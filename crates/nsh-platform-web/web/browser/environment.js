@@ -29,13 +29,22 @@ export function createEnvironment(reactive, invoke, dom) {
   const fields = Object.fromEntries(Object.entries(initial).map(([name, value]) => [name, reactive.signal(value)]));
   const tokens = reactive.signal(0);
   const insets = reactive.context(() => fields.safeArea());
-  // `select` as nsh-js's `platform_select`: the OS's key, then `tv` on a
-  // TV, then `desktop` / `mobile`, then `default` (`native` is not the web).
-  const platform = { os: "web", version: "0.0", idiom: "desktop", desktop: true, tv: false, catalyst: false,
+  // `select` as nsh-js's `platform_select`: the platform's name, then the
+  // OS's key, then `tv` on a TV, then `desktop` / `mobile`, then `default`
+  // (`native` is not the web).
+  const platform = { name: "web", os: "web", version: "0.0", idiom: "desktop", desktop: true, tv: false, catalyst: false,
     select(spec) {
-      if ("web" in spec) return spec.web;
-      if (this.tv && "tv" in spec) return spec.tv;
-      return this.desktop ? spec.desktop ?? spec.default : spec.mobile ?? spec.default;
+      if (!spec || typeof spec !== "object") return undefined;
+      const keys = this.name !== this.os ? [this.name, this.os] : [this.os];
+      if (this.tv) keys.push("tv");
+      keys.push(this.desktop ? "desktop" : "mobile");
+      if (this.os !== "web") keys.push("native");
+      keys.push("default");
+      for (const key of keys) {
+        const value = spec[key];
+        if (value !== undefined) return value;
+      }
+      return undefined;
     } };
   let appearance = "system", systemScheme = "light";
   // What a `ThemeScope` shows, for what it renders (nsh-js's `scope_scheme`
@@ -71,8 +80,10 @@ export function createEnvironment(reactive, invoke, dom) {
     shadersAvailable: () => fields.shaders(),
     // The engine's count; a page has no system sleep to hear, so it stays 0.
     wakeCount: () => fields.wakeCount(),
-    // A browser page has no performance monitor (its developer tools measure it).
+    // A browser page has no performance monitor (its developer tools measure it),
+    // so no stats either.
     fpsEnabled: () => false,
+    perfStats: () => null,
   };
   const accessibility = { reduceMotion: () => fields.reduceMotion(), screenReaderEnabled: () => fields.screenReader() };
   // nsh-js's `appInfo` (`env.rs`): what the build wrote, handed over by

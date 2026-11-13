@@ -1,16 +1,15 @@
-//! Keyboard focus between the views: Tab and Shift+Tab move it between
-//! the stops in tree order, the arrow keys to the nearest stop in their
-//! direction, Return and Space press the focused view. The
-//! decisions are `nsh_core::focus`'s, over the views' frames in the
-//! window's points (as drawn: scroll offsets, shifts and transforms
-//! applied, each frame the box around its corners), as the GPUI backend's
-//! are.
+//! Keyboard focus moves between the views beyond Tab: the arrow keys move
+//! it to the nearest stop in their direction, Return and Space press the
+//! focused view. The decisions are `nsh_core::focus`'s, over the views'
+//! frames in the window's points (as drawn: scroll offsets, shifts and
+//! transforms applied, each frame the box around its corners), as the
+//! GPUI backend's are.
 //!
-//! Text fields keep their own focus ([`crate::text_input`]); this module
-//! holds the focus of every other stop (`ViewProps::focus_stop`: a
-//! pressable, a view `focusable` makes one), reported as the fields' is:
-//! `FOCUSED` (so `focus:` styles follow), `onFocus` / `onBlur`, and the
-//! accessibility focus. One of the two has the keyboard at a time.
+//! The focus itself is held where Tab, clicks and `ref.focus()` put it: a
+//! text field's in [`crate::text_input`], any other stop's in
+//! [`crate::keyboard`] (with its `FOCUSED` state,
+//! `onFocus` / `onBlur`, accessibility focus and modal restore). This
+//! module only reads it and moves it.
 //!
 //! - **Stops**: the views of the focus scope (the newest modal, else the
 //!   surface: [`crate::navigation::focus_scope`]) that are stops, not
@@ -22,10 +21,6 @@
 //!   ([`NshView::with_children_in_reading_order`]: tree order, a scroll
 //!   view's content as it is on screen; a shown overlay's content after the
 //!   view it follows, `nsh_core::input::tab_order`).
-//! - **Tab** and Shift+Tab move to the next and previous stop, around from
-//!   the last (`focus::tab`, through `nsh_core::input::tab_stop`); a field
-//!   reached has its text selected, as in Windows' dialogs, any other stop
-//!   takes this module's focus. The stop reached is scrolled into view.
 //! - **Arrows** (no modifier), as on GPUI: Left / Right go to the nearest
 //!   stop on an overlapping row, Up / Down to the nearest below / above,
 //!   one in an overlapping column first (`focus::horizontal`,
@@ -35,9 +30,9 @@
 //!   Left and Right stay in its popup. The stop reached is scrolled into
 //!   view; an arrow that moves no focus goes on to the scroll views
 //!   ([`crate::scroll::key`]). What uses the arrows keeps them: the app's
-//!   bindings, the focused field (Left / Right, and Up / Down in a
-//!   multiline one) and selectable text with a selection come first
-//!   ([`crate::input::key`]'s order).
+//!   bindings, the focused view's capture rules, the focused field (Left /
+//!   Right, and Up / Down in a multiline one) and selectable text with a
+//!   selection come first ([`crate::input::key`]'s order).
 //! - **Return and Space** (neither Control, Alt nor the Windows key held:
 //!   `nsh_core::input::presses_focused_control`) are the focused view's
 //!   when it takes presses and no field is edited, as on the other
@@ -48,13 +43,8 @@
 //!   does not act instead of the control the focus was moved to. A view
 //!   that takes no presses leaves them to the app's bindings
 //!   ([`crate::input::key`]'s order).
-//! - **Layers**: focus that went into a root view's child (the page, a
-//!   sheet's panel, an overlay) from a stop of another comes back to that
-//!   stop when the layer goes ([`focus::Layers`]); a stop a backdrop
-//!   covers loses the focus and gets it back when that layer goes. Modals
-//!   give the focus back themselves ([`crate::navigation`]).
 
-use std::{cell::RefCell, rc::Rc};
+use std::rc::Rc;
 
 use nsh_core::{
     Bounds, EventKind, EventPayload, NodeId, PointerEvents, Points, ViewKind,
@@ -62,7 +52,6 @@ use nsh_core::{
     geometry::{point, size},
     input::{has_press, presses_focused_control, tab_order},
     keymap::Key,
-    tailwind::state::FOCUSED,
 };
 
 use crate::{geom::Mat4, input::KeyEvent, surface::Surface, view::NshView};
@@ -82,15 +71,6 @@ const VK_DOWN: u16 = 0x28;
 
 /// What a press of Return or Space sends the focused view.
 const PRESS: [EventKind; 3] = [EventKind::PressDown, EventKind::PressUp, EventKind::Press];
-
-/// A surface's keyboard focus on views that are not fields.
-#[derive(Default)]
-pub(crate) struct Focus {
-    /// The stop that has it.
-    view: RefCell<Option<NshView>>,
-    /// The layers the focus went into, each with the stop it came from.
-    layers: RefCell<focus::Layers>,
-}
 
 /// A stop of the focus scope: the core's candidate, and its view.
 #[derive(Clone)]
@@ -320,19 +300,6 @@ fn layers(scope: &NshView) -> Vec<Layer> {
         .collect()
 }
 
-/// The child of its root view (the surface's root, or the modal it is in)
-/// around `view`: the layer it is in. With that root view.
-fn layer_of(view: &NshView) -> Option<(NshView, NodeId)> {
-    let mut at = view.clone();
-    loop {
-        let parent = at.parent_view()?;
-        if parent.parent_view().is_none() || parent.kind() == ViewKind::Modal {
-            return Some((parent, at.id()));
-        }
-        at = parent;
-    }
-}
-
 /// `ancestor` is `view` or one of its ancestors.
 fn contains(ancestor: &NshView, view: &NshView) -> bool {
     let mut at = Some(view.clone());
@@ -384,185 +351,26 @@ fn in_menu(view: &NshView) -> bool {
     )
 }
 
-/// The view with this module's focus (not a field's). One the app removed
-/// loses it quietly (its node is gone).
-pub(crate) fn focused(surface: &Surface) -> Option<NshView> {
-    let view = surface.focus.view.borrow().clone()?;
-    if view.attached() {
-        return Some(view);
-    }
-    surface.focus.view.borrow_mut().take();
-    None
+/// The custom view with the keyboard focus in the window the input is in
+/// ([`crate::keyboard`]'s holder), not a field.
+fn focused(surface: &Surface) -> Option<NshView> {
+    crate::keyboard::focused_in(surface, surface.input_root().id())
 }
 
-/// View `view` was removed (or deleted): if it holds the view with this
-/// module's focus, the focus goes at once, with no `onBlur` to a view that
-/// no longer exists (a removal animation keeps it attached a while, when
-/// Return and Space must not press it). Its state is cleared all the same:
-/// a kept node may be inserted again.
-pub(crate) fn detached(surface: &Surface, view: &NshView) {
-    let Some(stop) = focused(surface) else {
-        return;
-    };
-    if crate::input::holds(view, &stop) {
-        surface.focus.view.borrow_mut().take();
-        crate::input::set_state(surface, &stop, FOCUSED, false);
-    }
-}
-
-/// The view with the keyboard focus: the focused field, else the view
-/// with this module's.
-pub(crate) fn current(surface: &Surface) -> Option<NshView> {
+/// The view with the keyboard focus: the focused field, else the custom
+/// view with it.
+fn current(surface: &Surface) -> Option<NshView> {
     crate::text_input::focused(surface).or_else(|| focused(surface))
 }
 
-/// Notes that the focus went from `from` to `to`: when they are in two
-/// layers of one root view, `to`'s gives it back to `from` when it goes.
-fn entered(surface: &Surface, from: Option<&NshView>, to: &NshView) {
-    let Some(from) = from else {
-        return;
-    };
-    if let (Some((root, from_layer)), Some((into_root, into))) = (layer_of(from), layer_of(to))
-        && root == into_root
-        && from_layer != into
-    {
-        surface.focus.layers.borrow_mut().entered(into, from.id());
-    }
-}
-
-/// Sends `kind` (`Focus`, `Blur`) to `view` when it listens, as fields do.
-fn send(surface: &Surface, view: &NshView, kind: EventKind) {
-    let (id, listens) = {
-        let s = view.state();
-        (s.id, s.events.contains(kind))
-    };
-    if listens {
-        surface.event(id, kind, EventPayload::None);
-    }
-}
-
-/// Takes this module's focus off its view: `FOCUSED` off, `onBlur`.
-fn blur_view(surface: &Surface) -> Option<NshView> {
-    let old = surface.focus.view.borrow_mut().take()?;
-    if !old.attached() {
-        return None;
-    }
-    crate::input::set_state(surface, &old, FOCUSED, false);
-    send(surface, &old, EventKind::Blur);
-    surface.invalidate();
-    Some(old)
-}
-
-/// Gives this module's focus to `view` (a stop that is not a field), or
-/// takes it away: the field that had the keyboard is blurred first, then
-/// the view that had this focus, then `view` is reported focused and takes
-/// the accessibility focus.
-pub(crate) fn set(surface: &Rc<Surface>, view: Option<&NshView>) {
-    let old = focused(surface);
-    if old.as_ref() == view {
-        return;
-    }
-    let field = crate::text_input::focused(surface);
-    if view.is_some() && field.is_some() {
-        crate::text_input::blur_all(surface);
-    }
-    let old = blur_view(surface);
-    let Some(view) = view else {
-        return;
-    };
-    entered(surface, old.as_ref().or(field.as_ref()), view);
-    *surface.focus.view.borrow_mut() = Some(view.clone());
-    crate::input::set_state(surface, view, FOCUSED, true);
-    send(surface, view, EventKind::Focus);
-    crate::access::focus(surface, view);
-    surface.invalidate();
-}
-
-/// Field `field` takes the keyboard (from `old`, the field that had it, if
-/// any): the view with this module's focus loses it first.
-pub(crate) fn field_focused(surface: &Surface, field: &NshView, old: Option<&NshView>) {
-    let view = blur_view(surface);
-    entered(surface, view.as_ref().or(old), field);
-}
-
-/// Takes the keyboard focus off `view`: a field, or the view with this
-/// module's focus.
-pub(crate) fn blur(surface: &Surface, view: &NshView) {
-    if view.kind() == ViewKind::Input {
-        crate::text_input::blur(view);
-    } else if focused(surface).as_ref() == Some(view) {
-        blur_view(surface);
-    }
-}
-
-/// Gives the keyboard focus back to `view` (a stop a modal or a layer took
-/// it from), as it had it: a field, or this module's focus.
-pub(crate) fn restore(surface: &Rc<Surface>, view: &NshView) {
-    if view.kind() == ViewKind::Input {
-        crate::text_input::focus(view);
-    } else {
-        set(surface, Some(view));
-    }
-}
-
-/// `focus()` on `view`: a field takes the typing; any other view takes the
-/// focus as Tab gives it, when it is a stop of the scope the focus is in
-/// (on another view it does nothing).
-pub(crate) fn focus_view(surface: &Rc<Surface>, view: &NshView) {
-    if view.kind() == ViewKind::Input {
-        crate::text_input::focus(view);
-        return;
-    }
-    let scope = crate::navigation::focus_scope(surface);
-    if still_stop(&scope, view).0 {
-        set(surface, Some(view));
-        crate::scroll::reveal(surface, view);
-    }
-}
-
-/// `blur()` on `view`: the field, or the view with this module's focus,
-/// lets go of it; on any other view it blurs the focused field, as before
-/// views took the focus.
-pub(crate) fn blur_command(surface: &Rc<Surface>, view: &NshView) {
-    if view.kind() == ViewKind::Input {
-        crate::text_input::blur(view);
-    } else if focused(surface).as_ref() == Some(view) {
-        blur_view(surface);
-    } else {
-        crate::text_input::blur_all(surface);
-    }
-}
-
-/// Tab (`back`: Shift+Tab): the focus moves to the next stop of the focus
-/// scope in tree order, around from the last, and the stop reached comes
-/// into view. False when the scope has no stop.
-pub(crate) fn tab(surface: &Rc<Surface>, back: bool) -> bool {
-    let scope = crate::navigation::focus_scope(surface);
-    let stops = stops_in(&scope);
-    let current = current(surface);
-    let at = current
-        .as_ref()
-        .and_then(|view| stops.iter().position(|stop| stop.view == *view));
-    let Some(next) = focus::tab(&stops, at, None, None, back) else {
-        return false;
-    };
-    let view = stops[next].view.clone();
-    if view.kind() == ViewKind::Input {
-        crate::text_input::tab_to(&view);
-    } else {
-        focus_stop(surface, &view);
-    }
-    true
-}
-
 /// Moves the keyboard focus to stop `view`, revealed in its scroll views:
-/// a field takes the typing, any other view this module's focus.
+/// a field takes the typing, any other view [`crate::keyboard`]'s focus.
 fn focus_stop(surface: &Rc<Surface>, view: &NshView) {
     if view.kind() == ViewKind::Input {
         crate::text_input::focus(view);
-    } else {
-        set(surface, Some(view));
         crate::scroll::reveal(surface, view);
+    } else {
+        crate::keyboard::focus_control(surface, view);
     }
 }
 
@@ -674,102 +482,6 @@ pub(crate) fn press_key(surface: &Surface, event: &KeyEvent) -> bool {
     true
 }
 
-/// `view` is still a stop of the scope the focus is in, not covered by a
-/// backdrop; with the layer that covers it when one does.
-fn still_stop(scope: &NshView, view: &NshView) -> (bool, Option<NodeId>) {
-    if !view.attached() || !is_stop(view) {
-        return (false, None);
-    }
-    let size = view.state().frame.size;
-    if !editable(view) && (size.width.0 <= 0.0 || size.height.0 <= 0.0) {
-        return (false, None);
-    }
-    let mut at = view.clone();
-    loop {
-        if at == *scope {
-            break;
-        }
-        if left_out(&at) || (at.kind() == ViewKind::Modal) {
-            return (false, None);
-        }
-        match at.parent_view() {
-            Some(parent) => at = parent,
-            None => return (false, None),
-        }
-    }
-    let cover = layer_of(view)
-        .filter(|(root, _)| root == scope)
-        .and_then(|(_, own)| focus::covered_by(&layers(scope), own));
-    (cover.is_none(), cover)
-}
-
-/// A batch was applied: the view with this module's focus that is no
-/// longer a stop of the scope loses it (one a backdrop covers gets it back
-/// when that layer goes), and with nothing focused the stop a layer that
-/// went took the focus from gets it back.
-pub(crate) fn end_batch(surface: &Rc<Surface>) {
-    let held = surface.focus.view.borrow().clone();
-    let scope = crate::navigation::focus_scope(surface);
-    if let Some(view) = held {
-        if !view.attached() {
-            surface.focus.view.borrow_mut().take();
-        } else {
-            let (stop, cover) = still_stop(&scope, &view);
-            if let Some(cover) = cover {
-                surface.focus.layers.borrow_mut().entered(cover, view.id());
-            }
-            if !stop {
-                set(surface, None);
-            }
-        }
-    }
-    if current(surface).is_none() {
-        let restored = surface.focus.layers.borrow().restore(
-            |layer| surface.view(layer).is_none_or(|view| !view.attached()),
-            |id| {
-                surface
-                    .view(id)
-                    .is_some_and(|view| still_stop(&scope, &view).0 && shows_in_window(&view))
-            },
-        );
-        if let Some(view) = restored.and_then(|id| surface.view(id)) {
-            restore(surface, &view);
-        }
-    }
-    surface
-        .focus
-        .layers
-        .borrow_mut()
-        .retain(|layer| surface.view(layer).is_some_and(|view| view.attached()));
-}
-
-/// Some of `view` is in sight: neither clipped away nor scrolled out.
-fn shows_in_window(view: &NshView) -> bool {
-    let visible = view.visible_bounds();
-    let Some(own) = view.to_root().and_then(|m| {
-        m.bounds(
-            visible.origin.x.0,
-            visible.origin.y.0,
-            visible.size.width.0,
-            visible.size.height.0,
-        )
-    }) else {
-        return false;
-    };
-    visible.size.width.0 > 0.0
-        && visible.size.height.0 > 0.0
-        && shows(intersect(
-            (own.0, own.1, own.0 + own.2, own.1 + own.3),
-            window_edges(view),
-        ))
-}
-
-/// Forgets the focus (the app stopped).
-pub(crate) fn reset(surface: &Surface) {
-    surface.focus.view.borrow_mut().take();
-    *surface.focus.layers.borrow_mut() = focus::Layers::default();
-}
-
 #[cfg(test)]
 mod tests {
     /// Return and Space on the focused control:
@@ -844,7 +556,7 @@ mod tests {
                 assert!(!press_key(&surface, &down(vk, false)));
             }
             // On the button: they are its.
-            *surface.focus.view.borrow_mut() = Some(button);
+            assert!(crate::keyboard::focus_control(&surface, &button));
             assert!(on_control(&surface));
             for vk in [VK_RETURN, VK_SPACE] {
                 assert!(!crate::keymap::key(&surface, &down(vk, false)));
@@ -871,7 +583,7 @@ mod tests {
                 KeyBinding::new(4, stroke("enter"), When::NotEditing, false).focus_keys(true),
             );
             crate::keymap::set(&surface, Arc::new(Keymap::new(table)));
-            *surface.focus.view.borrow_mut() = Some(button);
+            assert!(crate::keyboard::focus_control(&surface, &button));
             assert!(crate::keymap::key(&surface, &down(VK_RETURN, false)));
             // Space has none: it presses.
             assert!(!crate::keymap::key(&surface, &down(VK_SPACE, false)));
@@ -883,7 +595,7 @@ mod tests {
             let (surface, view) = window();
             view.state_mut().events.set(EventKind::Press, false);
             crate::keymap::set(&surface, Arc::new(Keymap::new(bindings())));
-            *surface.focus.view.borrow_mut() = Some(view.clone());
+            assert!(crate::keyboard::focus_control(&surface, &view));
             assert!(!on_control(&surface));
             assert!(crate::keymap::key(&surface, &down(VK_RETURN, false)));
             assert!(!press_key(&surface, &down(VK_RETURN, false)));

@@ -7,7 +7,11 @@ on the pull request's branch, each workflow its own `pull_request` event did
 not run: those whose paths the change does not touch. The ones it touched
 already run, and run once. Workflows disabled in the fork (Website,
 Packages, Compat: `fork-compat.yml` is the fork's) and the fork's own
-(`fork-*.yml`) are left out.
+(`fork-*.yml`) are left out. So are the workflows whose jobs pick upstream's
+self-hosted runners for every run but a scheduled one or a pull request from
+another repository (`runs-on` naming the `public` label: Examples, GPUI,
+Rust application and TUI since upstream's #1827, #1917 and #1937): the fork
+has no such runner, and a started run would wait for one for a day.
 
 Usage: dispatch.py <base sha> <head branch>  (at the root of a checkout of
 the head, with `gh` signed in as the workflow's token, `actions: write`).
@@ -69,6 +73,15 @@ def active():
     return {w["path"] for w in json.loads(out) if w["state"] == "active"}
 
 
+def self_hosted(workflow):
+    """Whether a job of `workflow` runs on upstream's self-hosted runners
+    when started by hand (its `runs-on` names the `public` label)."""
+    for job in (workflow.get("jobs") or {}).values():
+        if "public" in str(job.get("runs-on", "")):
+            return True
+    return False
+
+
 def main():
     base, head = sys.argv[1], sys.argv[2]
     files = changed(base)
@@ -81,6 +94,9 @@ def main():
         workflow = yaml.safe_load(path.read_text())
         on = workflow.get(True) or {}
         if "pull_request" not in on or "workflow_dispatch" not in on:
+            continue
+        if self_hosted(workflow):
+            print(f"{path.name}: left out (upstream's self-hosted runners)")
             continue
         globs = patterns(workflow)
         if globs is None or any(matches(f, globs) for f in files):

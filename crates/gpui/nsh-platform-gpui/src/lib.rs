@@ -52,6 +52,7 @@ mod geom;
 mod host_settings;
 mod image;
 mod input;
+mod key_focus;
 mod keymap;
 mod keys;
 mod mount;

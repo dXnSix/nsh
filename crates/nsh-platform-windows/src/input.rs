@@ -207,10 +207,26 @@ pub(crate) struct KeyEvent {
     pub(crate) vk: u16,
     /// Down (or up).
     pub(crate) down: bool,
-    /// An auto-repeat of a key held down.
+    /// An auto-repeat of a key held down (the message's previous-key-state
+    /// bit).
     pub(crate) repeat: bool,
     /// Modifiers held.
     pub(crate) modifiers: Modifiers,
+    /// The scan code the message carries (0 when it carries none: input
+    /// injected as text, `VK_PACKET`).
+    pub(crate) scan: u16,
+    /// The key is an extended one (the message's extended bit).
+    pub(crate) extended: bool,
+    /// It came as `WM_SYSKEYDOWN` / `WM_SYSKEYUP`: an Alt combination,
+    /// whose `TranslateMessage` character is a `WM_SYSCHAR`.
+    pub(crate) sys: bool,
+    /// `TranslateMessage` ran for the message and may have queued its
+    /// character (`WM_CHAR` / `WM_SYSCHAR`): only then may a consuming
+    /// shortcut remove the characters it made. False for an untranslated
+    /// private message ([`crate::window::WM_NSH_KEYDOWN`] /
+    /// [`crate::window::WM_NSH_SYSKEYDOWN`]) and for input synthesized
+    /// inside the backend, which queued nothing.
+    pub(crate) translated: bool,
 }
 
 /// The mouse cursor.
@@ -489,9 +505,10 @@ unsafe extern "system" fn on_timer(
 
 // --- The views' hooks ---------------------------------------------------------------
 
-/// Forgets every gesture (the app stopped).
+/// Forgets every gesture and the keyboard focus (the app stopped).
 pub(crate) fn reset(surface: &Surface) {
     crate::file_drop::reset(surface);
+    crate::keyboard::reset(surface);
     let input = &surface.input;
     input.window_press.borrow_mut().take();
     input.pointers.borrow_mut().clear();
@@ -1249,8 +1266,17 @@ pub(crate) fn wheel(surface: &Rc<Surface>, event: WheelEvent) {
     wheel_input(surface, x, y, dx, dy, event.time * 1000.0, kind);
 }
 
-/// A key from the window; true when handled. Only key downs (and their
-/// repeats) go to the modules; ups are not acted on.
+/// A key from the window; true when handled.
+///
+/// A key down goes, in order, to the window's shortcuts, the dialogs the
+/// surface shows, the app's keymap, the focused custom view's raw
+/// `KeyDown` and `capture_keys` rules ([`crate::keyboard`]), the
+/// application menu's shortcuts, and the native defaults (a focused
+/// field's editing, selectable text, navigation, scrolling, Tab). A
+/// capture consumes the key before the menu's shortcuts and defaults; a
+/// key the keymap took is not reported to the raw listeners too. A key up
+/// is reported to the focused custom view (or heard for Alt's release)
+/// and runs nothing else.
 pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
     let input = &surface.input;
     if MODIFIER_KEYS.contains(&event.vk) && !event.repeat {
@@ -1260,6 +1286,9 @@ pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
         surface.control(|c| c.set_input_modality(InputModality::Keyboard));
     }
     if !event.down {
+        // The view with the focus hears the release, whichever view (or
+        // none) heard the press.
+        crate::keyboard::release(surface, &event);
         // `DefWindowProc` opens the window menu when Alt is released after
         // it saw no other key: swallow the release once Alt + key was ours.
         return event.vk == VK_MENU && input.alt_combo.replace(false);
@@ -1272,7 +1301,12 @@ pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
     let shortcut = surface.shortcuts.borrow().iter().any(|f| f(&event));
     let handled = shortcut
         || crate::system::key(surface, &event)
+        // The app's bindings come first (a focused view's raw path runs
+        // them itself, once, through the same table).
         || crate::keymap::key(surface, &event)
+        // The focused custom view's raw keys, and the capture rules that
+        // take a key before the menu's shortcuts and the defaults.
+        || crate::keyboard::press(surface, &event)
         // Return and Space press the focused control once its own bindings
         // passed on them, before the menu's shortcuts.
         || crate::focus::press_key(surface, &event)
@@ -1294,17 +1328,68 @@ pub(crate) fn key(surface: &Rc<Surface>, event: KeyEvent) -> bool {
     handled
 }
 
-/// Tab and Shift + Tab move the keyboard focus between the stops, the
-/// fields that edit and the views that take presses or are `focusable`,
-/// in tree order (as macOS and Linux do), within the newest modal: the
-/// views under it never get the focus ([`crate::focus::tab`]). A field
-/// reached has its text selected, as in Windows' dialogs.
-fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
+/// Tab and Shift + Tab move the keyboard focus between the stops, in tree
+/// order (GTK's focus chain does this on Linux), within the newest modal
+/// of the window the input is in: the text fields and the focusable custom
+/// views ([`crate::keyboard::is_stop`]). The field reached has its text
+/// selected, as in Windows' dialogs; a custom view reports its focus and
+/// scrolls into view.
+pub(crate) fn tab(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let m = event.modifiers;
     if event.vk != VK_TAB || m.ctrl || m.alt || m.meta {
         return false;
     }
-    crate::focus::tab(surface, m.shift)
+    let mut stops = Vec::new();
+    collect_stops(&crate::navigation::focus_scope(surface), &mut stops);
+    let current = crate::keyboard::focused_in(surface, surface.input_root().id())
+        .and_then(|f| stops.iter().position(|v| *v == f))
+        .or_else(|| {
+            crate::text_input::focused(surface).and_then(|f| stops.iter().position(|v| *v == f))
+        });
+    let Some(next) = input::tab_stop(current, stops.len(), m.shift, true) else {
+        return false;
+    };
+    let target = &stops[next];
+    if target.kind() == ViewKind::Input {
+        crate::text_input::tab_to(target);
+    } else {
+        crate::keyboard::focus_control(surface, target);
+    }
+    true
+}
+
+/// The enabled focus stops shown under `view`, in tree order (a scroll
+/// view's content as it is on screen; a shown overlay's content after the
+/// view it follows, [`input::tab_order`]).
+fn collect_stops(view: &NshView, out: &mut Vec<NshView>) {
+    let skipped = |view: &NshView| {
+        let s = view.state();
+        s.style.hidden || s.concealed || s.props.pointer_events == PointerEvents::None
+    };
+    let order = input::tab_order(
+        view.clone(),
+        |view| {
+            if skipped(view) {
+                return Vec::new();
+            }
+            view.with_children_in_reading_order(<[NshView]>::to_vec)
+        },
+        NshView::id,
+        |view| view.state().props.tab_after,
+    );
+    out.extend(order.into_iter().filter(|view| {
+        if skipped(view) {
+            return false;
+        }
+        let (field, disabled) = {
+            let s = view.state();
+            (
+                s.kind == ViewKind::Input,
+                s.props.accessibility.state.disabled,
+            )
+        };
+        !disabled && (field || crate::keyboard::is_stop(view))
+    }));
 }
 
 // --- Hit testing --------------------------------------------------------------------
@@ -1542,6 +1627,21 @@ fn down(
         if let Some(c) = candidate {
             c.send(surface, PointerKind::Down, (x, y), clicks, modifiers);
             item = Some(c);
+        }
+    }
+    // The press gives the keyboard focus to the stop it is on (the view or
+    // its nearest focusable ancestor), as a click does on a desktop; a
+    // hosted item (a video's controls, a component's window) or a field
+    // keeps the keys for itself.
+    match &item {
+        Some(Item::Input(_)) => {}
+        Some(Item::Hosted(..)) => {
+            crate::keyboard::blur_window(surface, crate::app_window::window_of(surface, &hit.view))
+        }
+        _ => {
+            if let Some(target) = crate::keyboard::focus_target(surface, &hit.view) {
+                crate::keyboard::focus_pointer(surface, &target);
+            }
         }
     }
     let native = matches!(item, Some(Item::Hosted(..) | Item::Input(_)));

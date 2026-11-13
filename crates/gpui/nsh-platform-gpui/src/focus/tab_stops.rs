@@ -1,11 +1,11 @@
-//! Tab and Shift + Tab over views mounted as the engine mounts them: they
-//! stop at the arrows' stops (pressables and `focusable` views as well as
-//! fields, less those with no area or under a backdrop), in tree order
+//! Tab and Shift + Tab over views mounted as the engine mounts them
+//! (upstream's Tab, `input::tab`, on [`crate::key_focus`]): they stop at
+//! pressables and `focusable` views as well as fields, in tree order
 //! through `nsh_core::input::tab_stop`, within the newest modal; the stop
 //! the focus leaves the view from lets go of it.
 
 use gpui::TestAppContext;
-use nsh_core::{EventKind, InputConfig, MountItem, ROOT_ID, ViewKind, ViewProps};
+use nsh_core::{EventKind, InputConfig, MountItem, ViewKind, ViewProps};
 
 use super::directional_focus::{PAGE, Tree, focused, has_focused_state, heard, key, surface};
 use crate::input::Modifiers;
@@ -137,52 +137,4 @@ fn the_stop_tab_leaves_the_view_from_lets_go(cx: &mut TestAppContext) {
     crate::input::tab_past_ends(&surface, true, || true);
     assert_eq!(focused(&surface), None);
     assert_eq!(heard(&surface), [(4, EventKind::Blur)]);
-}
-
-#[gpui::test]
-fn tab_skips_the_stops_under_a_backdrop(cx: &mut TestAppContext) {
-    let (surface, _app) = surface(cx);
-    let mut tree = Tree::default();
-    tree.pressable(4, PAGE, (10.0, 10.0, 80.0, 40.0));
-    // A sheet: a backdrop that closes it on a press, a panel over it.
-    tree.view(40, ROOT_ID, ViewKind::View, (0.0, 0.0, 400.0, 300.0))
-        .events(40, &[EventKind::Press])
-        .props(
-            40,
-            ViewProps {
-                focusable: Some(false),
-                ..ViewProps::default()
-            },
-        );
-    tree.view(42, ROOT_ID, ViewKind::View, (0.0, 200.0, 400.0, 100.0))
-        .pressable(44, 42, (10.0, 10.0, 80.0, 40.0));
-    tree.apply(&surface);
-    heard(&surface);
-    assert!(tab(&surface, false));
-    assert_eq!(
-        focused(&surface),
-        Some(44),
-        "the page's pressable is covered"
-    );
-    assert!(!tab(&surface, false));
-    assert!(!tab(&surface, true));
-    assert!(!heard(&surface).contains(&(4, EventKind::Focus)));
-    // Past the ends Tab wraps around to the sheet's stop, not the page's.
-    crate::input::tab_past_ends(&surface, false, || false);
-    assert_eq!(focused(&surface), Some(44));
-}
-
-#[gpui::test]
-fn tab_skips_views_with_no_area(cx: &mut TestAppContext) {
-    let (surface, _app) = surface(cx);
-    let mut tree = Tree::default();
-    tree.pressable(4, PAGE, (10.0, 10.0, 0.0, 0.0))
-        .pressable(6, PAGE, (110.0, 10.0, 80.0, 40.0))
-        .pressable(8, PAGE, (210.0, 10.0, 80.0, 0.0));
-    tree.apply(&surface);
-    assert!(tab(&surface, false));
-    assert_eq!(focused(&surface), Some(6));
-    assert!(!tab(&surface, false));
-    assert!(!tab(&surface, true));
-    assert_eq!(focused(&surface), Some(6));
 }

@@ -31,7 +31,8 @@ says how.
 - **One hop per commit.** The engine runs on its own thread; each commit is one closure sent to GPUI's main thread,
   which notifies the view.
 - **Input** comes from GPUI's mouse, scroll, key and input method events; hit testing, presses, the responder system,
-  scrolling and text editing are the same logic as the Windows backend's.
+  scrolling and text editing are the same logic as the Windows backend's. A zoomable scroll view zooms with a touchpad
+  pinch around the pointer, and scrolls both ways while zoomed.
 
 ## Requirements
 
@@ -91,7 +92,9 @@ on need them installed, with GTK 3 and GStreamer's base and good plug-ins (Debia
 
 The `nsh-platform-gpui` crate (from the NSH repository) gives a Rust GPUI app `AppView`: one NSH engine as a GPUI
 view (`Entity<AppView>`), which fills the space its parent element gives it. Each `AppView` is independent; several
-can run at once. It runs a Rust root, the root component of your crate:
+can run at once. Like the other platform crates it has every optional part of the runtime on by default; a GPUI app
+that embeds only some apps can [leave parts out of its binary](./project-structure.md#leaving-parts-out-of-the-binary).
+It runs a Rust root, the root component of your crate:
 
 ```rust
 use gpui::{AppContext, WindowOptions};
@@ -206,7 +209,6 @@ What draws or behaves differently from the native desktop backends:
 - **Canvas text** is approximated: upright under rotations, made smaller rather than narrower for `maxWidth`,
   gradients paint it in one color, `strokeText` fills, its shadows are not blurred, and composite operations and
   `clearRect` do not apply to it.
-- **Scroll views** do not zoom (`zoomTo` and the zoom props are ignored).
 - **Video** plays on Linux (GStreamer) and on Samsung TVs (the TV's player, on its video plane or, inside turning,
   fading or clipped views, as a texture); on macOS and Windows a video shows a placeholder and reports `onError`.
   When a TV takes its decoder from the app (another app, or around a pause and resume), the video reports `onBuffer`
