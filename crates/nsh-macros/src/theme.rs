@@ -95,8 +95,9 @@ const KINDS: &[Kind] = &[
 /// a color, a number or a font family. `None`: no role reads box shadows
 /// or gradients.
 fn role_value(kind: &Kind) -> Option<TokenStream2> {
+    let nsh_core = crate::root::nsh_core();
     match kind.name {
-        "color" => Some(quote!(::nsh_core::element::AdaptiveColor)),
+        "color" => Some(quote!(#nsh_core::element::AdaptiveColor)),
         "font" => Some(quote!(::std::sync::Arc<::core::primitive::str>)),
         "shadow" | "gradient" => None,
         _ => Some(quote!(::core::primitive::f32)),
@@ -429,8 +430,9 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream2> {
         });
     }
 
-    let ui = quote!(::nsh_core::element);
-    let private = quote!(::nsh_core::element::__private);
+    let nsh_core = crate::root::nsh_core();
+    let ui = quote!(#nsh_core::element);
+    let private = quote!(#nsh_core::element::__private);
     let patch = format_ident!("{name}Patch");
     let vis = &input.vis;
 
