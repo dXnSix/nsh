@@ -16,7 +16,9 @@ name: Fork CI
 # - `core`, `linux`, `windows`, `gpui`, `tui`, `examples`, `rust-app`: the
 #   clippy and test steps of upstream's workflow of that name, on one
 #   runner each.
-# - `headless`: the examples' tests without a platform (`nsh test <app>`).
+# - `headless`, `headless-rust`: the examples' tests without a platform
+#   (`nsh test <app>`), in two jobs side by side: the TSX apps, and the
+#   apps that build a Rust crate first.
 # - `android`, `web`, `tizen`: clippy for Android, the web runtime's build
 #   and its JS tests, clippy for Samsung TVs (one architecture).
 #
@@ -116,7 +118,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           SHA: ${{ github.event.pull_request.head.sha }}
           APPLE: ${{ steps.jobs.outputs.apple }}
-          ANDROID: ${{ steps.jobs.outputs.android }}
+          ANDROID: ${{ steps.jobs.outputs.emulator }}
         run: |
           ask() {
             local have
@@ -388,7 +390,9 @@ jobs:
           fi
 
   # The examples' tests without a platform, and the generated declarations'
-  # type check: steps of upstream's `rust-app.yml`, job `web`.
+  # type check: steps of upstream's `rust-app.yml`, job `web`. Two jobs, so
+  # the gate waits for the longer one, not for their sum: this one runs the
+  # TSX apps (the gallery's tests are most of it).
   headless:
     needs: changes
     if: needs.changes.outputs.headless == 'true'
@@ -401,10 +405,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
           echo "TMPDIR=$RUNNER_TEMP/nsh-test-tmp" >> "$GITHUB_ENV"
-      # GTK 4, WebKitGTK and GStreamer: the examples' crates are built for
-      # this machine.
-      - name: Install clang, LLVM, GTK 4, WebKitGTK and GStreamer
-        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Install clang and LLVM
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cargo
@@ -415,11 +417,43 @@ jobs:
         run: cargo build -p nsh-cli --locked
       - name: Run the examples' tests
         run: |
-          for app in counter gallery post-editor rust-exports tasks tasks-rs; do
+          for app in counter gallery tasks; do
             ./target/debug/nsh test "examples/$app"
           done
       - name: Type-check the generated declarations
         run: ./target/debug/nsh check examples/counter -- --skipLibCheck false
+
+  # The apps with a Rust crate of their own, each built with its headless
+  # runner before its tests run.
+  headless-rust:
+    needs: changes
+    if: needs.changes.outputs.headless == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up temporary files
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/nsh-test-tmp" >> "$GITHUB_ENV"
+      # GTK 4, WebKitGTK and GStreamer: the apps' crates are built for this
+      # machine.
+      - name: Install clang, LLVM, GTK 4, WebKitGTK and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: headless-rust
+      - name: Build the command line
+        run: cargo build -p nsh-cli --locked
+      - name: Run the examples' tests
+        run: |
+          for app in post-editor rust-exports tasks-rs; do
+            ./target/debug/nsh test "examples/$app"
+          done
 
   # Clippy for Android, as it was; the examples' tests in an emulator: on a
   # Mac for a pull request (`.github/fork/local.sh`), and `fork-full.yml`.

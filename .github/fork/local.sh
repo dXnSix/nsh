@@ -83,15 +83,15 @@ fi
 if [[ "$all" == true ]]; then
   parts=(macos ios android)
 elif ((${#parts[@]} == 0)); then
-  needs="apple=true android=true"
+  needs="apple=true emulator=true"
   if base="$(git merge-base HEAD origin/main 2> /dev/null)" && [[ -f "$here/changed.py" ]]; then
     files="$(mktemp)"
     git diff --name-only "$base" HEAD > "$files"
-    needs="$(python3 "$here/changed.py" "$files" 2> /dev/null | tr '\n' ' ')" || needs="apple=true android=true"
+    needs="$(python3 "$here/changed.py" "$files" 2> /dev/null | tr '\n' ' ')" || needs="apple=true emulator=true"
     rm -f "$files"
   fi
   [[ "$needs" == *"apple=true"* ]] && parts+=(macos ios)
-  [[ "$needs" == *"android=true"* ]] && parts+=(android)
+  [[ "$needs" == *"emulator=true"* ]] && parts+=(android)
   if ((${#parts[@]} == 0)); then
     echo "local.sh: nothing to check: the change touches nothing macOS, iOS or Android build (--all runs them anyway)"
     exit 0

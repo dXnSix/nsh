@@ -5,11 +5,13 @@ of paths are upstream's: the `paths` of the workflow each job's commands
 come from (`core.yml` for `core`, `linux.yml` for `linux`, and so on), read
 from the checkout, so they follow upstream's as it keeps them (its
 `.github/ci/paths.py` checks them against the dependency graph). The jobs
-with no upstream workflow (`android`, `web`, `tizen`, and `apple`: macOS
-and iOS, checked on a Mac by `.github/fork/local.sh`, which also reads
-`apple` and `android` here to pick its parts) add their crates to the
-shared ones. A change to the fork's own CI files runs every job, and so does a
-list that cannot be read.
+with no upstream workflow (`android`, `web`, `tizen`) add their crates to
+the shared ones, and so do the local checks, which `.github/fork/local.sh`
+runs on a Mac and also reads here to pick its parts (`apple`: macOS and
+iOS, `emulator`: Android's examples' tests). A change to the fork's own CI
+files runs every job, and so does a list that cannot be read. The local
+checks follow the scripts in `.github/fork/`, not the workflows, which they
+do not run.
 
 Usage, at the root of a checkout (whose workflows it reads; the script
 itself may be elsewhere):
@@ -24,8 +26,11 @@ import sys
 
 ROOT = pathlib.Path.cwd()
 
-# The fork's own CI: a change here is checked by every job.
-EVERYTHING = [".github/fork/**", ".github/workflows/fork-*.yml"]
+# The fork's own CI: a change here is checked by every job of the gate, and
+# a change to its scripts by the local checks too.
+SCRIPTS = [".github/fork/**"]
+EVERYTHING = SCRIPTS + [".github/workflows/fork-*.yml"]
+LOCAL = {"apple", "emulator"}
 
 
 def upstream(name):
@@ -42,6 +47,7 @@ def areas():
     core = upstream("core.yml")
     gpui = upstream("gpui.yml") + core
     rust_app = upstream("rust-app.yml")
+    android = core + ["crates/nsh-platform-android/**", "crates/xtask/**"]
     return {
         "core": core,
         "linux": upstream("linux.yml"),
@@ -53,7 +59,8 @@ def areas():
         # The examples' tests without a platform, as Rust application's
         # `web` job runs them.
         "headless": rust_app,
-        "android": core + ["crates/nsh-platform-android/**", "crates/xtask/**"],
+        "android": android,
+        "emulator": android,
         "web": core + ["crates/nsh-platform-web/**", "crates/nsh-cli/**"],
         "tizen": gpui,
         "apple": core + [
@@ -81,14 +88,18 @@ def main():
             line for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line
         ]
     # GitHub lists at most 3000 files of a pull request: a longer list is cut.
-    if files is not None and (len(files) >= 3000 or any(matches(f, EVERYTHING) for f in files)):
+    if files is not None and len(files) >= 3000:
         files = None
     for name in NAMES:
-        run = files is None or any(matches(f, jobs[name]) for f in files)
+        if files is None:
+            run = True
+        else:
+            ci = SCRIPTS if name in LOCAL else EVERYTHING
+            run = any(matches(f, ci) or matches(f, jobs[name]) for f in files)
         print(f"{name}={'true' if run else 'false'}")
 
 
 NAMES = ["core", "linux", "windows", "gpui", "tui", "examples", "rust-app", "headless", "android", "web",
-         "tizen", "apple"]
+         "tizen", "apple", "emulator"]
 
 main()
