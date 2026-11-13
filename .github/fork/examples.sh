@@ -115,10 +115,18 @@ case "$target" in
   # Shift+F10 opens the app as the web, which `--target ios` refuses, and
   # since the sync with upstream `6a4f1de19` the menu its held finger opens
   # has chosen its item before the test's press on it, which finds no menu.
+  # Menus runs all but one test: "off iOS the system's menu card…"
+  # (upstream's #1736) opens the gallery as macOS, which `--target ios`
+  # refuses.
   ios)
     gallery=(animations device error-boundary gestures links list-search
-      mention menus navigation network photos press shaders storage text-view timers)
+      mention navigation network photos press shaders storage text-view timers)
     filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "menus submenus three levels" "menus undo and redo" "menus settings are checkable"
+      "menus a choice of one closes" "menus a choice of one in a submenu"
+      "menus a row's context menu" "menus a row's menu changes"
+      "menus the placement and alignment" "menus a long menu scrolls"
+      "menus a command that takes a while" "menus on iOS the system's menu card"
       "context-menu-press a tap presses"
       "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
       "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
