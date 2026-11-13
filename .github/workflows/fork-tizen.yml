@@ -2,6 +2,12 @@ name: Fork Tizen
 
 # Samsung TVs (Tizen), the fork's own checks; upstream has no Tizen target.
 #
+# Not on every pull request: the builds take 20 minutes for each
+# architecture. `fork-full.yml` calls this workflow every night and after a
+# sync (`workflow_call`), and the gate (`fork-ci.yml`, job `tizen`) lints one
+# architecture on a pull request that changes what the TV builds. A pull
+# request runs `cross` and `tv-specs` here when labelled `ci:tizen`.
+#
 # - `cross`: `nsh-platform-tizen` (`libnsh.so`) for armv7, x86_64 and aarch64, release and dev, through
 #   dXn.GpuiTizen's cross driver (`cargo xtask cross`, its target specs and its symbol check: one export,
 #   `nsh_tizen_main`, and only documented Tizen 8.0 symbols), with the Tizen SDK's 8.0 rootstraps installed
@@ -18,8 +24,7 @@ name: Fork Tizen
 # `pr/tizen/*` branches, this branch alone) `cross` and `emulator` skip, without the TV idiom's specs or
 # `--target tizen-web` `tv-specs` does, each with a notice.
 #
-# Draft pull requests run `cross` and `tv-specs` only when labelled `ci:tizen`; a label takes effect with the
-# next push (the workflow takes no `labeled` events: `.github/ci/paths.py`). `crates/gpui` commits the git
+# A label takes effect with the next push (the workflow takes no `labeled` events). `crates/gpui` commits the git
 # `[patch.crates-io]` lines of the gpui-fast and wgpu forks, so the jobs need no fork checkouts. A fork-only
 # file (branch kind `fork/*`): it never goes upstream and adds only its own file.
 #
@@ -32,12 +37,10 @@ name: Fork Tizen
 # install it is the repository owner's acceptance of Samsung's SDK licence on the runner.
 
 on:
-  push:
-    branches: [main]
+  # From `fork-full.yml`: `github.workflow` and the event are the caller's.
+  workflow_call:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
-  merge_group:
-    types: [checks_requested]
   workflow_dispatch:
     inputs:
       emulator:
@@ -48,10 +51,10 @@ on:
 permissions:
   contents: read
 
-# Per event and label too, so a push to main never cancels a manual emulator run, and one label's run never
-# cancels another's.
+# Per workflow (a call from `fork-full.yml` is that workflow's) and event, so a night's run never cancels a
+# manual emulator run.
 concurrency:
-  group: fork-tizen-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: fork-tizen-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -65,7 +68,13 @@ jobs:
   # What the checkout has of the Tizen work: this workflow can be in a branch (the fork's `main`, this one alone)
   # before the crates and the CLI it checks are, and then the jobs that need them skip with a notice.
   plan:
-    if: github.event.action != 'closed'
+    # A pull request's own run only with a Tizen label; a call from
+    # `fork-full.yml` and a manual run always.
+    if: >-
+      github.event.action != 'closed'
+      && (github.event_name != 'pull_request' || github.workflow != 'Fork Tizen'
+          || contains(github.event.pull_request.labels.*.name, 'ci:tizen')
+          || contains(github.event.pull_request.labels.*.name, 'ci:tizen-emulator'))
     runs-on: ubuntu-24.04
     outputs:
       tizen: ${{ steps.has.outputs.tizen }}
@@ -83,11 +92,12 @@ jobs:
           echo "tv=$tv" >> "$GITHUB_OUTPUT"
 
   cross:
-    # Not on drafts unless labelled `ci:tizen`.
+    # A pull request's own run only when labelled `ci:tizen`.
     needs: plan
     if: >-
       needs.plan.outputs.tizen == 'true'
-      && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
+      && (github.event_name != 'pull_request' || github.workflow != 'Fork Tizen'
+          || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
     strategy:
       fail-fast: false
       matrix:
@@ -127,11 +137,12 @@ jobs:
             -- -D warnings
 
   tv-specs:
-    # Not on drafts unless labelled `ci:tizen`.
+    # A pull request's own run only when labelled `ci:tizen`.
     needs: plan
     if: >-
       needs.plan.outputs.tv == 'true'
-      && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
+      && (github.event_name != 'pull_request' || github.workflow != 'Fork Tizen'
+          || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -170,6 +181,7 @@ jobs:
     needs: plan
     if: >-
       needs.plan.outputs.tizen == 'true'
+      && github.workflow == 'Fork Tizen'
       && ((github.event_name == 'workflow_dispatch' && inputs.emulator)
           || (github.event_name == 'pull_request'
               && contains(github.event.pull_request.labels.*.name, 'ci:tizen-emulator')))
