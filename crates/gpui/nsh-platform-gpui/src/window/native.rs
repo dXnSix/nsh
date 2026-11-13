@@ -40,7 +40,9 @@ mod mac {
         NSWindow, NSWindowButton, NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode,
         NSWindowStyleMask, NSWindowTitleVisibility,
     };
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    #[cfg(feature = "platform")]
+    use objc2_foundation::NSRect;
+    use objc2_foundation::{NSPoint, NSSize};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::*;
