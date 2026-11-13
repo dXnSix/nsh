@@ -10,8 +10,8 @@ the shared ones, and so do the local checks, which `.github/fork/local.sh`
 runs on a Mac and also reads here to pick its parts (`apple`: macOS and
 iOS, `emulator`: Android's examples' tests). A change to the fork's own CI
 files runs every job, and so does a list that cannot be read. The local
-checks follow the scripts in `.github/fork/`, not the workflows, which they
-do not run.
+checks follow the scripts they run (`local.sh`, `examples.sh`, this one),
+not the workflows.
 
 Usage, at the root of a checkout (whose workflows it reads; the script
 itself may be elsewhere):
@@ -27,9 +27,9 @@ import sys
 ROOT = pathlib.Path.cwd()
 
 # The fork's own CI: a change here is checked by every job of the gate, and
-# a change to its scripts by the local checks too.
-SCRIPTS = [".github/fork/**"]
-EVERYTHING = SCRIPTS + [".github/workflows/fork-*.yml"]
+# a change to the scripts the local checks run by those checks too.
+SCRIPTS = [".github/fork/local.sh", ".github/fork/examples.sh", ".github/fork/changed.py"]
+EVERYTHING = [".github/fork/**", ".github/workflows/fork-*.yml"]
 LOCAL = {"apple", "emulator"}
 
 
