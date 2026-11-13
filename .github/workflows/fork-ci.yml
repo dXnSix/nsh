@@ -27,10 +27,11 @@ name: Fork CI
 # - The examples' tests on a platform (`nsh test --target <platform>`), the
 #   other runners of upstream's matrices, Windows on Arm and the Tizen
 #   builds run at night and on demand: `fork-full.yml`.
-# - macOS and iOS are checked on a Mac, not on GitHub's macOS runners:
-#   `.github/fork/apple.sh`, which reports to the pull request as the
-#   status `apple (local)`. `changes` sets that status to pending when the
-#   pull request changes what the Apple platforms build.
+# - macOS, iOS and the Android emulator are checked on a Mac, not on
+#   GitHub's runners: `.github/fork/local.sh`, which reports to the pull
+#   request as the statuses `apple (local)` and `android (local)`. `changes`
+#   sets them to pending when the pull request changes what those platforms
+#   build.
 # - Compat: `fork-compat.yml`.
 #
 # A fork-only file (branch kind `fork/*`): it never goes upstream, and adds
@@ -105,23 +106,31 @@ jobs:
           else
             python3 .github/fork/changed.py --all | tee -a "$GITHUB_OUTPUT"
           fi
-      # macOS and iOS are checked on a Mac (`.github/fork/apple.sh`), which
-      # sets this status to its result. Pending until then, and left as it
-      # is when the check already ran for this commit. A pull request from
-      # another repository has a read-only token: no status.
-      - name: Ask for the local macOS and iOS check
-        if: github.event_name == 'pull_request' && steps.jobs.outputs.apple == 'true'
+      # macOS, iOS and the Android emulator are checked on a Mac
+      # (`.github/fork/local.sh`), which sets these statuses to its results.
+      # Pending until then, and left as they are when the check already ran
+      # for this commit. A pull request from another repository has a
+      # read-only token: no status.
+      - name: Ask for the local macOS, iOS and Android checks
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           SHA: ${{ github.event.pull_request.head.sha }}
+          APPLE: ${{ steps.jobs.outputs.apple }}
+          ANDROID: ${{ steps.jobs.outputs.emulator }}
         run: |
-          have=$(gh api "repos/$GH_REPO/commits/$SHA/statuses" --jq '[.[] | select(.context == "apple (local)")] | length' || echo 1)
-          if [[ "$have" == 0 ]]; then
-            gh api "repos/$GH_REPO/statuses/$SHA" -f state=pending -f context='apple (local)' \
-              -f description='Not run yet: .github/fork/apple.sh on a Mac' > /dev/null \
-              || echo "::notice::could not set the status (a read-only token)"
-          fi
+          ask() {
+            local have
+            have=$(gh api "repos/$GH_REPO/commits/$SHA/statuses" --jq "[.[] | select(.context == \"$1\")] | length" || echo 1)
+            if [[ "$have" == 0 ]]; then
+              gh api "repos/$GH_REPO/statuses/$SHA" -f state=pending -f context="$1" \
+                -f description='Not run yet: .github/fork/local.sh on a Mac' > /dev/null \
+                || echo "::notice::could not set the status (a read-only token)"
+            fi
+          }
+          if [[ "$APPLE" == true ]]; then ask 'apple (local)'; fi
+          if [[ "$ANDROID" == true ]]; then ask 'android (local)'; fi
 
   # Upstream's `core.yml`: the crates every platform shares.
   core:
@@ -446,8 +455,8 @@ jobs:
             ./target/debug/nsh test "examples/$app"
           done
 
-  # Clippy for Android, as it was; the examples' tests in an emulator:
-  # `fork-full.yml`.
+  # Clippy for Android, as it was; the examples' tests in an emulator: on a
+  # Mac for a pull request (`.github/fork/local.sh`), and `fork-full.yml`.
   android:
     needs: changes
     if: needs.changes.outputs.android == 'true'

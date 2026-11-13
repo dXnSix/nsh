@@ -5,14 +5,17 @@ of paths are upstream's: the `paths` of the workflow each job's commands
 come from (`core.yml` for `core`, `linux.yml` for `linux`, and so on), read
 from the checkout, so they follow upstream's as it keeps them (its
 `.github/ci/paths.py` checks them against the dependency graph). The jobs
-with no upstream workflow (`android`, `web`, `tizen`, and `apple`, the
-local check of `.github/fork/apple.sh`) add their crates to the shared
-ones. A change to the fork's own CI files runs every job, and so does a
-list that cannot be read. The local checks (`apple`: macOS and iOS,
-`emulator`: Android's examples' tests) follow the scripts in
-`.github/fork/`, not the workflows, which they do not run.
+with no upstream workflow (`android`, `web`, `tizen`) add their crates to
+the shared ones, and so do the local checks, which `.github/fork/local.sh`
+runs on a Mac and also reads here to pick its parts (`apple`: macOS and
+iOS, `emulator`: Android's examples' tests). A change to the fork's own CI
+files runs every job, and so does a list that cannot be read. The local
+checks follow the scripts in `.github/fork/`, not the workflows, which they
+do not run.
 
-Usage: changed.py <file with the changed paths, one a line> | --all
+Usage, at the root of a checkout (whose workflows it reads; the script
+itself may be elsewhere):
+changed.py <file with the changed paths, one a line> | --all
 Prints `<job>=true|false` lines for `$GITHUB_OUTPUT`.
 """
 
@@ -21,7 +24,7 @@ import pathlib
 import re
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[2]
+ROOT = pathlib.Path.cwd()
 
 # The fork's own CI: a change here is checked by every job of the gate, and
 # a change to its scripts by the local checks too.

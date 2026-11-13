@@ -13,9 +13,9 @@ name: Fork full
 # - `macos`, `ios`, `android`, `web`: clippy, tests, and the examples' tests
 #   on the platform (`nsh test --target <platform>`,
 #   `.github/fork/examples.sh`): macOS windows, an iOS simulator, an Android
-#   emulator, headless Chrome. On pull requests macOS and iOS are checked on
-#   a Mac instead (`.github/fork/apple.sh`); GitHub's macOS runners are used
-#   here only.
+#   emulator, headless Chrome. On pull requests macOS, iOS and the Android
+#   emulator are checked on a Mac instead (`.github/fork/local.sh`);
+#   GitHub's macOS runners and its emulator are used here only.
 # - `linux`, `gpui-gallery`, `windows`: upstream's `linux.yml` and
 #   `windows.yml` in full, with the examples' tests in GTK, GPUI and Win32
 #   windows.
