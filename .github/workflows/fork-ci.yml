@@ -22,6 +22,10 @@ name: Fork CI
 # - `android`, `web`, `tizen`: clippy for Android, the web runtime's build
 #   and its JS tests, clippy for Samsung TVs (one architecture).
 #
+# Every `cargo test` step runs through `.github/fork/retry.sh`: a command
+# that fails runs once more before the step fails, and one that then passes
+# is reported as flaky, a warning on the run.
+#
 # What is not here:
 #
 # - The examples' tests on a platform (`nsh test --target <platform>`), the
@@ -162,7 +166,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets $PACKAGES -- -D warnings
       - name: Test
-        run: cargo test $PACKAGES
+        run: bash .github/fork/retry.sh cargo test $PACKAGES
 
   # Upstream's `linux.yml`, job `check`, without each optional feature
   # alone, the AT-SPI tests and the examples' tests in GTK windows
@@ -196,13 +200,13 @@ jobs:
       - name: Check without optional features
         run: cargo clippy -p nsh-linux-app --no-default-features --features js -- -D warnings
       - name: Test without optional features
-        run: xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features js --lib without_the_feature
+        run: bash .github/fork/retry.sh xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features js --lib without_the_feature
       # The backend's tests that make GTK widgets run where a display opens:
       # the second run has a virtual one, with a session bus of its own.
       - name: Test
         run: >
-          cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev
-          && dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --features webview
+          bash .github/fork/retry.sh cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev
+          && bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --features webview
 
   # Upstream's `windows.yml` without the examples' tests in Win32 windows
   # (`fork-full.yml`).
@@ -237,7 +241,8 @@ jobs:
         run: cargo clippy -p nsh-windows-app --no-default-features --features js -- -D warnings
       # Tests need no display: they open no window.
       - name: Test
-        run: cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+        shell: bash
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
 
   # Upstream's `gpui.yml` on Linux; macOS and Windows: `fork-full.yml`.
   gpui:
@@ -279,10 +284,10 @@ jobs:
         run: cargo clippy -p nsh-platform-gpui --no-default-features --features js -- -D warnings
       - name: Test
         working-directory: crates/gpui
-        run: cargo test
+        run: bash ../../.github/fork/retry.sh cargo test
       - name: Test (GPUI's test platform)
         working-directory: crates/gpui
-        run: cargo test -p nsh-platform-gpui --features shot
+        run: bash ../../.github/fork/retry.sh cargo test -p nsh-platform-gpui --features shot
       - name: Clippy (examples/embed-gpui)
         working-directory: examples/embed-gpui
         run: cargo clippy --all-targets -- -D warnings
@@ -309,11 +314,11 @@ jobs:
       - name: Clippy
         run: cargo clippy -p nsh-platform-tui --all-targets -- -D warnings
       - name: Test
-        run: cargo test -p nsh-platform-tui
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-tui
       - name: Formula rendering with and without math
         run: |
-          cargo test -p nsh-base --test base terminal::a_terminal_reads_a_formula_as_text_not_its_tex
-          cargo test -p nsh-base --features math --test base terminal::a_terminal_reads_a_formula_as_text_not_its_tex
+          bash .github/fork/retry.sh cargo test -p nsh-base --test base terminal::a_terminal_reads_a_formula_as_text_not_its_tex
+          bash .github/fork/retry.sh cargo test -p nsh-base --features math --test base terminal::a_terminal_reads_a_formula_as_text_not_its_tex
 
   # Upstream's `examples.yml`: the Rust examples, and every app's bundle.
   examples:
@@ -345,7 +350,7 @@ jobs:
         run: cargo clippy --all-targets ${{ steps.crates.outputs.packages }} -- -D warnings
       - name: Test
         if: steps.crates.outputs.packages != ''
-        run: cargo test ${{ steps.crates.outputs.packages }}
+        run: bash .github/fork/retry.sh cargo test ${{ steps.crates.outputs.packages }}
       - name: Build the apps
         run: |
           cargo build -p nsh-cli
@@ -380,7 +385,7 @@ jobs:
       - name: Clippy
         run: cargo clippy -p gallery-native --all-targets --locked -- -D warnings
       - name: Test the crate
-        run: cargo test -p gallery-native --locked
+        run: bash .github/fork/retry.sh cargo test -p gallery-native --locked
       - name: Check the native dependency graph
         run: |
           cargo tree -p gallery-native --locked -e normal > "$RUNNER_TEMP/rust-app-dependencies.txt"

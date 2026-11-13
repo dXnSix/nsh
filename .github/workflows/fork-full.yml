@@ -28,6 +28,9 @@ name: Fork full
 # - `tizen`: `fork-tizen.yml` (the three architectures' builds, the TV
 #   idiom's specs).
 #
+# The `cargo test` steps run through `.github/fork/retry.sh`, as the gate's
+# do: once more after a failure, with a warning when that passes.
+#
 # The commands are copies of upstream's workflows, which are disabled in the
 # fork's settings; a sync that changes them is followed here by hand. A
 # fork-only file (branch kind `fork/*`).
@@ -116,7 +119,7 @@ jobs:
           --features nsh-platform-macos/dev
           -- -D warnings
       - name: Test
-        run: cargo test -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
       - name: Run the examples' tests in macOS windows
         run: |
           cargo build -p nsh-cli
@@ -301,11 +304,11 @@ jobs:
             cargo clippy -p nsh-linux-app --no-default-features --features "$feature" -- -D warnings
           done
       - name: Test without optional features
-        run: xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features js --lib without_the_feature
+        run: bash .github/fork/retry.sh xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features js --lib without_the_feature
       - name: Test
         run: >
-          cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev
-          && dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --features webview
+          bash .github/fork/retry.sh cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev
+          && bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --features webview
       # Opt-in Action-interface tests use an independent AT client, not GTK signals.
       - name: Test AT-SPI activation and input
         env:
@@ -314,8 +317,8 @@ jobs:
           GSK_RENDERER: cairo
           RUST_TEST_THREADS: "1"
         run: |
-          dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::activation_ -- --nocapture
-          dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::atspi_activation_ -- --ignored --nocapture
+          bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::activation_ -- --nocapture
+          bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::atspi_activation_ -- --ignored --nocapture
       # The examples' tests in GTK windows on a virtual display, with the
       # platform's input (`nsh test --target linux`).
       - name: Run the examples' tests in GTK windows
@@ -416,7 +419,8 @@ jobs:
       - name: Check without optional features
         run: cargo clippy -p nsh-windows-app --no-default-features --features js -- -D warnings
       - name: Test
-        run: cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+        shell: bash
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
       # The examples' tests in Win32 windows, with the platform's input
       # (`nsh test --target windows`).
       - name: Run the examples' tests in Win32 windows
@@ -470,7 +474,8 @@ jobs:
       - name: Check without optional features
         run: cargo clippy -p nsh-windows-app --no-default-features --features js -- -D warnings
       - name: Test
-        run: cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+        shell: bash
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
 
   # Upstream's `gpui.yml` on macOS and Windows (Linux: the gate).
   gpui:
@@ -515,7 +520,7 @@ jobs:
         run: cargo clippy -p nsh-platform-gpui --no-default-features --features js -- -D warnings
       - name: Test
         working-directory: crates/gpui
-        run: cargo test
+        run: bash ../../.github/fork/retry.sh cargo test
       - name: Check (runtime-shaders)
         if: runner.os == 'macOS'
         working-directory: crates/gpui
@@ -541,7 +546,7 @@ jobs:
       - name: Clippy
         run: cargo clippy -p nsh-platform-tui --all-targets -- -D warnings
       - name: Test
-        run: cargo test -p nsh-platform-tui
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-tui
 
   # Upstream's `rust-app.yml`, job `check`, on macOS and Windows (Linux: the
   # gate).
@@ -582,7 +587,7 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo clippy -p nsh-macos-app --locked --no-default-features --features js -- -D warnings
       - name: Test the crate
-        run: cargo test -p gallery-native ${{ runner.os == 'macOS' && '-p nsh-platform-apple' || '' }} --locked
+        run: bash .github/fork/retry.sh cargo test -p gallery-native ${{ runner.os == 'macOS' && '-p nsh-platform-apple' || '' }} --locked
 
   # Upstream's `rust-app.yml`, job `web`: a Rust app and a TSX app with a
   # Rust crate published for the web, and what they must not link.
