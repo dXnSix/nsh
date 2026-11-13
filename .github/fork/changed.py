@@ -8,7 +8,8 @@ from the checkout, so they follow upstream's as it keeps them (its
 with no upstream workflow (`android`, `web`, `tizen`, and `apple`, the
 local check of `.github/fork/apple.sh`) add their crates to the shared
 ones. A change to the fork's own CI files runs every job, and so does a
-list that cannot be read.
+list that cannot be read. The local checks (`apple`, `android`) follow the
+scripts in `.github/fork/`, not the workflows, which they do not run.
 
 Usage: changed.py <file with the changed paths, one a line> | --all
 Prints `<job>=true|false` lines for `$GITHUB_OUTPUT`.
@@ -21,8 +22,11 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-# The fork's own CI: a change here is checked by every job.
-EVERYTHING = [".github/fork/**", ".github/workflows/fork-*.yml"]
+# The fork's own CI: a change here is checked by every job of the gate, and
+# a change to its scripts by the local checks too.
+SCRIPTS = [".github/fork/**"]
+EVERYTHING = SCRIPTS + [".github/workflows/fork-*.yml"]
+LOCAL = {"apple", "android"}
 
 
 def upstream(name):
@@ -78,10 +82,14 @@ def main():
             line for line in pathlib.Path(sys.argv[1]).read_text().splitlines() if line
         ]
     # GitHub lists at most 3000 files of a pull request: a longer list is cut.
-    if files is not None and (len(files) >= 3000 or any(matches(f, EVERYTHING) for f in files)):
+    if files is not None and len(files) >= 3000:
         files = None
     for name in NAMES:
-        run = files is None or any(matches(f, jobs[name]) for f in files)
+        if files is None:
+            run = True
+        else:
+            ci = SCRIPTS if name in LOCAL else EVERYTHING
+            run = any(matches(f, ci) or matches(f, jobs[name]) for f in files)
         print(f"{name}={'true' if run else 'false'}")
 
 
