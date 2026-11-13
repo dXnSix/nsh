@@ -68,6 +68,7 @@ fn start(name: &str, overrides: Option<&str>) -> (Engine, Receiver<MountBatch>) 
         audio: None,
         cache: Default::default(),
         windows: None,
+        login_item: None,
     };
     let overrides = overrides.map(str::to_owned);
     let engine = Engine::start_with(

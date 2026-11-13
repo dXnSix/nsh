@@ -673,6 +673,22 @@ fn view_key_event(stroke: &Keystroke) -> KeyEvent {
             23 => "F23",
             _ => "F24",
         }),
+        // The media and TV remote keys by the web's names (`KeyboardEvent.key`).
+        keymap::Key::MediaPlayPause => Some("MediaPlayPause"),
+        keymap::Key::MediaPlay => Some("MediaPlay"),
+        keymap::Key::MediaPause => Some("MediaPause"),
+        keymap::Key::MediaStop => Some("MediaStop"),
+        keymap::Key::MediaRewind => Some("MediaRewind"),
+        keymap::Key::MediaFastForward => Some("MediaFastForward"),
+        keymap::Key::MediaNext => Some("MediaTrackNext"),
+        keymap::Key::MediaPrevious => Some("MediaTrackPrevious"),
+        keymap::Key::ColorRed => Some("ColorF0Red"),
+        keymap::Key::ColorGreen => Some("ColorF1Green"),
+        keymap::Key::ColorYellow => Some("ColorF2Yellow"),
+        keymap::Key::ColorBlue => Some("ColorF3Blue"),
+        keymap::Key::ChannelUp => Some("ChannelUp"),
+        keymap::Key::ChannelDown => Some("ChannelDown"),
+        keymap::Key::Info => Some("Info"),
     };
     let typed = match stroke.key {
         keymap::Key::Char(c) => Some(if m.shift { shifted(c) } else { c }),

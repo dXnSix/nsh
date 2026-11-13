@@ -169,6 +169,7 @@ fn start(host: Option<&str>) -> (Engine, Receiver<MountBatch>) {
         speech: None,
         audio: None,
         windows: None,
+        login_item: None,
     };
     let host = host.map(str::to_owned);
     let engine = Engine::start_with(

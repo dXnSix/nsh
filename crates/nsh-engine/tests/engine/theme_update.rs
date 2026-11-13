@@ -204,6 +204,7 @@ fn a_rust_app_updates_and_resets_its_tokens() {
         speech: None,
         audio: None,
         windows: None,
+        login_item: None,
     };
     let _engine: Engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
     let seen = collect(&rx);
