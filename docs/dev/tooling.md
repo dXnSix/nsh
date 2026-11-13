@@ -937,7 +937,9 @@ program that describes them, builds the hosts and runners with them, and does ev
   requirements must accept, or by path from the checkout the app's crates depend on (nsh's own examples, as
   `examples/gallery-rs`, through the workspace's path dependencies), which must be of that version, with the app's
   crates.io dependencies on nsh patched to it. Git dependencies use the checkout Cargo resolves from the app’s
-  lockfile, including registry dependencies redirected by its patches. The generated workspaces patch both crates.io
+  lockfile, including registry dependencies redirected by its patches. A crate that names none of nsh's crates but
+  takes nsh through another crate (a framework that re-exports it) counts with the `nsh-core` its build resolves
+  (`nsh_through_dependency`), wherever that comes from. The generated workspaces patch both crates.io
   and the Git repository to that checkout, so the app and its hosts share the same core and native module types.
   Requirements of another version, or crates taking nsh from two places, stop the command with what to change, rather
   than a build failing later on two `nsh-core`s. They build in the app's own `target/`, as a Cargo project in the app's
