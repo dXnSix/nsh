@@ -210,6 +210,8 @@ An app made by an earlier `nsh init` gets the new `tsconfig.json` with its next 
 
 A Rust app's code is its crate's modules (`mod screens;`), and its dependencies come from crates.io like any crate's; NSH's own crates are `nsh-core` (the primitives, signals and typed styles, `use nsh_core::prelude::*`) and `nsh-base` (the base components and the theme).
 
+A framework built on NSH can re-export them so that its apps depend on it alone: its prelude brings `nsh_core` into scope next to the macros (`pub use nsh_core;`), and in a crate whose `Cargo.toml` does not name `nsh-core`, NSH's macros (`#[component]`, `#[native_module]`, the derives) refer to that `nsh_core` rather than to a dependency of the crate.
+
 In TSX, split the app into as many `.ts` and `.tsx` modules as you like and import them with relative paths; the extension may be left out:
 
 ```tsx
