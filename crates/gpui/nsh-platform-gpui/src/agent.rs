@@ -421,8 +421,8 @@ impl Native for GpuiNative {
         // The step's keystroke is the source of the key (its raw event
         // carries it; `physical` is `None`), so the press and release take
         // the same router real keys do.
-        let stroke = nsh_core::keymap::Keystroke::parse(keys, crate::keys::OS)
-            .map_err(|e| e.to_string())?;
+        let stroke =
+            nsh_core::keymap::Keystroke::parse(keys, crate::keys::OS).map_err(|e| e.to_string())?;
         self.press_in_focus(
             move |surface| {
                 let taken = synth::press_keys(surface, &stroke);

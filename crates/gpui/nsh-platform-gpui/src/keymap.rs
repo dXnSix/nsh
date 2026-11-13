@@ -391,7 +391,7 @@ mod tests {
                 modifiers: Default::default(),
             };
             // While a field is edited, too: they type nothing.
-            assert!(super::key(&surface, &event, true), "{name}");
+            assert!(super::key_stroke(&surface, &event, true, None), "{name}");
             surface.keymap.held.set(None);
         }
     }

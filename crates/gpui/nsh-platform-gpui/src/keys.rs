@@ -366,6 +366,22 @@ fn named(key: &str) -> Option<SharedString> {
         "platform" | "cmd" | "super" | "win" => "Meta",
         "back" => "BrowserBack",
         "forward" => "BrowserForward",
+        // The media and TV remote keys by the Tizen platform's names.
+        "mediaplaypause" => "MediaPlayPause",
+        "mediaplay" => "MediaPlay",
+        "mediapause" => "MediaPause",
+        "mediastop" => "MediaStop",
+        "mediarewind" => "MediaRewind",
+        "mediafastforward" => "MediaFastForward",
+        "medianext" => "MediaTrackNext",
+        "mediaprevious" => "MediaTrackPrevious",
+        "red" => "ColorF0Red",
+        "green" => "ColorF1Green",
+        "yellow" => "ColorF2Yellow",
+        "blue" => "ColorF3Blue",
+        "channelup" => "ChannelUp",
+        "channeldown" => "ChannelDown",
+        "info" | "xf86info" => "Info",
         other => {
             let n = other
                 .strip_prefix('f')
@@ -399,6 +415,22 @@ fn named_key(key: ShortcutKey) -> SharedString {
         ShortcutKey::Right => "ArrowRight",
         ShortcutKey::F(n) => return SharedString::from(format!("F{n}")),
         ShortcutKey::Char(c) => return SharedString::from(c.to_string()),
+        // The media and TV remote keys by the web's names.
+        ShortcutKey::MediaPlayPause => "MediaPlayPause",
+        ShortcutKey::MediaPlay => "MediaPlay",
+        ShortcutKey::MediaPause => "MediaPause",
+        ShortcutKey::MediaStop => "MediaStop",
+        ShortcutKey::MediaRewind => "MediaRewind",
+        ShortcutKey::MediaFastForward => "MediaFastForward",
+        ShortcutKey::MediaNext => "MediaTrackNext",
+        ShortcutKey::MediaPrevious => "MediaTrackPrevious",
+        ShortcutKey::ColorRed => "ColorF0Red",
+        ShortcutKey::ColorGreen => "ColorF1Green",
+        ShortcutKey::ColorYellow => "ColorF2Yellow",
+        ShortcutKey::ColorBlue => "ColorF3Blue",
+        ShortcutKey::ChannelUp => "ChannelUp",
+        ShortcutKey::ChannelDown => "ChannelDown",
+        ShortcutKey::Info => "Info",
     };
     SharedString::new_static(name)
 }
