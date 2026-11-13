@@ -80,6 +80,7 @@ pub fn registries() -> &'static [Registry] {
         let mut mobile = Registry::runtime("nsh/mobile");
         mobile
             .register::<crate::mobile::TabBar>()
+            .register::<crate::mobile::SegmentedControl>()
             .module::<android::BackHandler>()
             .module::<haptics::Haptics>();
         let mut os = Registry::runtime("os");

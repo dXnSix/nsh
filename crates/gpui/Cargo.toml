@@ -59,6 +59,8 @@ libc = "0.2"
 
 # The same versions as the main workspace's.
 anyhow = "1"
+# A picture's alpha inlined in the SVG GPUI turns (already in GPUI's tree).
+base64 = "0.22"
 crossbeam-channel = "0.5"
 image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4"
