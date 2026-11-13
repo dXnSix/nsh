@@ -135,7 +135,9 @@ required-features = ["platform"]
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-handle.workspace = true
 objc2.workspace = true
-objc2-app-kit.workspace = true
+# `NSRunningApplication`: the activation policy (`run_in_background`), which
+# `gpui_platform` would bring but is optional here (`platform`).
+objc2-app-kit = { workspace = true, features = ["NSRunningApplication"] }
 objc2-foundation.workspace = true
 
 [target.'cfg(windows)'.dependencies]
