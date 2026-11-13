@@ -45,6 +45,7 @@ mod link;
 mod link_hint;
 mod listbox;
 mod menu;
+mod menu_button;
 mod navigation;
 mod number_input;
 mod numeric;
@@ -183,6 +184,10 @@ pub use crate::{
         MenuListProps, MenuProps, MenuSeparator, MenuSeparatorElement, MenuSeparatorProps, Submenu,
         SubmenuElement, SubmenuEvent, SubmenuProps, context_menu, menu, menu_item, menu_list,
         menu_separator, submenu,
+    },
+    menu_button::{
+        MenuButton, MenuButtonElement, MenuButtonEvent, MenuButtonItem, MenuButtonProps,
+        menu_button,
     },
     navigation::{dialog, nav_page, nav_stack},
     number_input::{
@@ -330,11 +335,11 @@ pub mod parts {
         CarouselNext, CarouselPagination, CarouselPaginationItem, CarouselPrevious, Checkbox,
         Collapsible, ColorArea, ColorEyeDropper, ColorField, ColorPicker, ColorSlider, ColorSwatch,
         Combobox, Command, ContextMenu, DataTable, DatePicker, DockArea, FocusGroup, HoverCard,
-        Link, Menu, MenuItem, MenuSeparator, NumberInput, OtpInput, Pagination, Popover, Progress,
-        Radio, RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar, Select, Sheet, Slider,
-        Submenu, Switch, Tab, Table, TableBody, TableCaption, TableCell, TableFooter, TableHead,
-        TableHeader, TableRow, Tabs, TextView, TimeField, Toast, ToastStack, Toggle, ToggleGroup,
-        Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, Tree,
+        Link, Menu, MenuButton, MenuItem, MenuSeparator, NumberInput, OtpInput, Pagination,
+        Popover, Progress, Radio, RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar,
+        Select, Sheet, Slider, Submenu, Switch, Tab, Table, TableBody, TableCaption, TableCell,
+        TableFooter, TableHead, TableHeader, TableRow, Tabs, TextView, TimeField, Toast,
+        ToastStack, Toggle, ToggleGroup, Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, Tree,
     };
     #[cfg(feature = "editor")]
     use crate::{DiffView, Editor};
@@ -414,11 +419,13 @@ pub mod parts {
             .module::<AlertDialog>();
     }
 
-    /// `Menu`, `ContextMenu` and their items.
+    /// `Menu`, `ContextMenu` and their items, and `MenuButton` (the
+    /// system's menu).
     pub fn menu(registry: &mut Registry) {
         registry
             .register::<ContextMenu>()
             .register::<Menu>()
+            .register::<MenuButton>()
             .register::<MenuItem>()
             .register::<MenuSeparator>()
             .register::<Submenu>();
@@ -632,6 +639,7 @@ mod tests {
                 "HoverCard",
                 "Link",
                 "Menu",
+                "MenuButton",
                 "MenuItem",
                 "MenuSeparator",
                 "NumberInput",
