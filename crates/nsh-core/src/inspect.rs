@@ -111,8 +111,37 @@ pub struct DevDetail {
     pub list: Option<DevList>,
     /// What a list cell holds.
     pub cell: Option<crate::CellSlot>,
-    /// The style a dev tool overrides it with, as declarations.
-    pub override_style: Option<Vec<StyleDecl>>,
+    /// The layer a dev tool put over its authored values.
+    pub dev_override: Option<DevOverride>,
+}
+
+/// A dev tool's layer over a node's authored values
+/// ([`crate::element::dev_override`]): classes, inline declarations and
+/// forced states only, never other props. It survives the node's own class
+/// and style updates; cleared, the node is exactly as authored. It dies
+/// with its node: nothing keeps it in the core.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DevOverride {
+    /// Classes over the node's own (Tailwind, as `class`), or instead of
+    /// them with [`Self::replace_class`].
+    pub class: String,
+    /// `class` replaces the node's classes rather than adding to them.
+    pub replace_class: bool,
+    /// Declarations applied after the node's classes and `style`.
+    pub style: crate::StylePatch,
+    /// Interaction states shown as if the platform reported them
+    /// ([`crate::tailwind::state`]: hovered, pressed, focused, ...).
+    pub states: u16,
+}
+
+/// A node's dev state: made by an override, never before.
+pub(crate) struct NodeDev {
+    /// The layer.
+    pub(crate) layer: DevOverride,
+    /// The classes the node's own code last set, under the layer.
+    pub(crate) base: Option<std::rc::Rc<crate::tailwind::ClassList>>,
+    /// The layer's classes, parsed.
+    pub(crate) extra: Option<std::rc::Rc<crate::tailwind::ClassList>>,
 }
 
 /// A node's box from its last layout, before rounding.
@@ -225,6 +254,13 @@ pub(crate) enum Request {
         Point<Points>,
         Option<NodeId>,
         crate::element::AnswerSlot<Vec<NodeId>>,
+    ),
+    /// A layer over a node, or none: applied when queued, so the commit
+    /// lays it out; answers whether the node exists.
+    Override(
+        NodeId,
+        Option<DevOverride>,
+        crate::element::AnswerSlot<bool>,
     ),
     /// The script's: answered by the engine ([`ScriptSources`]).
     Source(NodeId, crate::element::AnswerSlot<Option<DevSource>>),
