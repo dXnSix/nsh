@@ -1,35 +1,52 @@
 name: Fork CI
 
-# Every pull request of the fork is checked on every platform, whatever it
-# changes. Upstream's workflows run only when a pull request touches what
-# they build, and none of them runs on macOS, iOS, Android or the web, whose
-# changes upstream checks by hand. This adds both:
+# The fork's gate: what every pull request and every push to `main` must
+# pass. Lints, compiles and unit tests only, on GitHub's Linux and Windows
+# runners: no window, simulator or emulator, and no macOS runner.
 #
-# - `upstream`: starts, on the pull request's branch, each upstream workflow
-#   its own `pull_request` event did not run (`.github/fork/dispatch.py`):
-#   Core, Linux, Windows, GPUI, Examples and Rust application, as they are
-#   defined upstream. Their checks show on the pull request with the others.
-#   Upstream's Compat is disabled in the fork: it reads longbridge's
-#   nsh-compat, which fails the fork's own cases. `fork-compat.yml` is the
-#   fork's compat check.
-# - `macos`, `ios`, `android`, `web`: clippy, tests, and the examples' tests on
-#   the platform (`nsh test --target <platform>`, `.github/fork/examples.sh`):
-#   macOS windows, an iOS simulator, an Android emulator, headless Chrome.
-#   `web` runs the examples' tests only: clippy for the web crate is
-#   upstream's to add, as no upstream workflow runs it.
-# - `windows-arm64`: upstream's Windows checks (`windows.yml`), on Windows on
-#   Arm (`windows-11-arm`), which no upstream workflow runs on.
+# The fork runs only its own workflows. Upstream's (Core, Linux, Windows,
+# GPUI, Examples, Rust application, TUI, CI paths, Release) are disabled in
+# the fork's settings (`gh workflow disable`): their files stay upstream's,
+# untouched. The jobs here run the same commands as upstream's workflows,
+# copied, so a sync that changes upstream's commands is followed here by
+# hand.
+#
+# - `changes`: which jobs the pull request needs (`.github/fork/changed.py`:
+#   upstream's own `paths` lists). A push to `main` runs them all.
+# - `core`, `linux`, `windows`, `gpui`, `tui`, `examples`, `rust-app`: the
+#   clippy and test steps of upstream's workflow of that name, on one
+#   runner each.
+# - `headless`, `headless-rust`: the examples' tests without a platform
+#   (`nsh test <app>`), in two jobs side by side: the TSX apps, and the
+#   apps that build a Rust crate first.
+# - `android`, `web`, `tizen`: clippy for Android, the web runtime's build
+#   and its JS tests, clippy for Samsung TVs (one architecture).
+#
+# Every `cargo test` step runs through `.github/fork/retry.sh`: a command
+# that fails runs once more before the step fails, and one that then passes
+# is reported as flaky, a warning on the run.
+#
+# What is not here:
+#
+# - The examples' tests on a platform (`nsh test --target <platform>`), the
+#   other runners of upstream's matrices, Windows on Arm and the Tizen
+#   builds run at night and on demand: `fork-full.yml`.
+# - macOS, iOS and the Android emulator are checked on a Mac, not on
+#   GitHub's runners: `.github/fork/local.sh`, which reports to the pull
+#   request as the statuses `apple (local)` and `android (local)`. `changes`
+#   sets them to pending when the pull request changes what those platforms
+#   build.
+# - Compat: `fork-compat.yml`.
 #
 # A fork-only file (branch kind `fork/*`): it never goes upstream, and adds
 # files of its own (`.github/fork/`) rather than editing upstream's, so an
-# upstream sync never conflicts with it. Pushes to `main` run the platform
-# jobs too, which keeps their dependency caches for the pull requests.
+# upstream sync never conflicts with it. Pushes to `main` save the
+# dependency caches the pull requests restore.
 
 on:
   push:
     branches: [main]
   pull_request:
-    # As upstream's workflows (its AGENTS.md "CI", `.github/ci/paths.py`):
     # `closed` runs nothing, but it takes the pull request's concurrency group
     # and so cancels its runs still queued or running once it merges or closes.
     types: [opened, synchronize, reopened, ready_for_review, closed]
@@ -54,113 +71,408 @@ env:
   CARGO_PROFILE_TEST_DEBUG: 0
 
 jobs:
-  upstream:
-    # Nothing for drafts or a pull request being closed.
-    if: github.event_name == 'pull_request' && github.event.action != 'closed' && !github.event.pull_request.draft
+  changes:
+    # Nothing for drafts or a pull request being closed; the jobs below
+    # need this one, and skip with it.
+    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      actions: write
+      pull-requests: read
+      statuses: write
+    outputs:
+      core: ${{ steps.jobs.outputs.core }}
+      linux: ${{ steps.jobs.outputs.linux }}
+      windows: ${{ steps.jobs.outputs.windows }}
+      gpui: ${{ steps.jobs.outputs.gpui }}
+      tui: ${{ steps.jobs.outputs.tui }}
+      examples: ${{ steps.jobs.outputs.examples }}
+      rust-app: ${{ steps.jobs.outputs.rust-app }}
+      headless: ${{ steps.jobs.outputs.headless }}
+      android: ${{ steps.jobs.outputs.android }}
+      web: ${{ steps.jobs.outputs.web }}
+      tizen: ${{ steps.jobs.outputs.tizen }}
     steps:
+      # A pull request's checkout is its merge with `main`, so the script is
+      # `main`'s even for a `pr/*` branch, cut from upstream.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-      # The dispatcher comes from the pull request's merge with its base, as
-      # this file does: a `pr/*` branch, cut from upstream, has no
-      # `.github/fork/`, and a fork change to the dispatcher runs its own.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          path: .fork
-          sparse-checkout: .github/fork
-      - name: Start the upstream workflows this pull request did not run
+      - name: Find the jobs this change needs
+        id: jobs
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          python3 -c "import yaml" 2>/dev/null || pip install pyyaml
-          python3 .fork/.github/fork/dispatch.py "${{ github.event.pull_request.base.sha }}" "${{ github.head_ref }}"
+          if [[ -n "$PR" ]]; then
+            gh api --paginate "repos/$GH_REPO/pulls/$PR/files?per_page=100" --jq '.[].filename' > "$RUNNER_TEMP/files"
+            echo "$(wc -l < "$RUNNER_TEMP/files") changed files"
+            python3 .github/fork/changed.py "$RUNNER_TEMP/files" | tee -a "$GITHUB_OUTPUT"
+          else
+            python3 .github/fork/changed.py --all | tee -a "$GITHUB_OUTPUT"
+          fi
+      # macOS, iOS and the Android emulator are checked on a Mac
+      # (`.github/fork/local.sh`), which sets these statuses to its results.
+      # Pending until then, and left as they are when the check already ran
+      # for this commit. A pull request from another repository has a
+      # read-only token: no status.
+      - name: Ask for the local macOS, iOS and Android checks
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          APPLE: ${{ steps.jobs.outputs.apple }}
+          ANDROID: ${{ steps.jobs.outputs.emulator }}
+        run: |
+          ask() {
+            local have
+            have=$(gh api "repos/$GH_REPO/commits/$SHA/statuses" --jq "[.[] | select(.context == \"$1\")] | length" || echo 1)
+            if [[ "$have" == 0 ]]; then
+              gh api "repos/$GH_REPO/statuses/$SHA" -f state=pending -f context="$1" \
+                -f description='Not run yet: .github/fork/local.sh on a Mac' > /dev/null \
+                || echo "::notice::could not set the status (a read-only token)"
+            fi
+          }
+          if [[ "$APPLE" == true ]]; then ask 'apple (local)'; fi
+          if [[ "$ANDROID" == true ]]; then ask 'android (local)'; fi
 
-  macos:
-    # Nothing for drafts or a pull request being closed.
-    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
-    runs-on: macos-15
+  # Upstream's `core.yml`: the crates every platform shares.
+  core:
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      # The toolchain file's iOS and Android targets are only the release's.
+      RUSTUP_TOOLCHAIN: stable
+      PACKAGES: >-
+        -p nsh-core -p nsh-macros -p nsh-js -p nsh-base -p nsh-engine
+        -p nsh-bundler -p nsh-package -p nsh-testing
+        --features nsh-bundler/bundle,nsh-testing/bundle,nsh-testing/agent
     steps:
       - uses: actions/checkout@v4
+      # QuickJS is C (bindgen needs libclang).
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      # Upstream's action, as it is: huacnlee/cargo and the dependencies'
+      # builds, which main's runs save and pull requests restore.
+      - name: Cargo
+        uses: ./.github/actions/cargo
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache: core
+      - name: Clippy
+        run: cargo clippy --all-targets $PACKAGES -- -D warnings
+      - name: Test
+        run: bash .github/fork/retry.sh cargo test $PACKAGES
+
+  # Upstream's `linux.yml`, job `check`, without each optional feature
+  # alone, the AT-SPI tests and the examples' tests in GTK windows
+  # (`fork-full.yml`).
+  linux:
+    needs: changes
+    if: needs.changes.outputs.linux == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang, GTK 4, WebKitGTK and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev xvfb xauth at-spi2-core python3 libxtst6 libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: linux
       - name: Clippy
         run: >
           cargo clippy --all-targets
-          -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
-          --features nsh-platform-macos/dev
+          -p nsh-platform-linux -p nsh-linux-host -p nsh-linux-app
+          -p nsh-cli -p nsh-dev -p xtask
           -- -D warnings
+      - name: Clippy (without WebKitGTK)
+        run: cargo clippy --all-targets -p nsh-platform-linux -- -D warnings
+      - name: Check without optional features
+        run: cargo clippy -p nsh-linux-app --no-default-features --features js -- -D warnings
+      - name: Test without optional features
+        run: bash .github/fork/retry.sh xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features js --lib without_the_feature
+      # The backend's tests that make GTK widgets run where a display opens:
+      # the second run has a virtual one, with a session bus of its own.
       - name: Test
-        run: cargo test -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
-      - name: Run the examples' tests in macOS windows
-        run: |
-          cargo build -p nsh-cli
-          bash .github/fork/examples.sh macos
+        run: >
+          bash .github/fork/retry.sh cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev
+          && bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --features webview
 
-  ios:
-    # Nothing for drafts or a pull request being closed.
-    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
-    runs-on: macos-15
+  # Upstream's `windows.yml` without the examples' tests in Win32 windows
+  # (`fork-full.yml`).
+  windows:
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
+    runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      # QuickJS is C: bindgen needs libclang, which the image's LLVM has.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # rustc can overflow its default stack on the `windows` crate's
+      # bindings (STATUS_STACK_BUFFER_OVERRUN).
+      RUST_MIN_STACK: "268435456"
     steps:
       - uses: actions/checkout@v4
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-          targets: aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-apple-ios-macabi
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Cargo
+        uses: ./.github/actions/cargo
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # `nsh-platform-ios` is empty off iOS: Catalyst checks it on the Mac.
-      - name: Clippy (Mac Catalyst)
+          cache: windows
+      - name: Clippy
         run: >
-          cargo clippy
-          -p nsh-platform-ios -p nsh-ios-host -p nsh-ios-app
-          --target aarch64-apple-ios-macabi
-          --features nsh-platform-ios/embed,nsh-platform-ios/dev
+          cargo clippy --all-targets
+          -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app
+          -p nsh-cli -p nsh-dev -p xtask
           -- -D warnings
-      - name: Build the simulator's development host
-        run: cargo build -p nsh-ios-host --target aarch64-apple-ios-sim
-      # `nsh test --target ios` boots the newest iPhone simulator.
-      - name: Run the examples' tests in an iOS simulator
+      - name: Check without optional features
+        run: cargo clippy -p nsh-windows-app --no-default-features --features js -- -D warnings
+      # Tests need no display: they open no window.
+      - name: Test
+        shell: bash
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+
+  # Upstream's `gpui.yml` on Linux; macOS and Windows: `fork-full.yml`.
+  gpui:
+    needs: changes
+    if: needs.changes.outputs.gpui == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up the environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/tmp"
+          echo "TMPDIR=$RUNNER_TEMP/tmp" >> "$GITHUB_ENV"
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang libclang-dev build-essential pkg-config \
+            libasound2-dev libfontconfig-dev libfreetype-dev libssl-dev \
+            libvulkan1 libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libzstd-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: gpui
+          lockfiles: "**/Cargo.lock"
+      - name: Clippy
+        working-directory: crates/gpui
+        run: cargo clippy --all-targets --features nsh-platform-gpui/dev -- -D warnings
+      - name: Check without optional features
+        working-directory: crates/gpui
+        run: cargo clippy -p nsh-platform-gpui --no-default-features --features js -- -D warnings
+      - name: Test
+        working-directory: crates/gpui
+        run: bash ../../.github/fork/retry.sh cargo test
+      - name: Test (GPUI's test platform)
+        working-directory: crates/gpui
+        run: bash ../../.github/fork/retry.sh cargo test -p nsh-platform-gpui --features shot
+      - name: Clippy (examples/embed-gpui)
+        working-directory: examples/embed-gpui
+        run: cargo clippy --all-targets -- -D warnings
+
+  # Upstream's `tui.yml` on Linux.
+  tui:
+    needs: changes
+    if: needs.changes.outputs.tui == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: tui
+      - name: Clippy
+        run: cargo clippy -p nsh-platform-tui --all-targets -- -D warnings
+      - name: Test
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-tui
+      - name: Formula rendering with and without math
+        run: |
+          bash .github/fork/retry.sh cargo test -p nsh-base --test base terminal::a_terminal_reads_a_formula_as_text_not_its_tex
+          bash .github/fork/retry.sh cargo test -p nsh-base --features math --test base terminal::a_terminal_reads_a_formula_as_text_not_its_tex
+
+  # Upstream's `examples.yml`: the Rust examples, and every app's bundle.
+  examples:
+    needs: changes
+    if: needs.changes.outputs.examples == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang, GTK 4 and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev jq
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: examples
+      - name: Find the Rust examples
+        id: crates
+        run: >
+          echo "packages=$(cargo metadata --no-deps --format-version 1
+          | jq -r '[.packages[] | select(.manifest_path | contains("/examples/")) | "-p " + .name] | join(" ")')"
+          >> "$GITHUB_OUTPUT"
+      - name: Clippy
+        if: steps.crates.outputs.packages != ''
+        run: cargo clippy --all-targets ${{ steps.crates.outputs.packages }} -- -D warnings
+      - name: Test
+        if: steps.crates.outputs.packages != ''
+        run: bash .github/fork/retry.sh cargo test ${{ steps.crates.outputs.packages }}
+      - name: Build the apps
         run: |
           cargo build -p nsh-cli
-          bash .github/fork/examples.sh ios
+          for entry in $(grep -l "mount(" examples/*/*.tsx) $(grep -l '"root"' examples/*/nsh.json); do
+            ./target/debug/nsh build "$entry" -o "$RUNNER_TEMP/bundles/${entry//\//_}"
+          done
 
+  # Upstream's `rust-app.yml`, job `check`, on Linux; macOS and Windows:
+  # `fork-full.yml`.
+  rust-app:
+    needs: changes
+    if: needs.changes.outputs.rust-app == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up temporary files
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/nsh-test-tmp" >> "$GITHUB_ENV"
+      - name: Install GTK 4 and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: rust-app
+      - name: Clippy
+        run: cargo clippy -p gallery-native --all-targets --locked -- -D warnings
+      - name: Test the crate
+        run: bash .github/fork/retry.sh cargo test -p gallery-native --locked
+      - name: Check the native dependency graph
+        run: |
+          cargo tree -p gallery-native --locked -e normal > "$RUNNER_TEMP/rust-app-dependencies.txt"
+          if grep -E 'nsh-js |rquickjs|quickjs-jit' "$RUNNER_TEMP/rust-app-dependencies.txt"; then
+            echo "The Rust executable unexpectedly links a JS runtime"
+            exit 1
+          fi
+
+  # The examples' tests without a platform, and the generated declarations'
+  # type check: steps of upstream's `rust-app.yml`, job `web`. Two jobs, so
+  # the gate waits for the longer one, not for their sum: this one runs the
+  # TSX apps (the gallery's tests are most of it).
+  headless:
+    needs: changes
+    if: needs.changes.outputs.headless == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up temporary files
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/nsh-test-tmp" >> "$GITHUB_ENV"
+      - name: Install clang and LLVM
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: headless
+      - name: Build the command line
+        run: cargo build -p nsh-cli --locked
+      - name: Run the examples' tests
+        run: |
+          for app in counter gallery tasks; do
+            ./target/debug/nsh test "examples/$app"
+          done
+      - name: Type-check the generated declarations
+        run: ./target/debug/nsh check examples/counter -- --skipLibCheck false
+
+  # The apps with a Rust crate of their own, each built with its headless
+  # runner before its tests run.
+  headless-rust:
+    needs: changes
+    if: needs.changes.outputs.headless == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up temporary files
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/nsh-test-tmp" >> "$GITHUB_ENV"
+      # GTK 4, WebKitGTK and GStreamer: the apps' crates are built for this
+      # machine.
+      - name: Install clang, LLVM, GTK 4, WebKitGTK and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: headless-rust
+      - name: Build the command line
+        run: cargo build -p nsh-cli --locked
+      - name: Run the examples' tests
+        run: |
+          for app in post-editor rust-exports tasks-rs; do
+            ./target/debug/nsh test "examples/$app"
+          done
+
+  # Clippy for Android, as it was; the examples' tests in an emulator: on a
+  # Mac for a pull request (`.github/fork/local.sh`), and `fork-full.yml`.
   android:
-    # Nothing for drafts or a pull request being closed.
-    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # The emulator runs with hardware acceleration.
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      # GTK 4 and GStreamer: the examples' crates (`gallery-rs`, `rust-exports`) are built
-      # for this machine too (GTK's Linux platform plays sounds and videos with GStreamer).
-      - name: Install clang, GTK 4 and GStreamer
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
       # The Android runtime: `javac` + `d8` (Java 17), the SDK's
       # `platforms;android-35` and an NDK: the image's default
-      # (`ANDROID_NDK_HOME`, 27). QuickJS's bindings, generated with the
-      # image's clang, do not build against the headers of its newest (30:
-      # "Unversioned target triples are not supported").
+      # (`ANDROID_NDK_HOME`, 27).
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -181,123 +493,73 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
+          key: android-clippy
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy
         run: cargo xtask clippy-android
-      # The emulator's ABI only, stripped: the development runtime of all
-      # three ABIs at debug is larger than an emulator's storage.
-      - name: Build the development runtime for the emulator
-        run: |
-          cargo xtask android --dev --abi x86_64
-          runtime="$RUNNER_TEMP/nsh-runtime/android/dev"
-          mkdir -p "$runtime"
-          cp -R target/android/debug-dev/. "$runtime/"
-          strip=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)
-          "$strip" --strip-debug "$runtime/lib/x86_64/libnsh.so"
-          echo "NSH_RUNTIME=$RUNNER_TEMP/nsh-runtime" >> "$GITHUB_ENV"
-          cargo build -p nsh-cli
-      - name: Run the examples' tests in an Android emulator
-        id: emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          target: google_apis
-          # The default screen (320 × 640 at 160 dpi): a phone's (pixel_6,
-          # 1080 × 2400) is seven times the pixels for the software renderer,
-          # and the tests ran out of time.
-          disk-size: 6G
-          # No guest Vulkan: wgpu would pick it, and the emulator's
-          # SwiftShader Vulkan stalled on the shader tests and took the
-          # emulator down; GLES is what an emulator on a Mac gives wgpu.
-          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -noaudio -no-boot-anim -camera-back none
-          disable-animations: true
-          script: |
-            bash .github/fork/emulator-logs.sh start "$RUNNER_TEMP/emulator-logs"
-            bash .github/fork/examples.sh android
-      # An emulator that goes away during a test (as it did on the gallery's
-      # Styles page, `examples.sh`) leaves no line in this log: the device's
-      # log, the runner's memory and kernel log and the emulator's crash
-      # reports say what ended it (`.github/fork/emulator-logs.sh`).
-      - name: Collect the emulator's logs
-        if: failure() && steps.emulator.conclusion == 'failure'
-        run: bash .github/fork/emulator-logs.sh collect "$RUNNER_TEMP/emulator-logs"
-      - name: Upload the emulator's logs
-        if: failure() && steps.emulator.conclusion == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-emulator-logs-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/emulator-logs
-          retention-days: 7
 
+  # The web runtime builds (an app published for the web), and its JS
+  # tests that need no browser. The examples' tests in Chrome:
+  # `fork-full.yml`. No clippy for the web crate: no upstream workflow runs
+  # it, and it is upstream's to add.
   web:
-    # Nothing for drafts or a pull request being closed.
-    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@v4
-      # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar); GTK 4 and
-      # GStreamer: the examples' crates (`gallery-rs`, `rust-exports`) are built for
-      # this machine too (GTK's Linux platform plays sounds and videos with GStreamer).
-      - name: Install clang, LLVM, GTK 4 and GStreamer
-        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar).
+      - name: Install clang and LLVM
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Cargo
+        uses: ./.github/actions/cargo
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # `nsh test --target web` opens the apps in the image's Chrome.
-      - name: Run the examples' tests in headless Chrome
+          cache: web
+      - name: The web runtime's JS tests
+        run: node --test crates/nsh-platform-web/web/scroll.test.mjs crates/nsh-platform-web/web/nsh.test.mjs
+      - name: Publish the counter for the web
         run: |
-          cargo build -p nsh-cli
-          bash .github/fork/examples.sh web
+          cargo build -p nsh-cli --locked
+          ./target/debug/nsh package examples/counter --target web -o target/web-gate
+          ls target/web-gate/*/index.html target/web-gate/*/nsh.*.wasm
 
-  windows-arm64:
-    # Nothing for drafts or a pull request being closed.
-    if: github.event_name != 'pull_request' || (github.event.action != 'closed' && !github.event.pull_request.draft)
-    # The checks of upstream's `windows.yml`, on an Arm64 Windows 11 runner
-    # (the `aarch64-pc-windows-msvc` host toolchain, LLVM 20 and Visual
-    # Studio 2022 with the Arm64 tools on its image).
-    runs-on: windows-11-arm
+  # Clippy for Samsung TVs, one architecture, through dXn.GpuiTizen's cross
+  # driver (`fork-tizen.yml`, job `cross`, which builds all three at night).
+  tizen:
+    needs: changes
+    if: needs.changes.outputs.tizen == 'true'
+    runs-on: ubuntu-24.04
     env:
-      # QuickJS is C: bindgen needs libclang, which the image's LLVM has.
-      LIBCLANG_PATH: C:\Program Files\LLVM\bin
-      # rustc can overflow its default stack on the `windows` crate's
-      # bindings (STATUS_STACK_BUFFER_OVERRUN).
-      RUST_MIN_STACK: "268435456"
-    defaults:
-      run:
-        shell: bash
+      DXN_GPUI_TIZEN: ${{ github.workspace }}/.tizen/dXn.GpuiTizen
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: dXn.GpuiTizen (cross driver, target specs)
+        uses: actions/checkout@v4
         with:
-          components: clippy
-      - name: Check the host and libclang
-        run: |
-          rustc -vV | grep '^host: aarch64-pc-windows-msvc$'
-          test -f "$(cygpath -u "$LIBCLANG_PATH")/libclang.dll"
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+          repository: dXnSix/dXn.GpuiTizen
+          path: .tizen/dXn.GpuiTizen
+          persist-credentials: false
+      - name: The Tizen SDK and the 8.0 rootstraps
+        uses: ./.tizen/dXn.GpuiTizen/.github/actions/tizen-sdk
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Clippy
-        run: >
-          cargo clippy --all-targets
-          -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app
-          -p nsh-cli -p nsh-dev -p xtask
-          -- -D warnings
-      # Without the optional features, as upstream checks it.
-      - name: Check without optional features
-        run: cargo clippy -p nsh-windows-app --no-default-features --features js -- -D warnings
-      # Tests need no display: they open no window.
-      - name: Test
-        run: cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
-      - name: Run the examples' tests in Win32 windows
+          packages: TIZEN-8.0-NativeAppDevelopment-CLI
+      - name: Rust (dXn.GpuiTizen's pinned nightly)
+        working-directory: .tizen/dXn.GpuiTizen
         run: |
-          cargo build -p nsh-cli
-          bash .github/fork/examples.sh windows
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >>"$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" --version
+      - name: clang
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+      - name: Clippy for the TV (aarch64)
+        working-directory: .tizen/dXn.GpuiTizen
+        run: |
+          cargo xtask cross --target aarch64 --clippy \
+            --manifest-path "$GITHUB_WORKSPACE/crates/gpui/Cargo.toml" -p nsh-platform-tizen \
+            -- -D warnings

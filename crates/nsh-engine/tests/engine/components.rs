@@ -1590,6 +1590,60 @@ fn clipboard_images_are_unavailable_where_the_clipboard_holds_text_only() {
     assert_eq!(commands, 0, "an image call reached the platform");
 }
 
+const CLIPBOARD_REFUSED: &str = r#"import { mount, signal, Text } from "nsh";
+import { Clipboard } from "nsh";
+
+const shown = signal("waiting");
+setTimeout(async () => {
+  const read = () =>
+    Clipboard.readText().then(
+      (text) => `resolved "${text}"`,
+      (e) => `${e.name} ${e.code} ${e.permission}`,
+    );
+  const refused = await read();
+  const empty = await read();
+  shown.set(`${refused} | ${empty}`);
+}, 0);
+
+mount(() => <Text>{shown()}</Text>);
+"#;
+
+#[test]
+fn clipboard_text_the_person_refuses_rejects() {
+    // iOS's paste prompt answered with Don't Allow Paste: the board holds
+    // text, none was read. Then an empty board, which still reads "".
+    let (engine, rx) = start(CLIPBOARD_REFUSED);
+    let control = engine.control();
+    let wanted = r#"Error ERR_ACCESS_DENIED clipboard | resolved """#;
+    let mut reads = 0;
+    let batches = until(&rx, |batch| {
+        for item in &batch.items {
+            if let MountItem::Command {
+                id: ROOT_ID,
+                command:
+                    Command::ReadClipboard {
+                        id,
+                        has_only: false,
+                    },
+            } = item
+            {
+                reads += 1;
+                let mut payload = vec![
+                    ("id", PayloadValue::Number(*id as f64)),
+                    ("has", PayloadValue::Bool(false)),
+                ];
+                if reads == 1 {
+                    payload.push(("denied", PayloadValue::Bool(true)));
+                }
+                control.dispatch_event(ROOT_ID, EventKind::Clipboard, EventPayload::Map(payload));
+            }
+        }
+        shows(batch, wanted)
+    });
+    assert!(batches.iter().any(|b| shows(b, wanted)), "{wanted}");
+    assert_eq!(reads, 2);
+}
+
 const CLIPBOARD_IMAGE_TOO_LARGE: &str = r#"import { mount, signal, Text } from "nsh";
 import { Clipboard } from "nsh";
 
@@ -2877,6 +2931,112 @@ fn quit_requests_reach_the_app_and_it_decides() {
     assert!(
         commands.contains(&DesktopCommand::SetQuitOnRequest(true)),
         "no listener left: {commands:?}"
+    );
+}
+
+const QUIT_AT_ONCE: &str = r#"import { mount, signal, Text } from "nsh";
+import { Application } from "nsh/desktop";
+
+const saved = signal(false);
+const quits = signal(0);
+Application.on("quitRequest", () => {
+  if (saved()) Application.quit();
+  else saved.set(true);
+});
+Application.on("quit", () => quits.set(quits() + 1));
+mount(() => <Text>{`saved ${saved()} quits ${quits()}`}</Text>);
+"#;
+
+/// On a [`nsh_engine::LocalEngine`] (the web's), the pump that takes a quit
+/// request runs the app's TS listener and carries its answer: a host that
+/// must decide before it returns (a page leaving) learns whether the app
+/// quit. Granting the request does not end the app (the page may still
+/// stay); [`nsh_engine::LocalEngine::start_quit`], as the page goes, runs
+/// the app's `quit` listeners in that call, once.
+#[test]
+fn a_local_engine_answers_a_quit_request_within_the_pump_that_takes_it() {
+    use nsh_core::desktop::{DesktopCommand, WindowEvent};
+
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut engine = nsh_engine::LocalEngine::start(
+        app_config(
+            QUIT_AT_ONCE,
+            Environment {
+                os: nsh_engine::Os::Linux,
+                ..Environment::default()
+            },
+            None,
+            None,
+            &[],
+        ),
+        ApproxTextEngine,
+        ChannelSink(tx),
+    )
+    .expect("the app starts");
+    let app_commands = |batches: &[MountBatch]| -> Vec<DesktopCommand> {
+        batches
+            .iter()
+            .flat_map(|b| &b.items)
+            .filter_map(|item| match item {
+                MountItem::Command {
+                    id: ROOT_ID,
+                    command: Command::Desktop(command),
+                } => Some((**command).clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    // The listener is added by a task of the core: a pump or two.
+    let mut listening = false;
+    for _ in 0..4 {
+        engine.pump();
+        let batches: Vec<MountBatch> = rx.try_iter().collect();
+        if app_commands(&batches).contains(&DesktopCommand::SetQuitOnRequest(false)) {
+            listening = true;
+            break;
+        }
+    }
+    assert!(listening, "the app listens to quit requests");
+    let request = |engine: &mut nsh_engine::LocalEngine<ApproxTextEngine>| {
+        engine.control().dispatch_event(
+            ROOT_ID,
+            EventKind::Window,
+            EventPayload::Window(Box::new(WindowEvent::QuitRequest)),
+        );
+        engine.pump();
+        rx.try_iter().collect::<Vec<MountBatch>>()
+    };
+    let kept = request(&mut engine);
+    assert!(
+        kept.iter().any(|b| shows(b, "saved true quits 0")),
+        "the listener ran: {kept:?}"
+    );
+    assert!(
+        !app_commands(&kept).contains(&DesktopCommand::Quit),
+        "the app keeps running: {kept:?}"
+    );
+    let quit = request(&mut engine);
+    assert!(
+        app_commands(&quit).contains(&DesktopCommand::Quit),
+        "the app quit within the pump: {quit:?}"
+    );
+    assert!(
+        !quit.iter().any(|b| shows(b, "saved true quits 1")),
+        "granting the request does not end the app: {quit:?}"
+    );
+    engine.start_quit();
+    let after: Vec<MountBatch> = rx.try_iter().collect();
+    assert!(
+        after.iter().any(|b| shows(b, "saved true quits 1")),
+        "its quit listener ran: {after:?}"
+    );
+    // The app ends once.
+    engine.start_quit();
+    engine.pump();
+    let again: Vec<MountBatch> = rx.try_iter().collect();
+    assert!(
+        !again.iter().any(|b| shows(b, "saved true quits 2")),
+        "its quit listener ran again: {again:?}"
     );
 }
 
