@@ -861,6 +861,16 @@ pub(crate) fn dev_source<'a>(cx: *mut JsContext) -> &'a crate::dev_source::DevSo
     &dom(cx).dev
 }
 
+/// Stamps node `node` (borrowed) with where it was written (a node a
+/// native component makes later than its use: a dialog's modal).
+pub(crate) fn stamp_node(
+    cx: *mut JsContext,
+    node: JsValue,
+    stamp: Option<crate::dev_source::Stamp>,
+) {
+    set_stamp(cx, node, stamp);
+}
+
 /// Stamps node `node` (borrowed) with where it was written.
 fn set_stamp(cx: *mut JsContext, node: JsValue, stamp: Option<crate::dev_source::Stamp>) {
     let p = node_ptr(cx, node);

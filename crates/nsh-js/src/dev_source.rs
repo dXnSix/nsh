@@ -233,6 +233,38 @@ pub(crate) fn take_pending(cx: *mut JsContext) -> Option<Stamp> {
     dev(cx).pending.take()
 }
 
+/// Keeps `site` on `holder` (a native component's own state object,
+/// borrowed) for a host node it makes later ([`kept_site`]).
+pub(crate) fn keep_site(cx: *mut JsContext, holder: JsValue, site: Option<Stamp>) {
+    let Some(site) = site else { return };
+    for (name, value) in [
+        (c"__nsh_site_a", f64::from(site.anchor)),
+        (c"__nsh_site_d", f64::from(site.delta)),
+        (c"__nsh_site_c", f64::from(site.column)),
+    ] {
+        // SAFETY: a live object; the number is moved in.
+        unsafe { qjs::JS_SetPropertyStr(cx, holder, name.as_ptr(), qjs::JS_NewFloat64(value)) };
+    }
+}
+
+/// The site [`keep_site`] kept on `holder` (borrowed).
+pub(crate) fn kept_site(cx: *mut JsContext, holder: JsValue) -> Option<Stamp> {
+    let read = |name: &std::ffi::CStr| {
+        // SAFETY: a read of a live object; the value is freed.
+        unsafe {
+            let v = qjs::JS_GetPropertyStr(cx, holder, name.as_ptr());
+            let n = number(cx, v);
+            qjs::JS_FreeValue(cx, v);
+            n
+        }
+    };
+    Some(Stamp {
+        anchor: read(c"__nsh_site_a")? as u32,
+        delta: read(c"__nsh_site_d")? as i32,
+        column: read(c"__nsh_site_c")? as u32,
+    })
+}
+
 /// The instance a node made now belongs to (0: none).
 pub(crate) fn current_instance(cx: *mut JsContext) -> u32 {
     let d = dev(cx);
@@ -750,6 +782,66 @@ mod instance_tests {
         assert_eq!(host.node_source(lists[1]), rows(5));
         // Unstamped: neither the hot component's use nor a sibling's site.
         assert_eq!(host.node_source(lists[2]), None);
+    }
+
+    /// The native components of `nsh` and `nsh/native` give their host
+    /// nodes their uses' sites: a stack, its page, a registered native
+    /// component and a dialog (whose modal is made when it opens).
+    #[test]
+    fn native_components_hosts_report_their_own_call_sites() {
+        let host = Host::with_options(crate::HostOptions {
+            ui_sets: vec![nsh_base::registry()],
+            ..Default::default()
+        })
+        .unwrap();
+        host.eval_source(
+            r#"
+            import "nsh:hot";
+            import { mount, nativeComponent } from "nsh";
+            import { NavStack, NavPage, createNavStack, Dialog } from "nsh/base";
+            import { element, insert, anchor, component } from "nsh:rt";
+            const run = (module, exports, require) => {
+                const a0 = anchor("main", "App", 1);
+                const Map = nativeComponent("com.example.map", { props: [] });
+                const App = __nsh_hot.component("main", "App", () => {
+                    const v = element("view", a0, 1, 3);
+                    insert(v, component(NavStack, {
+                        state: createNavStack(["home"]),
+                        children: (route) => component(NavPage, { title: "Home" }, a0, 3, 9),
+                    }, a0, 2, 5));
+                    insert(v, component(Map, {}, a0, 4, 5));
+                    insert(v, component(Dialog, { open: true }, a0, 5, 5));
+                    return v;
+                }, "app");
+                mount(App);
+            };
+            __nsh_hot.define("main", run, false);
+            __nsh_hot.start("main", {});
+            "#,
+        )
+        .unwrap();
+        let mut ops = Vec::new();
+        host.take_ops(&mut ops);
+        let made = |tag: nsh_core::Tag| {
+            ops.iter()
+                .find_map(|op| match op {
+                    nsh_core::Op::Create { id, tag: t } if *t == tag => Some(*id),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {tag:?} made"))
+        };
+        let site = |line, column| {
+            Some(NodeSource {
+                module: "main".to_owned(),
+                anchor: "App".to_owned(),
+                line,
+                column,
+            })
+        };
+        assert_eq!(host.node_source(made(nsh_core::Tag::Stack)), site(3, 5));
+        assert_eq!(host.node_source(made(nsh_core::Tag::Screen)), site(4, 9));
+        assert_eq!(host.node_source(made(nsh_core::Tag::Native)), site(5, 5));
+        assert_eq!(host.node_source(made(nsh_core::Tag::Modal)), site(6, 5));
     }
 
     #[test]
