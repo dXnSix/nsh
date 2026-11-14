@@ -2967,6 +2967,7 @@ fn a_local_engine_answers_a_quit_request_within_the_pump_that_takes_it() {
             },
             None,
             None,
+            &[],
         ),
         ApproxTextEngine,
         ChannelSink(tx),
