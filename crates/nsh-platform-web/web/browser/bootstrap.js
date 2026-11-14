@@ -4628,7 +4628,11 @@
 					min,
 					max,
 					!!options?.snap
-				], [this]);
+				], [
+					this,
+					min,
+					max
+				].filter((v) => nodes.has(v)));
 			},
 			add(b) {
 				return math("add", this, b);
