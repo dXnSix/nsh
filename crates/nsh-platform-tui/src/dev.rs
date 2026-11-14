@@ -106,6 +106,21 @@ impl DevSession {
             }
             Box::new(native)
         });
+        // A dev tool observing the app (`nsh_testing::agent::observe`): its
+        // model takes every batch from the first, outside any test session,
+        // which replaces it with its own.
+        if nsh_testing::agent::observer_wanted() {
+            let model = nsh_testing::agent::Model::observing();
+            let (session, native) = agent::TestSession::new(model.clone(), wake.clone());
+            // The ordered inbox: attached before the first bundle.
+            if sender.send(Message::Test(session)).is_ok() {
+                wake.notify();
+            }
+            nsh_testing::agent::hand_over(nsh_testing::agent::Observation {
+                model,
+                native: Box::new(native),
+            });
+        }
         let tests = tester.clone();
         let client = DevClient::start(url, host, move |event| {
             let Some(event) = tests.event(event) else {

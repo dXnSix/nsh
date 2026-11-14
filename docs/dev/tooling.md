@@ -874,6 +874,19 @@ in the desktop idiom at any width (`nsh.js`'s `testSetup`, before the `idiom` op
 every other target runs them as desktops; `platform.os` stays `web`. Without a `platform`, or with `web`, the page
 measures as a real browser does.
 
+### Observe mode (dev tools)
+
+A dev tool inside an app can keep the same model of the views outside a test session. The app crate registers an
+observer with `nsh_testing::agent::observe(callback)` before its host starts (process-wide, the first call wins). A
+normal dev session then attaches an observing model (`Model::observing()`) before the first bundle, so its mirror
+holds every batch, and hands the observer an `Observation`: the model and the platform's `Native` driver, whose calls
+block on the main thread and are never made from the engine's. The app is not under test: an observing model swaps
+none of the engine's services (storage, network, clipboard and `openUrl` stay the app's), leaves culling on, and the
+host's `testing()` stays false, so the user's own pointer and keys, frame pacing and lifecycle are as they are. The
+mirror is reset on every engine start. A real test session replaces the observing model with its own; a host with no
+observer registered behaves as before. Each platform's `dev.rs` attaches it (macOS, Linux, Windows, iOS, Android, the
+terminal).
+
 ## New apps (`nsh init --template`)
 
 `nsh init <dir> --template ts|rust|mixed` (`init.rs`) writes one of three apps; without `--template` it asks with a

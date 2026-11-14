@@ -1180,10 +1180,15 @@ impl Surface {
         });
     }
 
-    /// Whether `nsh test --target` drives the app ([`Surface::set_test_model`]).
+    /// Whether `nsh test --target` drives the app ([`Surface::set_test_model`]):
+    /// a dev tool's observing model leaves the app as the user runs it.
     pub(crate) fn testing(&self) -> bool {
         #[cfg(feature = "dev")]
-        return self.test_model.borrow().is_some();
+        return self
+            .test_model
+            .borrow()
+            .as_ref()
+            .is_some_and(|model| !model.observes());
         #[cfg(not(feature = "dev"))]
         false
     }

@@ -112,6 +112,19 @@ impl DevSession {
             });
             Box::new(crate::agent::IosNative::new(key))
         });
+        // A dev tool observing the app (`nsh_testing::agent::observe`): its
+        // model takes every batch from the first, outside any test session,
+        // which replaces it with its own.
+        if nsh_testing::agent::observer_wanted()
+            && let Some(observed) = view.upgrade()
+        {
+            let model = nsh_testing::agent::Model::observing();
+            observed.set_test_model(model.clone());
+            nsh_testing::agent::hand_over(nsh_testing::agent::Observation {
+                model,
+                native: Box::new(crate::agent::IosNative::new(key)),
+            });
+        }
         let tests = tester.clone();
         let target = MainThreadBound::new((view, ui.clone()), mtm);
         let target = Arc::new(target);

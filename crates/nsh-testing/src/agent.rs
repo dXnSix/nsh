@@ -14,6 +14,18 @@
 //! 100 ms, 2 s at most (one that loops forever, a spinner, is not waited
 //! for). [`Native`]'s calls come from that thread; implementations do
 //! their work on the main thread and return when it is done.
+//!
+//! **Observe mode** (dev tools) is the other way to have a model: an app
+//! crate registers an observer with [`observe`] before its host starts,
+//! and a normal dev session then keeps an observing model
+//! ([`Model::observing`]) from the first batch on and hands it, with the
+//! platform's [`Native`], to the observer ([`hand_over`]). The app is not
+//! under test: an observing model swaps nothing of the engine (storage,
+//! network, clipboard, `openUrl` stay the app's), leaves culling on, and
+//! the host stays as it is (the user's pointer and keys, frame pacing,
+//! lifecycle: each platform's `testing()` is true only for a model that
+//! does not observe). The host resets it on every engine start. A real
+//! test session replaces it with its own model for its duration.
 
 use std::{
     sync::{Arc, Condvar, Mutex, MutexGuard},
@@ -100,6 +112,44 @@ pub struct Model {
     changed: Condvar,
     /// What the test set the app up with ([`Model::set_up`]).
     setup: Mutex<Option<Setup>>,
+    /// A dev tool's model in a normal dev session ([`Model::observing`]).
+    observing: bool,
+}
+
+/// What an observer gets ([`observe`]): the model of what the host shows
+/// and the platform's native driver.
+pub struct Observation {
+    /// The host's observing model, which takes every batch from the first.
+    pub model: Arc<Model>,
+    /// The platform's part: where views are, input, screenshots. Its calls
+    /// block on the host's main thread: never make them from the engine's.
+    pub native: Box<dyn Native>,
+}
+
+/// What [`observe`] registered.
+type Observer = Box<dyn Fn(Observation) + Send + Sync>;
+
+static OBSERVER: std::sync::OnceLock<Observer> = std::sync::OnceLock::new();
+
+/// Registers `observer` to get the [`Observation`] of every dev session a
+/// host starts (process-wide; the first call wins). An app crate calls it
+/// before its host starts. Returns whether this call registered it.
+pub fn observe(observer: impl Fn(Observation) + Send + Sync + 'static) -> bool {
+    OBSERVER.set(Box::new(observer)).is_ok()
+}
+
+/// Whether an observer is registered: a host's dev session then keeps an
+/// observing model.
+pub fn observer_wanted() -> bool {
+    OBSERVER.get().is_some()
+}
+
+/// Hands `observation` to the registered observer (a host's dev session,
+/// once its observing model is attached); does nothing without one.
+pub fn hand_over(observation: Observation) {
+    if let Some(observer) = OBSERVER.get() {
+        observer(observation);
+    }
 }
 
 /// What a test session's app starts with, in place of the platform's.
@@ -141,6 +191,29 @@ struct State {
 }
 
 impl Model {
+    /// A model for a dev tool to observe the app with in a normal dev
+    /// session ([`observe`]): attached before the first bundle, it swaps
+    /// nothing of the engine and leaves culling on.
+    pub fn observing() -> Arc<Model> {
+        Arc::new(Model {
+            observing: true,
+            ..Model::default()
+        })
+    }
+
+    /// Whether it is a dev tool's model, not a test session's: the host is
+    /// then not under test.
+    pub fn observes(&self) -> bool {
+        self.observing
+    }
+
+    /// Forgets what the host showed (the engine starts again, a reload):
+    /// the mirror is built anew from the next batch.
+    pub fn reset(&self) {
+        *self.lock() = State::default();
+        self.changed.notify_all();
+    }
+
     /// Takes in a batch the host applied (on its main thread, after
     /// applying it).
     pub fn apply(&self, batch: &MountBatch) {
@@ -257,6 +330,10 @@ impl Model {
     /// host hands the engine back once it started
     /// ([`Model::engine_started`]).
     pub fn set_up_engine(&self, config: &mut nsh_engine::EngineConfig) {
+        // An observed app runs as the user runs it.
+        if self.observing {
+            return;
+        }
         let mut setup = self.setup.lock().unwrap_or_else(|e| e.into_inner());
         let Some(setup) = &mut *setup else { return };
         config.network = Some(Arc::new(forward::ForwardNetwork {
@@ -316,6 +393,11 @@ impl Model {
     /// The engine [`Model::set_up_engine`] set up started: the test moves
     /// its clock through it.
     pub fn engine_started(&self, engine: nsh_engine::EngineControl) {
+        // An observed app keeps its culling; the mirror starts anew.
+        if self.observing {
+            self.reset();
+            return;
+        }
         // Steps reach every view of a page, below its fold too, as the
         // headless driver's do.
         engine.set_content_culling(false);
@@ -2885,5 +2967,146 @@ mod tests {
             );
             assert_eq!(pressed.lock().unwrap().len(), 7);
         }
+    }
+}
+
+/// Observe mode: an observing model swaps nothing, keeps the mirror from
+/// the first batch, is reset on engine start, and gets to the observer; a
+/// real test session's model is not one.
+#[cfg(test)]
+mod observe_tests {
+    use std::sync::Arc;
+
+    use nsh_core::{element::Root, prelude::*};
+    use nsh_engine::EngineConfig;
+
+    use super::*;
+
+    #[component]
+    fn Hello() -> impl IntoElement {
+        view().child(text("Hello"))
+    }
+
+    /// A platform that does nothing.
+    struct Quiet;
+
+    impl Native for Quiet {
+        fn bounds(&self, _: NodeId) -> Option<Bounds<Points>> {
+            None
+        }
+        fn viewport(&self) -> Size<Points> {
+            Size::new(Points(1.0), Points(1.0))
+        }
+        fn press(&self, _: Point<Points>) {}
+        fn long_press(&self, _: Point<Points>, _: Duration) {}
+        fn scroll(&self, _: Point<Points>, _: Point<Points>) {}
+        fn drag(&self, _: Point<Points>, _: Point<Points>) {}
+        fn type_text(&self, _: &str) {}
+        fn key(&self, _: Key) {}
+        fn input_text(&self, _: NodeId) -> Option<String> {
+            None
+        }
+        fn back(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn answer_dialog(&self, _: Option<&str>) -> Result<(), String> {
+            Ok(())
+        }
+        fn animating(&self) -> bool {
+            false
+        }
+        fn screenshot(&self) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+        fn resize(&self, _: Points, _: Points) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_dark(&self, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn quit(&self) {}
+    }
+
+    fn batches_of(model: &Model) -> u64 {
+        model.lock().batches
+    }
+
+    #[test]
+    fn an_observing_model_swaps_nothing_of_the_engine() {
+        let model = Model::observing();
+        assert!(model.observes());
+        assert!(!Model::default().observes());
+        // Even set up as a test would, it leaves the app's own services.
+        model.set_up(
+            vec![("k".into(), "v".into())],
+            true,
+            nsh_dev::protocol::TestEnvironment::default(),
+            Arc::new(|_| {}),
+        );
+        let mut config = EngineConfig::new(Root::of::<Hello>());
+        model.set_up_engine(&mut config);
+        assert!(config.storage.is_none());
+        assert!(config.network.is_none());
+        assert!(config.clipboard.is_none());
+        assert!(config.refuse_connections.is_none());
+        assert!(!config.trace);
+        // A test session's model takes them over.
+        let tested = Model::default();
+        tested.set_up(
+            Vec::new(),
+            false,
+            nsh_dev::protocol::TestEnvironment::default(),
+            Arc::new(|_| {}),
+        );
+        let mut config = EngineConfig::new(Root::of::<Hello>());
+        tested.set_up_engine(&mut config);
+        assert!(config.storage.is_some() && config.clipboard.is_some());
+    }
+
+    #[test]
+    fn the_mirror_starts_with_the_first_batch_and_is_reset_on_engine_start() {
+        let (engine, batches) = crate::start(EngineConfig::new(Root::of::<Hello>())).unwrap();
+        let model = Model::observing();
+        let first = batches.recv_timeout(Duration::from_secs(5)).unwrap();
+        model.apply(&first);
+        assert_eq!(batches_of(&model), 1);
+        assert!(model.lock().screen.texts().contains(&"Hello"));
+        // The engine starts again (a reload): the mirror starts anew.
+        model.engine_started(engine.control());
+        assert_eq!(batches_of(&model), 0);
+        assert!(model.lock().screen.texts().is_empty());
+    }
+
+    #[test]
+    fn the_first_observer_wins_and_gets_the_observation() {
+        static GOT: Mutex<Vec<bool>> = Mutex::new(Vec::new());
+        let registered = observe(|observation| {
+            GOT.lock().unwrap().push(observation.model.observes());
+        });
+        // Another registration (another app crate) does not replace it.
+        assert!(!observe(|_| panic!("the second observer never runs")));
+        assert!(registered);
+        assert!(observer_wanted());
+        hand_over(Observation {
+            model: Model::observing(),
+            native: Box::new(Quiet),
+        });
+        assert_eq!(*GOT.lock().unwrap(), [true]);
+    }
+
+    /// A real test session makes a model of its own, not an observing
+    /// one: the host replaces the observing model with it.
+    #[test]
+    fn a_test_session_replaces_the_observing_model() {
+        let host: Arc<Mutex<Option<Arc<Model>>>> = Arc::new(Mutex::new(Some(Model::observing())));
+        let slot = host.clone();
+        let tester = Tester::new(move |model| {
+            *slot.lock().unwrap() = Some(model);
+            Box::new(Quiet)
+        });
+        assert!(host.lock().unwrap().as_ref().unwrap().observes());
+        assert!(tester.event(nsh_dev::DevEvent::Testing).is_none());
+        let now = host.lock().unwrap().clone().unwrap();
+        assert!(!now.observes());
     }
 }
