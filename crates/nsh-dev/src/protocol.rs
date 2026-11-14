@@ -1122,6 +1122,7 @@ mod tests {
             platform: Some(HostPlatform::Tizen),
             ui_sets: None,
             tests: false,
+            running: None,
         };
         let text = serde_json::to_string(&hello).unwrap();
         assert!(text.contains(r#""platform":"tizen""#), "{text}");
