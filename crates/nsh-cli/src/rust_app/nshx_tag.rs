@@ -161,11 +161,12 @@ mod tests {
             "Cargo's checkout, not the repository"
         );
         // The generated manifests take nsh's crates from that checkout.
-        assert!(
-            nsh.dep("nsh-core", "")
-                .contains(&*checkout.join("crates/nsh-core").to_string_lossy()),
-            "{}",
-            nsh.dep("nsh-core", "")
+        assert_eq!(
+            nsh.dep("nsh-core", ""),
+            format!(
+                "{{ path = {:?} }}",
+                checkout.join("crates").join("nsh-core").to_string_lossy()
+            )
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
