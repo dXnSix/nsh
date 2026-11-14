@@ -724,7 +724,7 @@ fn render_component(
     props: JsValue,
     spec_data: *mut JsValue,
 ) -> Result<JsValue, JsValue> {
-    let node = dom::create_element(cx, nsh_core::Tag::View)?;
+    let node = dom::create_host_element(cx, nsh_core::Tag::View)?;
     let guard = Owned(cx, node);
     let name = new_string(cx, spec.name);
     let r = dom::set_prop_value(cx, node, "component", name);

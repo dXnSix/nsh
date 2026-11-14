@@ -839,12 +839,19 @@ pub(crate) fn push_op(cx: *mut JsContext, op: Op) -> Result<(), JsValue> {
     dom(cx).push(cx, op)
 }
 
-/// A new host element (owned). A native component's host node: it takes
-/// the call site of the component use rendering it (`dev_source`).
+/// A new host element (owned).
 pub(crate) fn create_element(cx: *mut JsContext, tag: Tag) -> Result<JsValue, JsValue> {
     let id = next_id(cx);
     dom(cx).push(cx, Op::Create { id, tag })?;
-    let node = new_node(cx, id, false, Some(tag));
+    Ok(new_node(cx, id, false, Some(tag)))
+}
+
+/// A native component's host node (owned): [`create_element`], taking the
+/// call site of the component use rendering it (`dev_source`). Only the
+/// node a native component renders as calls this; the other nodes it makes
+/// (slots, placeholders, windows) are made with [`create_element`].
+pub(crate) fn create_host_element(cx: *mut JsContext, tag: Tag) -> Result<JsValue, JsValue> {
+    let node = create_element(cx, tag)?;
     set_stamp(cx, node, crate::dev_source::take_pending(cx));
     Ok(node)
 }
@@ -3836,7 +3843,7 @@ unsafe extern "C" fn render_host(
     let Some(tag) = string_arg(cx, tag).and_then(|t| Tag::from_name(&t)) else {
         return UNDEFINED;
     };
-    let node = match create_element(cx, tag) {
+    let node = match create_host_element(cx, tag) {
         Ok(node) => node,
         Err(e) => return e,
     };

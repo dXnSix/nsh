@@ -10,8 +10,10 @@
 //! not render again with their right lines.
 //!
 //! A component use sets the call site it was written at as pending while
-//! its component runs: a native component's host node, made with
-//! [`crate::dom::create_element`], takes it.
+//! its component starts: a native component's host node, made with
+//! [`crate::dom::create_host_element`], takes it, and so does the instance
+//! of a hot component, so nothing else made in its body (slots, rows'
+//! placeholders, other nodes) gets it.
 //!
 //! Each render of a hot component (the bundler's proxies, `hot.rs`) is an
 //! instance: its `module:name` key, its call site and its props, provided
@@ -262,7 +264,8 @@ pub(crate) fn begin_instance(cx: *mut JsContext, key: &str, props: JsValue) -> u
         id,
         Instance {
             key: key.to_owned(),
-            call_site: d.pending.get(),
+            // Taken: the component's body is not at its use's site.
+            call_site: d.pending.take(),
             parent,
             // SAFETY: kept until the instance goes.
             props: unsafe { qjs::JS_DupValue(cx, props) },
@@ -673,6 +676,80 @@ mod instance_tests {
         );
         // Listing them ran no getter.
         assert!(renders(&host));
+    }
+
+    /// Only a native component's host node takes its use's site: not the
+    /// placeholders of rows rendered later, nor what the body of a hot
+    /// component makes, nor a second native component used without a stamp.
+    #[test]
+    fn only_host_nodes_take_a_use_s_call_site() {
+        let host = Host::new().unwrap();
+        host.set_lazy_rows(true);
+        host.eval_source(
+            r#"
+            import "nsh:hot";
+            import { mount } from "nsh";
+            import { element, insert, anchor, component, each, list } from "nsh:rt";
+            const run = (module, exports, require) => {
+                const a0 = anchor("main", "Rows", 2);
+                const a1 = anchor("main", "App", 20);
+                const Rows = __nsh_hot.component("main", "Rows", () => {
+                    const v = element("view", a0, 1, 10);
+                    const items = Array.from({ length: 200 }, (_, i) => i);
+                    insert(v, each(() => items, (i) => element("view")));
+                    insert(v, component(list, { each: [], children: () => element("view") }, a0, 2, 5));
+                    insert(v, component(list, { each: [], children: () => element("view") }, a0, 3, 5));
+                    insert(v, component(list, { each: [], children: () => element("view") }));
+                    return v;
+                }, "rows");
+                const App = __nsh_hot.component("main", "App", () => {
+                    const v = element("view", a1, 1, 10);
+                    insert(v, component(Rows, {}, a1, 2, 7));
+                    return v;
+                }, "app");
+                mount(App);
+            };
+            __nsh_hot.define("main", run, false);
+            __nsh_hot.start("main", {});
+            "#,
+        )
+        .unwrap();
+        let mut ops = Vec::new();
+        host.take_ops(&mut ops);
+        let placeholders: Vec<nsh_core::NodeId> = ops
+            .iter()
+            .filter_map(|op| match op {
+                nsh_core::Op::Placeholder { id } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert!(!placeholders.is_empty(), "lazy rows made placeholders");
+        for id in placeholders {
+            assert_eq!(host.node_source(id), None, "placeholder {id}");
+        }
+        let lists: Vec<nsh_core::NodeId> = ops
+            .iter()
+            .filter_map(|op| match op {
+                nsh_core::Op::Create {
+                    id,
+                    tag: nsh_core::Tag::List,
+                } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        let rows = |line| {
+            Some(NodeSource {
+                module: "main".to_owned(),
+                anchor: "Rows".to_owned(),
+                line,
+                column: 5,
+            })
+        };
+        assert_eq!(lists.len(), 3);
+        assert_eq!(host.node_source(lists[0]), rows(4));
+        assert_eq!(host.node_source(lists[1]), rows(5));
+        // Unstamped: neither the hot component's use nor a sibling's site.
+        assert_eq!(host.node_source(lists[2]), None);
     }
 
     #[test]
