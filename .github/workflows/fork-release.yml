@@ -5,15 +5,15 @@ name: Fork release
 # the GitHub release of an `nshx-*` tag, so tools that pin a fork tag (rayx)
 # download it instead of compiling NSH.
 #
-# - Pushing a tag `nshx-<workspace version>-<n>` (`scripts/sync-main.sh tag`
-#   on the fork's `private/fork-docs` branch pushes it) builds and releases it.
+# - Pushing a tag `nshx-<workspace version>-<n>` (the nshx-release skill in
+#   nsh-root makes and pushes it) builds and releases it.
 # - Running it by hand builds and releases an existing tag, such as one made
 #   before this workflow existed.
 #
 # A fork-only file (branch kind `fork/*`): it never goes upstream. Its build
 # steps are upstream's `dist` job in `release.yml`, which keeps running on
 # `v*` tags only, and the fork creates none. When an upstream sync changes
-# `release.yml`, copy the change here (`sync-main.sh upstream` warns).
+# `release.yml`, copy the change here (the nshx-sync-upstream skill checks).
 #
 # Assets: `nsh-<platform>.tar.gz` (`.zip` on Windows), each holding one
 # `nsh/` directory laid out as `dist/nsh`, with a `.sha256` beside it, and a
