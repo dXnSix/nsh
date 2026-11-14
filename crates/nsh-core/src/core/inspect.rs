@@ -232,10 +232,10 @@ impl<M: TextEngine> Core<M> {
         out
     }
 
-    /// The root views to pick in, bottom first: the surface, its own root
-    /// views (fixed views, header items, accessories) in tree order, the
-    /// overlays shown on it in show order, then each modal in tree order
-    /// with the overlays shown on it. Those in `skip`'s subtree or under a
+    /// The root views to pick in, bottom first: the surface, its header
+    /// items and accessories in tree order, the overlays (and fixed views)
+    /// shown on it in show order, then each modal in tree order with those
+    /// shown on it. Those in `skip`'s subtree or under a
     /// hidden view are left out.
     fn pick_layers(&self, skip: Option<NodeId>) -> Vec<Key> {
         let excluded = |key: Key| {
@@ -254,12 +254,11 @@ impl<M: TextEngine> Core<M> {
         let mut stack = vec![self.root];
         while let Some(key) = stack.pop() {
             let node = &self.nodes[key as usize];
-            if key != self.root && is_root_view(node) && node.kind != Kind::Overlay {
-                if node.kind == Kind::Modal {
-                    modals.push(key);
-                } else {
-                    surface_views.push(key);
-                }
+            // Overlays and fixed views come in shown, from `self.overlays`.
+            match node.kind {
+                Kind::Modal => modals.push(key),
+                Kind::HeaderItem | Kind::InputAccessory => surface_views.push(key),
+                _ => {}
             }
             stack.extend(node.children.iter().rev().copied());
         }
@@ -834,5 +833,61 @@ mod pick_tests {
         } else {
             panic!("{hits:?}");
         }
+    }
+
+    fn fixed(id: NodeId, parent: NodeId, w: f32, h: f32) -> Vec<Op> {
+        vec![
+            Op::Create { id, tag: Tag::View },
+            Op::Insert {
+                parent,
+                child: id,
+                before: None,
+            },
+            style_op(
+                id,
+                &[
+                    ("position", StyleValue::Str("fixed")),
+                    ("left", StyleValue::Number(0.0)),
+                    ("top", StyleValue::Number(0.0)),
+                    ("width", StyleValue::Number(w)),
+                    ("height", StyleValue::Number(h)),
+                ],
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_fixed_view_is_picked_once_above_the_tree() {
+        let mut c = core();
+        let mut ops = boxed(2, ROOT_ID, 0.0, 0.0, 100.0, 100.0);
+        ops.extend(fixed(4, 2, 50.0, 50.0));
+        apply(&mut c, ops);
+        c.commit();
+        assert_eq!(c.dev_pick(at(5.0, 5.0), None), [4, 2, ROOT_ID]);
+    }
+
+    #[test]
+    fn a_fixed_view_in_a_modal_is_above_the_modal_s_content() {
+        let mut c = core();
+        let mut ops = boxed(2, ROOT_ID, 0.0, 0.0, 100.0, 100.0);
+        ops.extend([
+            Op::Create {
+                id: 4,
+                tag: Tag::Modal,
+            },
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+        ]);
+        ops.extend(boxed(6, 4, 0.0, 0.0, 80.0, 80.0));
+        ops.extend(fixed(8, 6, 40.0, 40.0));
+        apply(&mut c, ops);
+        c.commit();
+        let hits = c.dev_pick(at(5.0, 5.0), None);
+        let first = |id| hits.iter().position(|&h| h == id).unwrap_or(usize::MAX);
+        assert_eq!(hits.iter().filter(|&&h| h == 8).count(), 1, "{hits:?}");
+        assert!(first(8) < first(6) && first(6) < usize::MAX, "{hits:?}");
     }
 }
