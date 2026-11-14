@@ -116,16 +116,20 @@ case "$target" in
   # Shift+F10 opens the app as the web, which `--target ios` refuses, and
   # since the sync with upstream `6a4f1de19` the menu its held finger opens
   # has chosen its item before the test's press on it, which finds no menu.
-  # Menus runs all but one test: "off iOS the system's menu card…"
+  # Menus runs all but two tests: "off iOS the system's menu card…"
   # (upstream's #1736) opens the gallery as macOS, which `--target ios`
-  # refuses.
+  # refuses, and "a row's menu changes the list" fails on upstream's own
+  # code since its #1930 (iOS hardware keys): a tap on the ⋯ button of a
+  # focusable row opens no menu (upstream `a68a2e388` fails it on the
+  # simulator, and passes it with #1930 reverted). It comes back when
+  # upstream fixes that.
   ios)
     gallery=(animations device error-boundary gestures links list-search
       mention navigation network photos press shaders storage text-view timers)
     filtered=("environment appearance" "form the Input demo" "form a disabled field"
       "menus submenus three levels" "menus undo and redo" "menus settings are checkable"
       "menus a choice of one closes" "menus a choice of one in a submenu"
-      "menus a row's context menu" "menus a row's menu changes"
+      "menus a row's context menu"
       "menus the placement and alignment" "menus a long menu scrolls"
       "menus a command that takes a while" "menus on iOS the system's menu card"
       "context-menu-press a tap presses"
