@@ -8,8 +8,8 @@ use crate::{
     NodeId,
     geometry::{Point, Points, point, size_pt},
     inspect::{
-        DevBox, DevDetail, DevEdges, DevFlags, DevList, DevNode, DevScroll, DevState, DevTree,
-        Request,
+        DevBox, DevDetail, DevEdges, DevFlags, DevList, DevNode, DevOverride, DevScroll, DevState,
+        DevTree, NodeDev, Request,
     },
     text::TextEngine,
 };
@@ -59,6 +59,12 @@ impl<M: TextEngine> Core<M> {
     /// Queues a tool's question for the next commit (the first one makes
     /// the dev state).
     pub(super) fn queue_inspect(&mut self, request: Request) {
+        if let Request::Override(id, layer, answer) = request {
+            // Now, so the next commit lays it out.
+            let found = self.dev_override(id, layer);
+            answer.borrow_mut().deliver(found);
+            return;
+        }
         let dev = self.dev.get_or_insert_with(Box::<DevState>::default);
         if request.is_script() {
             dev.script.push(request);
@@ -121,6 +127,72 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// Puts `layer` over node `id`'s authored classes, style and states, or
+    /// takes it away (`None`): the node is then exactly as its own code set
+    /// it. Returns whether the node exists.
+    pub fn dev_override(&mut self, id: NodeId, layer: Option<DevOverride>) -> bool {
+        let Ok(key) = self.key(id) else {
+            return false;
+        };
+        // The classes the node's own code set: kept by its layer, else the
+        // incoming list (under its state styles, when it has them).
+        let node = &mut self.nodes[key as usize];
+        let base = match node.dev.take() {
+            Some(dev) => dev.base,
+            None => match node.parts.as_deref() {
+                Some(parts) => parts.base.clone(),
+                None => node.classes.clone(),
+            },
+        };
+        if let Some(layer) = layer {
+            self.nodes[key as usize].dev = Some(Box::new(NodeDev {
+                layer,
+                base: base.clone(),
+            }));
+        }
+        // Resolved again, with the layer or without.
+        self.set_class_list(key, base);
+        self.update_tracking(key);
+        true
+    }
+
+    /// The classes of `key` with its layer: `classes` (what its code set)
+    /// becomes the layer's base.
+    pub(super) fn overridden_classes(
+        &mut self,
+        key: Key,
+        classes: Option<std::rc::Rc<crate::tailwind::ClassList>>,
+    ) -> Option<std::rc::Rc<crate::tailwind::ClassList>> {
+        let Some(dev) = self.nodes[key as usize].dev.as_deref_mut() else {
+            return classes;
+        };
+        dev.base = classes.clone();
+        let (class, replace) = (dev.layer.class.clone(), dev.layer.replace_class);
+        // Parsed with the theme and tokens now (cached), as the node's own.
+        let extra = (!class.trim().is_empty()).then(|| self.tailwind.get(&class).0);
+        if replace {
+            return extra;
+        }
+        match (classes, extra) {
+            (Some(c), Some(e)) => Some(std::rc::Rc::new(c.merged(&e))),
+            (None, Some(e)) => Some(e),
+            (c, None) => c,
+        }
+    }
+
+    /// The theme or the tokens changed: overridden nodes resolve their
+    /// layers' classes again, those without classes of their own too.
+    pub(super) fn restyle_overrides(&mut self) {
+        let keys: Vec<(Key, Option<std::rc::Rc<crate::tailwind::ClassList>>)> = self
+            .nodes
+            .iter()
+            .filter_map(|(k, n)| Some((k as Key, n.dev.as_deref()?.base.clone())))
+            .collect();
+        for (key, base) in keys {
+            self.set_class_list(key, base);
+        }
+    }
+
     /// Whether a tool ever asked this core anything (it then has dev
     /// state).
     pub fn inspected(&self) -> bool {
@@ -171,7 +243,7 @@ impl<M: TextEngine> Core<M> {
                 placeholder: node.placeholder,
                 hidden: node.view_style.hidden || node.hidden_in_text,
                 overlay: node.is_overlay(),
-                overridden: false,
+                overridden: node.dev.is_some(),
             },
         }
     }
@@ -211,7 +283,7 @@ impl<M: TextEngine> Core<M> {
                 columns: l.columns,
             }),
             cell: node.slot,
-            override_style: None,
+            dev_override: node.dev.as_deref().map(|dev| dev.layer.clone()),
         })
     }
 
@@ -466,7 +538,7 @@ mod tree_tests {
         assert_eq!(detail.layout.border.top, Points(0.0));
         assert!(detail.events.contains(EventKind::Press));
         assert!(detail.view_style.border_radius.0 > 0.0);
-        assert_eq!(detail.override_style, None);
+        assert_eq!(detail.dev_override, None);
         assert!(c.dev_node(9_999).is_none());
     }
 
@@ -889,5 +961,286 @@ mod pick_tests {
         let first = |id| hits.iter().position(|&h| h == id).unwrap_or(usize::MAX);
         assert_eq!(hits.iter().filter(|&&h| h == 8).count(), 1, "{hits:?}");
         assert!(first(8) < first(6) && first(6) < usize::MAX, "{hits:?}");
+    }
+}
+
+#[cfg(test)]
+mod override_tests {
+    use super::super::tests::{apply, core, style_op};
+    use crate::{
+        NodeId, Op, Prop, ROOT_ID, Style, StylePatch, StyleValue, Tag, geometry::Points,
+        inspect::DevOverride, prelude::*, tailwind::state,
+    };
+
+    type TestCore = crate::core::Core<super::super::tests::FakeEngine>;
+
+    fn styled(id: NodeId, class: Option<&str>, width: f32) -> Vec<Op> {
+        let mut ops = vec![
+            Op::Create { id, tag: Tag::View },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: id,
+                before: None,
+            },
+            style_op(
+                id,
+                &[
+                    ("width", StyleValue::Number(width)),
+                    ("height", StyleValue::Number(50.0)),
+                ],
+            ),
+        ];
+        if let Some(class) = class {
+            ops.push(Op::SetProp {
+                id,
+                prop: Prop::Class(class.into()),
+            });
+        }
+        ops
+    }
+
+    fn patch(props: &[(&str, StyleValue<'_>)]) -> StylePatch {
+        let mut patch = StylePatch::default();
+        let mut style = Style::default();
+        for &(k, v) in props {
+            patch.set(&mut style, k, v).unwrap();
+        }
+        patch
+    }
+
+    /// What the node shows: its view style and box.
+    fn shown(c: &TestCore, id: NodeId) -> (crate::ViewStyle, crate::inspect::DevBox) {
+        let d = c.dev_node(id).unwrap();
+        (d.view_style, d.layout)
+    }
+
+    #[test]
+    fn a_layer_survives_the_node_s_own_updates_and_clearing_restores_it() {
+        let mut c = core();
+        apply(&mut c, styled(2, Some("p-2"), 100.0));
+        c.commit();
+        assert!(c.dev_override(
+            2,
+            Some(DevOverride {
+                class: "p-8".into(),
+                style: patch(&[("opacity", StyleValue::Number(0.5))]),
+                ..Default::default()
+            })
+        ));
+        c.commit();
+        let (view, layout) = shown(&c, 2);
+        assert_eq!(layout.padding.left, Points(32.0));
+        assert_eq!(view.opacity, 0.5);
+        assert!(
+            c.dev_tree()
+                .nodes
+                .iter()
+                .any(|n| n.id == 2 && n.flags.overridden)
+        );
+        assert_eq!(c.dev_node(2).unwrap().dev_override.unwrap().class, "p-8");
+        // The node's own class and style change under the layer.
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: 2,
+                prop: Prop::Class("p-4".into()),
+            }],
+        );
+        apply(
+            &mut c,
+            vec![style_op(
+                2,
+                &[
+                    ("width", StyleValue::Number(120.0)),
+                    ("height", StyleValue::Number(50.0)),
+                ],
+            )],
+        );
+        c.commit();
+        let (view, layout) = shown(&c, 2);
+        assert_eq!(layout.padding.left, Points(32.0));
+        assert_eq!(layout.size.width, Points(120.0));
+        assert_eq!(view.opacity, 0.5);
+        // Cleared: exactly what a node authored so shows.
+        assert!(c.dev_override(2, None));
+        apply(&mut c, styled(4, Some("p-4"), 120.0));
+        c.commit();
+        let (view, layout) = shown(&c, 2);
+        let (authored_view, authored_layout) = shown(&c, 4);
+        assert_eq!(view, authored_view);
+        assert_eq!(layout.padding, authored_layout.padding);
+        assert_eq!(layout.size, authored_layout.size);
+        assert!(!c.dev_tree().nodes.iter().any(|n| n.flags.overridden));
+        assert_eq!(c.dev_node(2).unwrap().dev_override, None);
+    }
+
+    /// A node without classes restyles on a fast path: the layer stays.
+    #[test]
+    fn the_fast_path_of_a_node_without_classes_keeps_the_layer() {
+        let mut c = core();
+        apply(&mut c, styled(2, None, 100.0));
+        c.commit();
+        c.dev_override(
+            2,
+            Some(DevOverride {
+                style: patch(&[("opacity", StyleValue::Number(0.3))]),
+                ..Default::default()
+            }),
+        );
+        apply(
+            &mut c,
+            vec![style_op(
+                2,
+                &[
+                    ("width", StyleValue::Number(80.0)),
+                    ("height", StyleValue::Number(50.0)),
+                ],
+            )],
+        );
+        c.commit();
+        let (view, layout) = shown(&c, 2);
+        assert_eq!(view.opacity, 0.3);
+        assert_eq!(layout.size.width, Points(80.0));
+        c.dev_override(2, None);
+        c.commit();
+        assert_eq!(shown(&c, 2).0.opacity, 1.0);
+    }
+
+    #[test]
+    fn forced_states_show_their_styles_and_replace_class_replaces() {
+        let mut c = core();
+        apply(
+            &mut c,
+            styled(2, Some("p-2 opacity-100 hover:opacity-50"), 100.0),
+        );
+        c.commit();
+        assert_eq!(shown(&c, 2).0.opacity, 1.0);
+        c.dev_override(
+            2,
+            Some(DevOverride {
+                states: state::HOVERED,
+                ..Default::default()
+            }),
+        );
+        c.commit();
+        assert_eq!(shown(&c, 2).0.opacity, 0.5);
+        c.dev_override(
+            2,
+            Some(DevOverride {
+                class: "p-6".into(),
+                replace_class: true,
+                ..Default::default()
+            }),
+        );
+        c.commit();
+        let (view, layout) = shown(&c, 2);
+        assert_eq!(layout.padding.left, Points(24.0));
+        // The node's classes are gone, its hover with them.
+        assert_eq!(view.opacity, 1.0);
+        c.dev_override(2, None);
+        c.commit();
+        let (view, layout) = shown(&c, 2);
+        assert_eq!(layout.padding.left, Points(8.0));
+        assert_eq!(view.opacity, 1.0);
+    }
+
+    #[component]
+    fn Card() -> impl IntoElement {
+        view().p_2().child(view().p_1().child(text("Hi")))
+    }
+
+    /// A Rust component's host node and its internal nodes take layers too.
+    #[test]
+    fn a_rust_component_s_nodes_take_layers() {
+        let mut c = core();
+        c.mount_root(&crate::element::Root::new::<Card>(|| ()));
+        c.commit();
+        let padded: Vec<(NodeId, Points)> = c
+            .dev_tree()
+            .nodes
+            .iter()
+            .filter_map(|n| Some((n.id, c.dev_node(n.id)?.layout.padding.left)))
+            .filter(|(_, p)| p.0 > 0.0)
+            .collect();
+        assert_eq!(padded.len(), 2, "{padded:?}");
+        for &(id, authored) in &padded {
+            c.dev_override(
+                id,
+                Some(DevOverride {
+                    class: "p-10".into(),
+                    ..Default::default()
+                }),
+            );
+            c.commit();
+            assert_eq!(c.dev_node(id).unwrap().layout.padding.left, Points(40.0));
+            c.dev_override(id, None);
+            c.commit();
+            assert_eq!(c.dev_node(id).unwrap().layout.padding.left, authored);
+        }
+    }
+
+    /// The layer's classes follow the tokens as the node's own do, on a
+    /// node with classes of its own and on one without.
+    #[test]
+    fn a_layer_s_classes_follow_token_changes() {
+        let mut c = core();
+        apply(&mut c, styled(2, Some("p-2"), 100.0));
+        apply(&mut c, styled(4, None, 100.0));
+        c.commit();
+        for id in [2, 4] {
+            c.dev_override(
+                id,
+                Some(DevOverride {
+                    class: "bg-primary".into(),
+                    ..Default::default()
+                }),
+            );
+        }
+        c.commit();
+        let before = shown(&c, 2).0.background_color;
+        assert_eq!(shown(&c, 4).0.background_color, before);
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_color("primary", crate::Color(0x0000_ffff).into());
+        c.set_tokens(tokens);
+        c.commit();
+        for id in [2, 4] {
+            let now = shown(&c, id).0.background_color;
+            assert_ne!(now, before, "node {id}");
+            assert_eq!(now, crate::Color(0x0000_ffff), "node {id}");
+        }
+    }
+
+    /// The layer is the node's: it goes with it, and the core keeps none.
+    #[test]
+    fn a_layer_dies_with_its_node() {
+        let mut c = core();
+        apply(&mut c, styled(2, Some("p-2"), 100.0));
+        c.commit();
+        // Through the action path: answered at once, laid out next commit.
+        let (answer, slot) = crate::element::Answer::new();
+        c.queue_inspect(super::Request::Override(
+            2,
+            Some(DevOverride {
+                class: "p-8".into(),
+                ..Default::default()
+            }),
+            slot,
+        ));
+        drop(answer);
+        c.commit();
+        assert_eq!(c.dev_node(2).unwrap().layout.padding.left, Points(32.0));
+        apply(
+            &mut c,
+            vec![
+                Op::Remove {
+                    parent: ROOT_ID,
+                    child: 2,
+                },
+                Op::Release { id: 2 },
+            ],
+        );
+        c.commit();
+        assert!(!c.dev_override(2, None));
+        assert!(c.dev.is_none());
     }
 }

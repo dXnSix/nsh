@@ -289,6 +289,14 @@ ignore transforms and stop at modal roots. What the script knows of its nodes co
 nothing. The code is `crates/nsh-core/src/inspect.rs` (the types) and `crates/nsh-core/src/core/inspect.rs` (the
 answers). Until something asks, no node has dev state and a commit does no dev work.
 
+`dev_override(id, layer)` puts a `DevOverride` over a node: classes over its own (or instead of them, `replace_class`),
+inline declarations applied after its classes and `style`, and forced interaction states (`tailwind::state`). Nothing
+else of a node can be overridden. The layer is the node's dev state (`Node::dev`): `set_class_list` keeps what the
+node's code sets as the layer's base and merges the layer's classes over it, `restyle` applies its declarations last,
+the fast path of a node without classes restyles fully while it has one, and `styled_states` adds its states, so the
+layer survives the node's own updates and Rust components' nodes take it too. `dev_override(id, None)` restores
+exactly the authored result; the layer dies with its node, and nothing keeps it in the core.
+
 ## `nsh build --split`
 
 Writes a split bundle (`native-pipeline.md`, "Split bundles"): `bundle.js` / `.map` / `.nshc` and, per chunk,

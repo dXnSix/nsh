@@ -116,7 +116,7 @@ impl Part {
 #[derive(Debug, Default)]
 pub(super) struct NodeParts {
     /// The classes as set, before the state styles are merged in.
-    base: Option<std::rc::Rc<ClassList>>,
+    pub(super) base: Option<std::rc::Rc<ClassList>>,
     /// The state styles, by [`Part`] (the first eleven).
     states: [Option<std::rc::Rc<StylePatch>>; 11],
     /// The state styles as rules (none without any).
@@ -472,6 +472,9 @@ impl<M: TextEngine> Core<M> {
     pub(super) fn styled_states(&self, key: Key) -> u16 {
         let node = &self.nodes[key as usize];
         let states = node.states | node.projected;
+        // The states a dev tool forces.
+        #[cfg(feature = "inspect")]
+        let states = states | node.dev.as_deref().map_or(0, |dev| dev.layer.states);
         if node.projected & state::FOCUSED != 0 && self.focus_visible_on.is_some() {
             states | state::FOCUS_VISIBLE
         } else {
@@ -1015,6 +1018,9 @@ impl<M: TextEngine> Core<M> {
     /// Sets the resolved classes of `key` (a Rust component's styles go
     /// straight here).
     pub(super) fn set_class_list(&mut self, key: Key, classes: Option<std::rc::Rc<ClassList>>) {
+        // A dev tool's layer: what the node's code set stays its base.
+        #[cfg(feature = "inspect")]
+        let classes = self.overridden_classes(key, classes);
         let node = &mut self.nodes[key as usize];
         // The state styles go over the classes.
         let classes = match node.parts.as_deref_mut() {
@@ -1089,6 +1095,8 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        #[cfg(feature = "inspect")]
+        self.restyle_overrides();
         self.part_classes_again(|_| true);
     }
 
@@ -1123,6 +1131,9 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        // Dev tools' layers name classes of their own.
+        #[cfg(feature = "inspect")]
+        self.restyle_overrides();
         self.part_classes_again(|c| all || (c.deps() & deps::THEME != 0 && c.reads(&changed)));
         let hosts: Vec<NodeId> = self
             .components
@@ -1636,6 +1647,11 @@ impl<M: TextEngine> Core<M> {
             node.ch = ch;
             let id = node.id;
             self.ch_styled.push((key, id));
+        }
+        // A dev tool's declarations, last.
+        #[cfg(feature = "inspect")]
+        if let Some(dev) = self.nodes[key as usize].dev.as_deref() {
+            dev.layer.style.apply(&mut style);
         }
         style.node_props(&mut props);
         self.set_class_props(key, props);

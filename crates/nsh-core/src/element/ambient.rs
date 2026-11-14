@@ -1151,6 +1151,20 @@ pub fn dev_node(id: crate::NodeId) -> Answer<Option<crate::inspect::DevDetail>> 
     answer
 }
 
+/// Puts `layer` over node `id`'s authored classes, style and states, or
+/// takes the layer away (`None`), restoring exactly what the node's own
+/// code set (dev tools, feature `inspect`: [`crate::inspect::DevOverride`]).
+/// Applied before the next commit lays out; answers whether the node
+/// exists. To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_override(id: crate::NodeId, layer: Option<crate::inspect::DevOverride>) -> Answer<bool> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Override(
+        id, layer, slot,
+    )));
+    answer
+}
+
 /// Where node `id` was written, as the source says now: hot bundles stamp
 /// their elements (dev tools, feature `inspect`). `None` for text, nodes
 /// made natively, bundles without stamps and Rust apps. To await in a task.

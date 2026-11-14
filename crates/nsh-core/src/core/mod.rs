@@ -734,6 +734,10 @@ struct Node {
     /// Whether a child of it was ever stacked apart (`zIndex`, sticky, a
     /// bar): its native children are placed by rank, not just in order.
     ranked_children: bool,
+    /// A dev tool's layer over its authored values ([`crate::inspect`]):
+    /// `None` until one is set.
+    #[cfg(feature = "inspect")]
+    dev: Option<Box<crate::inspect::NodeDev>>,
 }
 
 impl Node {
@@ -976,6 +980,8 @@ impl Node {
             attached: Vec::new(),
             overlay_watched: 0,
             ranked_children: false,
+            #[cfg(feature = "inspect")]
+            dev: None,
             elevation: Points::ZERO,
             backdrop_material: crate::BackdropMaterial::default(),
             macos_backdrop: None,
@@ -4072,7 +4078,16 @@ impl<M: TextEngine> Core<M> {
         let key = self.key(id)?;
         let node = &mut self.nodes[key as usize];
         node.inline_style = patch;
-        if node.classes.is_some() || node.spaced || node.inline_style.reads_current_color() {
+        // A dev tool's layer goes over this style: the full path keeps it.
+        #[cfg(feature = "inspect")]
+        let overridden = node.dev.is_some();
+        #[cfg(not(feature = "inspect"))]
+        let overridden = false;
+        if node.classes.is_some()
+            || node.spaced
+            || node.inline_style.reads_current_color()
+            || overridden
+        {
             self.restyle(key);
             return Ok(());
         }
