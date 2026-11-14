@@ -220,6 +220,10 @@ runtime (`crates/nsh-js/src/hot.rs`, see `tooling.md`). The script is an ES modu
 factories `require` by specifier; an edit that imports a native module the running script did not makes the host
 reload.
 
+The top-level signals and navigation stacks a development bundle keeps across runs of their modules
+(`__nsh_hot.keep`) are listed by `__nsh_hot.kept()`, `{ "module:name": value }`: dev tools read an app's TSX state
+through it. `__nsh_hot` exists in development bundles only.
+
 ### Where elements were written (dev tools)
 
 Development bundles also say where each element was written, for dev tools that point from a view to its source. The

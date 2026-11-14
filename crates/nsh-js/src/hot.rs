@@ -138,13 +138,14 @@ fn with<T>(cx: Ctx, f: impl FnOnce(&mut Inner) -> T) -> T {
 fn install(cx: Ctx) -> Raw {
     let made = (|| -> R<V> {
         let obj = new_object(cx)?;
-        let methods: [(&std::ffi::CStr, js::Native, i32); 6] = [
+        let methods: [(&std::ffi::CStr, js::Native, i32); 7] = [
             (c"define", define, 3),
             (c"start", start, 2),
             (c"update", update, 1),
             (c"component", component, 4),
             (c"context", context, 3),
             (c"keep", keep, 4),
+            (c"kept", kept, 0),
         ];
         for (name, f, length) in methods {
             let f = function(cx, name, f, length)?;
@@ -725,6 +726,29 @@ native! {
     }
 }
 
+native! {
+    /// `kept()`: the top-level signals and navigation stacks kept across
+    /// runs of their modules ([`keep`]), by `module:name` (dev tools read the
+    /// app's state through them). Development bundles only: `__nsh_hot`
+    /// exists in no other.
+    fn kept(cx, _this, _args) {
+        let entries: Vec<(String, V)> = with(cx, |h| {
+            let mut entries: Vec<(String, V)> = h
+                .kept
+                .iter()
+                .map(|(key, (_, value))| (key.clone(), value.clone_ref()))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            entries
+        });
+        let obj = new_object(cx)?;
+        for (key, value) in entries {
+            js::define(cx, obj.raw(), &key, value, true)?;
+        }
+        Ok(obj)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -732,5 +756,69 @@ mod tests {
         assert_eq!(super::resolve("App.js", "./Counter.js"), "Counter.js");
         assert_eq!(super::resolve("a/b.js", "../c.js"), "c.js");
         assert_eq!(super::resolve("a/b.js", "./d/e.js"), "a/d/e.js");
+    }
+}
+
+/// `__nsh_hot.kept()`: the kept signals and stacks by `module:name`, in hot
+/// bundles only.
+#[cfg(test)]
+mod kept_tests {
+    use crate::Host;
+
+    #[test]
+    fn kept_lists_the_kept_signals_by_module_and_name() {
+        let host = Host::with_options(crate::HostOptions {
+            ui_sets: vec![nsh_base::registry()],
+            ..Default::default()
+        })
+        .unwrap();
+        host.eval_source(
+            r#"
+            import "nsh:hot";
+            import { signal } from "nsh";
+            import { createNavStack } from "nsh/base";
+            import { text } from "nsh:rt";
+            const run = (module, exports, require) => {
+                const count = __nsh_hot.keep("main", "count", "s1", signal(3));
+                const nav = __nsh_hot.keep("main", "nav", "s2", createNavStack(["home"]));
+                count.set(4);
+                globalThis.count = count;
+            };
+            __nsh_hot.define("main", run, false);
+            __nsh_hot.start("main", {});
+            const kept = __nsh_hot.kept();
+            const keys = Object.keys(kept).join(",");
+            text(`${keys} ${kept["main:count"]()} ${kept["main:count"] === globalThis.count}`);
+            "#,
+        )
+        .unwrap();
+        let mut ops = Vec::new();
+        host.take_ops(&mut ops);
+        let texts: Vec<String> = ops
+            .into_iter()
+            .filter_map(|op| match op {
+                nsh_core::Op::CreateText { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["main:count,main:nav 4 true"]);
+    }
+
+    #[test]
+    fn non_hot_bundles_have_no_kept() {
+        let host = Host::new().unwrap();
+        host.eval_source(
+            r#"
+            import { text } from "nsh:rt";
+            text(typeof globalThis.__nsh_hot);
+            "#,
+        )
+        .unwrap();
+        let mut ops = Vec::new();
+        host.take_ops(&mut ops);
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            nsh_core::Op::CreateText { text, .. } if text == "undefined"
+        )));
     }
 }
