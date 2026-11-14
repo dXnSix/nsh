@@ -61,6 +61,9 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{runtime::Platform, ui};
 
+// nshx only: a release of the fork takes the fork's crates at its tag.
+mod nshx_tag;
+
 /// The function `#[native_module]` makes at the root of the app's crate
 /// (`nsh-macros` `native_module.rs`): the crate's UI set.
 const ENTRY: &str = "__nsh_native_module";
@@ -818,6 +821,7 @@ pub(crate) fn runner_only(entry: &Path) -> anyhow::Result<RustApp> {
         .with_context(|| format!("entry not found: {}", entry.display()))?;
     let dir = entry.parent().context("entry has no directory")?;
     let nsh = crate::runtime::cli_checkout().map_or(Nsh::Registry, Nsh::Source);
+    let nsh = nshx_tag::runner_nsh(nsh, &dir.join(".nsh/rust"))?;
     let watched = watched(&[], nsh.source());
     let app = RustApp {
         workspace: dir.join(".nsh/rust"),

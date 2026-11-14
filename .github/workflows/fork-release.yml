@@ -234,8 +234,12 @@ jobs:
       # apiece: thin LTO over 16 units takes a fraction of that for little
       # run-time cost. The web profile, which inherits release, keeps fat
       # LTO: what pages download is built for size (docs/dev/web.md).
+      # `NSHX_TAG` goes into the CLI: `nsh package` builds a TSX app's
+      # trimmed desktop runner from the fork's crates at this tag, not
+      # upstream's from crates.io (`crates/nsh-cli/src/rust_app/nshx_tag.rs`).
       - name: Build the distribution
         env:
+          NSHX_TAG: ${{ env.TAG }}
           CARGO_PROFILE_RELEASE_LTO: thin
           CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
           CARGO_PROFILE_WEB_LTO: fat
