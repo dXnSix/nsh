@@ -1,0 +1,19 @@
+# A crate of an app that takes entropy through getrandom 0.3 and 0.4, linked
+# with the web module as `nsh package --target web` links one (the link test,
+# `tests/entropy_link.rs`, writes it out as Cargo.toml with the module's
+# path).
+[package]
+name = "entropy-link"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nsh-platform-web = { path = "@WEB@", default-features = false }
+getrandom-v03 = { package = "getrandom", version = "0.3" }
+getrandom-v04 = { package = "getrandom", version = "0.4", default-features = false }
+
+[workspace]

@@ -38,6 +38,7 @@ mod event;
 mod ffi;
 mod filesystem;
 mod net;
+mod random;
 mod shader;
 mod storage;
 mod text;

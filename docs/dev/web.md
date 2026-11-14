@@ -152,7 +152,7 @@ compiles each demo with `nsh build --release` into the ES module `website/public
 ignored by git), and publishes `examples/gallery` with `nsh package --target web` into `play/gallery/` (the website's
 Gallery page frames it; packaging builds `nsh-browser.wasm`: `--target wasm32-unknown-unknown --profile web`, the release
 profile optimized for size). Check the crate with `cargo clippy -p nsh-platform-web --target wasm32-unknown-unknown`: off
-WebAssembly it is empty. `.cargo/config.toml` gives wasm32 an 8 MiB stack (deep component trees) and selects getrandom's custom entropy backend. The CLI passes that backend flag to generated Rust-app builds as well, retaining existing compiler flags.
+WebAssembly it is empty. `.cargo/config.toml` gives wasm32 an 8 MiB stack (deep component trees) and selects getrandom's custom entropy backend. The CLI passes that backend flag to generated Rust-app builds as well, retaining existing compiler flags. The module defines that backend itself (`src/random.rs`, `__getrandom_v03_custom` for getrandom 0.3 and 0.4) from the page's `env.__nsh_random_fill`, Web Crypto's `getRandomValues`, so an app's crates that draw entropy (`rand`, `uuid`, a CRDT) link on the web; `tests/entropy_link.rs` links such a crate with the module.
 
 The standard module `zlib` links zstd's C library, so the build needs a clang that targets wasm32 and an `llvm-ar` (CI: Ubuntu's `clang` and `llvm`, with
 `AR_wasm32_unknown_unknown=llvm-ar`). Apple's clang has no WebAssembly target: on macOS point
