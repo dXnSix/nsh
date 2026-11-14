@@ -198,6 +198,13 @@ pub(crate) fn start(view: &Rc<AppView>, url: String) {
         });
         Box::new(crate::agent::MacNative::new(key_of_surface))
     });
+    // A dev tool observing the app (`nsh_testing::agent::observe`): its
+    // model takes every batch from the first, outside any test session,
+    // which replaces it with its own.
+    nsh_testing::agent::attach_observer(
+        |model| surface.set_test_model(Some(model)),
+        || Box::new(crate::agent::MacNative::new(key_of_surface)),
+    );
     let tests = tester.clone();
     let started = DevClient::start(url, host, move |event| {
         // Taken off the main queue: a step waits for what it does there.

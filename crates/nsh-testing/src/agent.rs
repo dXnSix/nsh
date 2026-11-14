@@ -14,6 +14,20 @@
 //! 100 ms, 2 s at most (one that loops forever, a spinner, is not waited
 //! for). [`Native`]'s calls come from that thread; implementations do
 //! their work on the main thread and return when it is done.
+//!
+//! **Observe mode** (dev tools) is the other way to have a model: an app
+//! crate registers an observer with [`observe`] before its host starts,
+//! and a normal dev session then keeps an observing model
+//! ([`Model::observing`]) from the first batch on and hands it, with the
+//! platform's [`Native`], to the observer ([`attach_observer`], which every
+//! host's dev start calls). The app is not under test: an observing model
+//! swaps nothing of the engine (storage, network, clipboard, `openUrl` stay
+//! the app's), leaves culling on, and the host stays as it is (the user's
+//! pointer and keys, frame pacing, lifecycle: each platform's `testing()`
+//! is [`drives_host`]). It is reset as each engine is set up, before its
+//! first batch. A real test session replaces it with its own model for its
+//! duration. The observer runs on a thread of its own, from which it may
+//! call the [`Native`] (its calls block on the host's main thread).
 
 use std::{
     sync::{Arc, Condvar, Mutex, MutexGuard},
@@ -100,6 +114,101 @@ pub struct Model {
     changed: Condvar,
     /// What the test set the app up with ([`Model::set_up`]).
     setup: Mutex<Option<Setup>>,
+    /// A dev tool's model in a normal dev session ([`Model::observing`]).
+    observing: bool,
+}
+
+/// What an observer gets ([`observe`]): the model of what the host shows
+/// and the platform's native driver.
+pub struct Observation {
+    /// The host's observing model, which takes every batch from the first.
+    pub model: Arc<Model>,
+    /// The platform's part: where views are, input, screenshots. Its calls
+    /// block on the host's main thread: never make them from the engine's.
+    pub native: Box<dyn Native>,
+}
+
+/// What [`observe`] registered.
+type Observer = Box<dyn Fn(Observation) + Send + Sync>;
+
+static OBSERVER: std::sync::OnceLock<Observer> = std::sync::OnceLock::new();
+
+/// Registers `observer` to get the [`Observation`] of every dev session a
+/// host starts (process-wide; the first call wins). An app crate calls it
+/// before its host starts. Returns whether this call registered it.
+pub fn observe(observer: impl Fn(Observation) + Send + Sync + 'static) -> bool {
+    OBSERVER.set(Box::new(observer)).is_ok()
+}
+
+/// Whether an observer is registered: a host's dev session then keeps an
+/// observing model.
+pub fn observer_wanted() -> bool {
+    OBSERVER.get().is_some()
+}
+
+/// Hands `observation` to the registered observer, on a thread of its own
+/// (a host's dev session, once its observing model is attached); does
+/// nothing without one. The observer may call the [`Native`] there: those
+/// calls block on the host's main thread, so making them on it (where the
+/// dev session starts) would never return.
+pub fn hand_over(observation: Observation) {
+    if OBSERVER.get().is_some() {
+        let started = std::thread::Builder::new()
+            .name("nsh-observer".into())
+            .spawn(move || {
+                if let Some(observer) = OBSERVER.get() {
+                    observer(observation);
+                }
+            });
+        if let Err(e) = started {
+            log::error!("cannot start the dev tool's observer: {e}");
+        }
+    }
+}
+
+/// What a host's dev start does for a dev tool (every platform's `dev.rs`
+/// calls it before the first bundle): with an observer registered, it
+/// makes an observing model, has the host `attach` it (on the calling
+/// thread, the host's main one, so it takes the first batch), and hands it
+/// with the platform's driver (`native`) to the observer. Returns whether
+/// it did.
+pub fn attach_observer(
+    attach: impl FnOnce(Arc<Model>),
+    native: impl FnOnce() -> Box<dyn Native>,
+) -> bool {
+    attach_if(observer_wanted(), attach, native)
+}
+
+/// [`attach_observer`] when `wanted`.
+fn attach_if(
+    wanted: bool,
+    attach: impl FnOnce(Arc<Model>),
+    native: impl FnOnce() -> Box<dyn Native>,
+) -> bool {
+    if !wanted {
+        return false;
+    }
+    let model = attach_model(attach);
+    hand_over(Observation {
+        model,
+        native: native(),
+    });
+    true
+}
+
+/// Makes an observing model and has the host attach it.
+fn attach_model(attach: impl FnOnce(Arc<Model>)) -> Arc<Model> {
+    let model = Model::observing();
+    attach(model.clone());
+    model
+}
+
+/// Whether the host's model `model` puts the host under test (each
+/// platform's `testing()`): a test session's does; none, or a dev tool's
+/// observing one, leaves the host as the user runs it (their pointer and
+/// keys, frame pacing, lifecycle).
+pub fn drives_host(model: Option<&Model>) -> bool {
+    model.is_some_and(|model| !model.observes())
 }
 
 /// What a test session's app starts with, in place of the platform's.
@@ -141,6 +250,29 @@ struct State {
 }
 
 impl Model {
+    /// A model for a dev tool to observe the app with in a normal dev
+    /// session ([`observe`]): attached before the first bundle, it swaps
+    /// nothing of the engine and leaves culling on.
+    pub fn observing() -> Arc<Model> {
+        Arc::new(Model {
+            observing: true,
+            ..Model::default()
+        })
+    }
+
+    /// Whether it is a dev tool's model, not a test session's: the host is
+    /// then not under test.
+    pub fn observes(&self) -> bool {
+        self.observing
+    }
+
+    /// Forgets what the host showed (the engine starts again, a reload):
+    /// the mirror is built anew from the next batch.
+    pub fn reset(&self) {
+        *self.lock() = State::default();
+        self.changed.notify_all();
+    }
+
     /// Takes in a batch the host applied (on its main thread, after
     /// applying it).
     pub fn apply(&self, batch: &MountBatch) {
@@ -257,6 +389,12 @@ impl Model {
     /// host hands the engine back once it started
     /// ([`Model::engine_started`]).
     pub fn set_up_engine(&self, config: &mut nsh_engine::EngineConfig) {
+        // An observed app runs as the user runs it; its mirror starts anew
+        // with this engine, before its first batch.
+        if self.observing {
+            self.reset();
+            return;
+        }
         let mut setup = self.setup.lock().unwrap_or_else(|e| e.into_inner());
         let Some(setup) = &mut *setup else { return };
         config.network = Some(Arc::new(forward::ForwardNetwork {
@@ -316,6 +454,10 @@ impl Model {
     /// The engine [`Model::set_up_engine`] set up started: the test moves
     /// its clock through it.
     pub fn engine_started(&self, engine: nsh_engine::EngineControl) {
+        // An observed app keeps its culling and its clock.
+        if self.observing {
+            return;
+        }
         // Steps reach every view of a page, below its fold too, as the
         // headless driver's do.
         engine.set_content_culling(false);
@@ -2885,5 +3027,199 @@ mod tests {
             );
             assert_eq!(pressed.lock().unwrap().len(), 7);
         }
+    }
+}
+
+/// Observe mode: an observing model swaps nothing, keeps the mirror from
+/// the first batch, is reset on engine start, and gets to the observer; a
+/// real test session's model is not one.
+#[cfg(test)]
+mod observe_tests {
+    use std::sync::Arc;
+
+    use nsh_core::{element::Root, prelude::*};
+    use nsh_engine::EngineConfig;
+
+    use super::*;
+
+    #[component]
+    fn Hello() -> impl IntoElement {
+        view().child(text("Hello"))
+    }
+
+    /// A platform that does nothing.
+    struct Quiet;
+
+    impl Native for Quiet {
+        fn bounds(&self, _: NodeId) -> Option<Bounds<Points>> {
+            None
+        }
+        fn viewport(&self) -> Size<Points> {
+            Size::new(Points(1.0), Points(1.0))
+        }
+        fn press(&self, _: Point<Points>) {}
+        fn long_press(&self, _: Point<Points>, _: Duration) {}
+        fn scroll(&self, _: Point<Points>, _: Point<Points>) {}
+        fn drag(&self, _: Point<Points>, _: Point<Points>) {}
+        fn type_text(&self, _: &str) {}
+        fn key(&self, _: Key) {}
+        fn input_text(&self, _: NodeId) -> Option<String> {
+            None
+        }
+        fn back(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn answer_dialog(&self, _: Option<&str>) -> Result<(), String> {
+            Ok(())
+        }
+        fn animating(&self) -> bool {
+            false
+        }
+        fn screenshot(&self) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+        fn resize(&self, _: Points, _: Points) -> Result<(), String> {
+            Ok(())
+        }
+        fn set_dark(&self, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn quit(&self) {}
+    }
+
+    fn batches_of(model: &Model) -> u64 {
+        model.lock().batches
+    }
+
+    #[test]
+    fn an_observing_model_swaps_nothing_of_the_engine() {
+        let model = Model::observing();
+        assert!(model.observes());
+        assert!(!Model::default().observes());
+        // Even set up as a test would, it leaves the app's own services.
+        model.set_up(
+            vec![("k".into(), "v".into())],
+            true,
+            nsh_dev::protocol::TestEnvironment::default(),
+            Arc::new(|_| {}),
+        );
+        let mut config = EngineConfig::new(Root::of::<Hello>());
+        model.set_up_engine(&mut config);
+        assert!(config.storage.is_none());
+        assert!(config.network.is_none());
+        assert!(config.clipboard.is_none());
+        assert!(config.refuse_connections.is_none());
+        assert!(!config.trace);
+        // A test session's model takes them over.
+        let tested = Model::default();
+        tested.set_up(
+            Vec::new(),
+            false,
+            nsh_dev::protocol::TestEnvironment::default(),
+            Arc::new(|_| {}),
+        );
+        let mut config = EngineConfig::new(Root::of::<Hello>());
+        tested.set_up_engine(&mut config);
+        assert!(config.storage.is_some() && config.clipboard.is_some());
+    }
+
+    /// The host sets the engine up, starts it, and its batches come: the
+    /// mirror is reset in the set-up, before the first batch, and keeps
+    /// every batch after it.
+    #[test]
+    fn the_mirror_is_reset_before_each_engine_s_first_batch() {
+        let model = Model::observing();
+        // What the previous engine showed.
+        let (old, old_batches) = crate::start(EngineConfig::new(Root::of::<Hello>())).unwrap();
+        model.apply(&old_batches.recv_timeout(Duration::from_secs(5)).unwrap());
+        assert_eq!(batches_of(&model), 1);
+        drop(old);
+        // A reload: set up (reset), started, the first batch.
+        let mut config = EngineConfig::new(Root::of::<Hello>());
+        model.set_up_engine(&mut config);
+        assert_eq!(batches_of(&model), 0);
+        assert!(model.lock().screen.texts().is_empty());
+        let (engine, batches) = crate::start(config).unwrap();
+        let first = batches.recv_timeout(Duration::from_secs(5)).unwrap();
+        model.apply(&first);
+        // The engine started (its control handed to the model) after its
+        // first batch came: the mirror keeps it.
+        model.engine_started(engine.control());
+        assert_eq!(batches_of(&model), 1);
+        assert!(model.lock().screen.texts().contains(&"Hello"));
+    }
+
+    /// Each platform's `testing()`: only a test session's model puts the
+    /// host under test.
+    #[test]
+    fn only_a_test_session_s_model_drives_the_host() {
+        assert!(!drives_host(None));
+        assert!(!drives_host(Some(&Model::observing())));
+        assert!(drives_host(Some(&Model::default())));
+    }
+
+    /// A host's dev start: without an observer nothing is attached; with
+    /// one, the host attaches an observing model first, then the observer
+    /// gets it with the driver, on a thread of its own.
+    #[test]
+    fn dev_start_attaches_before_it_hands_over() {
+        assert!(!attach_if(
+            false,
+            |_| panic!("nothing is attached without an observer"),
+            || panic!("no driver is made without an observer"),
+        ));
+        static GOT: Mutex<Vec<(bool, String)>> = Mutex::new(Vec::new());
+        let main = std::thread::current().id();
+        let registered = observe(move |observation| {
+            let thread = std::thread::current();
+            assert_ne!(
+                thread.id(),
+                main,
+                "the observer runs on a thread of its own"
+            );
+            GOT.lock().unwrap().push((
+                observation.model.observes(),
+                thread.name().unwrap_or("").to_owned(),
+            ));
+        });
+        // Another registration (another app crate) does not replace it.
+        assert!(!observe(|_| panic!("the second observer never runs")));
+        assert!(registered);
+        assert!(observer_wanted());
+        let attached: Arc<Mutex<Option<Arc<Model>>>> = Arc::default();
+        let slot = attached.clone();
+        assert!(attach_observer(
+            move |model| *slot.lock().unwrap() = Some(model),
+            || { Box::new(Quiet) as Box<dyn Native> },
+        ));
+        // Attached on this thread, before the hand-over returns.
+        assert!(
+            attached
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|m| m.observes())
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while GOT.lock().unwrap().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*GOT.lock().unwrap(), [(true, "nsh-observer".to_owned())]);
+    }
+
+    /// A real test session makes a model of its own, not an observing
+    /// one: the host replaces the observing model with it.
+    #[test]
+    fn a_test_session_replaces_the_observing_model() {
+        let host: Arc<Mutex<Option<Arc<Model>>>> = Arc::new(Mutex::new(Some(Model::observing())));
+        let slot = host.clone();
+        let tester = Tester::new(move |model| {
+            *slot.lock().unwrap() = Some(model);
+            Box::new(Quiet)
+        });
+        assert!(host.lock().unwrap().as_ref().unwrap().observes());
+        assert!(tester.event(nsh_dev::DevEvent::Testing).is_none());
+        let now = host.lock().unwrap().clone().unwrap();
+        assert!(!now.observes());
     }
 }

@@ -379,8 +379,9 @@ impl Surface {
     /// Whether `nsh test` drives the app ([`Self::set_test_model`]): then
     /// the agent's pointer is its only one (`input::install_on`).
     pub(crate) fn testing(&self) -> bool {
+        // A dev tool's observing model leaves the app as the user runs it.
         #[cfg(feature = "dev")]
-        return self.test_model.borrow().is_some();
+        return nsh_testing::agent::drives_host(self.test_model.borrow().as_deref());
         #[cfg(not(feature = "dev"))]
         false
     }
