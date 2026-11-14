@@ -6442,6 +6442,8 @@ impl<M: TextEngine> Core<M> {
                     None => links.next_change = Some(answer),
                 }
             }
+            #[cfg(feature = "inspect")]
+            Action::Inspect(request) => self.queue_inspect(request),
             Action::AppUrl(answer) => {
                 let address = self.components.url_schemes.address.get();
                 answer.borrow_mut().deliver(address);

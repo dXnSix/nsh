@@ -152,6 +152,10 @@ pub(crate) enum Action {
     NextAppUrlChange(AnswerSlot<crate::url_scheme::AppUrlChange>),
     /// The app's address resolves the slot ([`crate::url_scheme`]).
     AppUrl(AnswerSlot<Option<String>>),
+    /// A dev tool's question, answered in the next commit
+    /// ([`crate::inspect`]).
+    #[cfg(feature = "inspect")]
+    Inspect(crate::inspect::Request),
     /// The app sets its address ([`crate::url_scheme`]), replacing the
     /// history entry's or pushing one.
     SetAppUrl(String, crate::url_scheme::HistoryBehavior),

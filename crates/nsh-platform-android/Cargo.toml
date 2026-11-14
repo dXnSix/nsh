@@ -22,7 +22,7 @@ default = ["js", "shader", "editor", "emoji-picker", "highlight", "math", "plot"
 # Rust app and links no QuickJS.
 js = ["nsh-engine/js-core"]
 # Development support: dev server client, log forwarding, error overlay.
-dev = ["js", "shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "zlib", "crypto", "websocket", "updater", "dep:nsh-dev", "dep:nsh-testing", "svg"]
+dev = ["js", "shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "zlib", "crypto", "websocket", "updater", "dep:nsh-dev", "dep:nsh-testing", "svg", "nsh-core/inspect"]
 # Shaders (`Shader`, `ShaderEffect`, `ShaderTransition`, the shader transitions
 # of pages and dialogs), on naga and wgpu. Without it they draw nothing.
 shader = ["nsh-engine/shader"]

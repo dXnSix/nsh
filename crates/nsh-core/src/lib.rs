@@ -34,6 +34,8 @@ pub mod i18n;
 pub mod id_table;
 pub mod image;
 pub mod input;
+#[cfg(feature = "inspect")]
+pub mod inspect;
 pub mod js;
 pub mod keyboard;
 pub mod keymap;

@@ -88,7 +88,7 @@ impl ListScrollPosition {
 /// (rounding).
 const OVERFLOW_EPSILON: f32 = 0.5;
 
-fn valid(r: &Bounds<Points>) -> bool {
+pub(super) fn valid(r: &Bounds<Points>) -> bool {
     !(r.origin.x.0.is_nan()
         || r.origin.y.0.is_nan()
         || r.size.width.0.is_nan()
