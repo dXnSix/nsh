@@ -102,6 +102,9 @@ pub(crate) struct Dom {
     /// whose they are (not owned: a row taken out of its `each`, or the
     /// object's finalizer, takes its entry out).
     pending_rows: RefCell<FxHashMap<NodeId, JsValue>>,
+    /// Where nodes were written and who rendered them (hot bundles, for
+    /// dev tools: `dev_source`).
+    dev: crate::dev_source::DevSource,
 }
 
 #[derive(Clone, Copy)]
@@ -146,6 +149,10 @@ struct NodeData {
     /// The owner it was made under (`reactive::owner_handle`): its
     /// listeners' failures go to that owner's error boundary.
     owner: (u32, u32),
+    /// Where it was written (hot bundles: `dev_source`).
+    stamp: Option<crate::dev_source::Stamp>,
+    /// The hot component instance it was made under (0: none).
+    instance: u32,
 }
 
 /// The renderer of `cx`.
@@ -312,6 +319,7 @@ impl Dom {
             dialogs: Cell::new(0),
             lazy_rows: Cell::new(false),
             pending_rows: RefCell::new(FxHashMap::default()),
+            dev: crate::dev_source::DevSource::new(),
         }
     }
 
@@ -323,6 +331,7 @@ impl Dom {
             // SAFETY: values the renderer owned.
             unsafe { qjs::JS_FreeValue(raw, v) };
         }
+        self.dev.free_all(raw);
     }
 
     /// The platform `ios={{…}}` / `android={{…}}` / `web={{…}}` props are
@@ -712,6 +721,8 @@ fn new_node(cx: *mut JsContext, id: NodeId, text: bool, tag: Option<Tag>) -> JsV
         places: false,
         object: UNDEFINED,
         owner: reactive::owner_handle(cx),
+        stamp: None,
+        instance: crate::dev_source::current_instance(cx),
     }));
     // SAFETY: a registered class; the opaque is the boxed data, freed by
     // the finalizer.
@@ -833,6 +844,58 @@ pub(crate) fn create_element(cx: *mut JsContext, tag: Tag) -> Result<JsValue, Js
     let id = next_id(cx);
     dom(cx).push(cx, Op::Create { id, tag })?;
     Ok(new_node(cx, id, false, Some(tag)))
+}
+
+/// A native component's host node (owned): [`create_element`], taking the
+/// call site of the component use rendering it (`dev_source`). Only the
+/// node a native component renders as calls this; the other nodes it makes
+/// (slots, placeholders, windows) are made with [`create_element`].
+pub(crate) fn create_host_element(cx: *mut JsContext, tag: Tag) -> Result<JsValue, JsValue> {
+    let node = create_element(cx, tag)?;
+    set_stamp(cx, node, crate::dev_source::take_pending(cx));
+    Ok(node)
+}
+
+/// The renderer's part of [`crate::dev_source`].
+pub(crate) fn dev_source<'a>(cx: *mut JsContext) -> &'a crate::dev_source::DevSource {
+    &dom(cx).dev
+}
+
+/// Stamps node `node` (borrowed) with where it was written (a node a
+/// native component makes later than its use: a dialog's modal).
+pub(crate) fn stamp_node(
+    cx: *mut JsContext,
+    node: JsValue,
+    stamp: Option<crate::dev_source::Stamp>,
+) {
+    set_stamp(cx, node, stamp);
+}
+
+/// Stamps node `node` (borrowed) with where it was written.
+fn set_stamp(cx: *mut JsContext, node: JsValue, stamp: Option<crate::dev_source::Stamp>) {
+    let p = node_ptr(cx, node);
+    if stamp.is_some() && !p.is_null() {
+        // SAFETY: live node data.
+        unsafe { (*p).stamp = stamp };
+    }
+}
+
+/// Where node `id` was written, if it was stamped.
+pub(crate) fn node_stamp(cx: *mut JsContext, id: NodeId) -> Option<crate::dev_source::Stamp> {
+    let p = dom(cx).by_id(id);
+    // SAFETY: live node data.
+    (!p.is_null()).then(|| unsafe { (*p).stamp }).flatten()
+}
+
+/// The hot component instance node `id` was made under (0: none).
+pub(crate) fn node_instance(cx: *mut JsContext, id: NodeId) -> u32 {
+    let p = dom(cx).by_id(id);
+    // SAFETY: live node data.
+    if p.is_null() {
+        0
+    } else {
+        unsafe { (*p).instance }
+    }
 }
 
 /// The tag of element `v`, if it is one.
@@ -1400,7 +1463,10 @@ unsafe extern "C" fn element(
     if let Err(e) = dom(cx).push(cx, Op::Create { id, tag }) {
         return e;
     }
-    new_node(cx, id, false, Some(tag))
+    let node = new_node(cx, id, false, Some(tag));
+    // Hot bundles: `element(tag, anchor, lineDelta, column)`.
+    set_stamp(cx, node, crate::dev_source::stamp_args(cx, argc, argv, 1));
+    node
 }
 
 /// A new text node showing `text`.
@@ -2758,7 +2824,9 @@ pub(crate) unsafe extern "C" fn split(
     }
 }
 
-/// `component(Comp, props)`: renders a component (untracked).
+/// `component(Comp, props)`: renders a component (untracked). Hot bundles
+/// add where the use was written, `(anchor, lineDelta, column)`: pending
+/// while the component runs (`dev_source`).
 unsafe extern "C" fn component(
     cx: *mut JsContext,
     _this: JsValue,
@@ -2767,10 +2835,14 @@ unsafe extern "C" fn component(
 ) -> JsValue {
     let (comp, props) = (arg(argc, argv, 0), arg(argc, argv, 1));
     let mut args = [props];
+    let site = crate::dev_source::stamp_args(cx, argc, argv, 2);
+    let before = crate::dev_source::enter_use(cx, site);
     // SAFETY: a borrowed function and argument.
-    reactive::untracked_with(cx, || unsafe {
+    let out = reactive::untracked_with(cx, || unsafe {
         qjs::JS_Call(cx, comp, UNDEFINED, 1, args.as_mut_ptr())
-    })
+    });
+    crate::dev_source::leave_use(cx, before);
+    out
 }
 
 /// `cond(when, then, otherwise)`: what `then()` renders while `when()` is
@@ -3781,7 +3853,7 @@ unsafe extern "C" fn render_host(
     let Some(tag) = string_arg(cx, tag).and_then(|t| Tag::from_name(&t)) else {
         return UNDEFINED;
     };
-    let node = match create_element(cx, tag) {
+    let node = match create_host_element(cx, tag) {
         Ok(node) => node,
         Err(e) => return e,
     };
@@ -4141,6 +4213,11 @@ pub(crate) const RT_EXPORTS: &[crate::modules::Item] = &[
     ("font", Export::Function(font, 2), Ts::Internal),
     ("metaUrl", Export::Function(meta_url, 1), Ts::Internal),
     ("ref", Export::Function(ref_, 3), Ts::Internal),
+    (
+        "anchor",
+        Export::Function(crate::dev_source::anchor, 3),
+        Ts::Internal,
+    ),
 ];
 
 /// `metaUrl(path)`: what `import.meta.url` of the app's module `path`

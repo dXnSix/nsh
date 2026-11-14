@@ -148,6 +148,8 @@ pub(crate) fn compile_native(
         prologue,
         meta_path,
         modules,
+        // Dev tools learn where elements were written from hot bundles.
+        hot_key,
     )?;
     // The scopes once TypeScript and JSX are compiled, for checking imports.
     let scoping = SemanticBuilder::new()

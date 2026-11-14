@@ -1,2 +1,3 @@
 # Public API of nsh-js with bare floats that have no unit (docs/dev/geometry.md,
 # "Typed API"): one item path per line, then the reason.
+dev_source::PropValue::Number.0                                 # a JS number as the app passed it to a component (dev tools)

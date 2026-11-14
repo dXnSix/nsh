@@ -19,6 +19,7 @@ mod components;
 mod console;
 mod declarations;
 mod desktop;
+mod dev_source;
 mod dom;
 mod env;
 mod error;
@@ -70,6 +71,7 @@ pub use crate::{
         compile_chunk_bytecode,
     },
     declarations::type_definitions,
+    dev_source::{InstanceRef, NodeSource, PropValue},
     error::JsError,
     host::{ErrorHandler, Host, HostOptions, TextMeasurer},
     net::{FetchEvent, FetchOp, HttpBody, HttpHead, HttpRequest, NetworkQueue, RequestId},

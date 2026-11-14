@@ -258,7 +258,7 @@ pub(crate) unsafe extern "C" fn list(
 
 /// Renders a list for `props` (borrowed); the list's node (owned).
 pub(crate) fn render(cx: *mut JsContext, props: JsValue) -> Result<JsValue, JsValue> {
-    let node = dom::create_element(cx, Tag::List)?;
+    let node = dom::create_host_element(cx, Tag::List)?;
     let id = dom::node_id(cx, node).expect("a node");
     // SAFETY: dups the list owns.
     let data = Box::new(ListData {

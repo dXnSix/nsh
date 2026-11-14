@@ -604,7 +604,7 @@ unsafe extern "C" fn stack(
     argv: *mut JsValue,
 ) -> JsValue {
     let props = arg(argc, argv, 0);
-    let node = match dom::create_element(cx, Tag::Stack) {
+    let node = match dom::create_host_element(cx, Tag::Stack) {
         Ok(node) => node,
         Err(e) => return e,
     };
@@ -962,7 +962,7 @@ unsafe extern "C" fn screen(
     argv: *mut JsValue,
 ) -> JsValue {
     let props = arg(argc, argv, 0);
-    let node = match dom::create_element(cx, Tag::Screen) {
+    let node = match dom::create_host_element(cx, Tag::Screen) {
         Ok(node) => node,
         Err(e) => return e,
     };
@@ -1190,6 +1190,9 @@ unsafe extern "C" fn modal(
     // reads) and `tick`, which runs it again.
     // SAFETY: a new object.
     let state = unsafe { qjs::JS_NewObject(cx) };
+    // Dev tools: the use's call site, for the modal node made when it opens
+    // (later, in the run).
+    crate::dev_source::keep_site(cx, state, crate::dev_source::take_pending(cx));
     let tick = reactive::new_signal(cx, qjs::JS_NewFloat64(0.0));
     let run = native(cx, modal_run, 0, &mut [props, state, tick]);
     free(cx, state);
@@ -1249,6 +1252,7 @@ unsafe extern "C" fn modal_run(
             Ok(node) => node,
             Err(e) => return e,
         };
+        dom::stamp_node(cx, node, crate::dev_source::kept_site(cx, state));
         let result = (|| -> Result<(), JsValue> {
             dom::spread_except(
                 cx,

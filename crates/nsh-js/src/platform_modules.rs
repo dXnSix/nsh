@@ -610,7 +610,7 @@ unsafe extern "C" fn render_native(
     let Some(events) = names(cx, spec, c"events") else {
         return qjs::JS_EXCEPTION;
     };
-    let node = match dom::create_element(cx, Tag::Native) {
+    let node = match dom::create_host_element(cx, Tag::Native) {
         Ok(node) => node,
         Err(e) => return e,
     };

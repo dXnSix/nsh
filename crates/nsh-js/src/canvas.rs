@@ -1288,7 +1288,7 @@ unsafe extern "C" fn canvas(
     argv: *mut JsValue,
 ) -> JsValue {
     let props = arg(argc, argv, 0);
-    let node = match dom::create_element(cx, Tag::Canvas) {
+    let node = match dom::create_host_element(cx, Tag::Canvas) {
         Ok(node) => node,
         Err(e) => return e,
     };
