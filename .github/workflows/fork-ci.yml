@@ -94,7 +94,7 @@ jobs:
       tizen: ${{ steps.jobs.outputs.tizen }}
     steps:
       # A pull request's checkout is its merge with `main`, so the script is
-      # `main`'s even for a `pr/*` branch, cut from upstream.
+      # `main`'s even for an `up/*` branch, cut from upstream.
       - uses: actions/checkout@v4
       - name: Find the jobs this change needs
         id: jobs

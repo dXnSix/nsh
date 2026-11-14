@@ -3,14 +3,14 @@
 # its macOS runners are slow and often not there, and its Android emulator
 # goes away under load. The gate (`fork-ci.yml`) has no macOS job and no
 # emulator: this script is the fork's check of those platforms for a pull
-# request, and for a `pr/*` branch before it goes upstream. GitHub's
+# request, and for an `up/*` branch before it goes upstream. GitHub's
 # runners check them on `main` at night and after a sync (`fork-full.yml`).
 #
 # Usage, in the checkout to check (a worktree, at its root or below):
 #
 #   bash <path>/.github/fork/local.sh [macos] [ios] [android] [gpui] [--all] [--quick] [--no-status]
 #
-# The script may come from another checkout: a `pr/*` branch, cut from
+# The script may come from another checkout: an `up/*` branch, cut from
 # upstream, has no `.github/fork/`, and is checked with `main`'s script
 # (it reads `examples.sh` and `changed.py` beside itself).
 #

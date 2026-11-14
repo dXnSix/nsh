@@ -17,9 +17,9 @@
 //! application menu's item with that shortcut is chosen (`onMenu`); else
 //! Tab moves the keyboard focus between the inputs and the views that are
 //! its stops (those that take presses, and `focusable` ones that take none)
-//! where the platform does (macOS, Windows, Linux, the web), Shift+F10 asks
-//! it for its context menu (the web, Linux), the focused input takes the
-//! keys that edit it, and Escape goes back.
+//! where the platform does (macOS, the web, Linux), Shift+F10 asks it for
+//! its context menu (the web, Linux), the focused input takes the keys that
+//! edit it, and Escape goes back.
 //!
 //! The step `keyboard.remote(<key>)` presses a TV remote's key
 //! ([`crate::remote`]) the same way, Back aside, which goes back.
