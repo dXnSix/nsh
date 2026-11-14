@@ -1977,6 +1977,12 @@ pub struct StylePatch {
 }
 
 impl StylePatch {
+    /// Its declarations as written, in order (dev tools).
+    #[cfg(feature = "inspect")]
+    pub fn declarations(&self) -> &[StyleDecl] {
+        &self.decls
+    }
+
     /// Applies `decl` to `style` and records it if it applied. A default
     /// ([`StyleDecl::Default`]) applies unless the patch sets the property.
     pub fn push(&mut self, style: &mut Style, decl: StyleDecl) -> Result<(), StyleError> {

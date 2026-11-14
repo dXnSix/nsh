@@ -74,6 +74,58 @@ mod imp {
         trial: Option<Arc<dyn crate::Trial>>,
     }
 
+    /// Where the script's nodes were written and who rendered them
+    /// ([`nsh_core::inspect`]), from the VM's stamps and hot instances.
+    #[cfg(feature = "inspect")]
+    impl nsh_core::inspect::ScriptSources for Script {
+        fn source(&self, id: NodeId) -> Option<nsh_core::inspect::DevSource> {
+            self.host.node_source(id).map(dev_source)
+        }
+
+        fn instances(&self, id: NodeId) -> Vec<nsh_core::inspect::DevInstance> {
+            self.host
+                .node_instances(id)
+                .into_iter()
+                .map(|i| nsh_core::inspect::DevInstance {
+                    id: i.id,
+                    key: i.key,
+                    call_site: i.call_site.map(dev_source),
+                })
+                .collect()
+        }
+
+        fn props(&self, instance: u32) -> Vec<(String, nsh_core::inspect::DevProp)> {
+            use nsh_core::inspect::DevProp;
+            self.host
+                .instance_props(instance)
+                .into_iter()
+                .map(|(name, value)| {
+                    let value = match value {
+                        nsh_js::PropValue::Getter => DevProp::Getter,
+                        nsh_js::PropValue::Function => DevProp::Function,
+                        nsh_js::PropValue::Undefined => DevProp::Undefined,
+                        nsh_js::PropValue::Null => DevProp::Null,
+                        nsh_js::PropValue::Bool(b) => DevProp::Bool(b),
+                        nsh_js::PropValue::Number(n) => DevProp::Number(n),
+                        nsh_js::PropValue::Text(t) => DevProp::Text(t),
+                        nsh_js::PropValue::Object => DevProp::Object,
+                    };
+                    (name, value)
+                })
+                .collect()
+        }
+    }
+
+    #[cfg(feature = "inspect")]
+    fn dev_source(s: nsh_js::NodeSource) -> nsh_core::inspect::DevSource {
+        nsh_core::inspect::DevSource {
+            module: s.module,
+            anchor: s.anchor,
+            line: s.line,
+            column: s.column,
+        }
+    }
+
     impl Script {
         /// Starts a VM for `bundle` and evaluates it (errors go to `sink`);
         /// also the time evaluation took. `None`: the VM did not start.
@@ -398,6 +450,22 @@ mod stub {
     #[derive(Default)]
     pub(crate) struct NetworkQueue {
         pub(crate) ops: Vec<(u32, crate::FetchOp)>,
+    }
+
+    #[cfg(all(
+        feature = "inspect",
+        not(all(feature = "browser", target_arch = "wasm32"))
+    ))]
+    impl nsh_core::inspect::ScriptSources for Script {
+        fn source(&self, _: NodeId) -> Option<nsh_core::inspect::DevSource> {
+            match *self {}
+        }
+        fn instances(&self, _: NodeId) -> Vec<nsh_core::inspect::DevInstance> {
+            match *self {}
+        }
+        fn props(&self, _: u32) -> Vec<(String, nsh_core::inspect::DevProp)> {
+            match *self {}
+        }
     }
 
     #[cfg(not(all(feature = "browser", target_arch = "wasm32")))]

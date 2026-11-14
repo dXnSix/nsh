@@ -4,6 +4,8 @@ mod components;
 mod cull;
 mod directional;
 mod follow;
+#[cfg(feature = "inspect")]
+mod inspect;
 mod layout_scope;
 mod layout_tree;
 mod list;
@@ -1481,6 +1483,9 @@ pub struct Core<M: TextEngine> {
     login_item: Option<crate::desktop::LoginItems>,
     /// Rust components and what they rendered.
     components: components::Components,
+    /// What dev tools asked ([`crate::inspect`]): `None` until one asks.
+    #[cfg(feature = "inspect")]
+    dev: Option<Box<crate::inspect::DevState>>,
     /// Overlay nodes, those shown in the order they were shown (the last
     /// on top).
     overlays: Vec<Key>,
@@ -1551,6 +1556,8 @@ impl<M: TextEngine> Core<M> {
             audio: None,
             login_item: None,
             components: components::Components::for_viewport(viewport),
+            #[cfg(feature = "inspect")]
+            dev: None,
             lists: Vec::new(),
             parent_lists: Vec::new(),
             outer_moved: false,
@@ -3239,6 +3246,9 @@ impl<M: TextEngine> Core<M> {
         for (id, answer) in std::mem::take(&mut self.components.transition_times) {
             answer.borrow_mut().deliver(self.transition_time(id));
         }
+        // Dev tools' questions, with this commit's layout.
+        #[cfg(feature = "inspect")]
+        self.answer_inspections();
         // Into the scroll commands of the scroll views around, in place,
         // with this commit's layout and the scrolls of the commands before.
         if self

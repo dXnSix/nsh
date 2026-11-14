@@ -10,7 +10,7 @@ use crate::{
 
 /// 8pt per char, 16pt per line, wraps at `max_width`. Counts calls.
 #[derive(Default)]
-struct FakeEngine {
+pub(super) struct FakeEngine {
     prepares: Cell<u32>,
     measures: Cell<u32>,
     layouts: Cell<u32>,
@@ -400,7 +400,7 @@ fn values_of_calls_into_rust_that_panic_as_they_drop_stay_in_the_core() {
     assert!(js_events(&mut c).is_empty());
 }
 
-fn core() -> Core<FakeEngine> {
+pub(super) fn core() -> Core<FakeEngine> {
     let mut c = Core::new(FakeEngine::default(), size_pt(320.0, 480.0));
     c.set_tokens(crate::element::tokens::sample());
     c
@@ -502,7 +502,7 @@ fn style(props: &[(&str, StyleValue<'_>)]) -> Box<Style> {
     Box::new(s)
 }
 
-fn style_op(id: NodeId, props: &[(&str, StyleValue<'_>)]) -> Op {
+pub(super) fn style_op(id: NodeId, props: &[(&str, StyleValue<'_>)]) -> Op {
     let mut style = Box::<Style>::default();
     let mut patch = StylePatch::default();
     for &(k, v) in props {
@@ -511,7 +511,7 @@ fn style_op(id: NodeId, props: &[(&str, StyleValue<'_>)]) -> Op {
     Op::SetStyle { id, style, patch }
 }
 
-fn apply<M: TextEngine>(core: &mut Core<M>, ops: Vec<Op>) {
+pub(super) fn apply<M: TextEngine>(core: &mut Core<M>, ops: Vec<Op>) {
     for op in ops {
         core.apply(op).unwrap();
     }

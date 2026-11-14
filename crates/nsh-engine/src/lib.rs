@@ -3627,6 +3627,12 @@ impl<M: TextEngine> State<M> {
                     None => merged = Some(batch),
                 }
             }
+            // Dev tools' questions about the script's nodes, answered from
+            // its VM: what awaited them runs in the next round.
+            #[cfg(feature = "inspect")]
+            self.core.answer_script_inspections(
+                script.map(|s| s as &dyn nsh_core::inspect::ScriptSources),
+            );
             self.core.take_list_binds(&mut self.binds);
             self.core.take_events(&mut self.events);
             // URLs the platform opens go out in another round.

@@ -184,6 +184,22 @@ pub fn register(host: Rc<dyn Host>) -> Result<Registration, String> {
 }
 
 pub(crate) struct Script(Rc<dyn Host>);
+
+/// The browser's facade keeps no stamps the engine reads yet: the script's
+/// nodes say nothing of where they were written.
+#[cfg(feature = "inspect")]
+impl nsh_core::inspect::ScriptSources for Script {
+    fn source(&self, _: nsh_core::NodeId) -> Option<nsh_core::inspect::DevSource> {
+        None
+    }
+    fn instances(&self, _: nsh_core::NodeId) -> Vec<nsh_core::inspect::DevInstance> {
+        Vec::new()
+    }
+    fn props(&self, _: u32) -> Vec<(String, nsh_core::inspect::DevProp)> {
+        Vec::new()
+    }
+}
+
 impl Drop for Script {
     fn drop(&mut self) {
         self.0.stop("the app was disposed".into());

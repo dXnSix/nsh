@@ -58,6 +58,10 @@ glsl = ["shader", "naga/glsl-out"]
 # UI sets turn it on; apps and the web runtime go without
 # (`element::DECLARATIONS`).
 declarations = []
+# What dev tools ask the core about its nodes (`inspect`: the tree, a node's
+# detail, the nodes under a point). Every platform's `dev` feature turns it
+# on; release runners never do.
+inspect = []
 # The native WebSocket client (`websocket` on native hosts: tokio-tungstenite
 # over rustls, with the platform's trust store). Without it `connect` rejects
 # with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` unless the host supplies a transport.

@@ -48,6 +48,18 @@ pub(super) struct ClassNames {
     list: Vec<Box<str>>,
 }
 
+#[cfg(feature = "inspect")]
+impl ClassNames {
+    /// `class` and `classList` as written, joined by a space.
+    pub(super) fn authored(&self) -> String {
+        std::iter::once(&*self.class)
+            .chain(self.list.iter().map(|c| &**c))
+            .filter(|c| !c.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 /// A styled part of a node, besides the node itself: a state style
 /// (`activeStyle`, ...) or a part of a page or list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

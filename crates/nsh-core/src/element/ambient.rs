@@ -1132,6 +1132,75 @@ pub fn app_url() -> Answer<Option<String>> {
     answer
 }
 
+/// The core's tree as the next commit lays it out, every node from the
+/// root (dev tools, feature `inspect`: [`crate::inspect`]). To await in a
+/// task.
+#[cfg(feature = "inspect")]
+pub fn dev_tree() -> Answer<crate::inspect::DevTree> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Tree(slot)));
+    answer
+}
+
+/// Node `id` in full as the next commit lays it out; `None` for an unknown
+/// id (dev tools, feature `inspect`). To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_node(id: crate::NodeId) -> Answer<Option<crate::inspect::DevDetail>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Node(id, slot)));
+    answer
+}
+
+/// Where node `id` was written, as the source says now: hot bundles stamp
+/// their elements (dev tools, feature `inspect`). `None` for text, nodes
+/// made natively, bundles without stamps and Rust apps. To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_source(id: crate::NodeId) -> Answer<Option<crate::inspect::DevSource>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Source(id, slot)));
+    answer
+}
+
+/// The hot component instances that rendered node `id`, innermost first,
+/// each with where it was used (dev tools, feature `inspect`). To await in
+/// a task.
+#[cfg(feature = "inspect")]
+pub fn dev_instances(id: crate::NodeId) -> Answer<Vec<crate::inspect::DevInstance>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Instances(
+        id, slot,
+    )));
+    answer
+}
+
+/// The props hot component instance `instance` was rendered with, read
+/// from their descriptors: a getter is reported, never called (dev tools,
+/// feature `inspect`). To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_instance_props(instance: u32) -> Answer<Vec<(String, crate::inspect::DevProp)>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Props(
+        instance, slot,
+    )));
+    answer
+}
+
+/// The nodes under page point `page` as the next commit lays them out,
+/// innermost and topmost first, leaving out the subtree of `skip` (dev
+/// tools, feature `inspect`: [`crate::Core::dev_pick`]). To await in a
+/// task.
+#[cfg(feature = "inspect")]
+pub fn dev_pick(
+    page: crate::geometry::Point<crate::geometry::Points>,
+    skip: Option<crate::NodeId>,
+) -> Answer<Vec<crate::NodeId>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Pick(
+        page, skip, slot,
+    )));
+    answer
+}
+
 /// Sets the app's address (TS: `UrlScheme.setUrl`): on the web it replaces
 /// the current history entry's; the native platforms keep it for
 /// [`app_url`] ([`crate::url_scheme`]). An address longer than

@@ -271,6 +271,24 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 - Stacks are symbolicated with source maps: bundling produces a hidden source map (the TSX→JSX→JS maps are composed with
   `rolldown_sourcemap::collapse_sourcemaps`), sent along with the bundle; the engine rewrites `bundle.js:L:C` to `App.tsx:L:C` before reporting.
 
+### What dev tools ask the core (feature `inspect`)
+
+Every platform's `dev` feature turns on `nsh-core`'s `inspect` (release runners never do): dev tools ask the core
+about its nodes with `nsh_core::element::dev_tree()` (every node from the root: kind, parent and children, a Rust
+component's name, `class` as written, `testID`, raw text, frame, page position, flags), `dev_node(id)` (inline
+style declarations, the resolved view and text style, the unrounded box with padding, border and margin, states,
+events, accessibility props, a scroll view's offset and content size, a list's or cell's state) and
+`dev_pick(point, skip)` (the nodes under a page point, innermost and topmost first, whatever their `pointerEvents`,
+listeners or disabled state: modals above the surface, shown overlays above their root view in the order they were
+shown, clipping counts, hidden views and `skip`'s subtree, its overlays included, are left out). Each returns an
+`Answer` the core resolves in its next commit, after layout, through the same action path as `app_url()`; positions
+ignore transforms and stop at modal roots. What the script knows of its nodes comes the same way:
+`dev_source(id)`, `dev_instances(id)` and `dev_instance_props(instance)` (hot bundles' stamps and instances, kept by
+`nsh-js`) are queued by the core and answered in the same round by the engine (feature `inspect`, which the platforms'
+`dev` turns on) from its VM (`Core::answer_script_inspections` with the script as `ScriptSources`); a Rust app answers
+nothing. The code is `crates/nsh-core/src/inspect.rs` (the types) and `crates/nsh-core/src/core/inspect.rs` (the
+answers). Until something asks, no node has dev state and a commit does no dev work.
+
 ## `nsh build --split`
 
 Writes a split bundle (`native-pipeline.md`, "Split bundles"): `bundle.js` / `.map` / `.nshc` and, per chunk,
