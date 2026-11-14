@@ -145,11 +145,9 @@ impl<M: TextEngine> Core<M> {
             },
         };
         if let Some(layer) = layer {
-            let extra = (!layer.class.trim().is_empty()).then(|| self.tailwind.get(&layer.class).0);
             self.nodes[key as usize].dev = Some(Box::new(NodeDev {
                 layer,
                 base: base.clone(),
-                extra,
             }));
         }
         // Resolved again, with the layer or without.
@@ -169,13 +167,29 @@ impl<M: TextEngine> Core<M> {
             return classes;
         };
         dev.base = classes.clone();
-        if dev.layer.replace_class {
-            return dev.extra.clone();
+        let (class, replace) = (dev.layer.class.clone(), dev.layer.replace_class);
+        // Parsed with the theme and tokens now (cached), as the node's own.
+        let extra = (!class.trim().is_empty()).then(|| self.tailwind.get(&class).0);
+        if replace {
+            return extra;
         }
-        match (classes, &dev.extra) {
-            (Some(c), Some(e)) => Some(std::rc::Rc::new(c.merged(e))),
-            (None, Some(e)) => Some(e.clone()),
+        match (classes, extra) {
+            (Some(c), Some(e)) => Some(std::rc::Rc::new(c.merged(&e))),
+            (None, Some(e)) => Some(e),
             (c, None) => c,
+        }
+    }
+
+    /// The theme or the tokens changed: overridden nodes resolve their
+    /// layers' classes again, those without classes of their own too.
+    pub(super) fn restyle_overrides(&mut self) {
+        let keys: Vec<(Key, Option<std::rc::Rc<crate::tailwind::ClassList>>)> = self
+            .nodes
+            .iter()
+            .filter_map(|(k, n)| Some((k as Key, n.dev.as_deref()?.base.clone())))
+            .collect();
+        for (key, base) in keys {
+            self.set_class_list(key, base);
         }
     }
 
@@ -1162,6 +1176,37 @@ mod override_tests {
             c.dev_override(id, None);
             c.commit();
             assert_eq!(c.dev_node(id).unwrap().layout.padding.left, authored);
+        }
+    }
+
+    /// The layer's classes follow the tokens as the node's own do, on a
+    /// node with classes of its own and on one without.
+    #[test]
+    fn a_layer_s_classes_follow_token_changes() {
+        let mut c = core();
+        apply(&mut c, styled(2, Some("p-2"), 100.0));
+        apply(&mut c, styled(4, None, 100.0));
+        c.commit();
+        for id in [2, 4] {
+            c.dev_override(
+                id,
+                Some(DevOverride {
+                    class: "bg-primary".into(),
+                    ..Default::default()
+                }),
+            );
+        }
+        c.commit();
+        let before = shown(&c, 2).0.background_color;
+        assert_eq!(shown(&c, 4).0.background_color, before);
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_color("primary", crate::Color(0x0000_ffff).into());
+        c.set_tokens(tokens);
+        c.commit();
+        for id in [2, 4] {
+            let now = shown(&c, id).0.background_color;
+            assert_ne!(now, before, "node {id}");
+            assert_eq!(now, crate::Color(0x0000_ffff), "node {id}");
         }
     }
 

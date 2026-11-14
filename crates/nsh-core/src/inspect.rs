@@ -140,8 +140,6 @@ pub(crate) struct NodeDev {
     pub(crate) layer: DevOverride,
     /// The classes the node's own code last set, under the layer.
     pub(crate) base: Option<std::rc::Rc<crate::tailwind::ClassList>>,
-    /// The layer's classes, parsed.
-    pub(crate) extra: Option<std::rc::Rc<crate::tailwind::ClassList>>,
 }
 
 /// A node's box from its last layout, before rounding.

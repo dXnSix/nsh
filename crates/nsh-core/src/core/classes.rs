@@ -1095,6 +1095,8 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        #[cfg(feature = "inspect")]
+        self.restyle_overrides();
         self.part_classes_again(|_| true);
     }
 
@@ -1129,6 +1131,9 @@ impl<M: TextEngine> Core<M> {
         for key in keys {
             self.set_classes(key, None, None);
         }
+        // Dev tools' layers name classes of their own.
+        #[cfg(feature = "inspect")]
+        self.restyle_overrides();
         self.part_classes_again(|c| all || (c.deps() & deps::THEME != 0 && c.reads(&changed)));
         let hosts: Vec<NodeId> = self
             .components
