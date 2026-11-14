@@ -138,7 +138,9 @@ objc2.workspace = true
 # `NSRunningApplication`: the activation policy (`run_in_background`), which
 # `gpui_platform` would bring but is optional here (`platform`).
 objc2-app-kit = { workspace = true, features = ["NSRunningApplication"] }
-objc2-foundation.workspace = true
+# `NSArray`'s `iter` (the displays' screens), which `gpui_platform` turns on
+# otherwise: the crate builds without the `platform` feature too.
+objc2-foundation = { workspace = true, features = ["NSEnumerator"] }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle.workspace = true

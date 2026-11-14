@@ -6,7 +6,7 @@ order: 12.5
 
 # nsh/desktop
 
-`nsh/desktop` holds what only desktops have: the app's windows and their title bars, the displays, the application menu and context menus, the tray and global shortcuts. It works on macOS, Windows and Linux. Rust code finds the same in `nsh_core::element::desktop`: windows of the app's own (`window()`), the window a component renders in (`current_window()`, a `WindowRef`), the displays (`displays`), `quit`, `restart`, opening at login (`launch_at_login`, `set_launch_at_login`), the application menu and context menus (`set_application_menu`, `popup_menu`, made of `MenuItem`s), the tray (`set_tray`) and global shortcuts (`register_global_shortcut`), and marks draggable views with `.window_drag(true)`; TSX imports `nsh/desktop`. The module can be imported on every platform, so one bundle runs everywhere: on iOS and Android its functions do nothing, and `isAvailable` tells you whether its windows and menus are there. An app that declares capabilities needs `"application": true` for the main window, the application menu, the tray, global shortcuts, `quit`, `restart` and launching at login ([capabilities](../docs/sandbox-and-capabilities.md#application)); without it they do nothing. Context menus and the windows the app opens (granted by `windows`) need no `application`.
+`nsh/desktop` holds what only desktops have: the app's windows and their title bars, the displays, the application menu and context menus, the tray and global shortcuts. It works on macOS, Windows and Linux. Rust code finds the same in `nsh_core::element::desktop`: windows of the app's own (`window()`), the window a component renders in (`current_window()`, a `WindowRef`), the displays (`displays`), `quit`, `restart`, opening at login (`launch_at_login`, `set_launch_at_login`), the application menu and context menus (`set_application_menu`, `popup_menu`, made of `MenuItem`s), the tray (`set_tray`) and global shortcuts (`register_global_shortcut`), and marks draggable views with `.window_drag(true)`; TSX imports `nsh/desktop`. The module can be imported on every platform, so one bundle runs everywhere: on iOS and Android its functions do nothing, and `isAvailable` tells you whether its windows and menus are there. An app that declares capabilities needs `"application": true` for the main window, the application menu, the tray, global shortcuts, `quit` and quit requests, `restart` and launching at login ([capabilities](../docs/sandbox-and-capabilities.md#application)); without it they do nothing. Context menus and the windows the app opens (granted by `windows`) need no `application`.
 
 ```rust tabs
 use nsh_core::{
@@ -433,6 +433,16 @@ stops, the Quit item and the key quit at once again. The system ending the app (
 shutting down) never asks. It applies to standalone apps on macOS, Windows and Linux; a GPUI app that owns the window
 gets the request as `CloseRequest::Quit`.
 
+On the web, the user leaving the page (closing its tab, reloading, going to another site) is the quit request: it
+reaches the listener as the user leaves, so the example below works there as it is. A listener that calls `quit()` right
+away lets the page go without a question. A listener that asks first (here `askToSave()`) has the browser ask the user
+whether to leave; when the user stays, the app's own question is on the page, and once the work is saved the next leave
+goes at once. Desktop browsers show their question after the user has interacted with the page. However the user leaves,
+the app's `quit` listeners start once as the page goes: what they do synchronously completes, and work they await runs
+for as long as the page remains. A page the browser keeps in its back / forward cache keeps its app running, and the app
+goes on when the user comes back. This works whatever `isAvailable` says; an app that declares capabilities lists
+`"application": true` for it.
+
 ```rust tabs
 use nsh_core::{
     element::desktop::{on_app_quit, on_quit_request, quit},
@@ -470,7 +480,7 @@ function Editor() {
 
 `Application.on("quit", listener)` (Rust: `on_app_quit`) is the app's cleanup, as GPUI's `on_app_quit`: it runs
 however the app stops (its Quit item, `quit()`, its last window closing, the Dock's Quit, the system ending it when the
-user logs out, a host app removing its view), and cannot keep it running. A promise the listener returns is awaited,
+user logs out, a host app removing its view, the web page going), and cannot keep it running. A promise the listener returns is awaited,
 200 ms at most for all of them, while the platform waits for the app; past that the app stops. A listener added while a
 component renders goes with the component; the function `on` returns stops it.
 
@@ -747,10 +757,17 @@ interface Display {
   primary: boolean;
   scaleFactor: number;
   refreshRate: number | null;  // in hertz
+  cutouts: Bounds[];           // what a camera housing hides: a MacBook's notch
 }
 ```
 
 `win.state()` is a window as the platform reports it, `windowState()` the current window's, and `displays()` the displays, the primary one first; all are reactive. Every rectangle is in points, in screen coordinates: from the primary display's top left corner, with `y` growing down, as `setBounds` takes them. A change of mode, of display, of focus, or of being minimized or visible is reported at once; a move or a resize once the window stops for a moment, so what reads them runs once per move rather than at every step. Rust: `WindowRef::state() -> Option<WindowState>` and `displays() -> Vec<Display>` (`nsh_core::desktop`'s types); reading them subscribes to changes.
+
+A display's `cutouts` are the parts of it a camera housing covers, in the same screen coordinates: on a MacBook with a notch, one rectangle at the top's middle, as tall as the menu bar. A window can sit beside the notch, or show content that grows out of it; on every other display the list is empty.
+
+```tsx
+const notch = () => displays().flatMap((d) => d.cutouts)[0] ?? null;
+```
 
 While the window is on the screen, [`lifecycle()`](./nsh.md#device) reporting `"background"` means other windows cover it.
 
