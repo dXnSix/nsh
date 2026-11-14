@@ -2279,7 +2279,7 @@
 			entry.dispose();
 		};
 		const render = (props = {}) => {
-			const node = rt.element("list"), id = values.nodeIds.get(node);
+			const node = rt.hostElement("list"), id = values.nodeIds.get(node);
 			const state = {
 				node,
 				props,
@@ -3584,8 +3584,13 @@
 				result = reactive.untracked(() => Component(props));
 				return result;
 			} finally {
-				devSource?.leaveUse(entered, result);
+				devSource?.leaveUse(entered);
 			}
+		};
+		const hostElement = (tag) => {
+			const node = element(tag);
+			devSource?.stamp(node, devSource.takePending());
+			return node;
 		};
 		const element = (tag, anchor, delta, column) => {
 			const node = call(300, [tag]);
@@ -3700,7 +3705,10 @@
 			},
 			rt: {
 				element,
+				hostElement,
 				text: (value) => call(301, [String(value)]),
+				takeSite: () => devSource?.takePending() ?? null,
+				stampNode: (node, site) => devSource?.stamp(node, site),
 				prop,
 				bindProp,
 				insert,
@@ -3755,7 +3763,7 @@
 		const handler = (name) => "on" + name[0].toUpperCase() + name.slice(1);
 		const make = (spec, call) => function(props = {}) {
 			const rt = dom.rt;
-			const node = rt.element("view");
+			const node = rt.hostElement("view");
 			rt.prop(node, "component", spec.name);
 			const state = {
 				node,
@@ -4473,7 +4481,7 @@
 			}
 		});
 		function Canvas(props) {
-			const node = dom.rt.element("canvas");
+			const node = dom.rt.hostElement("canvas");
 			dom.rt.spread(node, reactive.split(props, ["draw", "onLayout"])[1]);
 			const size = reactive.signal(null, { equals: (a, b) => a?.width === b?.width && a?.height === b?.height });
 			dom.rt.prop(node, "onLayout", (e) => {
@@ -5097,7 +5105,7 @@
 			}
 		});
 		function NavPage(props) {
-			const node = rt.element("screen");
+			const node = rt.hostElement("screen");
 			pages.add(node);
 			rt.spread(node, except(props, [
 				"children",
@@ -5136,7 +5144,7 @@
 			return node;
 		}
 		function NavStack(props) {
-			const node = rt.element("stack");
+			const node = rt.hostElement("stack");
 			rt.spread(node, except(props, [
 				"state",
 				"children",
@@ -5169,6 +5177,7 @@
 			return node;
 		}
 		function Dialog(props) {
+			const site = rt.takeSite?.();
 			let closedByUser = false;
 			const tick = signal(0);
 			const close = (reason) => {
@@ -5196,6 +5205,7 @@
 				if (closedByUser) return null;
 				return untracked(() => {
 					const node = rt.element("modal");
+					rt.stampNode?.(node, site);
 					rt.spread(node, except(props, [
 						"children",
 						"style",
@@ -6376,10 +6386,16 @@
 				pending = site;
 				return { before };
 			},
-			leaveUse(entered, result) {
-				if (!entered) return;
-				if (pending && result !== null && typeof result === "object" && !Array.isArray(result) && !stamps.has(result) && typeof result !== "function") stamps.set(result, pending);
-				pending = entered.before;
+			leaveUse(entered) {
+				if (entered) pending = entered.before;
+			},
+			takePending() {
+				const site = pending;
+				pending = null;
+				return site;
+			},
+			stamp(node, site) {
+				if (site && node !== null && typeof node === "object") stamps.set(node, site);
 			},
 			beginInstance(key, props) {
 				const parent = currentInstance();
@@ -6576,7 +6592,7 @@
 			Shader: "shader"
 		})) {
 			const Component = (props) => {
-				const node = dom.rt.element(tag);
+				const node = dom.rt.hostElement(tag);
 				dom.rt.spread(node, props);
 				if ("children" in props) dom.rt.insert(node, () => props.children);
 				return node;
@@ -6584,7 +6600,7 @@
 			nsh[name] = Object.assign(Component, nsh[name]);
 		}
 		nsh.nativeComponent = (name, spec = {}) => (props = {}) => {
-			const node = dom.rt.element("native");
+			const node = dom.rt.hostElement("native");
 			dom.rt.prop(node, "component", name);
 			const own = new Set(spec.props ?? []), eventNames = new Set((spec.events ?? []).map((name) => "on" + name[0].toUpperCase() + name.slice(1)));
 			const forwarded = new Proxy(props, {
@@ -6612,7 +6628,7 @@
 		modules.exports.set("nsh/mobile", mobile);
 		const base = modules.exports.get("nsh/base");
 		if (base) base.Input = (props) => {
-			const node = dom.rt.element("input");
+			const node = dom.rt.hostElement("input");
 			dom.rt.spread(node, props);
 			return node;
 		};

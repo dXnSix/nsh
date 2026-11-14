@@ -129,8 +129,14 @@ export function createDom(invoke, values, reactive, live, wake) {
       result = reactive.untracked(() => Component(props));
       return result;
     } finally {
-      devSource?.leaveUse(entered, result);
+      devSource?.leaveUse(entered);
     }
+  };
+  // A native component's host node: it takes its use's call site.
+  const hostElement = tag => {
+    const node = element(tag);
+    devSource?.stamp(node, devSource.takePending());
+    return node;
   };
   // `element(tag, anchor, lineDelta, column)`: hot bundles stamp it.
   const element = (tag, anchor, delta, column) => {
@@ -206,7 +212,11 @@ export function createDom(invoke, values, reactive, live, wake) {
       if (typeof value === "function") events.set(name, value); else events.delete(name);
       call(309, [node, name, typeof value === "function"]);
     },
-    rt: { element, text: value => call(301, [String(value)]),
+    rt: { element, hostElement, text: value => call(301, [String(value)]),
+      // A native component that makes its host node later (a dialog's
+      // modal) takes its use's site first and stamps the node with it.
+      takeSite: () => devSource?.takePending() ?? null,
+      stampNode: (node, site) => devSource?.stamp(node, site),
       prop, bindProp, insert, append, component, cond, each, merge, spread,
       metaUrl: path => new URL(path, document.baseURI).href,
       ref,

@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { createDom } from "./dom.js";
 import { createHot } from "./hot.js";
 import { createDevSource } from "./dev_source.js";
+import { createNavigation } from "./navigation.js";
 
 // Owners with context and cleanups, computed values run at once: enough for
 // instances provided by context and forgotten with their owner.
@@ -29,8 +30,14 @@ function fakeReactive() {
   const untracked = fn => fn();
   // A scope of its own, disposed with `dispose()`.
   const scope = fn => { const o = child(); const value = run(fn, o); return { value, dispose: () => dispose(o) }; };
-  const signal = value => { const read = () => value; read.set = next => { value = next; }; return read; };
-  return { lookup, provide, cleanup, computed, untracked, signal, batch: fn => fn(), scope, getOwner: () => owner };
+  const signal = value => { const read = () => value; read.set = next => { value = next; }; read.update = fn => { value = fn(value); }; return read; };
+  const split = (props, keys) => {
+    const pick = {}, rest = {};
+    for (const key of Object.keys(props)) Object.defineProperty(keys.includes(key) ? pick : rest, key, { enumerable: true, get: () => props[key] });
+    return [pick, rest];
+  };
+  return { lookup, provide, cleanup, computed, untracked, signal, split, batch: fn => fn(), scope,
+    getOwner: () => owner, effect: fn => fn(), renderEffect: fn => fn() };
 }
 
 // A renderer whose nodes are plain objects with even ids, as the engine
@@ -78,23 +85,26 @@ test("an anchor run again moves its nodes", () => {
   assert.deepEqual(dom.nodeSource(id(row)), at("m", "List", 9, 9));
 });
 
-test("a native component's node takes its use's site; a hot component's body does not", () => {
+test("only a native component's host node takes its use's site, as on nsh-js", () => {
   const { dom, rt, hot, id } = setup();
   const a0 = rt.anchor("main", "Rows", 2);
   const a1 = rt.anchor("main", "App", 20);
-  // A native component: its node is made without a stamp.
-  const List = () => rt.element("list");
-  let unstamped, made;
+  // A native component: its host node is made with `hostElement`.
+  const List = () => rt.hostElement("list");
+  let made, unstamped, plain;
+  const lists = [];
+  const NativeList = () => { const l = rt.hostElement("list"); lists.push(l); return l; };
+  // A plain (not native) component returning a node made without a stamp.
+  const Plain = () => (plain = rt.element("view"));
   const Rows = hot.component("main", "Rows", () => {
     const v = rt.element("view", a0, 1, 10);
     // Made in the body, as a placeholder is: no site.
     made = rt.element("view");
     rt.component(List, {}, a0, 2, 5);
     unstamped = rt.component(List, {});
+    rt.component(Plain, {}, a0, 4, 5);
     return v;
   }, "rows");
-  let lists = [];
-  const NativeList = () => { const l = rt.element("list"); lists.push(l); return l; };
   const App = hot.component("main", "App", () => {
     const v = rt.element("view", a1, 1, 10);
     rt.component(Rows, {}, a1, 2, 7);
@@ -105,8 +115,28 @@ test("a native component's node takes its use's site; a hot component's body doe
   rt.component(App, {});
   assert.equal(dom.nodeSource(id(made)), null);
   assert.equal(dom.nodeSource(id(unstamped)), null);
+  // nsh-js gives a plain component's unstamped node nothing either.
+  assert.equal(dom.nodeSource(id(plain)), null);
   assert.deepEqual(dom.nodeSource(id(lists[0])), at("main", "App", 23, 5));
   assert.deepEqual(dom.nodeSource(id(lists[1])), at("main", "App", 24, 5));
+});
+
+// nsh-js's `native_components_hosts_report_their_own_call_sites`: a page and
+// a dialog (whose modal is made when it opens) report their uses' sites.
+test("a page and a dialog's modal report their own call sites", () => {
+  const { dom, rt, reactive, values, id } = setup();
+  const environment = {
+    api: { safeArea: () => ({ top: 0, right: 0, bottom: 0, left: 0 }), reduceMotion: () => false },
+    insets: { Provider: props => props.children },
+  };
+  const { NavPage, Dialog } = createNavigation(reactive, dom, environment, null);
+  const a0 = rt.anchor("main", "App", 1);
+  const page = rt.component(NavPage, { title: "Home" }, a0, 3, 9);
+  const shown = rt.component(Dialog, { open: true }, a0, 5, 5);
+  const modal = typeof shown === "function" ? shown() : shown;
+  assert.deepEqual(dom.nodeSource(id(page)), at("main", "App", 4, 9));
+  assert.ok(values.nodeIds.has(modal), "the dialog made its modal");
+  assert.deepEqual(dom.nodeSource(id(modal)), at("main", "App", 6, 5));
 });
 
 test("nodes name the instances that rendered them, innermost first, and props are read without getters", () => {

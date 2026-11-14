@@ -34,7 +34,7 @@ export function createNavigation(reactive, dom, environment, animation) {
   }
   const withInsets = (insets, children) => environment.insets.Provider({ value: insets, get children() { return children(); } });
   function NavPage(props) {
-    const node = rt.element("screen"); pages.add(node);
+    const node = rt.hostElement("screen"); pages.add(node);
     rt.spread(node, except(props, ["children", "header", "headerLeft", "headerRight", "headerTitle", "onDismiss", "onBackPress", "onInsets"]));
     const [insets, onInsets] = nativeInsets(true);
     rt.prop(node, "onInsets", onInsets);
@@ -50,7 +50,7 @@ export function createNavigation(reactive, dom, environment, animation) {
     return node;
   }
   function NavStack(props) {
-    const node = rt.element("stack");
+    const node = rt.hostElement("stack");
     rt.spread(node, except(props, ["state", "children", "onChange"]));
     // `onChange({ routes })` after each change, not for the first routes.
     let started = false;
@@ -74,6 +74,8 @@ export function createNavigation(reactive, dom, environment, animation) {
     return node;
   }
   function Dialog(props) {
+    // Dev tools: its use's call site, for the modal made when it opens.
+    const site = rt.takeSite?.();
     let closedByUser = false;
     const tick = signal(0);
     const close = reason => {
@@ -88,6 +90,7 @@ export function createNavigation(reactive, dom, environment, animation) {
       if (closedByUser) return null;
       return untracked(() => {
         const node = rt.element("modal");
+        rt.stampNode?.(node, site);
         rt.spread(node, except(props, ["children", "style", "class", "backdropStyle", "backdropClass", "backdropTestID", "open", "animation", "onOpen", "onClose", "onCancel", "onOpenChange"]));
         const hasBackdrop = () => props.backdropClass != null || props.backdropStyle != null;
         const slide = hasBackdrop() && (props.animation == null || props.animation === "slide") && props.style?.translate == null && !environment.api.reduceMotion();

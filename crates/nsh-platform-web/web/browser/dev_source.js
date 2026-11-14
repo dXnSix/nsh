@@ -8,10 +8,10 @@
 // lineDelta, column)`. A node keeps its stamp; its line is computed when
 // asked, from its anchor's line now.
 //
-// A component use is pending while its component starts: the node a
-// native component returns takes it (a component that returns a node made
-// without a stamp), and so does the instance of a hot component, so nothing
-// else made in its body gets it.
+// A component use is pending while its component starts: a native
+// component's host node takes it (`rt.hostElement`; a `Dialog` keeps it for
+// the modal it makes when it opens), and so does the instance of a hot
+// component, so nothing else made in its body gets it.
 //
 // Each render of a hot component is an instance (its `module:name` key, its
 // call site and its props), provided to what it renders through the
@@ -79,14 +79,20 @@ export function createDevSource(reactive) {
       pending = site;
       return { before };
     },
-    // The use returned `result`: a node it did not stamp (a native
-    // component's) takes the site still pending.
-    leaveUse(entered, result) {
-      if (!entered) return;
-      if (pending && result !== null && typeof result === "object" && !Array.isArray(result) && !stamps.has(result) && typeof result !== "function") {
-        stamps.set(result, pending);
-      }
-      pending = entered.before;
+    // The use returned: what was pending before it is again.
+    leaveUse(entered) {
+      if (entered) pending = entered.before;
+    },
+    // The pending site, taken (a native component's host node, or a
+    // `Dialog`, which keeps it for its modal).
+    takePending() {
+      const site = pending;
+      pending = null;
+      return site;
+    },
+    // Stamps `node` with `site` (taken with `takePending`).
+    stamp(node, site) {
+      if (site && node !== null && typeof node === "object") stamps.set(node, site);
     },
     // A render of hot component `key` with `props`, used at the pending site
     // (taken: its body is not at its use's site).
