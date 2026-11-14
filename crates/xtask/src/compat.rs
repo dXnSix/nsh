@@ -42,7 +42,10 @@ pub(crate) fn compat(record: Option<&str>) -> anyhow::Result<()> {
     cargo.arg("--target-dir").arg(root.join("target"));
     // The cases use shaders, EmojiPicker and WebSockets, all opt-in runtime
     // features (as the Compat workflow builds them).
-    cargo.args(["--features", "nsh-core/shader,nsh-base/emoji-picker,nsh-engine/websocket"]);
+    cargo.args([
+        "--features",
+        "nsh-core/shader,nsh-base/emoji-picker,nsh-engine/websocket",
+    ]);
     if let Some(version) = record {
         cargo.args(["--", "record", version]);
     }
