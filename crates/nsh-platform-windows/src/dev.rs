@@ -75,6 +75,8 @@ impl log::Log for DevLogger {
             return;
         }
         let message = record.args().to_string();
+        // A dev tool in the app hears every record forwarded, connected or not.
+        nsh_dev::tap_log(record.level().into(), record.target(), &message);
         let client = CLIENT.lock().ok().and_then(|c| c.upgrade());
         match client {
             Some(client) if CONNECTED.load(Ordering::Relaxed) => {

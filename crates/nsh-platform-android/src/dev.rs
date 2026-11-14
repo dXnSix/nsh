@@ -20,6 +20,8 @@ static CONNECTED: AtomicBool = AtomicBool::new(false);
 
 /// Sends a log line to the dev server; false if not connected.
 pub(crate) fn forward(level: log::Level, target: &str, message: &str) -> bool {
+    // A dev tool in the app hears every record forwarded, connected or not.
+    nsh_dev::tap_log(level.into(), target, message);
     if !CONNECTED.load(Ordering::Relaxed) {
         return false;
     }

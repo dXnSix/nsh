@@ -107,6 +107,34 @@ pub enum DevEvent {
     },
 }
 
+/// What [`set_log_observer`] registers: called with each log record a dev
+/// host would forward (its level, target and message).
+pub type LogObserver = fn(LogLevel, &str, &str);
+
+static LOG_OBSERVER: std::sync::OnceLock<LogObserver> = std::sync::OnceLock::new();
+
+/// Registers `observer` to get every log record the dev hosts of this
+/// process would forward to the dev server, connected or not (a dev tool
+/// inside the app). Process-wide; the first call wins. Returns whether this
+/// call registered it.
+pub fn set_log_observer(observer: LogObserver) -> bool {
+    LOG_OBSERVER.set(observer).is_ok()
+}
+
+/// A dev host's log record, on its way to the dev server (or stderr while
+/// not connected): every host's logger calls this first, the one place the
+/// observer is called from. Without an observer it does nothing and keeps
+/// nothing.
+pub fn tap_log(level: LogLevel, target: &str, message: &str) {
+    tap_to(LOG_OBSERVER.get(), level, target, message);
+}
+
+fn tap_to(observer: Option<&LogObserver>, level: LogLevel, target: &str, message: &str) {
+    if let Some(observer) = observer {
+        observer(level, target, message);
+    }
+}
+
 /// What a host tells the dev server about itself.
 #[derive(Debug, Clone)]
 pub struct HostInfo {
@@ -471,4 +499,60 @@ fn send(socket: &mut Socket, msg: &ClientMessage) -> Result<(), SessionEnd> {
     socket
         .send(Message::Text(text.into()))
         .map_err(|_| SessionEnd::Disconnected)
+}
+
+/// The log observer: called per record the hosts would forward, nothing
+/// without one.
+#[cfg(test)]
+mod log_tap_tests {
+    use std::sync::Mutex;
+
+    use super::{LogLevel, set_log_observer, tap_log, tap_to};
+
+    static SEEN: Mutex<Vec<(LogLevel, String, String)>> = Mutex::new(Vec::new());
+
+    fn seen(level: LogLevel, target: &str, message: &str) {
+        SEEN.lock().unwrap_or_else(|e| e.into_inner()).push((
+            level,
+            target.to_owned(),
+            message.to_owned(),
+        ));
+    }
+
+    fn other(_: LogLevel, _: &str, _: &str) {
+        panic!("the second observer never runs");
+    }
+
+    #[test]
+    fn the_observer_gets_every_forwarded_record() {
+        assert!(set_log_observer(seen));
+        assert!(!set_log_observer(other));
+        tap_log(LogLevel::Warn, "nsh::engine", "slow commit");
+        tap_log(LogLevel::Info, "js", "hello");
+        let got = SEEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(
+            got,
+            [
+                (
+                    LogLevel::Warn,
+                    "nsh::engine".to_owned(),
+                    "slow commit".to_owned()
+                ),
+                (LogLevel::Info, "js".to_owned(), "hello".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn without_an_observer_nothing_happens() {
+        // Nothing is called and nothing is kept for later.
+        tap_to(None, LogLevel::Error, "js", "lost");
+        assert!(
+            !SEEN
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .any(|(_, _, m)| m == "lost")
+        );
+    }
 }
