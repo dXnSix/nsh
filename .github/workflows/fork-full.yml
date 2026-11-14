@@ -249,11 +249,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar); GTK 4 and
-      # GStreamer: the examples' crates (`gallery-rs`, `rust-exports`) are built for
-      # this machine too (GTK's Linux platform plays sounds and videos with GStreamer).
-      - name: Install clang, LLVM, GTK 4 and GStreamer
-        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar). The web's
+      # list runs no app with a Rust crate (`examples.sh`), so nothing here
+      # is built against GTK.
+      - name: Install clang and LLVM
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:

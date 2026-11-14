@@ -40,24 +40,17 @@ case "$target" in
     filtered=("environment appearance" "toasts a toast shows" "toasts an undo restores"
       "toasts at most three" "toasts a swipe")
     ;;
-  # Left out: context-menu (the menu is not reported), controls (the
-  # segmented control is not a tab list), links, text-view (span positions
-  # are not reported), menus (a row's menu), overlays (tooltips), picker
-  # (`picks()` runs headless only). Error-boundary's failing binding expects
-  # QuickJS's message; the browser words it its own way. Context-menu-press
-  # runs its tap and its Shift+F10: the test's held finger is the mouse in
-  # the browser, and a held mouse button opens no menu since upstream's
-  # #1555. Toasts runs all but three tests: since upstream's #1305 (the
-  # toast stack's springs run until they settle) a toast outlasts the time
-  # the tests give it on the runner in "a toast shows", "at most three" and
-  # "on a desktop, the pointer" (all three pass on a Mac).
+  # The web runs only tests of the fork's own web code (`nsh.js` and the
+  # web platform differ from upstream's): upstream runs no examples' tests
+  # on the web, and the fork does not check upstream's code where upstream
+  # does not. A listed file that later fails on upstream's own code leaves
+  # the list; upstream's files are never patched to make it pass.
+  # Context-menu-press runs its tap and its Shift+F10: the test's held
+  # finger is the mouse in the browser, and a held mouse button opens no
+  # menu since upstream's #1555.
   web)
-    gallery=(animations device dock environment form gestures hover list-search
-      mention navigation network photos press resizable shaders shortcuts storage timers)
-    filtered=("error-boundary a failing listener"
-      "context-menu-press a tap presses" "context-menu-press Shift+F10"
-      "toasts an undo restores" "toasts its close button" "toasts a swipe"
-      "toasts an error's retry" "toasts a loading toast counts" "toasts a failed upload")
+    gallery=(form navigation shaders shortcuts)
+    filtered=("context-menu-press a tap presses" "context-menu-press Shift+F10")
     ;;
   # Left out: context-menu, dock, hover, overlays, resizable, shortcuts,
   # toasts (a mouse, a keyboard or a desktop's windows), picker (the
@@ -197,8 +190,12 @@ fi
 # Apps with Rust crates, in hosts built with them: a TSX app and a Rust app
 # (its root). The TSX app's `modules.test.tsx` runs headless only (`open`'s
 # `modules`), so its `App.test.tsx` is named, as in upstream's workflows.
-run examples/rust-exports/App.test.tsx
-run examples/gallery-rs/App.test.tsx
+# (Not on the web: they check upstream's Rust apps there, which the
+# `rust-app-web` job of `fork-full.yml` packages.)
+if [[ "$target" != web ]]; then
+  run examples/rust-exports/App.test.tsx
+  run examples/gallery-rs/App.test.tsx
+fi
 
 for entry in ${flaky[@]+"${flaky[@]}"}; do
   echo "::warning title=Flaky test::$entry failed, then passed when run again"
