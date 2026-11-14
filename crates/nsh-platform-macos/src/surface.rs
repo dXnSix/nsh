@@ -1184,11 +1184,7 @@ impl Surface {
     /// a dev tool's observing model leaves the app as the user runs it.
     pub(crate) fn testing(&self) -> bool {
         #[cfg(feature = "dev")]
-        return self
-            .test_model
-            .borrow()
-            .as_ref()
-            .is_some_and(|model| !model.observes());
+        return nsh_testing::agent::drives_host(self.test_model.borrow().as_deref());
         #[cfg(not(feature = "dev"))]
         false
     }

@@ -878,14 +878,16 @@ measures as a real browser does.
 
 A dev tool inside an app can keep the same model of the views outside a test session. The app crate registers an
 observer with `nsh_testing::agent::observe(callback)` before its host starts (process-wide, the first call wins). A
-normal dev session then attaches an observing model (`Model::observing()`) before the first bundle, so its mirror
-holds every batch, and hands the observer an `Observation`: the model and the platform's `Native` driver, whose calls
-block on the main thread and are never made from the engine's. The app is not under test: an observing model swaps
-none of the engine's services (storage, network, clipboard and `openUrl` stay the app's), leaves culling on, and the
-host's `testing()` stays false, so the user's own pointer and keys, frame pacing and lifecycle are as they are. The
-mirror is reset on every engine start. A real test session replaces the observing model with its own; a host with no
-observer registered behaves as before. Each platform's `dev.rs` attaches it (macOS, Linux, Windows, iOS, Android, the
-terminal).
+normal dev session then calls `attach_observer` before the first bundle: the host attaches an observing model
+(`Model::observing()`) on its main thread, so its mirror holds every batch, and the observer gets an `Observation`
+(the model and the platform's `Native` driver) on a thread of its own, `nsh-observer`, from which it may call the
+driver (its calls block on the host's main thread, so they are never made there or from the engine's thread). The app
+is not under test: an observing model swaps none of the engine's services (storage, network, clipboard and `openUrl`
+stay the app's) and leaves culling and the clock alone, and each host's `testing()` is `drives_host`, false for it, so
+the user's own pointer and keys, frame pacing and lifecycle are as they are. The mirror is reset as each engine is set
+up (`set_up_engine`), before its first batch. A real test session replaces the observing model with its own; a host
+with no observer registered behaves as before. Each platform's `dev.rs` calls `attach_observer` (macOS, Linux,
+Windows, iOS, Android, the terminal).
 
 ## New apps (`nsh init --template`)
 

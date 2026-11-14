@@ -78,17 +78,15 @@ impl DevSession {
         // A dev tool observing the app (`nsh_testing::agent::observe`): its
         // model takes every batch from the first, outside any test session,
         // which replaces it with its own.
-        if nsh_testing::agent::observer_wanted() {
-            let model = nsh_testing::agent::Model::observing();
-            *host.test_model.lock().unwrap_or_else(|e| e.into_inner()) = Some(model.clone());
-            nsh_testing::agent::hand_over(nsh_testing::agent::Observation {
-                model,
-                native: Box::new(crate::agent::AndroidNative::new(
+        nsh_testing::agent::attach_observer(
+            |model| *host.test_model.lock().unwrap_or_else(|e| e.into_inner()) = Some(model),
+            || {
+                Box::new(crate::agent::AndroidNative::new(
                     weak.clone(),
                     host.density(),
-                )),
-            });
-        }
+                ))
+            },
+        );
         let tests = tester.clone();
         let started = DevClient::start(url, host_info, move |event| {
             // Taken here: a step waits for what it does on the UI thread.
