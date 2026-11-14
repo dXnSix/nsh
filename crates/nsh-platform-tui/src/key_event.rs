@@ -182,5 +182,21 @@ fn dom_name(key: Key) -> String {
         Key::PageUp => "PageUp".into(),
         Key::PageDown => "PageDown".into(),
         Key::F(n) => format!("F{n}"),
+        // The media and TV remote keys by the web's names.
+        Key::MediaPlayPause => "MediaPlayPause".into(),
+        Key::MediaPlay => "MediaPlay".into(),
+        Key::MediaPause => "MediaPause".into(),
+        Key::MediaStop => "MediaStop".into(),
+        Key::MediaRewind => "MediaRewind".into(),
+        Key::MediaFastForward => "MediaFastForward".into(),
+        Key::MediaNext => "MediaTrackNext".into(),
+        Key::MediaPrevious => "MediaTrackPrevious".into(),
+        Key::ColorRed => "ColorF0Red".into(),
+        Key::ColorGreen => "ColorF1Green".into(),
+        Key::ColorYellow => "ColorF2Yellow".into(),
+        Key::ColorBlue => "ColorF3Blue".into(),
+        Key::ChannelUp => "ChannelUp".into(),
+        Key::ChannelDown => "ChannelDown".into(),
+        Key::Info => "Info".into(),
     }
 }

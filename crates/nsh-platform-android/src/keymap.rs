@@ -224,7 +224,10 @@ fn modifiers(meta: i32) -> Modifiers {
 /// one), and a negative id names a key (`-1` Enter, `-2` Escape, `-3`
 /// Tab, `-4` Backspace, `-5` Delete, `-6` Insert, `-7` Up, `-8` Down,
 /// `-9` Left, `-10` Right, `-11` Home, `-12` End, `-13` PageUp,
-/// `-14` PageDown, `-100 - n` F(n)).
+/// `-14` PageDown, `-100 - n` F(n)). The media and TV remote keys have none
+/// (`-1000`, which `KeyCaptures.java` gives no event): a rule naming one
+/// captures nothing, as no rule captures a system key, and a shortcut on
+/// one still fires ([`keystroke`]).
 pub(crate) fn capture_key(key: Key) -> i32 {
     match key {
         Key::Char(c) => c as i32,
@@ -243,6 +246,21 @@ pub(crate) fn capture_key(key: Key) -> i32 {
         Key::PageUp => -13,
         Key::PageDown => -14,
         Key::F(n) => -100 - i32::from(n),
+        Key::MediaPlayPause
+        | Key::MediaPlay
+        | Key::MediaPause
+        | Key::MediaStop
+        | Key::MediaRewind
+        | Key::MediaFastForward
+        | Key::MediaNext
+        | Key::MediaPrevious
+        | Key::ColorRed
+        | Key::ColorGreen
+        | Key::ColorYellow
+        | Key::ColorBlue
+        | Key::ChannelUp
+        | Key::ChannelDown
+        | Key::Info => -1000,
     }
 }
 

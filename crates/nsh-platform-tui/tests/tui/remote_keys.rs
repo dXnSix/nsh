@@ -46,3 +46,49 @@ fn the_media_and_tv_keys_fire_their_bindings() {
         "heard red mediaplaypause channelup info medianext",
     );
 }
+
+#[component]
+fn RemoteRawPage() -> impl IntoElement {
+    let down = signal(String::from("none"));
+    view()
+        .flex_1()
+        .child(
+            view()
+                .h(px(16.0))
+                .focusable(true)
+                .on_press(|_: &()| {})
+                .on_key_down(move |event: &KeyEvent| down.set(event.key.as_str().to_owned()))
+                .child(text("pad")),
+        )
+        .child(text(move || format!("down {}", down.get())))
+}
+
+/// A focused view's `on_key_down` hears a remote's key by the web's name
+/// for it (`KeyboardEvent.key`), as it hears `ArrowLeft` for `Left`.
+#[test]
+fn a_raw_key_event_names_the_media_and_tv_keys_as_the_web_does() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(60, 6)).unwrap();
+    view.load(App::Rust(Root::new::<RemoteRawPage>(|| ())))
+        .unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "down none");
+    view.handle(Input::Key {
+        key: "Tab".into(),
+        modifiers: Default::default(),
+        release: false,
+    });
+    for (name, web) in [
+        ("red", "ColorF0Red"),
+        ("mediaplaypause", "MediaPlayPause"),
+        ("medianext", "MediaTrackNext"),
+        ("channelup", "ChannelUp"),
+        ("info", "Info"),
+    ] {
+        view.handle(Input::Key {
+            key: name.into(),
+            modifiers: Default::default(),
+            release: false,
+        });
+        draw_until(&mut view, &mut terminal, &rx, &format!("down {web}"));
+    }
+}
