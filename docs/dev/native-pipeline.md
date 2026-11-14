@@ -219,3 +219,20 @@ runtime (`crates/nsh-js/src/hot.rs`, see `tooling.md`). The script is an ES modu
 `__nsh_hot` global; only development bundles import it) and the namespaces of the native modules the app imports, which
 factories `require` by specifier; an edit that imports a native module the running script did not makes the host
 reload.
+
+### Where elements were written (dev tools)
+
+Development bundles also say where each element was written, for dev tools that point from a view to its source. The
+compiler gives every top-level statement with JSX an anchor in the module's head, `_$anchor(module, statement, line)`
+(`nsh:rt`'s `anchor`: the module's hot key, the name the statement declares, `default` or `#<n>`, and its line), run
+again with every run of the module; `element(tag, …)` and `component(Comp, props, …)` get three more arguments, the
+anchor, the element's line relative to it and its column. Other bundles are compiled exactly as before.
+
+The renderer keeps the stamp beside the node (`crates/nsh-js/src/dev_source.rs`) and computes the line when asked
+(`Host::node_source`), from the anchor's line now: a hot update that moves a statement leaves the nodes of the
+components it did not render again with their right lines. A component use is pending while its component runs, so a
+native component's host node (made with `dom::create_element`) takes the place it was used at. Each render of a hot
+component is an instance (`Host::node_instances`, innermost first): its `module:name` key, its call site and its props,
+whose getters are listed and never called (`Host::instance_props`). Only top-level components are hot, so a nested or
+anonymous component folds into the nearest one. Nothing of this sends an op; text nodes and nodes made natively have
+no stamp. The web runtime takes the arguments and keeps nothing yet.

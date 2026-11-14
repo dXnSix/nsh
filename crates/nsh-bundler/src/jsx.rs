@@ -28,6 +28,17 @@
 //! The code is generated as JS text with holes, parsed, and the app's own
 //! expressions are moved into the holes: they keep their spans (the source
 //! map points at them), generated nodes take their JSX element's.
+//!
+//! **Stamps** (hot bundles only, for dev tools): every host element and
+//! component use also says where it was written. Each top-level statement
+//! with JSX gets an anchor in the module's head, `const __nsh_haN =
+//! _$anchor(module, statement, line)`, run again with every run of the
+//! module; `_$element(tag, anchor, lineDelta, column)` and
+//! `_$component(callee, props, anchor, lineDelta, column)` carry the
+//! element's line relative to its anchor and its column. A hot update that
+//! moves a statement re-registers its anchor's line, so the nodes of
+//! components it did not render again still say where they are. Without
+//! stamps the code is what it was.
 
 use std::{cell::Cell, collections::HashMap};
 
@@ -117,10 +128,138 @@ const HELPERS: &[&str] = &[
     "setup",
     "metaUrl",
     "ref",
+    "anchor",
 ];
 
 /// Prefix of generated names; apps do not use it.
 const HOLE: &str = "__nsh_h";
+
+/// Where a hot bundle's elements were written: the anchors of the module's
+/// top-level statements and the place of each element relative to its
+/// statement's anchor.
+struct Stamps<'s> {
+    /// The module's key in the hot runtime.
+    module: &'s str,
+    source: &'s str,
+    /// Byte offsets where the lines of `source` start.
+    lines: Vec<u32>,
+    /// The anchors made, in order: (statement name, line).
+    anchors: Vec<(String, usize)>,
+    /// The top-level statement being compiled: its name (`None`: it names
+    /// nothing), its line and its anchor once one is made.
+    current: Option<(Option<String>, usize, Option<usize>)>,
+    /// Anchors made for statements that name nothing (`#<n>`).
+    unnamed: usize,
+}
+
+impl<'s> Stamps<'s> {
+    fn new(module: &'s str, source: &'s str) -> Self {
+        let lines = std::iter::once(0)
+            .chain(
+                source
+                    .bytes()
+                    .enumerate()
+                    .filter(|(_, b)| *b == b'\n')
+                    .map(|(i, _)| i as u32 + 1),
+            )
+            .collect();
+        Stamps {
+            module,
+            source,
+            lines,
+            anchors: Vec::new(),
+            current: None,
+            unnamed: 0,
+        }
+    }
+
+    /// 1-based line and column (in characters) of byte `offset`.
+    fn position(&self, offset: u32) -> (usize, usize) {
+        let line = self.lines.partition_point(|start| *start <= offset);
+        let start = self.lines[line - 1] as usize;
+        let end = (offset as usize).min(self.source.len()).max(start);
+        let column = self
+            .source
+            .get(start..end)
+            .map_or(end - start, |text| text.chars().count());
+        (line, column + 1)
+    }
+
+    /// Starts top-level statement `statement`.
+    fn begin(&mut self, statement: &Statement<'_>) {
+        let (line, _) = self.position(statement.span().start);
+        self.current = Some((statement_name(statement), line, None));
+    }
+
+    /// The extra arguments stamping an element written at `span`:
+    /// `, anchor, lineDelta, column`.
+    fn stamp(&mut self, span: Span) -> String {
+        let (line, column) = self.position(span.start);
+        let Some((name, base, anchor)) = self.current.as_mut() else {
+            return String::new();
+        };
+        let index = match anchor {
+            Some(index) => *index,
+            None => {
+                let mut name = name.clone().unwrap_or_else(|| {
+                    self.unnamed += 1;
+                    format!("#{}", self.unnamed)
+                });
+                // Names are unique in a module; a repeated one (a name
+                // declared twice) keeps its anchors apart.
+                let taken = |n: &str| self.anchors.iter().any(|(a, _)| a == n);
+                if taken(&name) {
+                    let mut k = 2;
+                    while taken(&format!("{name}#{k}")) {
+                        k += 1;
+                    }
+                    name = format!("{name}#{k}");
+                }
+                self.anchors.push((name, *base));
+                *anchor = Some(self.anchors.len() - 1);
+                self.anchors.len() - 1
+            }
+        };
+        let delta = line as i64 - *base as i64;
+        format!(", {HOLE}a{index}, {delta}, {column}")
+    }
+}
+
+/// The name a top-level statement declares: a function's, a class's, the
+/// first variable's, `default` for an anonymous default export.
+fn statement_name(statement: &Statement<'_>) -> Option<String> {
+    use oxc::ast::ast::{BindingPattern, Declaration, ExportDefaultDeclarationKind};
+    let variable = |v: &oxc::ast::ast::VariableDeclaration<'_>| {
+        v.declarations.iter().find_map(|d| match &d.id {
+            BindingPattern::BindingIdentifier(id) => Some(id.name.to_string()),
+            _ => None,
+        })
+    };
+    let declaration = |d: &Declaration<'_>| match d {
+        Declaration::FunctionDeclaration(f) => f.id.as_ref().map(|id| id.name.to_string()),
+        Declaration::ClassDeclaration(c) => c.id.as_ref().map(|id| id.name.to_string()),
+        Declaration::VariableDeclaration(v) => variable(v),
+        _ => None,
+    };
+    match statement {
+        Statement::FunctionDeclaration(f) => f.id.as_ref().map(|id| id.name.to_string()),
+        Statement::ClassDeclaration(c) => c.id.as_ref().map(|id| id.name.to_string()),
+        Statement::VariableDeclaration(v) => variable(v),
+        Statement::ExportDeclaration(e) => declaration(&e.declaration),
+        Statement::ExportDefaultDeclaration(e) => Some(match &e.declaration {
+            ExportDefaultDeclarationKind::FunctionDeclaration(f) => {
+                f.id.as_ref()
+                    .map_or_else(|| "default".to_owned(), |id| id.name.to_string())
+            }
+            ExportDefaultDeclarationKind::ClassDeclaration(c) => {
+                c.id.as_ref()
+                    .map_or_else(|| "default".to_owned(), |id| id.name.to_string())
+            }
+            _ => "default".to_owned(),
+        }),
+        _ => None,
+    }
+}
 
 fn export_name(n: &ModuleExportName<'_>) -> String {
     match n {
@@ -155,8 +294,10 @@ fn imported_primitives(program: &Program<'_>) -> HashMap<String, Compiled> {
 }
 
 /// Compiles the JSX of `program` (TypeScript already removed; `scoping`
-/// its scopes). `prologue` is JS run first (the entry's setup). Errors come
-/// back rendered with a code frame of `source`.
+/// its scopes). `prologue` is JS run first (the entry's setup). With
+/// `stamp` (the module's hot key) elements are stamped with where they
+/// were written. Errors come back rendered with a code frame of `source`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn transform<'a>(
     allocator: &'a Allocator,
     program: &mut Program<'a>,
@@ -165,6 +306,7 @@ pub(crate) fn transform<'a>(
     prologue: Option<&str>,
     meta_path: Option<&str>,
     modules: &crate::compile::NativeModules,
+    stamp: Option<&str>,
 ) -> Result<(), String> {
     let mut compiler = Compiler {
         meta_path,
@@ -176,8 +318,21 @@ pub(crate) fn transform<'a>(
         vars: Cell::new(0),
         components: &modules.components,
         primitives: imported_primitives(program),
+        stamps: stamp.map(|module| Stamps::new(module, source)),
     };
-    compiler.visit_program(program);
+    if compiler.stamps.is_some() {
+        // Statement by statement, so each knows its anchor.
+        compiler.scopes.push(scoping.root_scope_id());
+        for statement in program.body.iter_mut() {
+            if let Some(stamps) = compiler.stamps.as_mut() {
+                stamps.begin(statement);
+            }
+            compiler.visit_statement(statement);
+        }
+        compiler.scopes.pop();
+    } else {
+        compiler.visit_program(program);
+    }
     if let Some(err) = compiler.errors.into_iter().next() {
         return Err(err.render_with_source_code(source.to_owned()));
     }
@@ -185,6 +340,16 @@ pub(crate) fn transform<'a>(
     if let Some(prologue) = prologue {
         compiler.used[helper("setup")] = true;
         head.push_str(prologue);
+    }
+    if let Some(stamps) = compiler.stamps.as_ref().filter(|s| !s.anchors.is_empty()) {
+        compiler.used[helper("anchor")] = true;
+        let module = serde_json::to_string(stamps.module).expect("a key is JSON");
+        for (index, (name, line)) in stamps.anchors.iter().enumerate() {
+            let name = serde_json::to_string(name).expect("a name is JSON");
+            head.push_str(&format!(
+                "const {HOLE}a{index} = _$anchor({module}, {name}, {line});\n"
+            ));
+        }
     }
     let imports: Vec<String> = HELPERS
         .iter()
@@ -494,6 +659,8 @@ struct Compiler<'a, 's> {
     primitives: HashMap<String, Compiled>,
     /// The module's path in the app: `import.meta.url` becomes its URL.
     meta_path: Option<&'s str>,
+    /// Hot bundles: where elements were written.
+    stamps: Option<Stamps<'s>>,
 }
 
 /// Whether `e` is `import.meta.url`.
@@ -553,6 +720,14 @@ impl<'a> Compiler<'a, '_> {
     fn use_helper(&mut self, name: &str) -> String {
         self.used[helper(name)] = true;
         format!("_${name}")
+    }
+
+    /// The stamp arguments of an element written at `span` (nothing without
+    /// stamps).
+    fn stamp(&mut self, span: Span) -> String {
+        self.stamps
+            .as_mut()
+            .map_or_else(String::new, |stamps| stamps.stamp(span))
     }
 
     fn var(&self) -> String {
@@ -770,7 +945,8 @@ impl<'a> Compiler<'a, '_> {
     ) -> String {
         let v = self.var();
         let element = self.use_helper("element");
-        body.push_str(&format!("const {v} = {element}({});", quote(core)));
+        let stamp = self.stamp(el.span);
+        body.push_str(&format!("const {v} = {element}({}{stamp});", quote(core)));
         let has_children = el.children.iter().any(|c| match c {
             JSXChild::Text(t) => clean_text(&t.value).is_some(),
             JSXChild::ExpressionContainer(c) => {
@@ -1089,6 +1265,8 @@ impl<'a> Compiler<'a, '_> {
 
     /// A component call with its props object.
     fn component(&mut self, el: JSXElement<'a>, callee: &str, g: &mut Gen<'a>) -> String {
+        // Read before the opening element is taken apart.
+        let stamp = self.stamp(el.span);
         let mut parts: Vec<String> = Vec::new();
         let mut props: Vec<String> = Vec::new();
         let opening = el.opening_element.unbox();
@@ -1175,7 +1353,7 @@ impl<'a> Compiler<'a, '_> {
             format!("{merge}({})", parts.join(", "))
         };
         let component = self.use_helper("component");
-        format!("{component}({callee}, {props})")
+        format!("{component}({callee}, {props}{stamp})")
     }
 
     /// The attributes of a control flow element, by name (each once).
@@ -1881,5 +2059,154 @@ mod tests {
             clean_text("a &amp; b &#65;&#x42;").as_deref(),
             Some("a & b AB")
         );
+    }
+}
+
+/// Stamps in hot bundles: anchors per top-level statement, `(anchor,
+/// lineDelta, column)` on every host element and component use.
+#[cfg(test)]
+mod stamp_tests {
+    fn compile(source: &str, hot: bool) -> String {
+        crate::compile::compile_native(
+            std::path::Path::new("App.tsx"),
+            oxc::span::SourceType::tsx(),
+            source,
+            None,
+            hot.then_some("src/App.tsx"),
+            Some("App.tsx"),
+            &crate::compile::NativeModules::new(&[nsh_base::registry().into()]),
+        )
+        .map(|c| c.code)
+        .unwrap()
+    }
+
+    fn flat(code: &str) -> String {
+        code.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn stamps_host_elements_and_component_uses() {
+        let code = flat(&compile(
+            "import { View, Text } from \"nsh\";\n\
+             import { Card } from \"./card\";\n\
+             export function App() {\n\
+             \x20 return <View>\n\
+             \x20   <Card title=\"x\" />\n\
+             \x20   <Text>hi</Text>\n\
+             \x20 </View>;\n\
+             }\n",
+            true,
+        ));
+        assert!(
+            code.contains(r#"const __nsh_ha0 = _$anchor("src/App.tsx", "App", 3);"#),
+            "{code}"
+        );
+        assert!(code.contains("anchor as _$anchor"), "{code}");
+        assert!(
+            code.contains(r#"_$element("view", __nsh_ha0, 1, 10)"#),
+            "{code}"
+        );
+        assert!(
+            code.contains(r#"_$element("text", __nsh_ha0, 3, 5)"#),
+            "{code}"
+        );
+        assert!(
+            code.contains(r#"_$component(Card, { title: "x" }, __nsh_ha0, 2, 5)"#),
+            "{code}"
+        );
+    }
+
+    #[test]
+    fn stamps_one_anchor_per_statement_with_jsx() {
+        let code = flat(&compile(
+            "import { View } from \"nsh\";\n\
+             const n = 1;\n\
+             export const Header = () => <View />;\n\
+             \n\
+             export default function () {\n\
+             \x20 return <View />;\n\
+             }\n\
+             mount(() => <View />);\n",
+            true,
+        ));
+        assert!(
+            code.contains(r#"const __nsh_ha0 = _$anchor("src/App.tsx", "Header", 3);"#),
+            "{code}"
+        );
+        assert!(
+            code.contains(r#"const __nsh_ha1 = _$anchor("src/App.tsx", "default", 5);"#),
+            "{code}"
+        );
+        assert!(
+            code.contains(r##"const __nsh_ha2 = _$anchor("src/App.tsx", "#1", 8);"##),
+            "{code}"
+        );
+        assert!(!code.contains("__nsh_ha3"), "{code}");
+        assert!(
+            code.contains(r#"_$element("view", __nsh_ha0, 0, 29)"#),
+            "{code}"
+        );
+        assert!(
+            code.contains(r#"_$element("view", __nsh_ha1, 1, 10)"#),
+            "{code}"
+        );
+        assert!(
+            code.contains(r#"_$element("view", __nsh_ha2, 0, 13)"#),
+            "{code}"
+        );
+    }
+
+    #[test]
+    fn stamps_elements_in_map_each_and_if_once_each() {
+        let code = flat(&compile(
+            "import { View, Text } from \"nsh\";\n\
+             declare const items: () => string[], on: () => boolean;\n\
+             export const List = () => <View>\n\
+             \x20 {items().map((i) => <Text>{i}</Text>)}\n\
+             \x20 <Each of={items()}>{(i) => <Text>{i()}</Text>}</Each>\n\
+             \x20 <If when={on()} else={<Text>off</Text>}><View /></If>\n\
+             </View>;\n",
+            true,
+        ));
+        // Each authored element once, where it was written.
+        for stamp in [
+            r#"_$element("view", __nsh_ha0, 0, 27)"#,
+            r#"_$element("text", __nsh_ha0, 1, 23)"#,
+            r#"_$element("text", __nsh_ha0, 2, 30)"#,
+            r#"_$element("text", __nsh_ha0, 3, 25)"#,
+            r#"_$element("view", __nsh_ha0, 3, 43)"#,
+        ] {
+            assert_eq!(code.matches(stamp).count(), 1, "{stamp} in {code}");
+        }
+        assert_eq!(code.matches("_$element(").count(), 5, "{code}");
+    }
+
+    /// The same module compiled with and without stamps differs only by
+    /// them: the anchor's import and declaration and the extra arguments.
+    #[test]
+    fn stamps_off_the_code_is_what_it_was() {
+        let source = "import { View, Text } from \"nsh\";\n\
+                      import { Card } from \"./card\";\n\
+                      export const page = <View class=\"p-2\">\n\
+                      \x20 <Card title=\"x\">{1}</Card>\n\
+                      \x20 <Text>hi</Text>\n\
+                      </View>;\n";
+        let plain = compile(source, false);
+        assert!(!plain.contains("anchor"), "{plain}");
+        assert!(!plain.contains("__nsh_ha"), "{plain}");
+        let stamped = compile(source, true);
+        assert!(stamped.contains("__nsh_ha0"), "{stamped}");
+        // Take the stamps out again.
+        let mut unstamped = stamped
+            .replace(", anchor as _$anchor", "")
+            .lines()
+            .filter(|l| !l.starts_with("const __nsh_ha"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        while let Some(at) = unstamped.find(", __nsh_ha") {
+            let end = at + unstamped[at..].find(')').unwrap();
+            unstamped.replace_range(at..end, "");
+        }
+        assert_eq!(flat(&unstamped), flat(&plain));
     }
 }
