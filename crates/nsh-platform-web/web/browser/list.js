@@ -8,7 +8,7 @@ export function createLists(invoke, values, reactive, dom, live, wake) {
   const slot = value => typeof value === "function" && !values.signals.has(value) && !values.memos.has(value) ? reactive.untracked(() => value({})) : value;
   const remove = (parent, entry) => { invoke(306, [parent, entry.node]); entry.dispose(); };
   const render = (props = {}) => {
-    const node = rt.element("list"), id = values.nodeIds.get(node);
+    const node = rt.hostElement("list"), id = values.nodeIds.get(node);
     const state = { node, props, owner: reactive.getOwner(), cells: new Map(), extras: [], latest: [-1, -1], reported: [-1, -1], timer: null };
     lists.set(id, state);
     reactive.cleanup(() => {

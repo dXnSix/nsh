@@ -127,6 +127,14 @@ pub trait Host {
     fn take_network(&self, out: &mut Vec<(u32, crate::FetchOp)>) {
         let _ = out;
     }
+    /// A dev tool's question about the script's node or instance `id`
+    /// (`devSource`, `devInstances`, `devProps`), answered by the page's
+    /// facade as JSON; `None` where the host keeps no stamps.
+    #[cfg(feature = "inspect")]
+    fn dev_query(&self, kind: &str, id: u32) -> Option<String> {
+        let _ = (kind, id);
+        None
+    }
     /// Deliver what happened to request `id`.
     fn fetch_event(&self, id: u32, event: FetchEvent) {
         let _ = (id, event);
@@ -185,19 +193,68 @@ pub fn register(host: Rc<dyn Host>) -> Result<Registration, String> {
 
 pub(crate) struct Script(Rc<dyn Host>);
 
-/// The browser's facade keeps no stamps the engine reads yet: the script's
-/// nodes say nothing of where they were written.
+/// Where the script's nodes were written, from the page's facade
+/// (`dev_source.js`), which answers as nsh-js does.
 #[cfg(feature = "inspect")]
 impl nsh_core::inspect::ScriptSources for Script {
-    fn source(&self, _: nsh_core::NodeId) -> Option<nsh_core::inspect::DevSource> {
-        None
+    fn source(&self, id: nsh_core::NodeId) -> Option<nsh_core::inspect::DevSource> {
+        let json = self.0.dev_query("devSource", id)?;
+        dev_source_of(&serde_json::from_str(&json).ok()?)
     }
-    fn instances(&self, _: nsh_core::NodeId) -> Vec<nsh_core::inspect::DevInstance> {
-        Vec::new()
+    fn instances(&self, id: nsh_core::NodeId) -> Vec<nsh_core::inspect::DevInstance> {
+        let Some(json) = self.0.dev_query("devInstances", id) else {
+            return Vec::new();
+        };
+        let Ok(serde_json::Value::Array(list)) = serde_json::from_str(&json) else {
+            return Vec::new();
+        };
+        list.iter()
+            .filter_map(|i| {
+                Some(nsh_core::inspect::DevInstance {
+                    id: u32::try_from(i["id"].as_u64()?).ok()?,
+                    key: i["key"].as_str()?.to_owned(),
+                    call_site: dev_source_of(&i["callSite"]),
+                })
+            })
+            .collect()
     }
-    fn props(&self, _: u32) -> Vec<(String, nsh_core::inspect::DevProp)> {
-        Vec::new()
+    fn props(&self, instance: u32) -> Vec<(String, nsh_core::inspect::DevProp)> {
+        use nsh_core::inspect::DevProp;
+        let Some(json) = self.0.dev_query("devProps", instance) else {
+            return Vec::new();
+        };
+        let Ok(serde_json::Value::Array(list)) = serde_json::from_str(&json) else {
+            return Vec::new();
+        };
+        list.iter()
+            .filter_map(|entry| {
+                let name = entry[0].as_str()?.to_owned();
+                let value = &entry[1]["value"];
+                let prop = match entry[1]["kind"].as_str()? {
+                    "getter" => DevProp::Getter,
+                    "function" => DevProp::Function,
+                    "undefined" => DevProp::Undefined,
+                    "null" => DevProp::Null,
+                    "bool" => DevProp::Bool(value.as_bool()?),
+                    "number" => DevProp::Number(value.as_f64()?),
+                    "text" => DevProp::Text(value.as_str()?.to_owned()),
+                    _ => DevProp::Object,
+                };
+                Some((name, prop))
+            })
+            .collect()
     }
+}
+
+/// A `{ module, anchor, line, column }` the facade answered.
+#[cfg(feature = "inspect")]
+fn dev_source_of(v: &serde_json::Value) -> Option<nsh_core::inspect::DevSource> {
+    Some(nsh_core::inspect::DevSource {
+        module: v["module"].as_str()?.to_owned(),
+        anchor: v["anchor"].as_str()?.to_owned(),
+        line: u32::try_from(v["line"].as_u64()?).ok()?,
+        column: u32::try_from(v["column"].as_u64()?).ok()?,
+    })
 }
 
 impl Drop for Script {

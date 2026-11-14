@@ -118,7 +118,32 @@ export function createDom(invoke, values, reactive, live, wake) {
     else insert(parent, child);
   };
   const bindProp = (node, name, read) => reactive.renderEffect(() => prop(node, name, read()));
-  const component = (Component, props) => reactive.untracked(() => Component(props));
+  // Dev tools' stamps and instances (`dev_source.js`), set by the runtime.
+  let devSource = null;
+  // `component(Comp, props, anchor, lineDelta, column)`: hot bundles add
+  // where the use was written, pending while the component starts.
+  const component = (Component, props, anchor, delta, column) => {
+    const entered = devSource?.enterUse(anchor, delta, column);
+    let result = null;
+    try {
+      result = reactive.untracked(() => Component(props));
+      return result;
+    } finally {
+      devSource?.leaveUse(entered);
+    }
+  };
+  // A native component's host node: it takes its use's call site.
+  const hostElement = tag => {
+    const node = element(tag);
+    devSource?.stamp(node, devSource.takePending());
+    return node;
+  };
+  // `element(tag, anchor, lineDelta, column)`: hot bundles stamp it.
+  const element = (tag, anchor, delta, column) => {
+    const node = call(300, [tag]);
+    devSource?.made(node, anchor, delta, column);
+    return node;
+  };
   const cond = (when, then, otherwise) => {
     const condition = reactive.computed(() => Boolean(when()));
     return reactive.computed(() => {
@@ -174,6 +199,12 @@ export function createDom(invoke, values, reactive, live, wake) {
     setTouches(value) { touches = value; },
     setPlatform(value) { platform = value; },
     setHot(value) { hot = value; },
+    setDevSource(value) { devSource = value; },
+    // Where node `id` was written and the instances that rendered it, as
+    // nsh-js answers them (`null` / `[]` without stamps).
+    nodeSource(id) { return devSource?.nodeSource(values.nodes.get(id)?.deref()) ?? null; },
+    nodeInstances(id) { return devSource?.nodeInstances(values.nodes.get(id)?.deref()) ?? []; },
+    instanceProps(id) { return devSource?.instanceProps(id) ?? []; },
     rootProp: (name, value) => prop(root, name, value),
     listen(node, name, value) {
       let events = handlers.get(node);
@@ -181,13 +212,16 @@ export function createDom(invoke, values, reactive, live, wake) {
       if (typeof value === "function") events.set(name, value); else events.delete(name);
       call(309, [node, name, typeof value === "function"]);
     },
-    rt: { element: tag => call(300, [tag]), text: value => call(301, [String(value)]),
+    rt: { element, hostElement, text: value => call(301, [String(value)]),
+      // A native component that makes its host node later (a dialog's
+      // modal) takes its use's site first and stamps the node with it.
+      takeSite: () => devSource?.takePending() ?? null,
+      stampNode: (node, site) => devSource?.stamp(node, site),
       prop, bindProp, insert, append, component, cond, each, merge, spread,
       metaUrl: path => new URL(path, document.baseURI).href,
       ref,
-      // Hot bundles stamp elements with where they were written; the page
-      // keeps no stamps yet, so anchors are ids nothing reads.
-      anchor: () => 0,
+      // Hot bundles stamp elements with where they were written.
+      anchor: (module, statement, line) => devSource ? devSource.anchor(module, statement, line) : 0,
     },
     mount(App, props) {
       // A hot update running the module again keeps what it mounted.

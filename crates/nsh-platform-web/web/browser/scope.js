@@ -17,6 +17,7 @@ export { createI18n } from "./i18n.js";
 export { installTesting } from "./testing.js";
 export { installFetch } from "./fetch.js";
 export { createHot } from "./hot.js";
+export { createDevSource } from "./dev_source.js";
 export { configureAddress } from "./address.js";
 
 
@@ -63,11 +64,11 @@ export function configureAPIs(nsh, modules, dom, active, env, page = {}) {
     GlobalShortcut: { register: () => Promise.resolve(false), unregister() {}, unregisterAll() {} },
   });
   for (const [name, tag] of Object.entries({View:"view",Text:"text",Scroll:"scroll",Overlay:"overlay",Image:"image",WebView:"webview",Video:"video",Shader:"shader"})) {
-    const Component = props => {const node = dom.rt.element(tag);dom.rt.spread(node,props);if ("children" in props) dom.rt.insert(node,()=>props.children);return node;};
+    const Component = props => {const node = dom.rt.hostElement(tag);dom.rt.spread(node,props);if ("children" in props) dom.rt.insert(node,()=>props.children);return node;};
     nsh[name] = Object.assign(Component, nsh[name]);
   }
   nsh.nativeComponent = (name, spec = {}) => (props = {}) => {
-    const node = dom.rt.element("native");
+    const node = dom.rt.hostElement("native");
     dom.rt.prop(node, "component", name);
     const own = new Set(spec.props ?? []), eventNames = new Set((spec.events ?? []).map(name => "on" + name[0].toUpperCase() + name.slice(1)));
     const forwarded = new Proxy(props, { ownKeys: target => Reflect.ownKeys(target).filter(key => key !== "children" && !own.has(key) && !eventNames.has(key)), getOwnPropertyDescriptor: () => ({ configurable: true, enumerable: true }) });
@@ -85,5 +86,5 @@ export function configureAPIs(nsh, modules, dom, active, env, page = {}) {
   mobile.InputAccessoryView = () => null; // Off-iOS behavior, in the app realm.
   modules.exports.set("nsh/mobile", mobile);
   const base = modules.exports.get("nsh/base");
-  if (base) base.Input = props => { const node = dom.rt.element("input"); dom.rt.spread(node, props); return node; };
+  if (base) base.Input = props => { const node = dom.rt.hostElement("input"); dom.rt.spread(node, props); return node; };
 }

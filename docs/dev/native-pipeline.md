@@ -241,4 +241,6 @@ does a hot component's instance, so nothing else its body makes (slots, rows' pl
 component is an instance (`Host::node_instances`, innermost first): its `module:name` key, its call site and its props,
 whose getters are listed and never called (`Host::instance_props`). Only top-level components are hot, so a nested or
 anonymous component folds into the nearest one. Nothing of this sends an op; text nodes and nodes made natively have
-no stamp. The web runtime takes the arguments and keeps nothing yet.
+no stamp. The browser host does the same in its facade (`web/browser/dev_source.js`, the same answers, its instances provided
+through the reactive graph's existing context operations), and the engine asks it through the runtime's listener
+(`devSource`, `devInstances`, `devProps`, answered as JSON).

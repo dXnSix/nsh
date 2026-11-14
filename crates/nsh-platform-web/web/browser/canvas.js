@@ -105,7 +105,7 @@ export function createCanvas(invoke, reactive, dom, live, wake, request = () => 
     },
   });
   function Canvas(props){
-    const node=dom.rt.element("canvas");
+    const node=dom.rt.hostElement("canvas");
     dom.rt.spread(node,reactive.split(props,["draw","onLayout"])[1]);
     const size=reactive.signal(null,{equals:(a,b)=>a?.width===b?.width&&a?.height===b?.height});
     dom.rt.prop(node,"onLayout",e=>{size.set({...e.bounds.size});props.onLayout?.(e);});

@@ -42,6 +42,22 @@ impl Runtime {
     }
 }
 impl Host for Runtime {
+    /// Asks the page's facade (`runtime.js`, `dev_source.js`), which
+    /// answers as JSON.
+    #[cfg(feature = "dev")]
+    fn dev_query(&self, kind: &str, id: u32) -> Option<String> {
+        if self.bindings.stopped.get() {
+            return None;
+        }
+        let listener = self.listener.borrow().clone()?;
+        let args = Value::array([
+            Value::string(kind).ok()?,
+            Value::array([Value::number(f64::from(id))]).ok()?,
+        ])
+        .ok()?;
+        use nsh_core::js::host::HostInput as _;
+        listener.call(&Value(0), &args).ok()?.as_string()
+    }
     fn initialize(&self, services: Services) -> Result<(), String> {
         *self.bindings.system.borrow_mut() = services.system;
         *self.bindings.posts.borrow_mut() = services.posts;

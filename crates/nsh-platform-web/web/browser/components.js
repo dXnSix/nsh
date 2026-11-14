@@ -5,7 +5,7 @@ export function createComponents(invoke, values, reactive, dom, environment) {
   const handler = name => "on" + name[0].toUpperCase() + name.slice(1);
   const make = (spec, call) => function (props = {}) {
     const rt = dom.rt;
-    const node = rt.element("view");
+    const node = rt.hostElement("view");
     rt.prop(node, "component", spec.name);
     const owner = reactive.getOwner();
     const state = { node, props, owner, renders: new Map(), lazy: reactive.signal(false) };
