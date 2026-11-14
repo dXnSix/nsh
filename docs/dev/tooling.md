@@ -897,6 +897,14 @@ up (`set_up_engine`), before its first batch. A real test session replaces the o
 with no observer registered behaves as before. Each platform's `dev.rs` calls `attach_observer` (macOS, Linux,
 Windows, iOS, Android, the terminal).
 
+### Log lines for a dev tool
+
+The dev hosts forward their log records to the dev server (or print them while not connected). A dev tool inside the
+app hears them too: `nsh_dev::set_log_observer(fn(level, target, message))` registers one observer per process (the
+first call wins), and every host's logger calls `nsh_dev::tap_log` with each record it would forward, connected or
+not (macOS, Linux, Windows, iOS, Android). Without an observer nothing is called and nothing is kept. The web host
+forwards no records through a dev client: its logs are the browser console's.
+
 ## New apps (`nsh init --template`)
 
 `nsh init <dir> --template ts|rust|mixed` (`init.rs`) writes one of three apps; without `--template` it asks with a
