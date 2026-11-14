@@ -120,6 +120,10 @@ export function createReactive(invoke, live, values) {
     }
     return [...picks, rest];
   };
+  // A value under `key` for what renders under the current owner, and the
+  // nearest one (dev tools' component instances: `dev_source.js`).
+  const provide = (key, value) => call(113, key, value);
+  const lookup = (key, fallback) => call(112, key, fallback);
   return { signal, computed, effect, cleanup, batch, untracked, root, context, split,
-    getOwner, runWithOwner, renderEffect, ErrorBoundary, protect };
+    getOwner, runWithOwner, renderEffect, ErrorBoundary, protect, provide, lookup };
 }

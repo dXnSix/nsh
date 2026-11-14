@@ -21,7 +21,7 @@
 // first one that differs, and made anew.
 import { adoptContextDefault } from "./reactive.js";
 
-export function createHot(reactive, report) {
+export function createHot(reactive, report, devSource = null) {
   // Module id -> factory(module, exports, require).
   const factories = new Map();
   // Modules that never run again (rolldown's runtime).
@@ -181,8 +181,16 @@ export function createHot(reactive, report) {
   };
 
   // A proxy's render: a memo of the component's implementation now, run
-  // again when its version changes.
-  const render = (key, version, props) => reactive.computed(() => {
+  // again when its version changes. For dev tools it is an instance of the
+  // component (`dev_source.js`), provided to what it renders and forgotten
+  // with the owner rendering it.
+  const render = (key, version, props) => {
+    const instance = devSource?.beginInstance(key, props);
+    if (instance) reactive.cleanup?.(() => devSource.endInstance(instance));
+    return memo(key, version, props, instance);
+  };
+  const memo = (key, version, props, instance) => reactive.computed(() => {
+    if (instance) devSource.provideInstance(instance);
     version();
     const fn = components.get(key)?.fn;
     if (!fn) return undefined;
@@ -282,6 +290,11 @@ export function createHot(reactive, report) {
       if (existing && existing.sig === sig) return existing.value;
       kept.set(key, { sig, value });
       return value;
+    },
+    // `kept()`: the kept top-level signals and navigation stacks by
+    // `module:name` (dev tools read the app's state through them).
+    kept() {
+      return Object.fromEntries(sorted(kept.keys()).map(key => [key, kept.get(key).value]));
     },
   };
 

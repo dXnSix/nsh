@@ -3140,6 +3140,8 @@
 			});
 			return [...picks, rest];
 		};
+		const provide = (key, value) => call(113, key, value);
+		const lookup = (key, fallback) => call(112, key, fallback);
 		return {
 			signal,
 			computed,
@@ -3154,7 +3156,9 @@
 			runWithOwner,
 			renderEffect,
 			ErrorBoundary,
-			protect
+			protect,
+			provide,
+			lookup
 		};
 	}
 
@@ -3572,7 +3576,22 @@
 			else insert(parent, child);
 		};
 		const bindProp = (node, name, read) => reactive.renderEffect(() => prop(node, name, read()));
-		const component = (Component, props) => reactive.untracked(() => Component(props));
+		let devSource = null;
+		const component = (Component, props, anchor, delta, column) => {
+			const entered = devSource?.enterUse(anchor, delta, column);
+			let result = null;
+			try {
+				result = reactive.untracked(() => Component(props));
+				return result;
+			} finally {
+				devSource?.leaveUse(entered, result);
+			}
+		};
+		const element = (tag, anchor, delta, column) => {
+			const node = call(300, [tag]);
+			devSource?.made(node, anchor, delta, column);
+			return node;
+		};
 		const cond = (when, then, otherwise) => {
 			const condition = reactive.computed(() => Boolean(when()));
 			return reactive.computed(() => {
@@ -3655,6 +3674,18 @@
 			setHot(value) {
 				hot = value;
 			},
+			setDevSource(value) {
+				devSource = value;
+			},
+			nodeSource(id) {
+				return devSource?.nodeSource(values.nodes.get(id)?.deref()) ?? null;
+			},
+			nodeInstances(id) {
+				return devSource?.nodeInstances(values.nodes.get(id)?.deref()) ?? [];
+			},
+			instanceProps(id) {
+				return devSource?.instanceProps(id) ?? [];
+			},
 			rootProp: (name, value) => prop(root, name, value),
 			listen(node, name, value) {
 				let events = handlers.get(node);
@@ -3668,7 +3699,7 @@
 				]);
 			},
 			rt: {
-				element: (tag) => call(300, [tag]),
+				element,
 				text: (value) => call(301, [String(value)]),
 				prop,
 				bindProp,
@@ -3681,7 +3712,7 @@
 				spread,
 				metaUrl: (path) => new URL(path, document.baseURI).href,
 				ref,
-				anchor: () => 0
+				anchor: (module, statement, line) => devSource ? devSource.anchor(module, statement, line) : 0
 			},
 			mount(App, props) {
 				const kept = hot?.reuse(App, props);
@@ -5994,7 +6025,7 @@
 
 //#endregion
 //#region ../nsh-platform-web/web/browser/hot.js
-	function createHot(reactive, report) {
+	function createHot(reactive, report, devSource = null) {
 		const factories = /* @__PURE__ */ new Map();
 		const fixed = /* @__PURE__ */ new Set();
 		const modules = /* @__PURE__ */ new Map();
@@ -6120,7 +6151,13 @@
 			for (const id of sorted(rerun)) visit(id);
 			return order;
 		};
-		const render = (key, version, props) => reactive.computed(() => {
+		const render = (key, version, props) => {
+			const instance = devSource?.beginInstance(key, props);
+			if (instance) reactive.cleanup?.(() => devSource.endInstance(instance));
+			return memo(key, version, props, instance);
+		};
+		const memo = (key, version, props, instance) => reactive.computed(() => {
+			if (instance) devSource.provideInstance(instance);
 			version();
 			const fn = components.get(key)?.fn;
 			if (!fn) return void 0;
@@ -6220,6 +6257,9 @@
 						value
 					});
 					return value;
+				},
+				kept() {
+					return Object.fromEntries(sorted(kept.keys()).map((key) => [key, kept.get(key).value]));
 				}
 			},
 			get started() {
@@ -6277,6 +6317,137 @@
 	}
 
 //#endregion
+//#region ../nsh-platform-web/web/browser/dev_source.js
+	function createDevSource(reactive) {
+		const anchorIds = /* @__PURE__ */ new Map();
+		const anchors = [];
+		const stamps = /* @__PURE__ */ new WeakMap();
+		const nodeInstance = /* @__PURE__ */ new WeakMap();
+		const instances = /* @__PURE__ */ new Map();
+		let lastInstance = 0;
+		let pending = null;
+		const instanceKey = {};
+		const stampOf = (anchor, delta, column) => typeof anchor === "number" && typeof delta === "number" && typeof column === "number" && anchor >= 0 && anchor < anchors.length ? {
+			anchor,
+			delta,
+			column: Math.max(0, column)
+		} : null;
+		const resolve = (stamp) => {
+			const entry = stamp && anchors[stamp.anchor];
+			return entry ? {
+				module: entry.module,
+				anchor: entry.anchor,
+				line: Math.max(1, entry.line + stamp.delta),
+				column: stamp.column
+			} : null;
+		};
+		const currentInstance = () => {
+			if (lastInstance === 0 || !reactive.lookup) return 0;
+			const id = reactive.lookup(instanceKey, 0);
+			return typeof id === "number" ? id : 0;
+		};
+		return {
+			anchor(module, statement, line) {
+				const key = `${module}\0${statement}`;
+				let id = anchorIds.get(key);
+				if (id === void 0) {
+					id = anchors.length;
+					anchors.push({
+						module: String(module),
+						anchor: String(statement),
+						line: 0
+					});
+					anchorIds.set(key, id);
+				}
+				anchors[id].line = Math.max(1, Math.trunc(Number(line)) || 1);
+				return id;
+			},
+			made(node, anchor, delta, column) {
+				if (node === null || typeof node !== "object") return;
+				const stamp = stampOf(anchor, delta, column);
+				if (stamp) stamps.set(node, stamp);
+				const instance = currentInstance();
+				if (instance) nodeInstance.set(node, instance);
+			},
+			enterUse(anchor, delta, column) {
+				const site = stampOf(anchor, delta, column);
+				if (!site) return void 0;
+				const before = pending;
+				pending = site;
+				return { before };
+			},
+			leaveUse(entered, result) {
+				if (!entered) return;
+				if (pending && result !== null && typeof result === "object" && !Array.isArray(result) && !stamps.has(result) && typeof result !== "function") stamps.set(result, pending);
+				pending = entered.before;
+			},
+			beginInstance(key, props) {
+				const parent = currentInstance();
+				const id = ++lastInstance;
+				instances.set(id, {
+					key,
+					callSite: pending,
+					parent,
+					props
+				});
+				pending = null;
+				return id;
+			},
+			provideInstance(id) {
+				reactive.provide?.(instanceKey, id);
+			},
+			endInstance(id) {
+				instances.delete(id);
+			},
+			nodeSource(node) {
+				return resolve(node !== null && typeof node === "object" ? stamps.get(node) : null);
+			},
+			nodeInstances(node) {
+				const out = [];
+				let next = node !== null && typeof node === "object" ? nodeInstance.get(node) ?? 0 : 0;
+				while (next !== 0 && out.length < 1024) {
+					const instance = instances.get(next);
+					if (!instance) break;
+					out.push({
+						id: next,
+						key: instance.key,
+						callSite: resolve(instance.callSite)
+					});
+					next = instance.parent;
+				}
+				return out;
+			},
+			instanceProps(id) {
+				const props = instances.get(id)?.props;
+				if (props === null || typeof props !== "object") return [];
+				return Object.keys(Object.getOwnPropertyDescriptors(props)).map((name) => {
+					const d = Object.getOwnPropertyDescriptor(props, name);
+					if (d.get || d.set) return [name, { kind: "getter" }];
+					const v = d.value;
+					if (v === void 0) return [name, { kind: "undefined" }];
+					if (v === null) return [name, { kind: "null" }];
+					switch (typeof v) {
+						case "boolean": return [name, {
+							kind: "bool",
+							value: v
+						}];
+						case "number": return [name, {
+							kind: "number",
+							value: v
+						}];
+						case "string": return [name, {
+							kind: "text",
+							value: v
+						}];
+						case "function": return [name, { kind: "function" }];
+						default: return [name, { kind: "object" }];
+					}
+				});
+			}
+		};
+	}
+
+//#endregion
 //#region ../nsh-platform-web/web/browser/address.js
 /** `nsh_core::url_scheme::MAX_URL_LEN`, in UTF-8 bytes. */
 	const MAX_ADDRESS_BYTES = 16384;
@@ -6314,6 +6485,7 @@
 		createAnimation: () => createAnimation,
 		createCanvas: () => createCanvas,
 		createComponents: () => createComponents,
+		createDevSource: () => createDevSource,
 		createDom: () => createDom,
 		createEnvironment: () => createEnvironment,
 		createGestures: () => createGestures,

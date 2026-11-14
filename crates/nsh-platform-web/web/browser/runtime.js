@@ -203,7 +203,7 @@ export function createBrowserHost(player) {
         delete realm.__nsh_browser_bootstrap;
         const { Values, createReactive, createModules, createDom, createComponents, createGestures,
           createCanvas, createAnimation, createNavigation, createKeymap, createEnvironment, createI18n,
-          createHost, createStandard, createResource, createLists, configureAPIs, createHot } = scope;
+          createHost, createStandard, createResource, createLists, configureAPIs, createHot, createDevSource } = scope;
         values = new Values();
         values.trace = () => player.wasm.nsh_browser_trace();
         values.report = report;
@@ -212,7 +212,10 @@ export function createBrowserHost(player) {
         player.wasm.nsh_browser_initialize();
         const reactive = createReactive(call, active, values);
         const dom = createDom(call, values, reactive, active, requestPump);
-        const hot = app.hot = createHot(reactive, report);
+        // Where hot bundles' nodes were written and who rendered them.
+        const devSource = createDevSource(reactive);
+        dom.setDevSource(devSource);
+        const hot = app.hot = createHot(reactive, report, devSource);
         dom.setHot(hot);
         const env = createEnvironment(reactive, call, dom);
         dom.setPlatform(env.api.platform);
@@ -240,6 +243,11 @@ export function createBrowserHost(player) {
             case "animationsFinished": animation?.finished(args[0]); break;
             // A gate ran after the start (`nsh_after_gate`).
             case "registry": modules?.refresh(); for (const watcher of watchers) watcher(); break;
+            // Dev tools ask the engine where a node was written
+            // (`nsh_core::element::dev_source`, ...): answered as JSON.
+            case "devSource": return JSON.stringify(dom.nodeSource(args[0]));
+            case "devInstances": return JSON.stringify(dom.nodeInstances(args[0]));
+            case "devProps": return JSON.stringify(dom.instanceProps(args[0]));
             default: throw new Error(`browser host event is not implemented: ${name}`);
           }
         };
