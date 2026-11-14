@@ -22,6 +22,7 @@
 //! by `nsh.json` `"tailwind"`, compiled into the bundle as
 //! `nsh:tailwind-theme` and pushed as a root prop at startup.
 
+mod describe;
 pub(crate) mod palette;
 mod theme;
 mod utilities;
@@ -30,8 +31,11 @@ use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-pub use self::theme::{Theme, ThemeError};
 use self::utilities::{Parts, touched};
+pub use self::{
+    describe::{ClassInfo, ClassTarget, describe},
+    theme::{Theme, ThemeError},
+};
 pub(crate) use self::{
     theme::ClassTokens,
     utilities::{Decl, Len, Part},
