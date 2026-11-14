@@ -2630,6 +2630,50 @@ fn scroll_reports_content_size() {
     )));
 }
 
+/// `scrollsToTop` reaches the scroll view's mounted behavior (iOS sets
+/// `UIScrollView.scrollsToTop` from it): on by default, off when the app
+/// says so, and on again.
+#[test]
+fn scrolls_to_top_reaches_the_scroll_behavior() {
+    fn behavior(batch: &MountBatch) -> Option<ScrollBehavior> {
+        batch.items.iter().rev().find_map(|i| match i {
+            MountItem::ScrollBehavior { id: 2, behavior } => Some((**behavior).clone()),
+            _ => None,
+        })
+    }
+    assert!(ScrollBehavior::default().scrolls_to_top);
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Scroll,
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Scroll(ScrollProp::ScrollsToTop(false)),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(behavior(&batch).map(|b| b.scrolls_to_top), Some(false));
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Scroll(ScrollProp::ScrollsToTop(true)),
+        }],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(behavior(&batch).map(|b| b.scrolls_to_top), Some(true));
+}
+
 /// `overflow: "hidden"` clips in layout as well as in paint: what a box
 /// clips away must not grow an ancestor scroll view's content size. A
 /// preview laid out at its design width and scaled down by a transform
@@ -5725,6 +5769,134 @@ fn a_drawn_header_is_as_wide_as_the_screen() {
         );
         assert_eq!(frames[&10].size.width, px(width - 88.0));
     }
+}
+
+/// With a native header, a title view is as wide as its content, at most
+/// the room the bar leaves between its items: a long one-line title shrinks
+/// instead of running under the trailing item (#1895), a short one keeps
+/// its width.
+#[test]
+fn a_native_title_view_fits_between_the_header_items() {
+    let insert = |parent, child| Op::Insert {
+        parent,
+        child,
+        before: None,
+    };
+    let build = |title: &str| {
+        let mut c = core();
+        let mut ops = vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Stack,
+            },
+            style_op(2, &[("flex", StyleValue::Number(1.0))]),
+            Op::Create {
+                id: 3,
+                tag: Tag::Screen,
+            },
+            // The title view: a clamped text, then a button.
+            Op::Create {
+                id: 4,
+                tag: Tag::HeaderItem,
+            },
+            Op::SetProp {
+                id: 4,
+                prop: Prop::HeaderSlot(crate::HeaderSlot::Title),
+            },
+            Op::Create {
+                id: 6,
+                tag: Tag::View,
+            },
+            style_op(6, &[("flexDirection", StyleValue::Str("row"))]),
+            Op::Create {
+                id: 10,
+                tag: Tag::View,
+            },
+            style_op(
+                10,
+                &[
+                    ("flex", StyleValue::Number(1.0)),
+                    ("minWidth", StyleValue::Number(0.0)),
+                ],
+            ),
+            Op::Create {
+                id: 12,
+                tag: Tag::Text,
+            },
+            style_op(12, &[("numberOfLines", StyleValue::Number(1.0))]),
+            Op::CreateText {
+                id: 13,
+                text: title.to_string(),
+            },
+            Op::Create {
+                id: 14,
+                tag: Tag::View,
+            },
+            style_op(
+                14,
+                &[
+                    ("width", StyleValue::Number(40.0)),
+                    ("height", StyleValue::Number(40.0)),
+                    ("flexShrink", StyleValue::Number(0.0)),
+                ],
+            ),
+            // The trailing item, 60 wide.
+            Op::Create {
+                id: 20,
+                tag: Tag::HeaderItem,
+            },
+            Op::SetProp {
+                id: 20,
+                prop: Prop::HeaderSlot(crate::HeaderSlot::Right),
+            },
+            Op::Create {
+                id: 22,
+                tag: Tag::View,
+            },
+            style_op(
+                22,
+                &[
+                    ("width", StyleValue::Number(60.0)),
+                    ("height", StyleValue::Number(40.0)),
+                ],
+            ),
+        ];
+        ops.extend([
+            insert(12, 13),
+            insert(10, 12),
+            insert(6, 10),
+            insert(6, 14),
+            insert(4, 6),
+            insert(20, 22),
+            insert(3, 4),
+            insert(3, 20),
+            insert(2, 3),
+            insert(ROOT_ID, 2),
+        ]);
+        apply(&mut c, ops);
+        let mut frames = std::collections::HashMap::new();
+        let batch = c.commit().unwrap();
+        for item in &batch.items {
+            if let MountItem::Frame { id, frame } = item {
+                frames.insert(*id, *frame);
+            }
+        }
+        frames
+    };
+    // 320 wide: the room is 320 - 2 * 16 (insets) - (60 + 16) (the item).
+    let frames = build(&"a title far too long to fit on one line of the header".repeat(2));
+    assert_eq!(frames[&4].size.width, px(212.0));
+    let button = frames[&14];
+    assert_eq!(
+        button.origin.x + button.size.width,
+        px(212.0),
+        "the button in the title"
+    );
+    let frames = build("Hi");
+    assert!(
+        frames[&4].size.width < px(100.0),
+        "a short title keeps its width"
+    );
 }
 
 #[test]
@@ -17680,6 +17852,7 @@ mod touch {
         EventPayload::Touch(Box::new(TouchEvent {
             phase,
             timestamp: t,
+            modifiers: Default::default(),
             activated: None,
             points: vec![TouchPoint {
                 id: 7,
@@ -28972,6 +29145,7 @@ fn touch_down(path: Vec<NodeId>) -> EventPayload {
             changed: true,
             pointer_type: crate::PointerType::Touch,
         }],
+        modifiers: Default::default(),
         activated: None,
     }))
 }

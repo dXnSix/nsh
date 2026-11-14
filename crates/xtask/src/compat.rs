@@ -40,8 +40,7 @@ pub(crate) fn compat(record: Option<&str>) -> anyhow::Result<()> {
     cargo.arg(if record.is_some() { "run" } else { "test" });
     // Cargo's own option, so before `run`'s `--`.
     cargo.arg("--target-dir").arg(root.join("target"));
-    // The cases use shaders, EmojiPicker and WebSockets, all opt-in runtime
-    // features (as the Compat workflow builds them).
+    // The cases use shaders, EmojiPicker and WebSockets, all opt-in runtime features.
     cargo.args([
         "--features",
         "nsh-core/shader,nsh-base/emoji-picker,nsh-engine/websocket",
