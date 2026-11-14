@@ -3680,7 +3680,8 @@
 				merge,
 				spread,
 				metaUrl: (path) => new URL(path, document.baseURI).href,
-				ref
+				ref,
+				anchor: () => 0
 			},
 			mount(App, props) {
 				const kept = hot?.reuse(App, props);

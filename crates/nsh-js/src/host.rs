@@ -681,6 +681,31 @@ impl Host {
         });
     }
 
+    /// Where node `id` was written, as the source says now (hot bundles,
+    /// whose elements the JSX compiler stamps): its module, the top-level
+    /// statement and the line and column. `None` for text nodes, nodes
+    /// made natively, unknown ids and bundles without stamps.
+    pub fn node_source(&self, id: NodeId) -> Option<crate::NodeSource> {
+        self.cx
+            .with(|cx| crate::dev_source::node_source(cx.as_raw().as_ptr(), id))
+    }
+
+    /// The hot component instances that rendered node `id`, innermost
+    /// first, each with where it was used. Only top-level components of hot
+    /// bundles are instances: nested and anonymous components fold into the
+    /// nearest one.
+    pub fn node_instances(&self, id: NodeId) -> Vec<crate::InstanceRef> {
+        self.cx
+            .with(|cx| crate::dev_source::node_instances(cx.as_raw().as_ptr(), id))
+    }
+
+    /// The props instance `instance` was rendered with, read from their
+    /// descriptors: a getter is reported as one and never called.
+    pub fn instance_props(&self, instance: u32) -> Vec<(String, crate::PropValue)> {
+        self.cx
+            .with(|cx| crate::dev_source::instance_props(cx.as_raw().as_ptr(), instance))
+    }
+
     /// Moves the ops committed by JS since the last call into `out`.
     pub fn take_ops(&self, out: &mut Vec<Op>) {
         let mut ops = self.shared.ops.borrow_mut();

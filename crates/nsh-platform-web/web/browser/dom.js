@@ -185,6 +185,9 @@ export function createDom(invoke, values, reactive, live, wake) {
       prop, bindProp, insert, append, component, cond, each, merge, spread,
       metaUrl: path => new URL(path, document.baseURI).href,
       ref,
+      // Hot bundles stamp elements with where they were written; the page
+      // keeps no stamps yet, so anchors are ids nothing reads.
+      anchor: () => 0,
     },
     mount(App, props) {
       // A hot update running the module again keeps what it mounted.

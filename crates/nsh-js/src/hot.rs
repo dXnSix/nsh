@@ -644,13 +644,22 @@ native! {
 }
 
 /// A proxy's render: a memo of the component's implementation now, run
-/// again when its version changes.
+/// again when its version changes. For dev tools it is an instance of the
+/// component (`dev_source`), provided to what it renders and gone with the
+/// owner rendering it.
 fn render(cx: Ctx, key: &str, version: Raw, props: Raw) -> R<V> {
+    let instance = crate::dev_source::begin_instance(cx, key, props);
+    let end = closure(cx, Vec::new(), move |cx, _, _| {
+        crate::dev_source::end_instance(cx, instance);
+        Ok(V::undefined())
+    })?;
+    crate::reactive::add_cleanup(cx, end.take());
     let key = key.to_owned();
     let run = closure(
         cx,
         vec![V::dup(cx, version), V::dup(cx, props)],
         move |cx, captures, _| {
+            crate::dev_source::provide_instance(cx, instance);
             js::call(cx, captures[0].raw(), UNDEFINED, &[])?;
             let Some(fun) = with(cx, |h| h.components.get(&key).map(|c| c.fun.clone_ref())) else {
                 return Ok(V::undefined());
