@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# The examples' tests on a real platform (`nsh test --target <target>`), for
-# the platforms upstream's workflows do not cover (macOS, iOS, Android, the
-# web, Windows on Arm). Usage: examples.sh <target> (in a checkout, after `cargo build -p
-# nsh-cli`).
+# The examples' tests on a real platform (`nsh test --target <target>`):
+# macOS, iOS, Android and the web. `fork-full.yml` runs it on GitHub's
+# runners at night, and `local.sh` on a Mac for macOS, iOS and Android.
+# Usage: examples.sh <target> (in a checkout, after `cargo build -p nsh-cli`;
+# the script itself may come from another checkout).
 #
 # Each platform runs the gallery's test files it passes, measured by running
 # every one of them there and on the runners; a file (or a test of it) is
@@ -133,8 +134,8 @@ case "$target" in
       "controls uploads" "controls stepped setup" "controls equalizer" "controls cart's quantities"
       "controls a sign-in code" "controls segmented control")
     ;;
-  # Windows on Arm (the `windows-arm64` job): the files upstream's
-  # `windows.yml` runs on x64.
+  # The files upstream's `windows.yml` runs (`fork-full.yml` lists them in
+  # its `windows` job; this entry is for a run by hand).
   windows)
     gallery=(context-menu device dock form gestures hover links navigation network photos
       resizable shortcuts storage timers)

@@ -1,0 +1,658 @@
+name: Fork full
+
+# Everything the gate (`fork-ci.yml`) leaves out, because it is slow or
+# fails now and then on a loaded runner. It never gates a pull request.
+#
+# Runs:
+# - every night, when `main` moved since the last night's run;
+# - by hand (`gh workflow run fork-full.yml --ref <branch> [-f only=<part>]`):
+#   after an upstream sync lands on `main`, or for a branch that needs it;
+# - on a pull request labelled `full-ci` (the label takes effect with the
+#   next push).
+#
+# - `macos`, `ios`, `android`, `web`: clippy, tests, and the examples' tests
+#   on the platform (`nsh test --target <platform>`,
+#   `.github/fork/examples.sh`): macOS windows, an iOS simulator, an Android
+#   emulator, headless Chrome. On pull requests macOS, iOS and the Android
+#   emulator are checked on a Mac instead (`.github/fork/local.sh`);
+#   GitHub's macOS runners and its emulator are used here only.
+# - `linux`, `gpui-gallery`, `windows`: upstream's `linux.yml` and
+#   `windows.yml` in full, with the examples' tests in GTK, GPUI and Win32
+#   windows.
+# - `windows-arm64`: upstream's Windows clippy and tests on Windows on Arm.
+#   Its examples' tests would repeat `windows`'s on a slower runner.
+# - `gpui`, `tui`, `rust-app`: the runners of upstream's matrices the gate
+#   leaves out (macOS, Windows).
+# - `rust-app-web`: upstream's `rust-app.yml`, job `web`, without the
+#   examples' tests (the gate's `headless`, and `web` here).
+# - `tizen`: `fork-tizen.yml` (the three architectures' builds, the TV
+#   idiom's specs).
+#
+# The `cargo test` steps run through `.github/fork/retry.sh`, as the gate's
+# do: once more after a failure, with a warning when that passes.
+#
+# The commands are copies of upstream's workflows, which are disabled in the
+# fork's settings; a sync that changes them is followed here by hand. A
+# fork-only file (branch kind `fork/*`).
+
+on:
+  schedule:
+    - cron: "30 1 * * *"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "The part to run"
+        type: choice
+        default: all
+        options: [all, macos, ios, android, web, linux, windows, gpui, tui, rust-app, tizen]
+
+permissions:
+  contents: read
+
+# By part too, so a run of one part never cancels a whole run.
+concurrency:
+  group: fork-full-${{ github.event.pull_request.number || github.ref }}-${{ inputs.only || 'all' }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+
+jobs:
+  plan:
+    # A pull request only with the label, and not while it closes (its
+    # `closed` event still takes the concurrency group, and so cancels the
+    # runs of a merged or closed pull request).
+    if: >-
+      github.event_name != 'pull_request'
+      || (github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, 'full-ci'))
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      only: ${{ steps.plan.outputs.only }}
+    steps:
+      # A night's run goes on only when `main` moved since the last night's
+      # run that was not cancelled (this one is still in progress).
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.workflow }}
+          ONLY: ${{ inputs.only || 'all' }}
+        run: |
+          run=true
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            last=$(gh run list --workflow "$WORKFLOW" --event schedule --branch main --status completed --limit 20 \
+              --json headSha,conclusion --jq '[.[] | select(.conclusion != "cancelled")][0].headSha // ""')
+            if [[ "$last" == "$GITHUB_SHA" ]]; then
+              echo "::notice::main has not changed since the last night's run ($last)"
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "only=$ONLY" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "macos"]'), needs.plan.outputs.only)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: >
+          cargo clippy --all-targets
+          -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
+          --features nsh-platform-macos/dev
+          -- -D warnings
+      - name: Test
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
+      - name: Run the examples' tests in macOS windows
+        run: |
+          cargo build -p nsh-cli
+          bash .github/fork/examples.sh macos
+
+  ios:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "ios"]'), needs.plan.outputs.only)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-apple-ios-macabi
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `nsh-platform-ios` is empty off iOS: Catalyst checks it on the Mac.
+      - name: Clippy (Mac Catalyst)
+        run: >
+          cargo clippy
+          -p nsh-platform-ios -p nsh-ios-host -p nsh-ios-app
+          --target aarch64-apple-ios-macabi
+          --features nsh-platform-ios/embed,nsh-platform-ios/dev
+          -- -D warnings
+      - name: Build the simulator's development host
+        run: cargo build -p nsh-ios-host --target aarch64-apple-ios-sim
+      # `nsh test --target ios` boots the newest iPhone simulator.
+      - name: Run the examples' tests in an iOS simulator
+        run: |
+          cargo build -p nsh-cli
+          bash .github/fork/examples.sh ios
+
+  android:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "android"]'), needs.plan.outputs.only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # The emulator runs with hardware acceleration.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # GTK 4 and GStreamer: the examples' crates (`gallery-rs`, `rust-exports`) are built
+      # for this machine too (GTK's Linux platform plays sounds and videos with GStreamer).
+      - name: Install clang, GTK 4 and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      # The Android runtime: `javac` + `d8` (Java 17), the SDK's
+      # `platforms;android-35` and an NDK: the image's default
+      # (`ANDROID_NDK_HOME`, 27). QuickJS's bindings, generated with the
+      # image's clang, do not build against the headers of its newest (30:
+      # "Unversioned target triples are not supported").
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install the Android platform
+        run: |
+          if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]]; then
+            sdkmanager=$(ls "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager* | head -1)
+            yes | "$sdkmanager" "platforms;android-35" > /dev/null || true
+          fi
+          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
+          test -d "$ANDROID_NDK_HOME"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The emulator's ABI only, stripped: the development runtime of all
+      # three ABIs at debug is larger than an emulator's storage.
+      - name: Build the development runtime for the emulator
+        run: |
+          cargo xtask android --dev --abi x86_64
+          runtime="$RUNNER_TEMP/nsh-runtime/android/dev"
+          mkdir -p "$runtime"
+          cp -R target/android/debug-dev/. "$runtime/"
+          strip=$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-strip | head -1)
+          "$strip" --strip-debug "$runtime/lib/x86_64/libnsh.so"
+          echo "NSH_RUNTIME=$RUNNER_TEMP/nsh-runtime" >> "$GITHUB_ENV"
+          cargo build -p nsh-cli
+      - name: Run the examples' tests in an Android emulator
+        id: emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          # The default screen (320 × 640 at 160 dpi): a phone's (pixel_6,
+          # 1080 × 2400) is seven times the pixels for the software renderer,
+          # and the tests ran out of time.
+          disk-size: 6G
+          # No guest Vulkan: wgpu would pick it, and the emulator's
+          # SwiftShader Vulkan stalled on the shader tests and took the
+          # emulator down; GLES is what an emulator on a Mac gives wgpu.
+          emulator-options: -no-window -gpu swiftshader_indirect -feature -Vulkan -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            bash .github/fork/emulator-logs.sh start "$RUNNER_TEMP/emulator-logs"
+            bash .github/fork/examples.sh android
+      # An emulator that goes away during a test leaves no line in this log:
+      # the device's log, the runner's memory and kernel log and the
+      # emulator's crash reports say what ended it
+      # (`.github/fork/emulator-logs.sh`).
+      - name: Collect the emulator's logs
+        if: failure() && steps.emulator.conclusion == 'failure'
+        run: bash .github/fork/emulator-logs.sh collect "$RUNNER_TEMP/emulator-logs"
+      - name: Upload the emulator's logs
+        if: failure() && steps.emulator.conclusion == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-logs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/emulator-logs
+          retention-days: 7
+
+  web:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "web"]'), needs.plan.outputs.only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar); GTK 4 and
+      # GStreamer: the examples' crates (`gallery-rs`, `rust-exports`) are built for
+      # this machine too (GTK's Linux platform plays sounds and videos with GStreamer).
+      - name: Install clang, LLVM, GTK 4 and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `nsh test --target web` opens the apps in the image's Chrome.
+      - name: Run the examples' tests in headless Chrome
+        run: |
+          cargo build -p nsh-cli
+          bash .github/fork/examples.sh web
+
+  # Upstream's `linux.yml`, job `check`, in full.
+  linux:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "linux"]'), needs.plan.outputs.only)
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang, GTK 4, WebKitGTK and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev xvfb xauth at-spi2-core python3 libxtst6 libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: linux
+      - name: Clippy
+        run: >
+          cargo clippy --all-targets
+          -p nsh-platform-linux -p nsh-linux-host -p nsh-linux-app
+          -p nsh-cli -p nsh-dev -p xtask
+          -- -D warnings
+      - name: Clippy (without WebKitGTK)
+        run: cargo clippy --all-targets -p nsh-platform-linux -- -D warnings
+      - name: Check without optional features
+        run: cargo clippy -p nsh-linux-app --no-default-features --features js -- -D warnings
+      # Each optional feature alone, so that none leans on another.
+      - name: Check each optional feature alone
+        run: |
+          for feature in shader editor rich-editor plot highlight math zlib crypto websocket updater svg net sound; do
+            cargo clippy -p nsh-linux-app --no-default-features --features "$feature" -- -D warnings
+          done
+      - name: Test without optional features
+        run: bash .github/fork/retry.sh xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features js --lib without_the_feature
+      - name: Test
+        run: >
+          bash .github/fork/retry.sh cargo test -p nsh-platform-linux -p nsh-cli -p nsh-dev
+          && bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --features webview
+      # Opt-in Action-interface tests use an independent AT client, not GTK signals.
+      - name: Test AT-SPI activation and input
+        env:
+          GTK_A11Y: atspi
+          GDK_BACKEND: x11
+          GSK_RENDERER: cairo
+          RUST_TEST_THREADS: "1"
+        run: |
+          bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::activation_ -- --nocapture
+          bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::atspi_activation_ -- --ignored --nocapture
+      # The examples' tests in GTK windows on a virtual display, with the
+      # platform's input (`nsh test --target linux`).
+      - name: Run the examples' tests in GTK windows
+        run: |
+          cargo build -p nsh-cli
+          # A session bus of its own: without one, GTK's portal and
+          # accessibility lookups wait for D-Bus autolaunch on each display.
+          run() { dbus-run-session -- xvfb-run -a ./target/debug/nsh test "$@" --target linux; }
+          run examples/counter
+          for file in context-menu device dock form gestures hover links navigation network photos resizable shortcuts storage timers; do
+            run "examples/gallery/tests/$file.test.tsx"
+          done
+          run examples/gallery/tests/environment.test.tsx --filter appearance
+          # Apps with Rust crates, in hosts built with them: a TSX app and a
+          # Rust app (its root).
+          run examples/rust-exports/App.test.tsx
+          run examples/gallery-rs/App.test.tsx
+
+  # Upstream's `linux.yml`, job `gpui-gallery`.
+  gpui-gallery:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "linux", "gpui"]'), needs.plan.outputs.only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      # Wry embeds GTK 3 web views in X11 child windows. Mesa's software
+      # Vulkan driver draws GPUI on the runner without a physical GPU.
+      GDK_BACKEND: x11
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up temporary directories outside the checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/tmp"
+          echo "TMPDIR=$RUNNER_TEMP/tmp" >> "$GITHUB_ENV"
+      - name: Install GPUI, Vulkan and Xvfb dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang libclang-dev build-essential pkg-config \
+            libasound2-dev libfontconfig-dev libfreetype-dev libssl-dev \
+            libvulkan1 mesa-vulkan-drivers libwayland-dev libx11-xcb-dev libxcb1-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libzstd-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good xvfb xauth
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: |
+            . -> target
+            crates/gpui -> ../../target
+          key: gpui-gallery
+      - name: Build the CLI and GPUI host
+        run: |
+          cargo build -p nsh-cli
+          cargo build --manifest-path crates/gpui/Cargo.toml --target-dir target -p nsh-gpui-host
+      - name: Run the gallery's tests in GPUI windows
+        run: |
+          run() { env -u WAYLAND_DISPLAY dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' ./target/debug/nsh test "$@" --target gpui; }
+          for file in context-menu device dock form gestures hover links navigation network photos resizable shortcuts storage timers; do
+            run "examples/gallery/tests/$file.test.tsx"
+          done
+          run examples/gallery/tests/environment.test.tsx --filter appearance
+
+  # Upstream's `windows.yml` in full (x64).
+  windows:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "windows"]'), needs.plan.outputs.only)
+    runs-on: windows-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+      # QuickJS is C: bindgen needs libclang, which the image's LLVM has.
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      # rustc can overflow its default stack on the `windows` crate's
+      # bindings (STATUS_STACK_BUFFER_OVERRUN).
+      RUST_MIN_STACK: "268435456"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: windows
+      - name: Clippy
+        run: >
+          cargo clippy --all-targets
+          -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app
+          -p nsh-cli -p nsh-dev -p xtask
+          -- -D warnings
+      - name: Check without optional features
+        run: cargo clippy -p nsh-windows-app --no-default-features --features js -- -D warnings
+      - name: Test
+        shell: bash
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+      # The examples' tests in Win32 windows, with the platform's input
+      # (`nsh test --target windows`).
+      - name: Run the examples' tests in Win32 windows
+        shell: bash
+        run: |
+          cargo build -p nsh-cli
+          run() { ./target/debug/nsh test "$@" --target windows; }
+          run examples/counter
+          for file in context-menu device dock form gestures hover links navigation network photos resizable shortcuts storage timers; do
+            run "examples/gallery/tests/$file.test.tsx"
+          done
+          run examples/gallery/tests/environment.test.tsx --filter appearance
+          # Apps with Rust crates, in hosts built with them: a TSX app and a
+          # Rust app (its root).
+          run examples/rust-exports/App.test.tsx
+          run examples/gallery-rs/App.test.tsx
+
+  # Upstream's Windows clippy and tests on an Arm64 Windows 11 runner (the
+  # `aarch64-pc-windows-msvc` host toolchain, LLVM 20 and Visual Studio 2022
+  # with the Arm64 tools on its image), which no upstream workflow runs on.
+  windows-arm64:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "windows"]'), needs.plan.outputs.only)
+    runs-on: windows-11-arm
+    env:
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+      RUST_MIN_STACK: "268435456"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Check the host and libclang
+        run: |
+          rustc -vV | grep '^host: aarch64-pc-windows-msvc$'
+          test -f "$(cygpath -u "$LIBCLANG_PATH")/libclang.dll"
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: >
+          cargo clippy --all-targets
+          -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app
+          -p nsh-cli -p nsh-dev -p xtask
+          -- -D warnings
+      - name: Check without optional features
+        run: cargo clippy -p nsh-windows-app --no-default-features --features js -- -D warnings
+      - name: Test
+        shell: bash
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+
+  # Upstream's `gpui.yml` on macOS and Windows (Linux: the gate).
+  gpui:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "gpui"]'), needs.plan.outputs.only)
+    name: gpui (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up the environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/tmp"
+          echo "TMPDIR=$RUNNER_TEMP/tmp" >> "$GITHUB_ENV"
+      - name: Set up Windows
+        if: runner.os == 'Windows'
+        run: |
+          echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+          echo "RUST_MIN_STACK=268435456" >> "$GITHUB_ENV"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: gpui
+          lockfiles: "**/Cargo.lock"
+      - name: Clippy
+        working-directory: crates/gpui
+        run: cargo clippy --all-targets --features nsh-platform-gpui/dev -- -D warnings
+      - name: Check without optional features
+        working-directory: crates/gpui
+        run: cargo clippy -p nsh-platform-gpui --no-default-features --features js -- -D warnings
+      - name: Test
+        working-directory: crates/gpui
+        run: bash ../../.github/fork/retry.sh cargo test
+      - name: Check (runtime-shaders)
+        if: runner.os == 'macOS'
+        working-directory: crates/gpui
+        run: cargo check -p nsh-gpui-host --features nsh-platform-gpui/runtime-shaders
+
+  # Upstream's `tui.yml` on macOS (Linux: the gate).
+  tui:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "tui"]'), needs.plan.outputs.only)
+    runs-on: macos-15
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: tui
+      - name: Clippy
+        run: cargo clippy -p nsh-platform-tui --all-targets -- -D warnings
+      - name: Test
+        run: bash .github/fork/retry.sh cargo test -p nsh-platform-tui
+
+  # Upstream's `rust-app.yml`, job `check`, on macOS and Windows (Linux: the
+  # gate).
+  rust-app:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "rust-app"]'), needs.plan.outputs.only)
+    name: rust-app (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up temporary files
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/nsh-test-tmp" >> "$GITHUB_ENV"
+      - name: Set up Windows compiler stack
+        if: runner.os == 'Windows'
+        run: echo "RUST_MIN_STACK=268435456" >> "$GITHUB_ENV"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: rust-app
+      - name: Clippy
+        run: cargo clippy -p gallery-native --all-targets --locked -- -D warnings
+      - name: Check macOS without optional features
+        if: runner.os == 'macOS'
+        run: cargo clippy -p nsh-macos-app --locked --no-default-features --features js -- -D warnings
+      - name: Test the crate
+        run: bash .github/fork/retry.sh cargo test -p gallery-native ${{ runner.os == 'macOS' && '-p nsh-platform-apple' || '' }} --locked
+
+  # Upstream's `rust-app.yml`, job `web`: a Rust app and a TSX app with a
+  # Rust crate published for the web, and what they must not link.
+  rust-app-web:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "rust-app", "web"]'), needs.plan.outputs.only)
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up temporary files
+        run: |
+          mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/nsh-test-tmp" >> "$GITHUB_ENV"
+      - name: Install clang, LLVM, GTK 4, WebKitGTK and GStreamer
+        run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Cargo
+        uses: ./.github/actions/cargo
+        with:
+          cache: rust-app-web
+      - name: Build the command line
+        run: cargo build -p nsh-cli --locked
+      - name: Publish the Rust gallery for the web
+        run: |
+          ./target/debug/nsh package examples/gallery-rs --target web -o target/rust-app-web
+          site="target/rust-app-web/Rust Gallery"
+          test -f "$site/index.html"
+          grep -q nsh_app_init "$site"/nsh.*.wasm
+          grep -q nsh_start_rust "$site"/nsh.*.wasm
+          if ls "$site"/app.*.nshc > /dev/null 2>&1 || grep -aq InternalError "$site"/nsh.*.wasm; then
+            echo "The Rust app's web runtime unexpectedly carries JS"
+            exit 1
+          fi
+      - name: Test the Rust app and check that it builds no JS engine, bundler or WebKitGTK
+        run: |
+          check() {
+            cargo tree --manifest-path examples/gallery-rs/.nsh/rust/Cargo.toml \
+              -p "nsh-app-gallery-native-$1" -e normal --target all \
+              > "$RUNNER_TEMP/$1-dependencies.txt"
+            if grep -E "$2" "$RUNNER_TEMP/$1-dependencies.txt"; then
+              echo "The Rust app's $1 program unexpectedly links $3"
+              exit 1
+            fi
+          }
+          ./target/debug/nsh check examples/gallery-rs
+          check describe '(rquickjs|quickjs-jit|nsh-js|nsh-bundler|rolldown|oxc)([ _-]|$)' "a JS engine or the bundler"
+          ./target/debug/nsh test examples/gallery-rs
+          check test '(nsh-bundler|rolldown|oxc_parser)([ _-]|$)' "the bundler"
+          for program in describe test; do
+            check "$program" '(webkit6|soup3|javascriptcore6)([ _-]|$)' "WebKitGTK"
+          done
+      - name: Publish a TSX app with a Rust crate for the web
+        run: |
+          ./target/debug/nsh package examples/rust-exports --target web -o target/rust-exports-web
+          site="target/rust-exports-web/Rust Exports"
+          ls "$site"/app.*.js
+          node crates/nsh-platform-web/web/browser/package-size.mjs "$site" --require-browser
+          grep -q rust-exports/native "$site"/nsh.*.wasm
+
+  # Samsung TVs: the three architectures' builds and the TV idiom's specs.
+  tizen:
+    needs: plan
+    if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "tizen"]'), needs.plan.outputs.only)
+    uses: ./.github/workflows/fork-tizen.yml
