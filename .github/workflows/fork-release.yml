@@ -377,9 +377,8 @@ jobs:
             assets/nsh-*.zip
 
       # GitHub's generated notes start from the latest release before this
-      # one, which in the fork can be `nightly`: the fork's copy of upstream's
-      # `release.yml` publishes it on its schedule. They start from the
-      # previous `nshx-*` tag instead, so they list every fork PR since it.
+      # one, which need not be an nshx release. They start from the previous
+      # `nshx-*` tag instead, so they list every fork PR since it.
       - name: Write the release notes
         env:
           GH_TOKEN: ${{ github.token }}
