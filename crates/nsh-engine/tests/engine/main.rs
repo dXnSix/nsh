@@ -20,6 +20,8 @@ mod compiled;
 mod component_bench;
 mod components;
 mod counter;
+#[cfg(feature = "inspect")]
+mod dev_sources;
 mod errors;
 mod external_wake;
 mod fetch;

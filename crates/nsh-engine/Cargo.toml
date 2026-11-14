@@ -37,6 +37,9 @@ shader = ["dep:wgpu", "dep:pollster", "nsh-core/shader", "dep:objc2", "dep:objc2
 websocket = ["nsh-core/websocket"]
 # App self-updates (`nsh/updater`). Without it a check finds no update.
 updater = ["nsh-core/updater"]
+# What dev tools ask the core (`nsh_core::inspect`), and where the script's
+# nodes were written, answered from its VM. The platforms' `dev` turns it on.
+inspect = ["nsh-core/inspect"]
 
 [dependencies]
 rustc-hash.workspace = true

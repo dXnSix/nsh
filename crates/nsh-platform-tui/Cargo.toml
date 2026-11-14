@@ -16,7 +16,7 @@ workspace = true
 default = ["js", "websocket", "updater", "net"]
 js = ["nsh-engine/js"]
 run-app = []
-dev = ["js", "websocket", "updater", "dep:nsh-dev", "dep:nsh-testing", "dep:serde_json", "dep:ureq", "net", "nsh-core/inspect"]
+dev = ["js", "websocket", "updater", "dep:nsh-dev", "dep:nsh-testing", "dep:serde_json", "dep:ureq", "net", "nsh-engine/inspect"]
 
 # The native WebSocket client (tokio-tungstenite, rustls). Without it
 # `connect` of `websocket` rejects with ERR_FEATURE_UNAVAILABLE_ON_PLATFORM.

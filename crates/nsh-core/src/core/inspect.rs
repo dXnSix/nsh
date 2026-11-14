@@ -59,10 +59,44 @@ impl<M: TextEngine> Core<M> {
     /// Queues a tool's question for the next commit (the first one makes
     /// the dev state).
     pub(super) fn queue_inspect(&mut self, request: Request) {
-        self.dev
-            .get_or_insert_with(Box::<DevState>::default)
-            .requests
-            .push(request);
+        let dev = self.dev.get_or_insert_with(Box::<DevState>::default);
+        if request.is_script() {
+            dev.script.push(request);
+        } else {
+            dev.requests.push(request);
+        }
+    }
+
+    /// Answers the questions about the script's nodes (where they were
+    /// written, who rendered them) with `sources`, the engine's script;
+    /// `None` (no script runs, a Rust app) answers each with nothing. The
+    /// engine calls it every round.
+    pub fn answer_script_inspections(
+        &mut self,
+        sources: Option<&dyn crate::inspect::ScriptSources>,
+    ) {
+        let Some(requests) = self
+            .dev
+            .as_mut()
+            .filter(|dev| !dev.script.is_empty())
+            .map(|dev| std::mem::take(&mut dev.script))
+        else {
+            return;
+        };
+        for request in requests {
+            match request {
+                Request::Source(id, answer) => answer
+                    .borrow_mut()
+                    .deliver(sources.and_then(|s| s.source(id))),
+                Request::Instances(id, answer) => answer
+                    .borrow_mut()
+                    .deliver(sources.map_or_else(Vec::new, |s| s.instances(id))),
+                Request::Props(instance, answer) => answer
+                    .borrow_mut()
+                    .deliver(sources.map_or_else(Vec::new, |s| s.props(instance))),
+                other => self.queue_inspect(other),
+            }
+        }
     }
 
     /// Answers the tools' questions with this commit's layout.
@@ -82,6 +116,7 @@ impl<M: TextEngine> Core<M> {
                 Request::Pick(page, skip, answer) => {
                     answer.borrow_mut().deliver(self.dev_pick(page, skip))
                 }
+                script => self.queue_inspect(script),
             }
         }
     }
@@ -181,35 +216,71 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The nodes under page point `page`, innermost and topmost first:
-    /// overlays above the tree, a later sibling (by `zIndex`) above an
-    /// earlier one, children before their parent. `pointerEvents`,
-    /// listeners and the disabled state do not count; a view that clips
-    /// (`overflow: hidden`, scroll views, lists, stacks) leaves out what
-    /// lies outside it, and hidden views are left out. The subtree of
-    /// `skip` (a tool's own layer) is left out.
+    /// modals above the surface, the overlays shown in a root view above
+    /// it in the order they were shown (the last on top), a later sibling
+    /// (by `zIndex`) above an earlier one, children before their parent.
+    /// `pointerEvents`, listeners and the disabled state do not count; a
+    /// view that clips (`overflow: hidden`, scroll views, lists, stacks)
+    /// leaves out what lies outside it, and hidden views and overlays not
+    /// shown are left out. The subtree of `skip` (a tool's own layer) is
+    /// left out, its overlays included.
     pub fn dev_pick(&self, page: Point<Points>, skip: Option<NodeId>) -> Vec<NodeId> {
         let mut out = Vec::new();
-        // Root views of their own above the tree, the last one topmost.
-        let mut layers = Vec::new();
+        for layer in self.pick_layers(skip).into_iter().rev() {
+            self.pick_in(layer, point(Points(0.0), Points(0.0)), page, skip, &mut out);
+        }
+        out
+    }
+
+    /// The root views to pick in, bottom first: the surface, its own root
+    /// views (fixed views, header items, accessories) in tree order, the
+    /// overlays shown on it in show order, then each modal in tree order
+    /// with the overlays shown on it. Those in `skip`'s subtree or under a
+    /// hidden view are left out.
+    fn pick_layers(&self, skip: Option<NodeId>) -> Vec<Key> {
+        let excluded = |key: Key| {
+            let mut k = key;
+            while k != NO_KEY {
+                let n = &self.nodes[k as usize];
+                if Some(n.id) == skip || n.view_style.hidden || n.hidden_in_text {
+                    return true;
+                }
+                k = n.parent;
+            }
+            false
+        };
+        let mut surface_views = Vec::new();
+        let mut modals = Vec::new();
         let mut stack = vec![self.root];
         while let Some(key) = stack.pop() {
             let node = &self.nodes[key as usize];
-            if key != self.root && is_root_view(node) {
-                layers.push(key);
+            if key != self.root && is_root_view(node) && node.kind != Kind::Overlay {
+                if node.kind == Kind::Modal {
+                    modals.push(key);
+                } else {
+                    surface_views.push(key);
+                }
             }
             stack.extend(node.children.iter().rev().copied());
         }
-        for &layer in layers.iter().rev() {
-            self.pick_in(layer, point(Points(0.0), Points(0.0)), page, skip, &mut out);
+        // Shown overlays, in the order they were shown, by the root view
+        // they are shown in.
+        let shown_in = |host: NodeId| {
+            self.overlays
+                .iter()
+                .copied()
+                .filter(move |&k| self.overlay(k).and_then(|o| o.host) == Some(host))
+        };
+        let root_id = self.nodes[self.root as usize].id;
+        let mut layers = vec![self.root];
+        layers.extend(surface_views);
+        layers.extend(shown_in(root_id));
+        for modal in modals {
+            layers.push(modal);
+            layers.extend(shown_in(self.nodes[modal as usize].id));
         }
-        self.pick_in(
-            self.root,
-            point(Points(0.0), Points(0.0)),
-            page,
-            skip,
-            &mut out,
-        );
-        out
+        layers.retain(|&k| k == self.root || !excluded(k));
+        layers
     }
 
     /// Adds the nodes under `page` in the subtree of `key`, whose parent's
@@ -467,6 +538,53 @@ mod tree_tests {
         assert!(!find(2).flags.placeholder && !find(2).flags.culled && !find(2).flags.spare);
     }
 
+    /// The script's questions wait for the engine, which answers them with
+    /// its VM, or with nothing when no script runs.
+    #[test]
+    fn script_questions_are_answered_by_the_engine_s_sources() {
+        use crate::inspect::{DevInstance, DevProp, DevSource, ScriptSources};
+        struct Vm;
+        impl ScriptSources for Vm {
+            fn source(&self, id: NodeId) -> Option<DevSource> {
+                (id == 2).then(|| DevSource {
+                    module: "App.tsx".into(),
+                    anchor: "App".into(),
+                    line: 3,
+                    column: 10,
+                })
+            }
+            fn instances(&self, _: NodeId) -> Vec<DevInstance> {
+                vec![DevInstance {
+                    id: 1,
+                    key: "App.tsx:App".into(),
+                    call_site: None,
+                }]
+            }
+            fn props(&self, _: u32) -> Vec<(String, DevProp)> {
+                vec![("title".into(), DevProp::Getter)]
+            }
+        }
+        let mut c = sample();
+        let (source, slot) = Answer::new();
+        c.queue_inspect(Request::Source(2, slot));
+        let (instances, slot) = Answer::new();
+        c.queue_inspect(Request::Instances(2, slot));
+        let (props, slot) = Answer::new();
+        c.queue_inspect(Request::Props(1, slot));
+        // The core's commit leaves them to the engine.
+        c.commit();
+        assert_eq!(c.dev.as_ref().unwrap().script.len(), 3);
+        c.answer_script_inspections(Some(&Vm));
+        assert_eq!(ready(source).unwrap().line, 3);
+        assert_eq!(ready(instances)[0].key, "App.tsx:App");
+        assert_eq!(ready(props), [("title".to_owned(), DevProp::Getter)]);
+        // A Rust app: no script, no answer but nothing.
+        let (source, slot) = Answer::new();
+        c.queue_inspect(Request::Source(2, slot));
+        c.answer_script_inspections(None);
+        assert_eq!(ready(source), None);
+    }
+
     /// INSP-4: a surface that never asks has no dev state and does no dev
     /// work in a commit.
     #[test]
@@ -603,5 +721,118 @@ mod pick_tests {
         );
         // The tool's own layer (the overlay) left out.
         assert_eq!(c.dev_pick(at(5.0, 5.0), Some(4)), [2, ROOT_ID]);
+    }
+
+    fn overlay(id: NodeId, parent: NodeId) -> Vec<Op> {
+        vec![
+            Op::Create {
+                id,
+                tag: Tag::Overlay,
+            },
+            Op::Insert {
+                parent,
+                child: id,
+                before: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn skip_leaves_out_the_overlays_of_its_subtree_and_hidden_ones_too() {
+        let mut c = core();
+        let mut ops = boxed(2, ROOT_ID, 0.0, 0.0, 100.0, 100.0);
+        ops.extend(overlay(4, 2));
+        ops.extend(boxed(6, 4, 0.0, 0.0, 30.0, 30.0));
+        apply(&mut c, ops);
+        c.commit();
+        assert!(c.dev_pick(at(5.0, 5.0), None).contains(&6));
+        // The overlay's parent skipped: the overlay goes with it.
+        assert_eq!(c.dev_pick(at(5.0, 5.0), Some(2)), [ROOT_ID]);
+        // Under a hidden view, an overlay is left out too.
+        apply(
+            &mut c,
+            vec![style_op(
+                2,
+                &[
+                    ("position", StyleValue::Str("absolute")),
+                    ("width", StyleValue::Number(100.0)),
+                    ("height", StyleValue::Number(100.0)),
+                    ("visibility", StyleValue::Str("hidden")),
+                ],
+            )],
+        );
+        c.commit();
+        assert_eq!(c.dev_pick(at(5.0, 5.0), None), [ROOT_ID]);
+    }
+
+    #[test]
+    fn overlays_are_picked_in_the_order_they_were_shown() {
+        use std::time::Duration;
+        let hint = |id: NodeId, open: bool| {
+            [
+                Op::SetProp {
+                    id,
+                    prop: Prop::Overlay(crate::OverlayProp::Hint(Some(Duration::from_secs(1)))),
+                },
+                Op::SetProp {
+                    id,
+                    prop: Prop::Overlay(crate::OverlayProp::Open(Some(open))),
+                },
+            ]
+        };
+        let mut c = core();
+        // Two hints on one anchor, so placed alike: 4 first in the tree, 8
+        // shown first.
+        let mut ops = boxed(2, ROOT_ID, 0.0, 0.0, 100.0, 100.0);
+        ops.extend(overlay(4, 2));
+        ops.extend(boxed(6, 4, 0.0, 0.0, 30.0, 30.0));
+        ops.extend(hint(4, false));
+        ops.extend(overlay(8, 2));
+        ops.extend(boxed(10, 8, 0.0, 0.0, 30.0, 30.0));
+        ops.extend(hint(8, true));
+        apply(&mut c, ops);
+        c.commit();
+        let place = |c: &crate::core::Core<_>, id| c.measure(id).unwrap().page;
+        let p = place(&c, 10);
+        let inside = at(p.x.0 + 5.0, p.y.0 + 5.0);
+        // The hint not shown is not picked.
+        let hits = c.dev_pick(inside, None);
+        assert!(!hits.contains(&6) && hits.contains(&10), "{hits:?}");
+        // Shown now, after 8: on top of it, though earlier in the tree.
+        apply(&mut c, hint(4, true).into());
+        c.commit();
+        assert_eq!(place(&c, 6), place(&c, 10));
+        let hits = c.dev_pick(inside, None);
+        let first = |id| hits.iter().position(|&h| h == id).unwrap_or(usize::MAX);
+        assert!(first(6) < first(10) && first(10) < usize::MAX, "{hits:?}");
+    }
+
+    #[test]
+    fn a_modal_is_above_the_surface_and_its_overlays() {
+        let mut c = core();
+        let mut ops = boxed(2, ROOT_ID, 0.0, 0.0, 100.0, 100.0);
+        ops.extend(overlay(4, 2));
+        ops.extend(boxed(6, 4, 0.0, 0.0, 30.0, 30.0));
+        ops.extend([
+            Op::Create {
+                id: 8,
+                tag: Tag::Modal,
+            },
+            Op::Insert {
+                parent: 2,
+                child: 8,
+                before: None,
+            },
+        ]);
+        ops.extend(boxed(10, 8, 0.0, 0.0, 30.0, 30.0));
+        apply(&mut c, ops);
+        c.commit();
+        let hits = c.dev_pick(at(5.0, 5.0), None);
+        let first = |id| hits.iter().position(|&h| h == id);
+        if let (Some(modal), Some(over)) = (first(10), first(6)) {
+            assert!(modal < over, "{hits:?}");
+        } else {
+            panic!("{hits:?}");
+        }
     }
 }

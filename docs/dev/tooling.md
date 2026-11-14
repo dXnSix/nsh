@@ -279,11 +279,15 @@ component's name, `class` as written, `testID`, raw text, frame, page position, 
 style declarations, the resolved view and text style, the unrounded box with padding, border and margin, states,
 events, accessibility props, a scroll view's offset and content size, a list's or cell's state) and
 `dev_pick(point, skip)` (the nodes under a page point, innermost and topmost first, whatever their `pointerEvents`,
-listeners or disabled state; clipping and overlays count, `skip`'s subtree is left out). Each returns an `Answer` the
-core resolves in its next commit, after layout, through the same action path as `app_url()`; positions ignore
-transforms and stop at modal roots. The code is `crates/nsh-core/src/inspect.rs` (the types) and
-`crates/nsh-core/src/core/inspect.rs` (the answers). Until something asks, no node has dev state and a commit does no
-dev work.
+listeners or disabled state: modals above the surface, shown overlays above their root view in the order they were
+shown, clipping counts, hidden views and `skip`'s subtree, its overlays included, are left out). Each returns an
+`Answer` the core resolves in its next commit, after layout, through the same action path as `app_url()`; positions
+ignore transforms and stop at modal roots. What the script knows of its nodes comes the same way:
+`dev_source(id)`, `dev_instances(id)` and `dev_instance_props(instance)` (hot bundles' stamps and instances, kept by
+`nsh-js`) are queued by the core and answered in the same round by the engine (feature `inspect`, which the platforms'
+`dev` turns on) from its VM (`Core::answer_script_inspections` with the script as `ScriptSources`); a Rust app answers
+nothing. The code is `crates/nsh-core/src/inspect.rs` (the types) and `crates/nsh-core/src/core/inspect.rs` (the
+answers). Until something asks, no node has dev state and a commit does no dev work.
 
 ## `nsh build --split`
 

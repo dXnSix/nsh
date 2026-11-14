@@ -1151,6 +1151,40 @@ pub fn dev_node(id: crate::NodeId) -> Answer<Option<crate::inspect::DevDetail>> 
     answer
 }
 
+/// Where node `id` was written, as the source says now: hot bundles stamp
+/// their elements (dev tools, feature `inspect`). `None` for text, nodes
+/// made natively, bundles without stamps and Rust apps. To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_source(id: crate::NodeId) -> Answer<Option<crate::inspect::DevSource>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Source(id, slot)));
+    answer
+}
+
+/// The hot component instances that rendered node `id`, innermost first,
+/// each with where it was used (dev tools, feature `inspect`). To await in
+/// a task.
+#[cfg(feature = "inspect")]
+pub fn dev_instances(id: crate::NodeId) -> Answer<Vec<crate::inspect::DevInstance>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Instances(
+        id, slot,
+    )));
+    answer
+}
+
+/// The props hot component instance `instance` was rendered with, read
+/// from their descriptors: a getter is reported, never called (dev tools,
+/// feature `inspect`). To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_instance_props(instance: u32) -> Answer<Vec<(String, crate::inspect::DevProp)>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Props(
+        instance, slot,
+    )));
+    answer
+}
+
 /// The nodes under page point `page` as the next commit lays them out,
 /// innermost and topmost first, leaving out the subtree of `skip` (dev
 /// tools, feature `inspect`: [`crate::Core::dev_pick`]). To await in a

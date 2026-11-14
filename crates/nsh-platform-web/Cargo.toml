@@ -39,7 +39,7 @@ linkable = []
 # The development host's (`nsh-dev.wasm`): development bundles with hot
 # module replacement, and the model of the app that `nsh test --target web`
 # asks about (`nsh_testing::agent`).
-dev = ["browser", "dep:nsh-testing", "dep:nsh-dev", "nsh-core/inspect"]
+dev = ["browser", "dep:nsh-testing", "dep:nsh-dev", "nsh-engine/inspect"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

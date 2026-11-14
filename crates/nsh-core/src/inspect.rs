@@ -13,6 +13,12 @@
 //! Positions ignore transforms and stop at modal roots: a view inside a
 //! modal (or a page's header item, an input's accessory) is placed in that
 //! root view, as `ref.measure()` places it.
+//!
+//! Where a node was written and which components rendered it are the
+//! script's (hot bundles stamp them, `nsh-js` keeps them):
+//! [`crate::element::dev_source`], [`crate::element::dev_instances`] and
+//! [`crate::element::dev_instance_props`] are answered in the same round
+//! by the engine, which hands the core its script as [`ScriptSources`].
 
 use std::sync::Arc;
 
@@ -155,6 +161,62 @@ pub struct DevList {
     pub columns: u32,
 }
 
+/// Where a node or a component use was written, as the source says now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevSource {
+    /// The module's key in the hot runtime (its path in the app).
+    pub module: String,
+    /// The top-level statement it was written in.
+    pub anchor: String,
+    /// 1-based line.
+    pub line: u32,
+    /// 1-based column, in characters.
+    pub column: u32,
+}
+
+/// An instance of a hot component that rendered a node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevInstance {
+    /// The instance's id, live while it is rendered.
+    pub id: u32,
+    /// The component's `module:name` key.
+    pub key: String,
+    /// Where the component was used.
+    pub call_site: Option<DevSource>,
+}
+
+/// A prop an instance was rendered with, read without running anything.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DevProp {
+    /// A getter (never called).
+    Getter,
+    /// A function.
+    Function,
+    /// `undefined`.
+    Undefined,
+    /// `null`.
+    Null,
+    /// A boolean.
+    Bool(bool),
+    /// A number, unitless as JS has it.
+    Number(f64),
+    /// A string.
+    Text(String),
+    /// An object or an array.
+    Object,
+}
+
+/// What the script knows of its nodes: the engine implements it over its
+/// VM and hands it to [`crate::Core::answer_script_inspections`].
+pub trait ScriptSources {
+    /// Where node `id` was written.
+    fn source(&self, id: NodeId) -> Option<DevSource>;
+    /// The instances that rendered node `id`, innermost first.
+    fn instances(&self, id: NodeId) -> Vec<DevInstance>;
+    /// The props instance `instance` was rendered with.
+    fn props(&self, instance: u32) -> Vec<(String, DevProp)>;
+}
+
 /// A question to the core, answered in its next commit.
 pub(crate) enum Request {
     Tree(crate::element::AnswerSlot<DevTree>),
@@ -164,6 +226,20 @@ pub(crate) enum Request {
         Option<NodeId>,
         crate::element::AnswerSlot<Vec<NodeId>>,
     ),
+    /// The script's: answered by the engine ([`ScriptSources`]).
+    Source(NodeId, crate::element::AnswerSlot<Option<DevSource>>),
+    Instances(NodeId, crate::element::AnswerSlot<Vec<DevInstance>>),
+    Props(u32, crate::element::AnswerSlot<Vec<(String, DevProp)>>),
+}
+
+impl Request {
+    /// Whether the script answers it, not the core's layout.
+    pub(crate) fn is_script(&self) -> bool {
+        matches!(
+            self,
+            Request::Source(..) | Request::Instances(..) | Request::Props(..)
+        )
+    }
 }
 
 /// The core's dev state: made by the first question, never before.
@@ -171,4 +247,6 @@ pub(crate) enum Request {
 pub(crate) struct DevState {
     /// Questions waiting for the commit.
     pub(crate) requests: Vec<Request>,
+    /// Questions the script answers, waiting for the engine.
+    pub(crate) script: Vec<Request>,
 }
