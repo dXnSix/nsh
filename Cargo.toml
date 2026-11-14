@@ -118,6 +118,7 @@ naga = { version = "30", default-features = false, features = ["wgsl-in"] }
 # WGSL only, each OS's own GPU API (and GL where Vulkan may be missing).
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "metal", "vulkan", "gles"] }
 pollster = "0.4"
+proc-macro-crate = "3.5"
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
