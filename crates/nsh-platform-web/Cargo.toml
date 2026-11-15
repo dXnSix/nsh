@@ -51,6 +51,8 @@ nsh-engine.workspace = true
 nsh-base = { workspace = true, features = ["editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 nsh-bundler = { workspace = true, optional = true }
 serde_json.workspace = true
+# The entropy backend an app's crates take on the web (`src/random.rs`).
+getrandom-stdlib.workspace = true
 sha2 = { workspace = true, optional = true }
 sha1 = { workspace = true, optional = true }
 md-5 = { workspace = true, optional = true }
