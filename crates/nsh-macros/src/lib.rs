@@ -1891,8 +1891,10 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 ///   the outer `Default` gives the field.
 /// - `#[token(skip)]`: no token; the field keeps `Default`'s value.
 ///
-/// A number field is its token's light value (`Tokens::number`); a dark
-/// value is read with `Tokens::number_in`, and `set_theme` drops it.
+/// A number field is its token's value in the appearance shown where
+/// `theme_of` reads it (its dark value where the app is dark and it has
+/// one); `set_theme` keeps both values of a number it leaves at that
+/// value.
 ///
 /// A field's doc comment is its token's doc (TS's `tokens.d.ts`). It makes
 /// `<Type>Patch`, every field an `Option` (a nested one its type's patch),

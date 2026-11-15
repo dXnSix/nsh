@@ -704,8 +704,8 @@ impl Default for DsTheme {
   `theme_of::<DsTheme>().surface.raised`. A name the tokens lack keeps the inner type's `Default`, not the value the
   outer `Default` gives the field. `#[token(flatten)]` is the same with no prefix; `#[token(skip)]` is no token (the
   field keeps `Default`'s value).
-- A number field is its token's light value, as `number()` is: read a dark value with `tokens().number_in("radius-card",
-  dark())`, or draw with the class (`rounded-card`), which follows the appearance. `set_theme` keeps the dark value
+- A number field is its token's value in the appearance shown where `theme_of` reads it, as `token()` and the class
+  (`rounded-card`) are: a binding that reads it runs again when the appearance changes. `set_theme` keeps both values
   of a number it leaves at its value, and a number it changes is that value in both appearances; `update_theme`
   changes only the fields its patch sets.
 - A field's doc comment is its token's, which `.nsh/types/nsh/tokens.d.ts` shows on `token()`.

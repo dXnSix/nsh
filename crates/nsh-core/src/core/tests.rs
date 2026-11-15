@@ -33827,10 +33827,10 @@ mod app_theme {
         assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 ff0000ff"));
     }
 
-    /// A number field is its token's light value: `update_theme` of other
-    /// fields and `set_theme` with the number at its value keep a dark one
-    /// the theme file gave; `set_theme` with another value is both
-    /// appearances'.
+    /// A number field is its token's value in the appearance shown (the
+    /// light one here): `update_theme` of other fields and `set_theme`
+    /// with the number at its value keep a dark one the theme file gave;
+    /// `set_theme` with another value is both appearances'.
     #[test]
     fn a_number_field_is_the_light_value_and_set_theme_keeps_the_dark_one_it_leaves() {
         let mut c = core();

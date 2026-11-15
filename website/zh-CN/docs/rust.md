@@ -639,9 +639,8 @@ impl Default for DsTheme {
   `raised`：`surface-raised`；`#[token(shadow)] raised`：`shadow-surface-raised`），读作
   `theme_of::<DsTheme>().surface.raised`。令牌中缺少的名称取内部类型的 `Default`，而不是外部 `Default` 给该字段的值。
   `#[token(flatten)]` 相同但不加前缀；`#[token(skip)]` 不是令牌（该字段保留 `Default` 的值）。
-- 数值字段是其令牌的浅色值，与 `number()` 相同：用 `tokens().number_in("radius-card", dark())` 读取深色值，
-  或用类名（`rounded-card`）绘制，它会跟随外观。`set_theme` 会保留值未被它改变的数值的深色值，被它改变的数值在两种外观下都是这个值；
-  `update_theme` 只改变补丁设置的字段。
+- 数值字段是其令牌在 `theme_of` 读取处所显示外观下的值，与 `token()` 和类名（`rounded-card`）相同：读取它的绑定会在外观变化时重新运行。
+  `set_theme` 会保留值未被它改变的数值的两个值，被它改变的数值在两种外观下都是这个值；`update_theme` 只改变补丁设置的字段。
 - 字段的文档注释就是其令牌的文档，`.nsh/types/nsh/tokens.d.ts` 会在 `token()` 上显示它。
 - 它生成 `DsThemePatch`，每个字段都是 `Option`（嵌套字段为其类型的补丁），文档写明其令牌和读取它的类名，供
   `update_theme` 使用。
