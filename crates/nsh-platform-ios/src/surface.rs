@@ -1133,7 +1133,8 @@ impl Surface {
     /// app's own again): sent to the running app at once, and to every app
     /// started later before its first frame.
     pub fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.view.ivars().host_theme.borrow_mut() = tokens.clone().map(|t| HostTheme::Tokens(Box::new(t)));
+        *self.view.ivars().host_theme.borrow_mut() =
+            tokens.clone().map(|t| HostTheme::Tokens(Box::new(t)));
         if let Some(running) = &*self.view.ivars().running.borrow() {
             running.engine.control().set_tokens(tokens);
         }

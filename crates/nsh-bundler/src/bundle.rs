@@ -2445,7 +2445,11 @@ mod declared_theme {
             SourceType::tsx(),
             &setup.theme,
         );
-        assert!(unknown.is_empty(), "{:?}", unknown.iter().map(|u| &u.class).collect::<Vec<_>>());
+        assert!(
+            unknown.is_empty(),
+            "{:?}",
+            unknown.iter().map(|u| &u.class).collect::<Vec<_>>()
+        );
         let tokens = super::theme_tokens_of(&dir, &[]).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         let declaration = crate::types::tokens_declaration(&tokens);

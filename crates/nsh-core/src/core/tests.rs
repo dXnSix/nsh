@@ -48896,8 +48896,10 @@ mod theme_modifiers {
 /// (typography), read by their declared kind, refused when their value is
 /// of no such kind, typed by keys, and written back.
 mod token_kinds {
-    use crate::element::{CubicBezier, Registry, TokenKey, Tokens, Typography};
-    use crate::geometry::Points;
+    use crate::{
+        element::{CubicBezier, Registry, TokenKey, Tokens, Typography},
+        geometry::Points,
+    };
 
     const DOCUMENT: &str = r##"{
         "cssVars": {
