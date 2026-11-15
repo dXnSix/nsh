@@ -429,6 +429,48 @@ impl Runtime {
                     .collect();
                 Value::string(&serde_json::Value::Array(list).to_string())
             }
+            // `tokens.get` (418), `kind` (419), `names` (420) and `entries`
+            // (421), as nsh-js's (`env.rs`): the token dictionary as JSON
+            // (`Tokens::value_json`, `kind_name`, `infos`), of the scope the
+            // page names (argument 1), else the surface's.
+            418..=421 => {
+                let scoped = args
+                    .index(1)?
+                    .as_number()
+                    .and_then(|named| self.scope_tokens_named(named));
+                let tokens = scoped
+                    .or_else(|| self.tokens.borrow().clone())
+                    .unwrap_or_default();
+                let json = match op {
+                    418 => {
+                        let name = args.index(0)?.as_string().unwrap_or_default();
+                        tokens.value_json(&name).unwrap_or(serde_json::Value::Null)
+                    }
+                    419 => {
+                        let name = args.index(0)?.as_string().unwrap_or_default();
+                        tokens
+                            .kind_name(&name)
+                            .map_or(serde_json::Value::Null, Into::into)
+                    }
+                    420 => {
+                        let filter = protocol::to_json(&compat::Value::new(args.index(0)?))
+                            .unwrap_or(serde_json::Value::Null);
+                        let text = |key: &str| filter.get(key).and_then(serde_json::Value::as_str);
+                        let names = tokens
+                            .infos()
+                            .into_iter()
+                            .filter(|info| text("kind").is_none_or(|k| info.kind == k))
+                            .filter(|info| text("prefix").is_none_or(|p| info.name.starts_with(p)))
+                            .map(|info| serde_json::Value::from(&*info.name))
+                            .collect();
+                        serde_json::Value::Array(names)
+                    }
+                    _ => serde_json::Value::Array(
+                        tokens.infos().iter().map(|info| info.to_json()).collect(),
+                    ),
+                };
+                Value::string(&json.to_string())
+            }
             // A `ThemeScope`'s tokens, as nsh-js's `make_scope_tokens`
             // (`env.rs`): its theme's values over the tokens around it (the
             // ones the scope around it names, else the surface's), kept in

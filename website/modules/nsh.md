@@ -386,6 +386,32 @@ updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb718
 resetTheme(["primary"]); // the app's primary again
 ```
 
+## tokens
+
+```ts
+const tokens: {
+  get<N extends keyof TokenKinds>(name: N): TokenValue<TokenKinds[N]>;
+  get(name: string): TokenValue | undefined;
+  kind(name: string): TokenKind | undefined;
+  names(filter?: { kind?: TokenKind; prefix?: string }): string[];
+  entries(): TokenInfo[];
+};
+
+interface TokenValue { kind: TokenKind; light: string | number; dark: string | number }
+interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string; owner?: string }
+```
+
+The app's design tokens as a dictionary, for code that does not know their names ahead: an editor, a tool, an agent.
+`tokens.get("radius-card")` is the token with its kind and its value in each appearance
+(`{ kind: "radius", light: 12, dark: 12 }`; a color as `#rrggbbaa`, a font as its family, shadows and gradients as CSS).
+A token's kind is the one its theme declares (`radius`, `spacing`, …), else the kind it is kept as (`color`,
+`number`, `font`, `shadow`, `gradient`). `tokens.kind(name)` gives the kind alone, `tokens.names()` every token's name,
+sorted (`tokens.names({ kind: "radius" })`, `tokens.names({ prefix: "colors-" })`), and `tokens.entries()` every token
+with its kind and, when a theme declares it, its path, doc and owner. All four are reactive: `get` follows its token,
+as [`token()`](#token) does, and the others follow tokens added, removed or given another kind. NSH writes each token's
+kind into `.nsh/types/nsh/tokens.d.ts` (`interface TokenKinds`), so `tokens.get("radius-card").light` is a `number`.
+Rust: `tokens().get_as::<V>(name)`, `kind_name`, `infos` and `value_json` of `Tokens`.
+
 ## setModifier, modifier, modifiers
 
 ```ts

@@ -952,6 +952,14 @@ token's path (segments in snake case for modules, a keyword raw, upper snake cas
 without a path at the top, named after its name), each documented with the token's doc; two tokens of one key, a kind
 there is not or a document it cannot read fail the build.
 
+**The dictionary as data** (`element/token_info.rs`): `Tokens::kind_name(name)` (the declared kind's name, else the
+kept kind's), `infos()` (`TokenInfo`: name, kind, path, doc and owner when declared, sorted), `value_json(name)`
+(`{ kind, light, dark }` as `token()` gives each appearance) and `same_names`. TS's `tokens` object (`env.rs`
+`make_tokens`: `get`, `kind`, `names`, `entries`; the web's ops 418 to 421) returns them as JSON. `get` tracks as
+`token()` does (the all-tokens signal and the name's); the others track `Env::shape_signal`, which `set_tokens` sets
+when the names, their kinds or the modifiers' contexts change, so a reader of `token()` does not run again for a name
+added. `tokens.d.ts` carries `interface TokenKinds` (each name's `kind_name`) beside `Tokens`.
+
 **Modifiers** (`element/theme_modifiers.rs`): a theme file's `"modifiers"` (a document's or the app's), each
 `{ "default", "contexts" }`, a context a partial `cssVars`. `ThemeModifiers::read(json, value, base, read)` reads each
 context as a change of the tokens is (`overrides_declared` by the declarations, else the set's `overrides` or

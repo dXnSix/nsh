@@ -2401,6 +2401,11 @@ mod declared_theme {
             "{declaration}"
         );
         assert!(!declaration.contains("primary"), "{declaration}");
+        // Each token's kind, for `tokens.get`.
+        assert!(
+            declaration.contains("  interface TokenKinds {\n    \"radius-card\": \"radius\";\n    \"surface-overlay\": \"color\";\n  }"),
+            "{declaration}"
+        );
     }
 
     #[test]

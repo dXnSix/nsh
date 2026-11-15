@@ -100,6 +100,10 @@ pub(crate) struct Env {
     /// set when most of the tokens read changed (a new theme), and for the
     /// names past [`TOKEN_SIGNALS`].
     tokens_signal: Cell<JsValue>,
+    /// A signal of the tokens' shape (owned): set when their names, their
+    /// kinds or the modifiers' contexts change, which `tokens.names`,
+    /// `entries`, `kind` and `modifier()` read.
+    shape_signal: Cell<JsValue>,
     tokens_version: Cell<u32>,
     /// A signal per token `token()` read (owned), set when that token's
     /// value changes and few do: what read a token follows that token,
@@ -147,6 +151,7 @@ impl Default for Env {
             insets: Cell::new(UNDEFINED),
             tokens: RefCell::new(Arc::default()),
             tokens_signal: Cell::new(UNDEFINED),
+            shape_signal: Cell::new(UNDEFINED),
             tokens_version: Cell::new(0),
             token_signals: RefCell::default(),
             theme: RefCell::new(ThemeTokens::default()),
@@ -220,6 +225,7 @@ impl Env {
             qjs::JS_FreeValue(raw, self.scope_tokens_key.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.scopes_signal.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.tokens_signal.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.shape_signal.replace(UNDEFINED));
             for (_, signal) in self.token_signals.get_mut().drain() {
                 qjs::JS_FreeValue(raw, signal);
             }
@@ -262,6 +268,7 @@ pub(crate) fn init(cx: *mut JsContext) {
     let insets = unsafe { crate::dom::context(cx, UNDEFINED, 1, args.as_mut_ptr()) };
     e.insets.set(insets);
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
+    e.shape_signal.set(reactive::new_signal(cx, number(0.0)));
 }
 
 /// How many tokens get a signal of their own ([`Env::token_signals`]):
@@ -306,14 +313,17 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
     // Roles mapped onto other tokens: what read a role reads another one.
     // A context picked is read by `modifier()`, of every token.
-    let whole = names >= TOKEN_SIGNALS
-        || 2 * changed.len() > names
-        || !old.same_roles(&tokens)
-        || old.modifiers() != tokens.modifiers();
-    if whole && !scoped {
+    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names || !old.same_roles(&tokens);
+    // The names, their kinds or the modifiers' contexts changed: what lists
+    // them reads them again.
+    let shape = !old.same_names(&tokens) || old.modifiers() != tokens.modifiers();
+    if whole && !scoped && !shape {
         return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
     }
     reactive::batch_with(cx, || {
+        if shape {
+            reactive::set_signal(cx, e.shape_signal.get(), number(version as f32));
+        }
         if whole {
             reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
         } else {
@@ -550,12 +560,12 @@ unsafe extern "C" fn set_modifier(
 }
 
 /// The tokens of the scope around what reads them, else the surface's,
-/// read tracked as `token()` reads them all.
+/// their shape read tracked (the names, kinds and modifiers' contexts).
 fn tracked_tokens(cx: *mut JsContext) -> Result<Arc<Tokens>, JsValue> {
     let e = env(cx);
     let scoped = scope_tokens(cx)?;
     if scoped.is_none() {
-        reactive::track(cx, e.tokens_signal.get());
+        reactive::track(cx, e.shape_signal.get());
     }
     Ok(scoped.unwrap_or_else(|| e.tokens.borrow().clone()))
 }
@@ -611,6 +621,129 @@ unsafe extern "C" fn modifiers(
         .collect();
     crate::host::json_to_js(cx, &serde_json::Value::Array(list))
 }
+
+/// `tokens.get(name)`: token `name` with its kind and its value in each
+/// appearance (`Tokens::value_json`), tracked as `token()` tracks it.
+unsafe extern "C" fn tokens_get(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let e = env(cx);
+    let scoped = match scope_tokens(cx) {
+        Ok(scoped) => scoped,
+        Err(exception) => return exception,
+    };
+    if scoped.is_none() {
+        reactive::track(cx, e.tokens_signal.get());
+        if let Some(signal) = name.as_deref().and_then(|n| token_signal(cx, e, n)) {
+            reactive::track(cx, signal);
+        }
+    }
+    let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
+    match name.and_then(|name| tokens.value_json(&name)) {
+        Some(value) => crate::host::json_to_js(cx, &value),
+        None => UNDEFINED,
+    }
+}
+
+/// `tokens.kind(name)`: the kind of token `name` (`Tokens::kind_name`).
+unsafe extern "C" fn tokens_kind(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    match name.and_then(|name| tokens.kind_name(&name)) {
+        Some(kind) => string(cx, kind),
+        None => UNDEFINED,
+    }
+}
+
+/// `tokens.names(filter?)`: every token's name, sorted, of the kind and with
+/// the prefix `filter` gives.
+unsafe extern "C" fn tokens_names(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let filter = match to_json(cx, arg(argc, argv, 0)) {
+        Ok(filter) => filter,
+        Err(exception) => return exception,
+    };
+    let text = |key: &str| {
+        filter
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let (kind, prefix) = (text("kind"), text("prefix"));
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let names: Vec<serde_json::Value> = tokens
+        .infos()
+        .into_iter()
+        .filter(|info| kind.as_deref().is_none_or(|k| info.kind == k))
+        .filter(|info| prefix.as_deref().is_none_or(|p| info.name.starts_with(p)))
+        .map(|info| (*info.name).into())
+        .collect();
+    crate::host::json_to_js(cx, &serde_json::Value::Array(names))
+}
+
+/// `tokens.entries()`: every token, sorted by name, with its kind and what
+/// declares it (`Tokens::infos`).
+unsafe extern "C" fn tokens_entries(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let list = tokens.infos().iter().map(|info| info.to_json()).collect();
+    crate::host::json_to_js(cx, &serde_json::Value::Array(list))
+}
+
+/// The `tokens` object of `nsh`: the token dictionary by name.
+fn make_tokens(cx: *mut JsContext) -> JsValue {
+    use crate::web::js;
+    let made = (|| -> js::R<js::V> {
+        let obj = js::new_object(cx)?;
+        for (name, key, f, length) in [
+            (c"get", "get", tokens_get as js::Native, 1),
+            (c"kind", "kind", tokens_kind as js::Native, 1),
+            (c"names", "names", tokens_names as js::Native, 1),
+            (c"entries", "entries", tokens_entries as js::Native, 0),
+        ] {
+            let function = js::function(cx, name, f, length)?;
+            js::define(cx, obj.raw(), key, function, true)?;
+        }
+        Ok(obj)
+    })();
+    made.map_or(qjs::JS_EXCEPTION, js::V::take)
+}
+
+/// `tokens` of `nsh`.
+pub(crate) const TOKENS_EXPORT: crate::modules::Item = (
+    "tokens",
+    Export::Value(make_tokens),
+    Ts::value(
+        "The app's design tokens by name, reactive, for code that does not know\ntheir names ahead (an editor, a tool, an agent): `get` a token with its\nkind and its value in each appearance, `kind` of a token, `names` of\nevery token (of a kind, with a prefix), `entries` with each one's kind and\nwhat declares it.",
+        "TokenDictionary",
+    ),
+);
 
 /// `setModifier` of `nsh`.
 pub(crate) const SET_MODIFIER_EXPORT: crate::modules::Item = (

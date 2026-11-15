@@ -129,6 +129,25 @@ test("setModifier hands the context to the engine, and modifier and modifiers re
   assert.deepEqual(writes, [1]);
 });
 
+test("tokens.* reads the token dictionary from the engine", () => {
+  const calls = [];
+  const { env } = environment((op, args) => {
+    calls.push([op, args]);
+    if (op === 418) return JSON.stringify(args[0] === "radius-card" ? { kind: "radius", light: 12, dark: 12 } : null);
+    if (op === 419) return JSON.stringify(args[0] === "radius-card" ? "radius" : null);
+    if (op === 420) return JSON.stringify(["radius-card"]);
+    if (op === 421) return JSON.stringify([{ name: "radius-card", kind: "radius" }]);
+  });
+  assert.deepEqual(env.api.tokens.get("radius-card"), { kind: "radius", light: 12, dark: 12 });
+  assert.equal(env.api.tokens.get("nothing"), undefined);
+  assert.equal(env.api.tokens.kind("radius-card"), "radius");
+  assert.equal(env.api.tokens.kind("nothing"), undefined);
+  assert.deepEqual(env.api.tokens.names({ kind: "radius" }), ["radius-card"]);
+  assert.deepEqual(env.api.tokens.entries(), [{ name: "radius-card", kind: "radius" }]);
+  assert.deepEqual(calls.map(([op]) => op), [418, 418, 419, 419, 420, 421]);
+  assert.deepEqual(calls[4][1], [{ kind: "radius" }, null]);
+});
+
 test("the lifecycle is the engine's", () => {
   const { env } = environment();
   // Before the engine reports, the native environment's default.

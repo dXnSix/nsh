@@ -74,6 +74,7 @@ pub mod theme;
 pub mod theme_file;
 mod theme_modifiers;
 mod theme_scope;
+mod token_info;
 mod token_keys;
 pub mod tokens;
 mod value;
@@ -200,6 +201,7 @@ pub use self::{
     theme::{Declarations, Declared, TokenKind},
     theme_modifiers::{ModifierAxis, ThemeModifiers},
     theme_scope::{ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
+    token_info::TokenInfo,
     token_keys::{TokenError, TokenKey, TokenValue},
     tokens::{
         AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleSpec, RoleValue,

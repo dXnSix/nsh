@@ -370,6 +370,29 @@ updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb718
 resetTheme(["primary"]); // 恢复应用的 primary
 ```
 
+## tokens
+
+```ts
+const tokens: {
+  get<N extends keyof TokenKinds>(name: N): TokenValue<TokenKinds[N]>;
+  get(name: string): TokenValue | undefined;
+  kind(name: string): TokenKind | undefined;
+  names(filter?: { kind?: TokenKind; prefix?: string }): string[];
+  entries(): TokenInfo[];
+};
+
+interface TokenValue { kind: TokenKind; light: string | number; dark: string | number }
+interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string; owner?: string }
+```
+
+把应用的设计令牌作为字典，供事先不知道其名称的代码使用：编辑器、工具、智能体。`tokens.get("radius-card")` 是该令牌及其种类
+和每种外观下的值（`{ kind: "radius", light: 12, dark: 12 }`；颜色为 `#rrggbbaa`，字体为字体族名，阴影和渐变为 CSS）。令牌的种类是主题为它
+声明的种类（`radius`、`spacing` 等），否则是它保存的种类（`color`、`number`、`font`、`shadow`、`gradient`）。`tokens.kind(name)` 只给出种类，
+`tokens.names()` 给出所有令牌的名称并排序（`tokens.names({ kind: "radius" })`、`tokens.names({ prefix: "colors-" })`），`tokens.entries()` 给出
+每个令牌及其种类，以及主题声明它时的路径、说明和所有者。四者都是响应式的：`get` 与 [`token()`](#token) 一样跟随它的令牌，其他三个跟随
+令牌的增加、移除或种类变化。NSH 把每个令牌的种类写入 `.nsh/types/nsh/tokens.d.ts`（`interface TokenKinds`），因此
+`tokens.get("radius-card").light` 的类型是 `number`。Rust：`Tokens` 的 `tokens().get_as::<V>(name)`、`kind_name`、`infos` 和 `value_json`。
+
 ## setModifier、modifier、modifiers
 
 ```ts

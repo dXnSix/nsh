@@ -81,6 +81,7 @@ mod theme_root;
 mod theme_scope;
 mod theme_update;
 mod token_by_name;
+mod token_dictionary;
 mod url_scheme;
 mod websocket;
 

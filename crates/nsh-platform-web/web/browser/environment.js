@@ -63,6 +63,12 @@ export function createEnvironment(reactive, invoke, dom) {
     if (named === undefined) tokens();
     return invoke(op, [name, shownScheme() === "dark", named ?? null]);
   };
+  // The token dictionary's reads (`tokens.*`), tracked as `token()`'s are.
+  const readDictionary = (op, arg) => {
+    const around = scoped && scope(), named = around ? around.tokens() : undefined;
+    if (named === undefined) tokens();
+    return JSON.parse(invoke(op, [arg, named ?? null]));
+  };
   const setColorScheme = scheme => {
     if (!["light", "dark", "system"].includes(scheme)) throw new TypeError('setColorScheme: expected "light", "dark" or "system"');
     appearance = scheme;
@@ -107,6 +113,14 @@ export function createEnvironment(reactive, invoke, dom) {
     // `updateTheme` and `resetTheme` (`env.rs`), the same way.
     updateTheme(theme) { invoke(409, [theme]); tokens.update(value => value + 1); },
     resetTheme(names) { invoke(410, [names]); tokens.update(value => value + 1); },
+    // `tokens` (`env.rs`): the token dictionary, as JSON from the engine, of
+    // the scope around what reads it, else the surface's.
+    tokens: {
+      get: name => readDictionary(418, name) ?? undefined,
+      kind: name => readDictionary(419, name) ?? undefined,
+      names: filter => readDictionary(420, filter ?? null),
+      entries: () => readDictionary(421, null),
+    },
     // `setModifier`, `modifier` and `modifiers` (`env.rs`): the engine picks
     // the context and keeps the modifiers with the tokens.
     setModifier(name, context) { invoke(415, [name, context]); tokens.update(value => value + 1); },

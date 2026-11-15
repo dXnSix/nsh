@@ -5467,6 +5467,11 @@
 				named ?? null
 			]);
 		};
+		const readDictionary = (op, arg) => {
+			const around = scoped && scope(), named = around ? around.tokens() : void 0;
+			if (named === void 0) tokens();
+			return JSON.parse(invoke(op, [arg, named ?? null]));
+		};
 		const setColorScheme = (scheme) => {
 			if (![
 				"light",
@@ -5521,6 +5526,12 @@
 				resetTheme(names) {
 					invoke(410, [names]);
 					tokens.update((value) => value + 1);
+				},
+				tokens: {
+					get: (name) => readDictionary(418, name) ?? void 0,
+					kind: (name) => readDictionary(419, name) ?? void 0,
+					names: (filter) => readDictionary(420, filter ?? null),
+					entries: () => readDictionary(421, null)
 				},
 				setModifier(name, context) {
 					invoke(415, [name, context]);

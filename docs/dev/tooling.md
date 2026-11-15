@@ -13,7 +13,7 @@
   frames, the web APIs and the control flow components `If` / `Each`), and from the bundler `nsh/assets.d.ts` (what
   image and font imports give) and `nsh/tokens.d.ts` (`nsh_bundler::tokens_declaration_of`: `interface Tokens` of
   `nsh`, every design token of the app's theme, `nsh.json` `"theme"` over the default, by name with its type, which
-  types `token()`; under the tokens the app's theme documents or theme file declare their names, typed by kind with
+  types `token()`, with `interface TokenKinds`, each token's kind, which types `tokens.get`; under the tokens the app's theme documents or theme file declare their names, typed by kind with
   their docs (`components.md` "Theme documents and typed keys"); a theme that does not parse gives the default's names, and the build reports it), `nsh/modifiers.d.ts` (`nsh_bundler::modifiers_declaration`: `interface ThemeModifiers` of `nsh`, the theme's modifiers each with the union of its contexts) and `nsh/roles.d.ts`
   (`nsh_bundler::roles_declaration`: `interface Roles` of `nsh`, the roles the UI sets list and the core's own,
   `description::roles`, by name with what each reads and its doc, which types `role()`). Each file declares its own names; the `import type` lines between them are worked out
