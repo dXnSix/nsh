@@ -255,6 +255,8 @@ A synchronous call that blocks freezes the app too. A synchronous call costs abo
 | `Callback<f64>` | `(value: number) => void` |
 | `#[args(value, index)] Callback<(f64, u32), bool>` | `(value: number, index: number) => boolean` |
 | `Stop` | `() => void` |
+| `JsHandle` | `object`: any TS object, array or function, kept as it is and given back as the same object; `Eq` / `Hash` by identity |
+| `Constructor` | `Function`: a Rust class itself (`get(I18nService)`); `def()`, `is::<C>()`, `Eq` / `Hash` by class; other values are a `TypeError` |
 | A `#[class]` value, or `Instance<T>` | The class. One object per live instance: `a.badge === a.badge` |
 | `&T`, `&mut T` of a class, in a class's sync member | The class, borrowed for the call |
 
@@ -287,6 +289,37 @@ take `Instance<Other>`.
 
 `call` in a task panics, and TSX sees: ``Error: `Callback::call` runs the function inside a synchronous call from JS; elsewhere (in a task) use `post` or `call_async` ``.
 During `call` the instance stays borrowed: a callback reaching the same instance throws.
+
+### Interfaces: TS objects Rust calls
+
+`#[interface]` on a trait declares `export interface <Trait>` for TS to implement, and makes `Js<Trait>`, the
+stand-in Rust calls the TS object through:
+
+```rust
+/// A service the app writes in TS.
+#[interface]
+pub trait Startable {
+    /// Starts as `name`; resolves once started.
+    async fn start(&self, name: String) -> Result<(), String>;
+    /// Whether it started (TS: `isStarted(): boolean`).
+    fn is_started(&self) -> bool;
+    /// TS: `readonly timeout?: number | null`; `None` when the object has none.
+    #[getter]
+    fn timeout(&self) -> Option<f64> {
+        None
+    }
+}
+// registry.interface::<JsStartable>();  a parameter `service: JsStartable` is TS `Startable`.
+```
+
+| Member | Inside a sync call from JS | In a task |
+| --- | --- | --- |
+| `fn` returning a value | Called at once | `Err` (a plain value panics) |
+| `fn` returning `()` | Called at once | Posted for JS's next turn |
+| `async fn` | Posted and awaited | Posted and awaited |
+
+A default body makes the member optional in TS; an object without it runs the default. What TS throws is the `Err`
+of a `Result<T, String>` (or `E: From<Exception>`).
 
 ### Listening: `Stop`
 

@@ -2553,6 +2553,8 @@
 			this.symbols = /* @__PURE__ */ new Map();
 			this.nextIdentity = 1;
 			this.wrap = null;
+			this.classOf = null;
+			this.constructorOf = null;
 			this.makeFunction = null;
 			this.classPeers = /* @__PURE__ */ new Map();
 			this.accessors = /* @__PURE__ */ new Map();
@@ -2743,6 +2745,8 @@
 			this.nodeIds = /* @__PURE__ */ new WeakMap();
 			this.instances = /* @__PURE__ */ new WeakMap();
 			this.wrap = null;
+			this.classOf = null;
+			this.constructorOf = null;
 			this.makeFunction = null;
 			this.settle = null;
 			this.after = null;
@@ -2888,6 +2892,8 @@
 						}
 						case 28: return this.put(this.wrap(a, b));
 						case 29: return this.instances.get(this.get(a)) ?? 0;
+						case 52: return this.classOf?.(this.get(a)) ?? -1;
+						case 53: return this.put(this.constructorOf(a));
 						case 48: return this.put(this.makeFunction(a));
 						case 31:
 							if (!this.hasError) {
@@ -3233,6 +3239,13 @@
 			return remember(Object.create(Constructor.prototype), id);
 		};
 		values.attach = remember;
+		const classIds = /* @__PURE__ */ new Map();
+		values.classOf = (value) => classIds.get(value) ?? -1;
+		values.constructorOf = (classId) => {
+			const Constructor = classes.get(classId);
+			if (!Constructor) throw new TypeError(`unregistered Rust class ${classId}`);
+			return Constructor;
+		};
 		values.settle = (id, result) => {
 			Promise.resolve(result).then((value) => {
 				if (live()) {
@@ -3266,6 +3279,7 @@
 				};
 				Object.defineProperty(Constructor, "name", { value: spec.name });
 				classes.set(spec.id, Constructor);
+				classIds.set(Constructor, spec.id);
 				const dispose = function() {
 					if (!live()) throw new Error("the app was disposed");
 					invoke(205, [this, spec.id]);

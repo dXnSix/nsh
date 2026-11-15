@@ -39,8 +39,8 @@ use nsh_core::{
     JsonValue,
     element::{
         CallbackHandle, ClassDef, ClassInstance, Exception, JsCall, JsClass, JsHost, JsIn, JsKind,
-        JsRaw, Member, MemberCall, MemberKind, Posts, PropError, RustCall, RustOp, SyncCall,
-        Thrown, Tracer,
+        JsRaw, JsTarget, Member, MemberCall, MemberKind, Posts, PropError, RustCall, RustOp,
+        SyncCall, Thrown, Tracer,
     },
 };
 use rquickjs::qjs;
@@ -91,6 +91,9 @@ type Wrappers = Rc<RefCell<FxHashMap<usize, Raw>>>;
 pub(crate) struct Classes {
     /// Prototype and constructor of each class made so far.
     built: RefCell<FxHashMap<TypeId, (V, V)>>,
+    /// The classes made so far, by their constructor's address (`built`
+    /// keeps the constructors, so the addresses stay theirs).
+    constructors: RefCell<FxHashMap<usize, &'static ClassDef>>,
     wrappers: Wrappers,
     /// The classes made, by the index their constructors carry.
     defs: RefCell<Vec<&'static ClassDef>>,
@@ -111,6 +114,7 @@ impl Classes {
     pub(crate) fn new(posts: Posts) -> Self {
         Self {
             built: RefCell::default(),
+            constructors: RefCell::default(),
             wrappers: Wrappers::default(),
             defs: RefCell::default(),
             posts,
@@ -122,6 +126,7 @@ impl Classes {
 
     /// Frees the values held (the state is unregistered).
     pub(crate) fn free_all(&mut self) {
+        self.constructors.borrow_mut().clear();
         self.built.borrow_mut().clear();
         self.functions.free_all();
         self.uncatchable.borrow_mut().take();
@@ -206,11 +211,25 @@ fn built(cx: Ctx, def: &'static ClassDef) -> R<(V, V)> {
         return Ok((proto.clone_ref(), ctor.clone_ref()));
     }
     let (proto, ctor) = make(cx, def)?;
-    classes(cx)
-        .built
+    let c = classes(cx);
+    c.constructors
+        .borrow_mut()
+        .insert(object_address(ctor.raw()), def);
+    c.built
         .borrow_mut()
         .insert(id, (proto.clone_ref(), ctor.clone_ref()));
     Ok((proto, ctor))
+}
+
+/// The address of object `v`, what tells it apart while it lives (QuickJS
+/// never moves an object); 0 for any other value.
+fn object_address(v: Raw) -> usize {
+    if js::is_object(v) {
+        // SAFETY: an inline pointer read of an object.
+        unsafe { qjs::JS_VALUE_GET_PTR(v) as usize }
+    } else {
+        0
+    }
 }
 
 /// A function calling `f` with `def` (static, so it needs no finalizer)
@@ -1085,6 +1104,32 @@ impl JsHost for CallHost<'_> {
         Some(new_callback(self.cx, from_raw(v)))
     }
 
+    fn object(&self, v: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
+        // Kept as it is: a promise among them stays the app's to handle.
+        let v = from_raw(v);
+        js::is_object(v).then(|| new_callback(self.cx, v))
+    }
+
+    fn vm(&self) -> Option<usize> {
+        Some(self.cx as usize)
+    }
+
+    fn class_of(&self, v: JsRaw) -> Option<&'static ClassDef> {
+        let address = object_address(from_raw(v));
+        if address == 0 {
+            return None;
+        }
+        classes(self.cx)
+            .constructors
+            .borrow()
+            .get(&address)
+            .copied()
+    }
+
+    fn class_constructor(&self, def: &'static ClassDef) -> Result<JsRaw, PropError> {
+        self.checked(constructor(self.cx, def))
+    }
+
     fn free(&self, v: JsRaw) {
         // SAFETY: an owned value.
         unsafe { qjs::JS_FreeValue(self.cx, from_raw(v)) };
@@ -1345,11 +1390,14 @@ impl Functions {
     }
 }
 
-/// A JS function as Rust keeps it.
+/// A JS function (or any value) as Rust keeps it.
 pub(crate) struct JsCallback {
     functions: Rc<Functions>,
     key: u64,
     posts: Posts,
+    /// The address of the object it keeps (0 for a primitive): what tells
+    /// it apart while kept, as QuickJS never moves an object.
+    object: usize,
 }
 
 impl JsCallback {
@@ -1402,10 +1450,28 @@ impl JsCallback {
 }
 
 impl CallbackHandle for JsCallback {
-    fn value(&self, _host: &dyn nsh_core::element::JsHost) -> Option<JsRaw> {
+    fn value(&self, host: &dyn nsh_core::element::JsHost) -> Option<JsRaw> {
         let (cx, v) = JsCallback::value(self)?;
+        // A value of this VM, for a host of this VM only.
+        if host.vm().is_some_and(|vm| vm != cx as usize) {
+            return None;
+        }
         // SAFETY: a new reference for the caller, of a value the table owns.
         Some(to_raw(unsafe { qjs::JS_DupValue(cx, v) }))
+    }
+
+    fn identity(&self) -> Option<(usize, usize)> {
+        // The table is the VM's (a new VM has a new one): an address a
+        // freed object leaves behind names no object of another VM.
+        (self.object != 0).then_some((Rc::as_ptr(&self.functions) as usize, self.object))
+    }
+
+    fn in_call(&self) -> bool {
+        !web::finalizing()
+            && self.value().is_some_and(|(cx, _)| {
+                // SAFETY: reading the context's opaque pointer.
+                !crate::state::state(cx).is_null() && classes(cx).depth.get() > 0
+            })
     }
 
     fn call_now(&self, call: JsCall) {
@@ -1475,10 +1541,12 @@ fn new_callback(cx: Ctx, v: Raw) -> Rc<dyn CallbackHandle> {
     // SAFETY: the table owns the new reference.
     let v = unsafe { qjs::JS_DupValue(cx, v) };
     functions.values.borrow_mut().insert(key, v);
+    let object = object_address(v);
     Rc::new(JsCallback {
         functions,
         key,
         posts: c.posts.clone(),
+        object,
     })
 }
 
@@ -1591,11 +1659,31 @@ pub(crate) fn run_call(cx: Ctx, mut call: JsCall) {
         .downcast_ref::<JsCallback>()
         .and_then(JsCallback::value)
         .filter(|(c, _)| *c == cx);
-    let Some((_, function)) = function else {
+    let Some((_, value)) = function else {
         call.reply(Err("the function belongs to another VM".to_owned().into()));
         return;
     };
-    let function = V::dup(cx, function);
+    let value = V::dup(cx, value);
+    // An object's member (an interface's): the method, or the property.
+    let member = match call.target() {
+        JsTarget::Call => None,
+        JsTarget::Method(name) | JsTarget::Get(name) => match js::get(cx, value.raw(), name) {
+            Ok(member) => Some((name, member)),
+            Err(Throw) => {
+                // A getter threw: as the call would have.
+                failed(cx, call);
+                return;
+            }
+        },
+    };
+    if let Some((_, member)) = &member
+        && call.optional()
+        && js::is_undefined(member.raw())
+    {
+        // No such member: Rust runs its default.
+        call.reply_missing();
+        return;
+    }
     let host = host_outside_calls(cx);
     let args = match call.args(&host) {
         Ok(args) => args
@@ -1611,12 +1699,20 @@ pub(crate) fn run_call(cx: Ctx, mut call: JsCall) {
         }
     };
     let raws: Vec<Raw> = args.iter().map(V::raw).collect();
-    let called = if call.settles() && !js::is_function(cx, function.raw()) {
+    let called = match member {
+        Some((_, property)) if matches!(call.target(), JsTarget::Get(_)) => Ok(property),
+        Some((name, method)) if !js::is_function(cx, method.raw()) => Err(js::type_error(
+            cx,
+            &format!(
+                "`{name}` is not a function, got {}",
+                host.describe(to_raw(method.raw()))
+            ),
+        )),
+        Some((_, method)) => js::call(cx, method.raw(), value.raw(), &raws),
         // A value in place of a function (`Callback::settling`) answers
         // itself, a promise what it settles to.
-        Ok(V::dup(cx, function.raw()))
-    } else {
-        js::call(cx, function.raw(), UNDEFINED, &raws)
+        None if call.settles() && !js::is_function(cx, value.raw()) => Ok(V::dup(cx, value.raw())),
+        None => js::call(cx, value.raw(), UNDEFINED, &raws),
     };
     match called {
         Ok(result) => {
@@ -1661,21 +1757,26 @@ pub(crate) fn run_call(cx: Ctx, mut call: JsCall) {
                 let _ = js::take_exception(cx);
             }
         }
-        Err(Throw) => {
-            let e = js::take_exception(cx);
-            // SAFETY: a check of a live value.
-            if unsafe { qjs::JS_IsUncatchableError(e.raw()) } {
-                // Kept for the call around it to rethrow.
-                let message = message_of(cx, e.raw());
-                classes(cx).uncatchable.borrow_mut().get_or_insert(e);
-                call.reply(Err(message.into()));
-            } else if call.wants_reply() {
-                let traced = call.traced();
-                call.reply(Err(thrown_of(cx, e.raw(), traced)));
-            } else {
-                js::report(cx, e);
-            }
-        }
+        Err(Throw) => failed(cx, call),
+    }
+}
+
+/// `call` failed with the pending exception: its reply gets it, or it is
+/// reported as uncaught; an uncatchable one (an interrupt) is kept for the
+/// synchronous call around it to rethrow.
+fn failed(cx: Ctx, call: JsCall) {
+    let e = js::take_exception(cx);
+    // SAFETY: a check of a live value.
+    if unsafe { qjs::JS_IsUncatchableError(e.raw()) } {
+        // Kept for the call around it to rethrow.
+        let message = message_of(cx, e.raw());
+        classes(cx).uncatchable.borrow_mut().get_or_insert(e);
+        call.reply(Err(message.into()));
+    } else if call.wants_reply() {
+        let traced = call.traced();
+        call.reply(Err(thrown_of(cx, e.raw(), traced)));
+    } else {
+        js::report(cx, e);
     }
 }
 

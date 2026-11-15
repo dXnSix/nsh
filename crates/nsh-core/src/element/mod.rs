@@ -47,8 +47,10 @@ mod engine_context;
 pub(crate) mod env;
 mod events;
 pub(crate) mod flow;
+mod handle;
 pub mod header;
 pub(crate) mod host;
+mod interface;
 mod js;
 pub(crate) mod json_host;
 mod keyboard;
@@ -106,7 +108,7 @@ macro_rules! decl {
 }
 
 pub use nsh_macros::{
-    Event, JsObject, PropEnum, Props, asset, assets, class, component, methods, module,
+    Event, JsObject, PropEnum, Props, asset, assets, class, component, interface, methods, module,
     native_components, native_module, theme_keys,
 };
 
@@ -139,11 +141,12 @@ pub use self::{
         RustOp, TaskStart, ToJs,
     },
     callback::{
-        Callback, CallbackArgs, CallbackHandle, CallbackRet, Exception, JsCall, Trace, Tracer,
+        Callback, CallbackArgs, CallbackHandle, CallbackRet, Exception, JsCall, JsTarget, Trace,
+        Tracer,
     },
     class::{
-        Arg, AsyncCall, Class, ClassDef, ClassInstance, ClassRefs, ClassSpec, Instance, Member,
-        MemberCall, MemberKind, MemberSpec, Ret, Thrown,
+        Arg, AsyncCall, Class, ClassDef, ClassInstance, ClassRefs, ClassSpec, Constructor,
+        Instance, Member, MemberCall, MemberKind, MemberSpec, Ret, Thrown,
     },
     component::{
         Api, BuiltInScrollbar, Component, ComponentError, ComponentSpec, Event, EventSpec,
@@ -162,6 +165,7 @@ pub use self::{
         TextSelectionEvent, VideoInfo, VideoProgress, WebNavigation,
     },
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic, each, when},
+    handle::JsHandle,
     host::{
         CanvasArg, CanvasPaint, CanvasView, Input, InputAccessoryView, IntoUniform, Modal,
         NativeView, Orientation, Overlay, Painter, Screen, Scroll, ShaderView, Stack, Svg, Uniform,
@@ -169,6 +173,7 @@ pub use self::{
         screen_transition, scroll, shader, shader_effect, shader_transition, svg, video, web_view,
         web_view_html,
     },
+    interface::{Interface, InterfaceDef, InterfaceMember, InterfaceRet},
     js::{JsClass, JsHost, JsIn, JsKind, JsOwned, JsPrimitive, JsRaw},
     json_host::from_json,
     keyboard::Keyboard,
@@ -301,6 +306,7 @@ pub mod __private {
     pub use super::{
         callback::NamedArgs,
         class::__private::*,
+        interface::__private::*,
         prop::{set_held, set_plain},
         value::object_field,
     };
