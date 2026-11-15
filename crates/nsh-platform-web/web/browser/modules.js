@@ -60,6 +60,14 @@ export function createModules(invoke, values, live, wake, makeComponent) {
     return remember(Object.create(Constructor.prototype), id);
   };
   values.attach = remember;
+  // A Rust class passed as a value: its constructor tells which it is.
+  const classIds = new Map();
+  values.classOf = value => classIds.get(value) ?? -1;
+  values.constructorOf = classId => {
+    const Constructor = classes.get(classId);
+    if (!Constructor) throw new TypeError(`unregistered Rust class ${classId}`);
+    return Constructor;
+  };
   values.settle = (id, result) => {
     Promise.resolve(result).then(
       value => { if (live()) { invoke(204, [id, true, value]); wake(); } },
@@ -83,6 +91,7 @@ export function createModules(invoke, values, live, wake, makeComponent) {
         };
         Object.defineProperty(Constructor, "name", { value: spec.name });
         classes.set(spec.id, Constructor);
+        classIds.set(Constructor, spec.id);
         const dispose = function () {
           if (!live()) throw new Error("the app was disposed");
           invoke(205, [this, spec.id]);

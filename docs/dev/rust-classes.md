@@ -246,6 +246,15 @@ For that, two choices of the first version change:
   or `Instance<Other>` is a JS object (`Self` from `new` and statics; `Option<Instance<Other>>` for none). An
   instance of another app's or set's class is refused with a `TypeError`. `async` members and module functions keep
   what they take: `Instance<Other>`, not `&Other`.
+- **Classes themselves**: a parameter `Constructor` takes a Rust class's constructor, the value TS names the class
+  by (`getRequiredService(I18nService)`), and tells Rust which `#[class]` it is (`def()`, `is::<I18nService>()`;
+  `Eq` and `Hash` by the class, so it keys a table of services). Only constructors NSH made for Rust classes are
+  taken, of any set the VM serves: a class TS declares, a TS subclass of a Rust class, any other function or value
+  throws a `TypeError` (``Services.nameOf: `service`: expected a Rust class, got a function``). A result
+  `Constructor` (`Constructor::of::<C>()`) gives JS the class's constructor, made on first use as an import makes
+  it. TS: `Function`, since TypeScript assigns a class declared with `private constructor()` to no `new (...) => …`
+  type. A `JsHandle` tells the same of the object it keeps (`handle.constructor()`), for a token that is a Rust
+  class or anything else.
 - **JS functions** (callbacks), below.
 - **JS objects** Rust keeps (`JsHandle`), below.
 - **Not in the first version:** events emitted by an instance (`EventTarget`) and iterators. Constructors honor
@@ -422,7 +431,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   It implements `element::Class` (`Class::DEF`, a `ClassDef`: name, doc, members, each a `Member` with its
   `MemberCall`), as `#[module]` implements `Module`; on the struct it implements `Trace` (the callbacks the fields
   keep) and `Ret` (a value of the struct is a new instance).
-- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Callback<A, R>`, `JsHandle`, `Posts`,
+- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle`, `Posts`,
   `Registry::class::<C>()`; the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
   `to_js`); the typed calls (`call.rs`: `RustOp`, `RustCall`, `JsEvent`, `AnyValue`, `ToJs`); the core runs
   them in order with the ops (`Core::run_rust`).

@@ -320,6 +320,20 @@ pub trait JsHost {
     /// The JS object of `instance`: the one it has, or a new one of its
     /// class.
     fn wrap(&self, instance: Rc<dyn ClassInstance>) -> Result<JsRaw, PropError>;
+    /// The class whose constructor `v` is ([`super::Constructor`]): one
+    /// the host made for a Rust class (`None`: anything else, or a host
+    /// without classes).
+    fn class_of(&self, _v: JsRaw) -> Option<&'static super::ClassDef> {
+        None
+    }
+    /// The constructor of class `def` (made on first use), owned. A host
+    /// without classes refuses.
+    fn class_constructor(&self, def: &'static super::ClassDef) -> Result<JsRaw, PropError> {
+        Err(PropError(format!(
+            "class `{}` cannot be made here",
+            def.name
+        )))
+    }
 
     /// Argument `i` of the call (`undefined` past the last), borrowed.
     fn arg(&self, i: usize) -> JsRaw;

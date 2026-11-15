@@ -17,6 +17,8 @@ mod classes;
 mod clock;
 mod components;
 mod console;
+#[cfg(test)]
+mod constructors;
 mod declarations;
 mod desktop;
 mod dev_source;

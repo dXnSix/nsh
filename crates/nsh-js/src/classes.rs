@@ -91,6 +91,9 @@ type Wrappers = Rc<RefCell<FxHashMap<usize, Raw>>>;
 pub(crate) struct Classes {
     /// Prototype and constructor of each class made so far.
     built: RefCell<FxHashMap<TypeId, (V, V)>>,
+    /// The classes made so far, by their constructor's address (`built`
+    /// keeps the constructors, so the addresses stay theirs).
+    constructors: RefCell<FxHashMap<usize, &'static ClassDef>>,
     wrappers: Wrappers,
     /// The classes made, by the index their constructors carry.
     defs: RefCell<Vec<&'static ClassDef>>,
@@ -111,6 +114,7 @@ impl Classes {
     pub(crate) fn new(posts: Posts) -> Self {
         Self {
             built: RefCell::default(),
+            constructors: RefCell::default(),
             wrappers: Wrappers::default(),
             defs: RefCell::default(),
             posts,
@@ -122,6 +126,7 @@ impl Classes {
 
     /// Frees the values held (the state is unregistered).
     pub(crate) fn free_all(&mut self) {
+        self.constructors.borrow_mut().clear();
         self.built.borrow_mut().clear();
         self.functions.free_all();
         self.uncatchable.borrow_mut().take();
@@ -206,11 +211,25 @@ fn built(cx: Ctx, def: &'static ClassDef) -> R<(V, V)> {
         return Ok((proto.clone_ref(), ctor.clone_ref()));
     }
     let (proto, ctor) = make(cx, def)?;
-    classes(cx)
-        .built
+    let c = classes(cx);
+    c.constructors
+        .borrow_mut()
+        .insert(object_address(ctor.raw()), def);
+    c.built
         .borrow_mut()
         .insert(id, (proto.clone_ref(), ctor.clone_ref()));
     Ok((proto, ctor))
+}
+
+/// The address of object `v`, what tells it apart while it lives (QuickJS
+/// never moves an object); 0 for any other value.
+fn object_address(v: Raw) -> usize {
+    if js::is_object(v) {
+        // SAFETY: an inline pointer read of an object.
+        unsafe { qjs::JS_VALUE_GET_PTR(v) as usize }
+    } else {
+        0
+    }
 }
 
 /// A function calling `f` with `def` (static, so it needs no finalizer)
@@ -1095,6 +1114,22 @@ impl JsHost for CallHost<'_> {
         Some(self.cx as usize)
     }
 
+    fn class_of(&self, v: JsRaw) -> Option<&'static ClassDef> {
+        let address = object_address(from_raw(v));
+        if address == 0 {
+            return None;
+        }
+        classes(self.cx)
+            .constructors
+            .borrow()
+            .get(&address)
+            .copied()
+    }
+
+    fn class_constructor(&self, def: &'static ClassDef) -> Result<JsRaw, PropError> {
+        self.checked(constructor(self.cx, def))
+    }
+
     fn free(&self, v: JsRaw) {
         // SAFETY: an owned value.
         unsafe { qjs::JS_FreeValue(self.cx, from_raw(v)) };
@@ -1498,12 +1533,7 @@ fn new_callback(cx: Ctx, v: Raw) -> Rc<dyn CallbackHandle> {
     // SAFETY: the table owns the new reference.
     let v = unsafe { qjs::JS_DupValue(cx, v) };
     functions.values.borrow_mut().insert(key, v);
-    let object = if js::is_object(v) {
-        // SAFETY: an inline pointer read of an object.
-        unsafe { qjs::JS_VALUE_GET_PTR(v) as usize }
-    } else {
-        0
-    };
+    let object = object_address(v);
     Rc::new(JsCallback {
         functions,
         key,

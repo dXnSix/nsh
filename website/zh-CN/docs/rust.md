@@ -348,7 +348,8 @@ Rust 中；TSX 传入 props、接收事件。类型不对的 prop（`u32` 类型
 字符串、`Option`、`Vec`、你的 `#[derive(JsObject)]` 结构体和 `#[derive(PropEnum)]` 枚举、你的类的实例，以及 TSX 函数
 （`Callback<A, R>`：Rust 在调用中立即调用它，或之后用 `post` 和 `call_async` 调用；`Callback<f64>` 在 TS 中是
 `(value: number) => void`，`#[args(balance)] listener: Callback<f64>` 给参数命名，得到 `(balance: number) => void`），以及 Rust
-原样保留的任意 TSX 对象（`JsHandle`，TS 中是 `object`：存进字段或映射，按身份比较，交还给 TSX 时仍是同一个对象）。开始监听的函数命名为
+原样保留的任意 TSX 对象（`JsHandle`，TS 中是 `object`：存进字段或映射，按身份比较，交还给 TSX 时仍是同一个对象），以及你的类本身
+（`Constructor`，TS 中是 `Function`：`getRequiredService(I18nService)` 让 Rust 知道 TSX 指的是哪个类）。开始监听的函数命名为
 `on(event, listener)`，返回 `Stop`（`Stop::new(|| …)`），TSX 得到的是停止监听的函数（`() => void`）；它只运行一次，在 TSX 调用它时，
 或在调用 `on` 的一方（组件，或热重载下模块的这次运行）消失时。事件处理函数
 接收一个对象：变体的值是它的字段 `value`，在变体上写 `#[args(price)]` 可以给它命名（`onSelect({ price })`），

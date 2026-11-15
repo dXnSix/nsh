@@ -40,6 +40,7 @@ pub use crate::element::{
     ComponentError,
     ComponentRef,
     Composition,
+    Constructor,
     ContextMenuEvent,
     Corners,
     Cursor,

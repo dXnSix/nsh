@@ -16,7 +16,7 @@ use nsh_core::{
 
 use super::{
     compat, protocol,
-    values::{Value, invoke},
+    values::{EXCEPTION, Value, invoke},
 };
 
 struct Frame {
@@ -531,6 +531,18 @@ impl JsHost for Bindings {
         let class = self.class_id(instance.def());
         let index = self.keep_instance(instance);
         Value::checked(invoke(28, index, class, 0, 0.0)).map(owned)
+    }
+    fn class_of(&self, value: JsRaw) -> Option<&'static ClassDef> {
+        // -1: no class's (and an exception, `EXCEPTION`, is none either).
+        let class = invoke(52, id(value), 0, 0, 0.0);
+        if !(0.0..f64::from(EXCEPTION)).contains(&class) {
+            return None;
+        }
+        self.classes.borrow().get(class as usize).copied()
+    }
+    fn class_constructor(&self, def: &'static ClassDef) -> Result<JsRaw, PropError> {
+        let class = self.class_id(def);
+        Value::checked(invoke(53, class, 0, 0, 0.0)).map(owned)
     }
     fn arg(&self, index: usize) -> JsRaw {
         let args = self.frames.borrow().last().map(|f| f.args.clone());

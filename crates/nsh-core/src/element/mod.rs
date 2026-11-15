@@ -140,8 +140,8 @@ pub use self::{
         Callback, CallbackArgs, CallbackHandle, CallbackRet, Exception, JsCall, Trace, Tracer,
     },
     class::{
-        Arg, AsyncCall, Class, ClassDef, ClassInstance, ClassRefs, ClassSpec, Instance, Member,
-        MemberCall, MemberKind, MemberSpec, Ret, Thrown,
+        Arg, AsyncCall, Class, ClassDef, ClassInstance, ClassRefs, ClassSpec, Constructor,
+        Instance, Member, MemberCall, MemberKind, MemberSpec, Ret, Thrown,
     },
     component::{
         Api, BuiltInScrollbar, Component, ComponentError, ComponentSpec, Event, EventSpec,

@@ -9,6 +9,7 @@ use std::{fmt, hash, rc::Rc};
 use super::{
     JsValue, PropError, TsTypes,
     callback::{CallbackHandle, Trace, Tracer},
+    class::{ClassDef, Constructor},
     js::{JsHost, JsIn, JsKind, JsOwned},
 };
 
@@ -32,16 +33,29 @@ pub struct JsHandle {
     /// What tells its object apart (computed once: equality and hashing
     /// read it, also after the VM is gone).
     identity: (usize, usize),
+    /// The Rust class the object is the constructor of, if it is one.
+    class: Option<&'static ClassDef>,
 }
 
 impl JsHandle {
-    fn of(handle: Rc<dyn CallbackHandle>) -> Self {
+    fn of(handle: Rc<dyn CallbackHandle>, class: Option<&'static ClassDef>) -> Self {
         // A host keeping one handle per object needs no identity of its
         // own: the handle is the object's.
         let identity = handle
             .identity()
             .unwrap_or((0, Rc::as_ptr(&handle) as *const () as usize));
-        Self { handle, identity }
+        Self {
+            handle,
+            identity,
+            class,
+        }
+    }
+
+    /// The Rust class whose constructor the object is, if it is one (a
+    /// token TS passes may be a Rust class or anything else): what a
+    /// [`Constructor`] parameter would have taken.
+    pub fn constructor(&self) -> Option<Constructor> {
+        self.class.map(Constructor::from_def)
     }
 
     /// The value it keeps, as the host holds it.
@@ -86,10 +100,11 @@ impl JsValue for JsHandle {
         ) {
             return Err(value.expected("an object"));
         }
-        value
-            .host()
-            .object(value.raw())
-            .map(Self::of)
+        let host = value.host();
+        // A constructor stays one: told once, while the host is at hand.
+        let class = host.class_of(value.raw());
+        host.object(value.raw())
+            .map(|handle| Self::of(handle, class))
             .ok_or_else(|| PropError("JS objects cannot be kept here".into()))
     }
 
