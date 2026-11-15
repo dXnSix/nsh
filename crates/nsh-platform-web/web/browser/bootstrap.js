@@ -3509,6 +3509,7 @@
 				]);
 				return;
 			}
+			if (name === "selectionMenu") return;
 			if (PLATFORM_PROPS.has(name)) {
 				platformProps(node, name, value);
 				return;
@@ -3761,6 +3762,21 @@
 	function createComponents(invoke, values, reactive, dom, environment) {
 		const states = /* @__PURE__ */ new WeakMap();
 		const handler = (name) => "on" + name[0].toUpperCase() + name.slice(1);
+		const propsOf = (read) => new Proxy({}, {
+			get(_, key) {
+				const value = read();
+				const field = value == null ? void 0 : value[key];
+				return typeof field === "function" ? field.bind(value) : field;
+			},
+			has(_, key) {
+				const value = read();
+				return value != null && key in Object(value);
+			},
+			getPrototypeOf() {
+				const value = read();
+				return value == null ? null : Object.getPrototypeOf(Object(value));
+			}
+		});
 		const make = (spec, call) => function(props = {}) {
 			const rt = dom.rt;
 			const node = rt.hostElement("view");
@@ -3861,18 +3877,21 @@
 			children(id, wanted) {
 				state(id)?.lazy.set(wanted);
 			},
-			render(id, prop, key, value) {
+			render(id, prop, key, value, func) {
 				const current = state(id);
 				if (!current) return;
+				const held = typeof func === "function" ? current.renders.get(prop)?.get(key) : void 0;
+				if (held?.value) return held.value.set(value);
 				reactive.runWithOwner(current.owner, () => reactive.protect(() => {
 					this.unrender(id, prop, key);
-					const render = current.props[prop];
+					const render = typeof func === "function" ? func : current.props[prop];
 					if (typeof render !== "function") return;
 					return reactive.root((dispose) => {
+						const signal = typeof func === "function" ? reactive.signal(value) : void 0;
 						const holder = dom.rt.element("view");
 						dom.rt.prop(holder, "componentRender", `${prop}\x1f${key}`);
 						try {
-							dom.rt.insert(holder, render(value));
+							dom.rt.insert(holder, reactive.untracked(() => render(signal ? propsOf(signal) : value)));
 							dom.rt.append(current.node, holder);
 						} catch (error) {
 							dispose();
@@ -3882,7 +3901,8 @@
 						if (!entries) current.renders.set(prop, entries = /* @__PURE__ */ new Map());
 						entries.set(key, {
 							holder,
-							dispose
+							dispose,
+							value: signal
 						});
 					});
 				}));
@@ -5397,6 +5417,8 @@
 			lifecycle: "active",
 			shaders: true,
 			wakeCount: 0,
+			horizontalSizeClass: "compact",
+			verticalSizeClass: "compact",
 			localeSettings: {
 				languages: ["en-US"],
 				timeZone: "UTC",
@@ -5456,6 +5478,8 @@
 			fields.colorScheme.set(scheme === "system" ? systemScheme : scheme);
 		};
 		const device = {
+			horizontalSizeClass: () => fields.horizontalSizeClass(),
+			verticalSizeClass: () => fields.verticalSizeClass(),
 			windowSize: () => fields.window(),
 			colorScheme: () => shownScheme(),
 			setColorScheme,

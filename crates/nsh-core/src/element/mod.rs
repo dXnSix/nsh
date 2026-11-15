@@ -249,8 +249,8 @@ pub use crate::{
     overlay::{Align, Placement},
     platform::{
         Appearance, HourCycle, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Lifecycle,
-        Locale, LocaleSettings, MeasurementSystem, Os, PerfStats, TemperatureUnit, TimeZone,
-        Weekday,
+        Locale, LocaleSettings, MeasurementSystem, Os, PerfStats, SizeClass, TemperatureUnit,
+        TimeZone, Weekday,
     },
     style::Color,
 };
