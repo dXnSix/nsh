@@ -1919,10 +1919,17 @@ fn class_declaration(out: &mut String, c: &ClassSpec) {
                 .collect()
         }
     };
+    // `<T, U = never>` of a generic class.
+    let generics = if c.def.generics.is_empty() {
+        String::new()
+    } else {
+        let params: Vec<&str> = c.def.generics.iter().map(|(_, text)| *text).collect();
+        format!("<{}>", params.join(", "))
+    };
     doc(out, "", c.doc);
     if c.def.interface {
         // No value: what its objects have.
-        let _ = writeln!(out, "export interface {} {{", c.name);
+        let _ = writeln!(out, "export interface {}{generics} {{", c.name);
         let has_setter = |name| {
             c.members
                 .iter()
@@ -1947,7 +1954,18 @@ fn class_declaration(out: &mut String, c: &ClassSpec) {
         out.push_str("}\n\n");
         return;
     }
-    let _ = writeln!(out, "export declare class {} {{", c.name);
+    let _ = writeln!(out, "export declare class {}{generics} {{", c.name);
+    if !c.def.generics.is_empty() {
+        // An ES private member nothing reads: without it, TypeScript would
+        // take a `ServiceToken<A>` for a `ServiceToken<B>` whenever no member
+        // names the type parameters.
+        let names: Vec<&str> = c.def.generics.iter().map(|(name, _)| *name).collect();
+        let _ = writeln!(
+            out,
+            "  /** Its type parameters, kept in its type (no value at run time). */\n  #types: [{}];",
+            names.join(", ")
+        );
+    }
     if !c.members.iter().any(|m| m.kind == MemberKind::Constructor) {
         out.push_str("  /** Made by the class's members only. */\n  private constructor();\n");
     }

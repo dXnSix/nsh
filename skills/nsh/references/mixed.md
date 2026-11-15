@@ -347,6 +347,30 @@ When the Rust types are looser than the TS should be (a `JsHandle` that is the s
 `new (…) => T` type takes. The text names what the set declares: the classes it names are registered by the set
 (`registry.class::<C>()`), not by the text.
 
+A class generic in TS (one Rust type, one JS class; only the declaration is generic):
+
+```rust
+/// Names a service of type `T`.
+// TS: export declare class ServiceToken<T> { #types: [T]; ... }
+#[class(generic = "T")]
+pub struct ServiceToken {
+    name: String,
+}
+
+#[class]
+impl ServiceToken {
+    /// A token of `T` named `name`.
+    #[ts("<T>(name: string): ServiceToken<T>")]
+    pub fn create(name: String) -> ServiceToken {
+        ServiceToken { name }
+    }
+}
+```
+
+The private `#types` member keeps `T` in the type, so a `ServiceToken<A>` is no `ServiceToken<B>`. Constraints and
+defaults are TypeScript's (`generic = "T extends object = object"`); `in` / `out` are refused. A Rust type naming the
+class (`Instance<ServiceToken>`) is `ServiceToken<any>`: give those members a `#[ts]` signature.
+
 ### Listening: `Stop`
 
 A function that starts listening is named `on_*` or `on(event, listener)` and returns `Stop`, built with `Stop::new(|| ...)`.

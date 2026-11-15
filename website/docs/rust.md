@@ -384,7 +384,9 @@ returning a value gives `Promise<T>`. Arguments and results are typed from the s
 a map, compared by identity and given back to TSX as the same object), and your classes themselves (`Constructor`,
 TS `Function`: `getRequiredService(I18nService)` tells Rust which class TSX named). Where those types are looser than
 TS should be, `#[ts("<T>(token: { readonly prototype: T }): T")]` on the member or function declares its TypeScript
-signature as written, generic ones too; the compiler checks that it names the Rust parameters, in their order. A trait
+signature as written, generic ones too; the compiler checks that it names the Rust parameters, in their order.
+`#[class(generic = "T")]` on a class's struct declares the class generic (`class ServiceToken<T>`), so a
+`ServiceToken<I18nService>` is no `ServiceToken<Clock>`; Rust's own types name it `ServiceToken<any>`. A trait
 marked `#[interface]` is a
 TypeScript interface that TSX objects implement for Rust: the set declares `export interface Startable` (a method per
 trait method, optional where the trait has a default body, `#[getter]` methods as `readonly` properties), and Rust

@@ -253,6 +253,15 @@ For that, two choices of the first version change:
   constructor, getter or setter has no type parameters (and a getter's is `(): T`). The types themselves are left to
   TypeScript, and the classes the text names are not registered by it: the set registers them, or a Rust type of the
   signature names them.
+- **Generic classes**: `#[class(generic = "T")]` on the struct declares the class generic over those TypeScript type
+  parameters, written as TypeScript writes them (`T extends object = object, K`; `in` / `out` are refused): `export
+  declare class ServiceToken<T>`. The class itself is one Rust type and one JS class; only its declaration is
+  generic. TypeScript compares classes by their members, so a type parameter no member names would let a
+  `ServiceToken<A>` pass for a `ServiceToken<B>`: the declaration keeps them in an ES private member, `#types: [T]`,
+  which no code can read (it has no value at run time) and which makes them covariant. Its `#[ts]` signatures name
+  them (`#[ts("<T>(name: string): ServiceToken<T>")]` on a static); a Rust type naming the class (`Instance<ServiceToken>`,
+  a result `ServiceToken`) is `ServiceToken<any>`. A `#[class(interface)]` is not generic (an `interface` has no
+  private member).
 - **Instances of classes**, by reference: a parameter `&Other` / `&mut Other` borrows another instance for the call
   (TS: `other: Other`), `Instance<Other>` keeps a handle (to store one instance in another), and a result `Other`
   or `Instance<Other>` is a JS object (`Self` from `new` and statics; `Option<Instance<Other>>` for none). An

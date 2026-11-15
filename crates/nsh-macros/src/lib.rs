@@ -2325,23 +2325,21 @@ fn no_block_doc(item: &ItemImpl, what: &str) -> syn::Result<()> {
 /// `Callback` or `Instance` report the callbacks they keep to JS's
 /// collector. `#[class(interface)]` on the struct: its objects come from members
 /// only, so the module exports no value of it and TypeScript declares an
-/// `interface` (no constructor or statics).
+/// `interface` (no constructor or statics). `#[class(generic = "T")]` on
+/// the struct: TypeScript declares the class generic over those type
+/// parameters (`ServiceToken<T>`, constraints and defaults as TypeScript
+/// writes them), kept in its type by a private member so a
+/// `ServiceToken<A>` is no `ServiceToken<B>`; the Rust types name it with
+/// `any` for each (`ServiceToken<any>`), and its `#[ts("…")]` signatures
+/// name its parameters.
 #[proc_macro_attribute]
 pub fn class(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let interface = match syn::parse::<Option<Ident>>(attr) {
-        Ok(None) => false,
-        Ok(Some(flag)) if flag == "interface" => true,
-        _ => {
-            return syn::Error::new(
-                Span::call_site(),
-                "`#[class]` takes nothing, or `interface` on the struct",
-            )
-            .into_compile_error()
-            .into();
-        }
+    let options = match class::options(attr.into()) {
+        Ok(options) => options,
+        Err(e) => return e.into_compile_error().into(),
     };
     let item = parse_macro_input!(item as syn::Item);
-    class::class(item, interface)
+    class::class(item, options)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

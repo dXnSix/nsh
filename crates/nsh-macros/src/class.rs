@@ -6,7 +6,7 @@
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
 use syn::{
-    Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, ItemStruct, Pat, ReturnType, Type,
+    Attribute, FnArg, ImplItem, ImplItemFn, ItemImpl, ItemStruct, LitStr, Pat, ReturnType, Type,
     spanned::Spanned,
 };
 
@@ -15,13 +15,57 @@ use crate::{
     result_ok, strip_args, sync_returns, system_param,
 };
 
-pub(crate) fn class(item: syn::Item, interface: bool) -> syn::Result<TokenStream2> {
+/// What `#[class(..)]` says.
+#[derive(Default)]
+pub(crate) struct ClassOptions {
+    /// `interface`: its objects come from members only.
+    pub(crate) interface: bool,
+    /// `generic = "T"`: its TypeScript type parameters.
+    pub(crate) generic: Option<Vec<crate::ts::TypeParam>>,
+}
+
+/// Reads `#[class(..)]`'s `attr`: nothing, `interface` or `generic = "T"`.
+pub(crate) fn options(attr: TokenStream2) -> syn::Result<ClassOptions> {
+    let mut out = ClassOptions::default();
+    let parser = syn::meta::parser(|meta| {
+        if meta.path.is_ident("interface") {
+            out.interface = true;
+            return Ok(());
+        }
+        if !meta.path.is_ident("generic") {
+            return Err(meta.error(
+                "`#[class]` takes nothing, or on the struct `interface` or `generic = \"T\"`",
+            ));
+        }
+        let lit: LitStr = meta.value()?.parse()?;
+        let params =
+            crate::ts::type_params(&lit.value()).map_err(|e| syn::Error::new(lit.span(), e))?;
+        if let Some(p) = params.iter().find(|p| p.variance) {
+            return Err(syn::Error::new(
+                lit.span(),
+                format!(
+                    "`{}`: a class's type parameters take no `in` or `out`: its declaration keeps \
+                     them in a member of their type, which makes them covariant",
+                    p.text
+                ),
+            ));
+        }
+        out.generic = Some(params);
+        Ok(())
+    });
+    syn::parse::Parser::parse2(parser, attr)?;
+    Ok(out)
+}
+
+pub(crate) fn class(item: syn::Item, options: ClassOptions) -> syn::Result<TokenStream2> {
     match item {
-        syn::Item::Struct(s) => class_struct(s, interface),
-        syn::Item::Impl(i) if interface => Err(syn::Error::new(
-            i.span(),
-            "`interface` goes on the class's struct",
-        )),
+        syn::Item::Struct(s) => class_struct(s, options),
+        syn::Item::Impl(i) if options.interface || options.generic.is_some() => {
+            Err(syn::Error::new(
+                i.span(),
+                "`interface` and `generic` go on the class's struct",
+            ))
+        }
         syn::Item::Impl(i) => class_impl(i),
         other => Err(syn::Error::new(
             other.span(),
@@ -30,13 +74,25 @@ pub(crate) fn class(item: syn::Item, interface: bool) -> syn::Result<TokenStream
     }
 }
 
-fn class_struct(item: ItemStruct, interface: bool) -> syn::Result<TokenStream2> {
+fn class_struct(item: ItemStruct, options: ClassOptions) -> syn::Result<TokenStream2> {
     if !item.generics.params.is_empty() {
         return Err(syn::Error::new(
             item.generics.span(),
-            "a class has no generic parameters",
+            "a class has no generic parameters (TypeScript's go in `#[class(generic = \"T\")]`)",
         ));
     }
+    let ClassOptions { interface, generic } = options;
+    if interface && generic.is_some() {
+        return Err(syn::Error::new(
+            item.ident.span(),
+            "a `#[class(interface)]` is not generic: TypeScript declares it as an `interface`, \
+             with no member of its own to keep the type parameters in",
+        ));
+    }
+    let generics = generic.unwrap_or_default().into_iter().map(|p| {
+        let (name, text) = (p.name, p.text);
+        quote!((#name, #text))
+    });
     let nsh_core = crate::root::nsh_core();
     let ui = quote!(#nsh_core::element);
     let name = &item.ident;
@@ -84,6 +140,8 @@ fn class_struct(item: ItemStruct, interface: bool) -> syn::Result<TokenStream2> 
         impl #ui::__private::ClassDoc for #name {
             const DOC: &'static str = #doc;
             const INTERFACE: bool = #interface;
+            const GENERICS: &'static [(&'static str, &'static str)] =
+                if #ui::DECLARATIONS { &[#(#generics),*] } else { &[] };
         }
 
         /// A new instance (a new JS object).
@@ -290,6 +348,7 @@ fn class_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 type_name: #ui::__private::type_name::<Self>,
                 members: &[#(#members),*],
                 interface: <Self as #ui::__private::ClassDoc>::INTERFACE,
+                generics: <Self as #ui::__private::ClassDoc>::GENERICS,
             };
         }
 
@@ -733,7 +792,7 @@ mod tests {
 
     /// The error `#[class]` gives `item`.
     fn error(item: proc_macro2::TokenStream) -> String {
-        match super::class(syn::parse2(item).unwrap(), false) {
+        match super::class(syn::parse2(item).unwrap(), super::ClassOptions::default()) {
             Ok(_) => "no error".to_owned(),
             Err(e) => e.to_string(),
         }
@@ -741,17 +800,18 @@ mod tests {
 
     #[test]
     fn interface_goes_on_the_struct() {
+        let interface = || super::options(quote!(interface)).unwrap();
         let item = syn::parse2(quote!(impl T { fn get(&self) -> u32 { 0 } })).unwrap();
-        let error = super::class(item, true).err().unwrap().to_string();
+        let error = super::class(item, interface()).err().unwrap().to_string();
         assert!(
-            error.contains("`interface` goes on the class's struct"),
+            error.contains("`interface` and `generic` go on the class's struct"),
             "{error}"
         );
         let item = syn::parse2(quote!(
             struct T;
         ))
         .unwrap();
-        let made = super::class(item, true).unwrap().to_string();
+        let made = super::class(item, interface()).unwrap().to_string();
         assert!(made.contains("const INTERFACE : bool = true"), "{made}");
     }
 
@@ -813,5 +873,85 @@ mod tests {
             error(quote!(impl T { #[getter] fn count(&self) -> u32 { 0 } }))
                 .contains("make it `pub fn`")
         );
+    }
+}
+
+#[cfg(test)]
+mod generic_tests {
+    use quote::quote;
+
+    fn options_error(attr: proc_macro2::TokenStream) -> String {
+        match super::options(attr) {
+            Ok(_) => "no error".to_owned(),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[test]
+    fn a_generic_class_names_its_type_parameters_on_the_struct() {
+        let options = super::options(quote!(generic = "T, U extends object = object")).unwrap();
+        let names: Vec<_> = options
+            .generic
+            .iter()
+            .flatten()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, ["T", "U"]);
+        let item = syn::parse2(quote!(
+            struct Token;
+        ))
+        .unwrap();
+        let made = super::class(item, options).unwrap().to_string();
+        assert!(
+            made.contains(r#"("T" , "T") , ("U" , "U extends object = object")"#),
+            "{made}"
+        );
+        // On the `impl` block, it is a mistake.
+        let item = syn::parse2(quote!(impl Token { pub fn get(&self) -> u32 { 0 } })).unwrap();
+        let error = super::class(item, super::options(quote!(generic = "T")).unwrap())
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("go on the class's struct"), "{error}");
+    }
+
+    #[test]
+    fn what_is_no_class_type_parameter_is_refused() {
+        for (attr, message) in [
+            (quote!(generic = ""), "no type parameters"),
+            (quote!(generic = "T T"), "a type parameter is a name"),
+            (quote!(generic = "in T"), "take no `in` or `out`"),
+            (quote!(generic = "out T"), "take no `in` or `out`"),
+            (quote!(generic = T), "expected string literal"),
+            (quote!(generics = "T"), "`#[class]` takes nothing"),
+        ] {
+            let error = options_error(attr.clone());
+            assert!(error.contains(message), "{attr}: {error}");
+        }
+        let error = super::class(
+            syn::parse2(quote!(
+                struct Stats;
+            ))
+            .unwrap(),
+            super::options(quote!(interface, generic = "T")).unwrap(),
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(
+            error.contains("a `#[class(interface)]` is not generic"),
+            "{error}"
+        );
+        let error = super::class(
+            syn::parse2(quote!(
+                struct Stats<T>(T);
+            ))
+            .unwrap(),
+            super::ClassOptions::default(),
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("TypeScript's go in"), "{error}");
     }
 }

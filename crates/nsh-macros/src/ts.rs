@@ -176,23 +176,35 @@ fn identifier(text: &str) -> Option<(&str, &str)> {
     (end > 0).then(|| (&text[..end], &text[end..]))
 }
 
+/// A type parameter: `in out V = never`.
+#[derive(Debug, PartialEq)]
+pub(crate) struct TypeParam {
+    pub(crate) name: String,
+    /// It has a variance (`in` or `out` before its name).
+    pub(crate) variance: bool,
+    /// Its whole declaration.
+    pub(crate) text: String,
+}
+
 /// Type parameters (`T`, `T extends object = object, U`, without the
-/// brackets): each one's name and declaration.
-pub(crate) fn type_params(text: &str) -> Result<Vec<(String, String)>, String> {
+/// brackets).
+pub(crate) fn type_params(text: &str) -> Result<Vec<TypeParam>, String> {
     let pieces = split_commas(text)?;
     if pieces.is_empty() {
         return Err("no type parameters: name at least one (`T`)".to_owned());
     }
-    let mut out: Vec<(String, String)> = Vec::new();
+    let mut out: Vec<TypeParam> = Vec::new();
     for piece in pieces {
         // `const T`, `in T`, `out T`, `in out T`.
         let mut rest = piece;
+        let mut variance = false;
         loop {
             match identifier(rest) {
                 Some((m, after))
                     if matches!(m, "const" | "in" | "out")
                         && after.starts_with(char::is_whitespace) =>
                 {
+                    variance |= m != "const";
                     rest = after.trim_start();
                 }
                 _ => break,
@@ -213,10 +225,14 @@ pub(crate) fn type_params(text: &str) -> Result<Vec<(String, String)>, String> {
                 "`{piece}`: a type parameter is a name, then `extends T` or `= T`"
             ));
         }
-        if out.iter().any(|(n, _)| n == name) {
+        if out.iter().any(|p| p.name == name) {
             return Err(format!("type parameter `{name}` is named twice"));
         }
-        out.push((name.to_owned(), piece.to_owned()));
+        out.push(TypeParam {
+            name: name.to_owned(),
+            variance,
+            text: piece.to_owned(),
+        });
     }
     Ok(out)
 }
@@ -530,17 +546,20 @@ mod ts_tests {
 
     #[test]
     fn type_parameters_read_names_modifiers_constraints_and_defaults() {
+        let param = |name: &str, variance, text: &str| TypeParam {
+            name: name.to_owned(),
+            variance,
+            text: text.to_owned(),
+        };
         assert_eq!(
             type_params("T, const U extends readonly unknown[], in out V = never").unwrap(),
             vec![
-                ("T".to_owned(), "T".to_owned()),
-                (
-                    "U".to_owned(),
-                    "const U extends readonly unknown[]".to_owned()
-                ),
-                ("V".to_owned(), "in out V = never".to_owned()),
+                param("T", false, "T"),
+                param("U", false, "const U extends readonly unknown[]"),
+                param("V", true, "in out V = never"),
             ]
         );
+        assert!(type_params("out T").unwrap()[0].variance);
         assert!(type_params("").unwrap_err().contains("name at least one"));
         assert!(
             type_params("T extends")
