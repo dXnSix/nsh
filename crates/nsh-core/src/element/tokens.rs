@@ -385,7 +385,8 @@ impl Tokens {
     }
 
     /// The number named `name` (its light value, the only one of most
-    /// numbers).
+    /// numbers). [`Tokens::number_in`] reads it in either appearance and
+    /// [`super::token`] in the appearance shown.
     pub fn number(&self, name: &str) -> Option<f32> {
         self.numbers.get(name).copied()
     }
@@ -438,7 +439,8 @@ impl Tokens {
     }
 
     /// The token named `name`, of any kind (a color first, as classes take
-    /// it).
+    /// it), as kept: a color with its values in both appearances, a number
+    /// its light value ([`Tokens::get_in`] gives it in either).
     pub fn get(&self, name: &str) -> Option<Token> {
         if let Some(c) = self.colors.get(name) {
             return Some(Token::Color(*c));
@@ -450,6 +452,36 @@ impl Tokens {
             return Some(Token::Font(f.clone()));
         }
         self.shadows.get(name).cloned().map(Token::Shadow)
+    }
+
+    /// The token named `name` in the dark appearance (`dark`) or the light
+    /// one: a number its value there ([`Tokens::number_in`]), any other
+    /// kind as [`Tokens::get`] gives it. Where the app is shown, Rust reads
+    /// it with [`super::token`], as TS's `token()` does.
+    pub fn get_in(&self, name: &str, dark: bool) -> Option<Token> {
+        match self.get(name)? {
+            Token::Number(_) => self.number_in(name, dark).map(Token::Number),
+            token => Some(token),
+        }
+    }
+
+    /// Whether number `name` has a dark value of its own.
+    pub(crate) fn has_dark_number(&self, name: &str) -> bool {
+        self.dark_numbers.contains_key(name)
+    }
+
+    /// The kind of token `name` (a color first, as [`Tokens::get`] takes
+    /// it).
+    pub(crate) fn kind(&self, name: &str) -> Option<Kind> {
+        if self.colors.contains_key(name) {
+            Some(Kind::Color)
+        } else if self.numbers.contains_key(name) {
+            Some(Kind::Number)
+        } else if self.fonts.contains_key(name) {
+            Some(Kind::Font)
+        } else {
+            None
+        }
     }
 
     /// These tokens with `role` mapped onto the token named `token` (in
@@ -602,6 +634,38 @@ impl Tokens {
             };
         }
         out
+    }
+}
+
+/// The kind of a token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Color,
+    Number,
+    Font,
+}
+
+impl Kind {
+    /// Whether a theme file reads a token named `name` as this kind: the
+    /// name says its kind, as a CSS variable's does
+    /// ([`super::theme_file`]).
+    pub(crate) fn names(self, name: &str) -> bool {
+        let font = name.starts_with("font-");
+        let weight = name.starts_with("font-weight-");
+        match self {
+            Kind::Font => font && !weight,
+            Kind::Color => !font,
+            Kind::Number => !font || weight,
+        }
+    }
+
+    /// The kind as a sentence names it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Kind::Color => "color",
+            Kind::Number => "number",
+            Kind::Font => "font family",
+        }
     }
 }
 

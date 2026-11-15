@@ -580,11 +580,11 @@ values of the light appearance, `dark` those of the dark one, and `theme` those 
   `.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())` draws it, following theme
   changes and switching with the appearance natively as `.bg(..)` does. `.shadow(layers)` takes static layers, the
   same in both.
-- **Numbers per appearance.** A number in `dark` is its dark value (`"dark": { "radius-card": "6px" }`): classes and
-  TSX's `token()` follow the appearance, and Rust reads it with `tokens().number_in("radius-card", dark())`
-  (`number()` is the light value, the only one of a number the theme gives once). `theme().radius` and
-  `theme().number(..)` are light values too: read one that has a dark value with `number_in`.
-  `Tokens::set_dark_number` gives one in code.
+- **Numbers per appearance.** A number in `dark` is its dark value (`"dark": { "radius-card": "6px" }`): classes,
+  TSX's `token()` and Rust's `element::token("radius-card")` follow the appearance shown. `tokens().number(..)` and
+  `tokens().get(..)` give the light value (the only one of a number the theme gives once);
+  `number_in("radius-card", dark)` and `get_in(.., dark)` read either. `theme().radius` and `theme().number(..)` are
+  light values too: read one that has a dark value with `element::token`. `Tokens::set_dark_number` gives one in code.
 - **Your own tokens.** Any other name is a token of the app, as a variable in Tailwind's `@theme` is: `"up"` above is
   `theme().color("up")` in Rust, `bg-up` / `text-up/70` in classes and `token("up")` in TSX
   ([Theme tokens](./tailwind.md#theme-tokens)). A number such as `"radius-card": "14px"` is `theme().number("radius-card")`
