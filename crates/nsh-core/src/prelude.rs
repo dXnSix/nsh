@@ -119,6 +119,7 @@ pub use crate::element::{
     Modal,
     ModalAnimation,
     ModalPresentation,
+    ModifierContext,
     ModuleCx,
     Motion,
     MotionChannel,

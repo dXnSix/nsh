@@ -697,7 +697,11 @@ source in place of nsh-base's shadcn theme; an app with none keeps the shadcn th
   `rounded-card`; `spacing-`, `text-`, `font-weight-`, `tracking-`, `leading-`, `blur-`); a font's starts with
   `font-`, a shadow's with `shadow-`, a gradient's with `background-image-`.
 - `path` is the token's place in the designer's tree (`surface.raised`), and `doc` its description, which
-  `.nsh/types/nsh/tokens.d.ts` shows on `token()`.
+  `.nsh/types/nsh/tokens.d.ts` shows on `token()`. A path names one token: a second token at the same path is
+  refused, in one document, across documents and in the app's theme file.
+- A theme document has these sections and no others: `cssVars`, `tokens`, `modifiers`, `roles` (and `$schema`, for
+  an editor). Another is said and left out. A shadcn or tweakcn file, which declares no tokens and has no modifiers,
+  is read as before, its own members (`name`, `type`, `css`) passed over.
 - `"roles"` maps the roles NSH's own parts draw with onto the document's tokens (below).
 
 The UI set registers its document in its `#[native_module]` function, and `theme_keys!` makes a typed key of each
@@ -798,7 +802,19 @@ use keys::modifiers::Brand;
 
 Brand::Forest.set(); // set_modifier("brand", "forest")
 let forest = Brand::current() == Some(Brand::Forest); // reactive
+
+// A part of the app in the forest brand and high contrast, whatever the app picks.
+theme_scope()
+    .modifiers(Some(ScopeModifiers::from(Brand::Forest).and(HighContrast::On)))
+    .child(preview())
 ```
+
+The app's picks are its own: a theme read again (`setTheme`, a hot reload of the theme file) keeps each context the
+app picked, where the new theme still has it. A change (`updateTheme`, `update_tokens`) changes the modifiers too:
+its `"modifiers"` give a context new values, add a context or a modifier and move a `default`, the contexts picked
+staying picked; a token a context sets takes the change's value as its own, under the contexts, so a context picked
+still sets it. A modifier's entry has `default` and `contexts`, a context `theme`, `light` and `dark`; another member
+is said and left out.
 
 **The toolchain.** `nsh build` and `nsh dev` learn the documents from the app's crates and its theme file: classes
 name their tokens (`bg-surface-raised`, `rounded-card`), and `.nsh/types/nsh/tokens.d.ts` types `token()` by kind, with

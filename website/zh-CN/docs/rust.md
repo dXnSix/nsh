@@ -627,7 +627,8 @@ shadcn 主题，成为应用的令牌来源；没有主题文档的应用保留�
 - 令牌的名称是类名、`var()` 和 `token()` 使用的名称。颜色和数值的名称自由（`surface-raised`、`action`）；带命名空间的种类以其
   Tailwind 命名空间开头，类名按它读取（`radius-card` 即 `rounded-card`；`spacing-`、`text-`、`font-weight-`、`tracking-`、
   `leading-`、`blur-`）；字体以 `font-` 开头，阴影以 `shadow-` 开头，渐变以 `background-image-` 开头。
-- `path` 是令牌在设计者的树中的位置（`surface.raised`），`doc` 是它的说明，`.nsh/types/nsh/tokens.d.ts` 在 `token()` 上显示它。
+- `path` 是令牌在设计者的树中的位置（`surface.raised`），`doc` 是它的说明，`.nsh/types/nsh/tokens.d.ts` 在 `token()` 上显示它。一个路径只对应一个令牌：同一路径上的第二个令牌会被拒绝，无论是在同一文档中、跨文档，还是在应用的主题文件中。
+- 主题文档只有这些部分：`cssVars`、`tokens`、`modifiers`、`roles`（以及供编辑器使用的 `$schema`）。其他部分会被略过并给出说明。shadcn 或 tweakcn 文件既不声明令牌也没有修饰符，照旧读取，它们自己的成员（`name`、`type`、`css`）被跳过。
 - `"roles"` 把 NSH 自身部件绘制所用的角色映射到文档的令牌上（见下文）。
 
 UI 集在它的 `#[native_module]` 函数中注册文档，`theme_keys!` 为它声明的每个令牌生成一个类型化键，按令牌的路径放在模块中：
@@ -712,7 +713,14 @@ use keys::modifiers::Brand;
 
 Brand::Forest.set(); // set_modifier("brand", "forest")
 let forest = Brand::current() == Some(Brand::Forest); // 响应式
+
+// 应用的一部分使用 forest 品牌和高对比度，无论应用选择了什么。
+theme_scope()
+    .modifiers(Some(ScopeModifiers::from(Brand::Forest).and(HighContrast::On)))
+    .child(preview())
 ```
+
+应用的选择属于应用自己：再次读取主题（`setTheme`、主题文件的热重载）时，应用选中的每个上下文只要新主题还有，就保持选中。更新（`updateTheme`、`update_tokens`）也会修改修饰符：它的 `"modifiers"` 可以给上下文新的值、新增上下文或修饰符、移动 `default`，已选中的上下文保持选中；某个上下文设置的令牌把更新的值作为自己的值（位于各上下文之下），因此选中的上下文仍然设置它。修饰符的条目有 `default` 和 `contexts`，上下文有 `theme`、`light` 和 `dark`；其他成员会被略过并给出说明。
 
 **工具链。** `nsh build` 和 `nsh dev` 从应用的 crate 和主题文件了解文档：类名使用其令牌（`bg-surface-raised`、`rounded-card`），
 `.nsh/types/nsh/tokens.d.ts` 按种类为 `token()` 提供类型，并带有说明（[主题 token](./tailwind.md#主题-token)）。

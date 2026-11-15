@@ -301,6 +301,7 @@ interface Theme {
   };
   roles?: Record<string, string>;
   tokens?: Record<string, TokenDeclaration>;
+  modifiers?: Record<string, { default: string; contexts: Record<string, Partial<Theme["cssVars"]>> }>;
 }
 
 interface TokenDeclaration {
@@ -322,7 +323,7 @@ interface TokenDeclaration {
 
 在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。
-嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先于它。传 `null` 恢复应用构建时的主题。
+嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先于它。传 `null` 恢复应用构建时的主题。应用用 [`setModifier`](#setmodifier-modifier-modifiers) 选择的上下文，只要新主题还有，就保持选中；热重载再次读取主题文件时也是如此。
 
 主题要整个读得懂：有值读不懂时（NSH 不认识的颜色，如 `#zz`、`lab()` 或 `rgb(255 0 0)garbage`；
 指不到颜色的 `var()`；或一种外观下是颜色、另一种外观下却不是颜色的值），
@@ -349,8 +350,15 @@ setTheme(null); // 恢复应用的主题
 ## updateTheme、resetTheme
 
 ```ts
-function updateTheme(theme: Theme): void;
+function updateTheme(theme: ThemeChange): void;
 function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
+
+interface ThemeChange {
+  cssVars?: Theme["cssVars"];
+  roles?: Theme["roles"];
+  tokens?: Theme["tokens"];
+  modifiers?: Record<string, { default?: string; contexts?: Record<string, Partial<Theme["cssVars"]>> }>;
+}
 ```
 
 `updateTheme` 在应用运行时修改 `theme` 设置的令牌，其余令牌保持不变；`setTheme` 则替换全部令牌。`theme` 的格式与 `setTheme`
@@ -358,6 +366,8 @@ function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
 马上读到新的值，引用这些令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上。连续两次更新都会生效，后一次覆盖前一次。
 `var(--name)` 指向本次更新没有设置的令牌时，取该令牌当前显示的值；不属于任何令牌类型的值会被略过，该令牌保持原值。
 嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先。
+
+更新也会修改主题的[修饰符](#setmodifier-modifier-modifiers)，编辑器就是这样在应用运行时显示对某个上下文的修改。更新中指定的修饰符取它给出的上下文值（叠加在原有值之上）、它新增的上下文以及它指定的 `default`；主题没有的修饰符被整个加在主题的修饰符之后（一个 `default` 和两个或更多上下文）。已选中的上下文保持选中，当前选中的上下文立即显示新的值。某个上下文设置的令牌，把更新的 `cssVars` 值作为自己的值（位于各上下文之下）：选中的上下文仍然设置它，没有上下文设置它时才显示新值。
 
 `resetTheme` 把 `names` 中的令牌恢复为应用主题中的值，即 `nsh.json` 的主题或 `setTheme` 设置的主题；不传名字时恢复全部令牌。
 主题中没有的名字会被移除。没有列出的令牌保持不变。在[已声明的令牌](../docs/rust.md#主题文档与类型化键)下，角色的名称指该角色所映射的令牌，与主题文件中一样。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
@@ -368,6 +378,9 @@ import { resetTheme, updateTheme } from "nsh";
 // 换一个品牌色，浅色和深色各一个；主题的其余部分不变。
 updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
 resetTheme(["primary"]); // 恢复应用的 primary
+
+// 在应用运行时编辑 forest 品牌的 accent。
+updateTheme({ modifiers: { brand: { contexts: { forest: { light: { accent: "#15803d" } } } } } });
 ```
 
 ## tokens
@@ -426,7 +439,7 @@ interface ModifierAxis {
 `setModifier("brand", "forest")` 在应用运行时选择一个上下文：调用后 `token()` 立即读取它的令牌，引用令牌的类、`nsh/base` 和 Rust 组件
 在下一帧跟随。主题没有的修饰符或上下文会抛出指明它的 `TypeError`。`modifier("brand")` 是修饰符现在的上下文，`modifiers()` 列出每个
 修饰符及其上下文和默认值；两者都是响应式的。上下文只设置主题已有的令牌，每个都按其种类读取，修饰符需要两个或更多上下文。NSH 把
-修饰符的类型写入 `.nsh/types/nsh/modifiers.d.ts`，因此 `setModifier("brand", "jungle")` 是类型错误。
+修饰符的类型写入 `.nsh/types/nsh/modifiers.d.ts`，因此 `setModifier("brand", "jungle")` 是类型错误。修饰符的条目有 `default` 和 `contexts`，上下文有 `theme`、`light` 和 `dark`：其他成员会被略过并给出说明；主题没有的部分也是如此（主题的部分是 `cssVars`、`tokens`、`modifiers` 和 `roles`）。
 Rust：`set_modifier`、`modifier` 和 `modifiers`（[主题文档](../docs/rust.md#主题文档与类型化键)）。
 
 ## appInfo
@@ -1230,9 +1243,9 @@ interface ThemeScopeProps {
 
 设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
 
-设置了 `modifiers` 时，作用域为自己选择主题[修饰符](#setmodifier-modifier-modifiers)的上下文：在其中，`{ brand: "forest" }` 的令牌取 forest 上下文的值，它的 `theme` 叠加在其上，`modifier("brand")` 返回 `forest`。它没有指定的修饰符保持外层的上下文，所以 `setModifier("density", "compact")` 会传入作用域，嵌套在内的作用域在外层的选择之上加上自己的选择。主题没有的修饰符或上下文会被略过并给出警告；`.nsh/types/nsh/modifiers.d.ts` 的类型使其成为类型错误。
+设置了 `modifiers` 时，作用域为自己选择主题[修饰符](#setmodifier-modifier-modifiers)的上下文：在其中，`{ brand: "forest" }` 的令牌取 forest 上下文的值，它的 `theme` 叠加在其上，`modifier("brand")` 返回 `forest`。它没有指定的修饰符保持外层的上下文，所以 `setModifier("density", "compact")` 会传入作用域，嵌套在内的作用域在外层的选择之上加上自己的选择。主题没有的修饰符或上下文会被略过并给出警告；`.nsh/types/nsh/modifiers.d.ts` 的类型使其成为类型错误。作用域的 `theme` 只设置值：其中的 `modifiers` 部分会被略过，并给出指向该 prop 的警告。
 
-与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 传入在 Rust 中构造的令牌，`.modifiers(Some(ScopeModifiers::new([("brand", "forest")])))`；`dark()`、`color()`、`tokens()`、`token()` 和类型化键的 `get()` 给出读取它们的绑定所在作用域的结果。
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 传入在 Rust 中构造的令牌，`.modifiers(Some(ScopeModifiers::from(Brand::Forest)))` 使用 `theme_keys!` 生成的修饰符枚举（另一个修饰符用 `.and(Density::Compact)`），或按名称用 `ScopeModifiers::new([("brand", "forest")])`；`dark()`、`color()`、`tokens()`、`token()` 和类型化键的 `get()` 给出读取它们的绑定所在作用域的结果。
 
 ```rust tabs
 view().flex_row().flex_1().child(

@@ -48322,6 +48322,293 @@ mod theme_modifiers {
         texts
     }
 
+    fn update(c: &mut Core<FakeEngine>, json: &str) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiThemeUpdate(json.into()),
+            }],
+        );
+    }
+
+    fn radius(c: &Core<FakeEngine>) -> Option<f32> {
+        c.tokens().number("radius-card")
+    }
+
+    /// What reading theme change `json` over the app's tokens says.
+    fn update_said(c: &Core<FakeEngine>, json: &str) -> Vec<String> {
+        let provider = css_registry().token_provider().unwrap();
+        let (_, said) = provider
+            .updated_left_out(json, c.tokens(), c.tokens())
+            .unwrap()
+            .unwrap();
+        said.iter().map(ToString::to_string).collect()
+    }
+
+    /// Gap 1: `updateTheme` with a `modifiers` section changes a context's
+    /// values, live when it is picked, and kept when it is picked again.
+    #[test]
+    fn an_update_changes_a_contexts_values_live() {
+        let mut c = themed();
+        pick(&mut c, "brand", "forest");
+        update(
+            &mut c,
+            r##"{ "modifiers": { "brand": { "contexts": { "forest": { "light": { "accent": "#123456" } } } } } }"##,
+        );
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x123456))));
+        // Set in `light` alone it is both appearances', as in any change.
+        assert_eq!(
+            c.tokens().color("accent").map(|t| Color::from(t.dark)),
+            Some(Color::from(rgb(0x123456)))
+        );
+        pick(&mut c, "brand", "ocean");
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x0000ff))));
+        pick(&mut c, "brand", "forest");
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x123456))));
+    }
+
+    /// Gap 1: a change adds a context, moves a default, and adds a
+    /// modifier, after the theme's; what it cannot give is said.
+    #[test]
+    fn an_update_adds_contexts_and_modifiers() {
+        let mut c = themed();
+        update(
+            &mut c,
+            r##"{ "modifiers": {
+                "brand": { "default": "desert", "contexts": { "desert": { "light": { "ink": "#c2a060" } } } },
+                "contrast": { "default": "off", "contexts": { "off": {}, "on": { "light": { "ink": "#000000" } } } } } }"##,
+        );
+        let axes = c.tokens().modifiers().unwrap().axes();
+        let names: Vec<(&str, Vec<&str>, &str)> = axes
+            .iter()
+            .map(|a| {
+                (
+                    &*a.name,
+                    a.contexts.iter().map(|c| &**c).collect(),
+                    &*a.default,
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("brand", vec!["ocean", "forest", "desert"], "desert"),
+                ("density", vec!["comfortable", "compact"], "comfortable"),
+                ("contrast", vec!["off", "on"], "off"),
+            ]
+        );
+        // The default moved; what is picked stays picked.
+        assert_eq!(
+            c.tokens().modifiers().unwrap().selected("brand"),
+            Some("ocean")
+        );
+        pick(&mut c, "brand", "desert");
+        assert_eq!(light(&c, "ink"), Some(Color::from(rgb(0xc2a060))));
+        // `contrast` comes last: it wins on `ink`.
+        pick(&mut c, "contrast", "on");
+        assert_eq!(light(&c, "ink"), Some(Color::from(rgb(0x000000))));
+        assert_eq!(
+            update_said(
+                &c,
+                r##"{ "modifiers": { "brand": { "default": "jungle", "bogus": 1,
+                      "contexts": { "forest": { "dim": {}, "light": { "nope": "#000000" } } } } } }"##
+            ),
+            [
+                "modifiers.brand.bogus: no such member (expected `default`, `contexts`)",
+                "modifiers.brand.contexts.forest.dim: no such member (expected `theme`, `light`, `dark`)",
+                "modifiers.brand.contexts.forest: `nope`: a context sets only the theme's own tokens",
+                "modifiers.brand: expected `default`, the name of one of its contexts",
+            ]
+        );
+    }
+
+    /// Gap 1: a change of a token a context sets changes the token's own
+    /// value, under the contexts: a context picked still sets it, and the
+    /// new value is back once no context does.
+    #[test]
+    fn an_update_of_a_token_a_context_sets_changes_its_own_value() {
+        let mut c = themed();
+        update(
+            &mut c,
+            r##"{ "cssVars": { "theme": { "radius-card": "10px" } } }"##,
+        );
+        assert_eq!(radius(&c), Some(10.0));
+        pick(&mut c, "density", "compact");
+        assert_eq!(radius(&c), Some(4.0));
+        update(
+            &mut c,
+            r##"{ "cssVars": { "theme": { "radius-card": "12px" } } }"##,
+        );
+        assert_eq!(radius(&c), Some(4.0));
+        pick(&mut c, "density", "comfortable");
+        assert_eq!(radius(&c), Some(12.0));
+    }
+
+    /// Gap 2: the theme read again (`setTheme`, a hot reload) keeps the
+    /// contexts the app picked, where it still has them.
+    #[test]
+    fn a_theme_read_again_keeps_the_contexts_picked() {
+        let mut c = themed();
+        pick(&mut c, "brand", "forest");
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(FILE.into()),
+            }],
+        );
+        assert_eq!(
+            c.tokens().modifiers().unwrap().selected("brand"),
+            Some("forest")
+        );
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        // A theme without that context: its default.
+        let other = FILE.replace("\"forest\"", "\"jungle\"");
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(other.into()),
+            }],
+        );
+        assert_eq!(
+            c.tokens().modifiers().unwrap().selected("brand"),
+            Some("ocean")
+        );
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x0000ff))));
+    }
+
+    /// Gap 3: a scope's `theme` with a `modifiers` section says so, and
+    /// where its picks go.
+    #[test]
+    fn a_scopes_theme_with_modifiers_says_to_use_the_prop() {
+        let c = themed();
+        let (_, said) = c
+            .theme_tokens()
+            .scoped(
+                c.tokens(),
+                r##"{ "cssVars": { "light": { "ink": "#333333" } }, "tokens": {}, "modifiers": { "brand": {} }, "colors": {} }"##,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            said.contains(
+                &"theme.modifiers: a scope picks the theme's contexts with its `modifiers` prop"
+                    .to_owned()
+            ),
+            "{said:?}"
+        );
+        assert!(
+            said.iter()
+                .any(|s| s.starts_with("theme.colors: no such section of a theme")),
+            "{said:?}"
+        );
+    }
+
+    /// Gap 4: a theme document's member no reader knows is said; a shadcn
+    /// file's own members are passed over, as before.
+    #[test]
+    fn a_documents_unknown_sections_are_said() {
+        let provider = css_registry().token_provider().unwrap();
+        let said = |json: &str| -> Vec<String> {
+            let (_, said) = provider.read_left_out(Some(json)).unwrap();
+            said.iter().map(ToString::to_string).collect()
+        };
+        assert_eq!(
+            said(
+                r##"{ "cssVars": { "light": { "ink": "#111111" } },
+                       "tokens": { "ink": { "kind": "color" } }, "bogus": 1 }"##
+            ),
+            [
+                "bogus: no such section of a theme (expected `cssVars`, `tokens`, `modifiers`, `roles`)"
+            ]
+        );
+        assert_eq!(
+            said(
+                r##"{ "$schema": "https://example.com/theme.json", "cssVars": { "light": { "ink": "#111111" } },
+                       "modifiers": { "m": { "default": "a", "contexts": { "a": {}, "b": {} } } }, "colours": {} }"##
+            ),
+            [
+                "colours: no such section of a theme (expected `cssVars`, `tokens`, `modifiers`, `roles`)"
+            ]
+        );
+        assert!(
+            said(
+                r##"{ "name": "violet", "type": "registry:style", "css": {},
+                           "cssVars": { "light": { "ink": "#111111" } } }"##
+            )
+            .is_empty()
+        );
+    }
+
+    /// Gap 5: a path names one token: in a file, across files and in a UI
+    /// set's documents.
+    #[test]
+    fn a_path_two_tokens_declare_is_refused() {
+        let provider = css_registry().token_provider().unwrap();
+        let (tokens, said) = provider
+            .read_left_out(Some(
+                r##"{ "cssVars": { "light": { "ink": "#111111", "ink-2": "#222222" } },
+                      "tokens": { "ink": { "kind": "color", "path": "colors.ink" },
+                                  "ink-2": { "kind": "color", "path": "colors.ink" } } }"##,
+            ))
+            .unwrap();
+        let said: Vec<String> = said.iter().map(ToString::to_string).collect();
+        assert!(
+            said.contains(&"`tokens.ink-2.path`: `colors.ink` is the path of `ink`".to_owned()),
+            "{said:?}"
+        );
+        assert_eq!(
+            tokens.declarations().unwrap().name_at("colors.ink"),
+            Some("ink")
+        );
+        // A UI set's document declares the path; the app's file may not.
+        let document = r##"{ "cssVars": { "light": { "ink": "#111111" } },
+                             "tokens": { "ink": { "kind": "color", "path": "colors.ink" } } }"##;
+        let mut registry = Registry::ui_set("ds/native");
+        registry.theme_document(document);
+        let (_, said) = registry
+            .token_provider()
+            .unwrap()
+            .read_left_out(Some(
+                r##"{ "cssVars": { "light": { "ink-2": "#222222" } },
+                      "tokens": { "ink-2": { "kind": "color", "path": "colors.ink" } } }"##,
+            ))
+            .unwrap();
+        let said: Vec<String> = said.iter().map(ToString::to_string).collect();
+        assert!(
+            said.contains(
+                &"`tokens.ink-2.path`: `colors.ink` is the path of `ink`, which ds/native declares"
+                    .to_owned()
+            ),
+            "{said:?}"
+        );
+        // Two documents: the second panics, naming it.
+        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut registry = Registry::ui_set("ds/native");
+            registry.theme_document(document);
+            let mut other = Registry::ui_set("ds/other");
+            other.theme_document(
+                r##"{ "cssVars": { "light": { "ink-2": "#222222" } },
+                      "tokens": { "ink-2": { "kind": "color", "path": "colors.ink" } } }"##,
+            );
+            let merged = Registry::merged(&[registry, other]);
+            let _ = merged.tokens(None);
+        }))
+        .unwrap_err();
+        let message = err
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .unwrap_or_default();
+        assert!(
+            message
+                .contains("the path `colors.ink` of the theme token `ink-2` is the path of `ink`"),
+            "{message}"
+        );
+    }
+
     #[test]
     fn a_scope_picks_its_own_contexts_and_follows_the_apps_other_modifiers() {
         let mut c = themed();

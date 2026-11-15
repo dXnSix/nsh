@@ -1002,6 +1002,8 @@ impl<M: TextEngine> Core<M> {
                 for what in left_out {
                     log::warn!("theme: {what}, ignored");
                 }
+                // The contexts the app picked stay picked.
+                let tokens = tokens.with_picks_of(&self.components.app_tokens);
                 self.set_tokens(tokens);
             }
             Some(Err(e)) => log::warn!("theme: {e}"),
@@ -1023,7 +1025,7 @@ impl<M: TextEngine> Core<M> {
     /// their values, the others stay. Applied in order, so two changes in
     /// one turn compose.
     pub(crate) fn update_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(tokens.over(&self.components.app_tokens));
+        self.components.app_tokens = Arc::new(self.components.app_tokens.updated_by(&tokens));
         self.tokens_changed();
     }
 
@@ -1087,10 +1089,9 @@ impl<M: TextEngine> Core<M> {
     /// now; what it cannot read is left out and keeps its value.
     pub(super) fn update_ui_theme(&mut self, json: &str) {
         let provider = self.components.registry.token_provider();
-        let Some(read) = provider
-            .as_ref()
-            .and_then(|p| p.overrides(json, &self.components.tokens))
-        else {
+        let Some(read) = provider.as_ref().and_then(|p| {
+            p.updated_left_out(json, &self.components.tokens, &self.components.app_tokens)
+        }) else {
             return log::warn!("theme: no UI set reads theme changes");
         };
         match read {
@@ -1098,7 +1099,8 @@ impl<M: TextEngine> Core<M> {
                 for what in left_out {
                     log::warn!("theme: {what}, ignored");
                 }
-                self.update_tokens(tokens);
+                self.components.app_tokens = Arc::new(tokens);
+                self.tokens_changed();
             }
             Err(e) => log::warn!("theme: {e}"),
         }

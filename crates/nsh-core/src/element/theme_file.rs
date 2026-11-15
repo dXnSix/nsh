@@ -56,7 +56,7 @@ pub(crate) struct LeftOut {
 
 impl LeftOut {
     /// `` `token` `` followed by `rest` (`": no color value"`).
-    fn about(token: &str, rest: impl std::fmt::Display) -> Self {
+    pub(crate) fn about(token: &str, rest: impl std::fmt::Display) -> Self {
         Self {
             token: Some(token.into()),
             undeclared: false,
@@ -159,6 +159,31 @@ pub fn with_modifiers(json: &str, tokens: Tokens) -> (Tokens, Vec<String>) {
     (tokens, sentences(left_out))
 }
 
+/// The sections an NSH theme document has (and `$schema`, an editor's).
+const SECTIONS: [&str; 5] = ["cssVars", "tokens", "modifiers", "roles", "$schema"];
+
+/// A sentence for each top-level member of theme file `value` that no
+/// reader knows, when it is an NSH theme document (it has `"tokens"` or
+/// `"modifiers"`): a shadcn or tweakcn file, with its own members (`name`,
+/// `type`, `css`), is read as before, its other members passed over.
+pub(crate) fn unknown_sections(value: &JsonValue) -> Vec<LeftOut> {
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    if !object.contains_key("tokens") && !object.contains_key("modifiers") {
+        return Vec::new();
+    }
+    object
+        .keys()
+        .filter(|k| !SECTIONS.contains(&k.as_str()))
+        .map(|k| {
+            LeftOut::said(format!(
+                "{k}: no such section of a theme (expected `cssVars`, `tokens`, `modifiers`, `roles`)"
+            ))
+        })
+        .collect()
+}
+
 /// Whether theme file `json` declares its tokens (a `"tokens"` section):
 /// then it is read by them, and replaces a UI set's defaults.
 pub fn declares(json: &str) -> bool {
@@ -228,6 +253,21 @@ pub(crate) fn declared_tokens(
             continue;
         }
         let text = |key: &str| entry.get(key).and_then(JsonValue::as_str);
+        // A path names one token.
+        if let Some(path) = text("path") {
+            let taken = declared
+                .iter()
+                .find(|(_, d): &&(Box<str>, super::theme::Declared)| {
+                    d.path.as_deref() == Some(path)
+                });
+            if let Some((other, _)) = taken {
+                left_out.push(LeftOut::about(
+                    &format!("{at}.path"),
+                    format_args!(": `{path}` is the path of `{other}`"),
+                ));
+                continue;
+            }
+        }
         for (key, v) in entry {
             if !matches!(key.as_str(), "kind" | "path" | "doc") || !(key == "kind" || v.is_string())
             {

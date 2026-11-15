@@ -292,6 +292,9 @@ impl Runtime {
                     prop: nsh_core::Prop::UiTheme(json.into()),
                 });
                 if let Some(tokens) = tokens {
+                    // The contexts the app picked stay picked, as in the core.
+                    let current = self.tokens.borrow().clone().unwrap_or_default();
+                    let tokens = tokens.with_picks_of(&current);
                     *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
                 }
                 Ok(Value(0))

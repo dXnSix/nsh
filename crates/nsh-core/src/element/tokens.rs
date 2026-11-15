@@ -448,9 +448,13 @@ impl ThemeTokens {
     /// `None`: no UI set reads theme changes.
     pub fn updated(&self, current: &Tokens, json: &str) -> Option<Result<Tokens, String>> {
         Some(
-            match self.provider.as_ref()?.overrides_left_out(json, current)? {
-                Ok((part, left_out)) => match refused(&left_out) {
-                    None => Ok(self.under_host(part).over(current)),
+            match self
+                .provider
+                .as_ref()?
+                .updated_left_out(json, current, current)?
+            {
+                Ok((tokens, left_out)) => match refused(&left_out) {
+                    None => Ok(self.under_host(tokens)),
                     Some(what) => Err(what),
                 },
                 Err(e) => Err(e),
@@ -512,8 +516,23 @@ impl ThemeTokens {
         json: &str,
     ) -> Option<Result<(Tokens, Vec<String>), String>> {
         let read = self.provider.as_ref()?.overrides_left_out(json, current)?;
+        let value = serde_json::from_str::<crate::JsonValue>(json).ok();
         Some(read.map(|(part, left_out)| {
             let mut said: Vec<String> = left_out.iter().map(ToString::to_string).collect();
+            if let Some(value) = &value {
+                // A scope picks contexts with its own prop, and declares nothing.
+                if value.get("modifiers").is_some() {
+                    said.push(
+                        "theme.modifiers: a scope picks the theme's contexts with its `modifiers` prop"
+                            .to_owned(),
+                    );
+                }
+                said.extend(
+                    super::theme_file::unknown_sections(value)
+                        .iter()
+                        .map(|l| format!("theme.{l}")),
+                );
+            }
             let (tokens, unknown) = part.within(current);
             said.extend(unknown.iter().map(|name| scope_left_out(name, current)));
             (tokens, said)

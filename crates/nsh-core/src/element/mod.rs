@@ -201,7 +201,8 @@ pub use self::{
     theme::{Declarations, Declared, TokenKind},
     theme_modifiers::{ModifierAxis, ThemeModifiers},
     theme_scope::{
-        ScopeModifiers, ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope,
+        ModifierContext, ScopeModifiers, ScopeTheme, ThemeScope, ThemeScopeElement,
+        ThemeScopeProps, theme_scope,
     },
     token_info::TokenInfo,
     token_keys::{TokenError, TokenKey, TokenValue},

@@ -252,6 +252,15 @@ fn modifier_enums(
                     Self::ALL.iter().copied().find(|c| c.name() == &*context)
                 }
             }
+
+            /// A context as a `ThemeScope` picks it
+            /// (`.modifiers(Some(Brand::Forest.into()))`).
+            impl #nsh_core::element::ModifierContext for #ident {
+                const MODIFIER: &'static str = Self::NAME;
+                fn context(self) -> &'static str {
+                    self.name()
+                }
+            }
         });
     }
     Ok(quote! {

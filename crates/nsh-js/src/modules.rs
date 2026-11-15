@@ -400,6 +400,18 @@ export interface Theme {
 }
 
 /**
+ * A change of the app's theme (`updateTheme`): any part of a theme; a
+ * modifier it names takes the contexts' values it gives, the contexts it
+ * adds and the `default` it names.
+ */
+export interface ThemeChange {
+  cssVars?: Theme["cssVars"];
+  roles?: Theme["roles"];
+  tokens?: Theme["tokens"];
+  modifiers?: Record<string, { default?: string; contexts?: Record<string, Partial<Theme["cssVars"]>> }>;
+}
+
+/**
 * The contexts of each theme modifier, by its name (`{ brand: "ocean" |
  * "forest" }`): nsh writes them per app into `.nsh/types/nsh/modifiers.d.ts`
  * from its theme.

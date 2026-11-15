@@ -266,6 +266,7 @@ impl Declarations {
             ));
         }
         let (declared, mut left_out) = super::theme_file::declared_tokens(&value, owner);
+        left_out.extend(super::theme_file::unknown_sections(&value));
         let mut own = Declarations::default();
         own.extend(owner, declared.clone(), &[])?;
         let (defaults, read_out) =
@@ -353,6 +354,14 @@ impl Declarations {
                     other.owner
                 ));
             }
+            if let Some(path) = &d.path
+                && let Some(other) = self.name_at(path)
+            {
+                return Err(format!(
+                    "{owner}: the path `{path}` of the theme token `{name}` is the path of `{other}`, which {} declares",
+                    self.names[other].owner
+                ));
+            }
             debug_assert!(d.kind.names(name));
         }
         let mut roles = Vec::new();
@@ -404,7 +413,17 @@ impl Declarations {
                     other.kind,
                     &other.owner,
                 )),
-                None => own.push((name, d)),
+                None => match d.path.as_deref().and_then(|path| self.name_at(path)) {
+                    Some(other) => left_out.push(super::theme_file::LeftOut::about(
+                        &format!("tokens.{name}.path"),
+                        format_args!(
+                            ": `{}` is the path of `{other}`, which {} declares",
+                            d.path.as_deref().unwrap_or_default(),
+                            self.names[other].owner
+                        ),
+                    )),
+                    None => own.push((name, d)),
+                },
             }
         }
         if !own.is_empty() {
@@ -508,6 +527,11 @@ impl TokenProvider {
                     .is_some_and(|value| super::theme_file::declares_tokens(&value));
                 if !declares {
                     let (tokens, mut left_out) = read(json).map(said)?;
+                    if let Some(value) =
+                        json.and_then(|json| serde_json::from_str::<crate::JsonValue>(json).ok())
+                    {
+                        left_out.extend(super::theme_file::unknown_sections(&value));
+                    }
                     let tokens = match json {
                         Some(json) => self.with_modifiers(json, tokens, None, None, &mut left_out),
                         None => tokens,
@@ -523,6 +547,7 @@ impl TokenProvider {
         let value: crate::JsonValue =
             serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
         let (set, mut left_out) = set.with_file(&value, APP_THEME);
+        left_out.extend(super::theme_file::unknown_sections(&value));
         let set = Arc::new(set);
         let (tokens, read_out) = super::theme_file::parse_declared(json, &set.defaults, &set)?;
         left_out.extend(read_out);
@@ -552,17 +577,7 @@ impl TokenProvider {
                 None => tokens,
             };
         };
-        let read = |context: &str| match (set, self) {
-            (Some(set), _) => super::theme_file::overrides_declared(context, &tokens, set),
-            (
-                None,
-                TokenProvider::Source {
-                    overrides: Some(overrides),
-                    ..
-                },
-            ) => overrides(context, &tokens).map(said),
-            _ => super::theme_file::overrides(context, &tokens).map(said),
-        };
+        let read = |context: &str| self.read_context(set, context, &tokens);
         let (file, said) = super::ThemeModifiers::read(json, &value, &tokens, read);
         left_out.extend(said);
         let modifiers = match (documents, file) {
@@ -579,6 +594,78 @@ impl TokenProvider {
             Some(modifiers) => modifiers.rebased(&tokens).apply(&tokens),
             None => tokens,
         }
+    }
+
+    /// A modifier's context `json` (a theme file of its `cssVars`) read
+    /// against `base`, as a change of the tokens is: by `set` when they are
+    /// declared.
+    fn read_context(
+        &self,
+        set: Option<&Arc<Declarations>>,
+        json: &str,
+        base: &Tokens,
+    ) -> Result<(Tokens, Vec<super::theme_file::LeftOut>), String> {
+        match (set, self) {
+            (Some(set), _) => super::theme_file::overrides_declared(json, base, set),
+            (
+                None,
+                TokenProvider::Source {
+                    overrides: Some(overrides),
+                    ..
+                },
+            ) => overrides(json, base).map(said),
+            _ => super::theme_file::overrides(json, base).map(said),
+        }
+    }
+
+    /// The app's tokens `app` changed by theme change `json` (`nsh`'s
+    /// `updateTheme`), its values read against `drawn` (the tokens drawn
+    /// with now, which a `var()` it does not set names): the values its
+    /// `cssVars` sets ([`Tokens::updated_by`]), then its `"modifiers"`
+    /// ([`super::ThemeModifiers::patched`], a theme with none taking the
+    /// change's as a file's). With what was left out. `None`: nothing reads
+    /// changes.
+    pub(crate) fn updated_left_out(
+        &self,
+        json: &str,
+        drawn: &Tokens,
+        app: &Tokens,
+    ) -> Option<Result<(Tokens, Vec<super::theme_file::LeftOut>), String>> {
+        // A change of only its modifiers (or declarations) sets no values.
+        let mut value: Option<crate::JsonValue> = serde_json::from_str(json).ok();
+        let values = match &mut value {
+            Some(crate::JsonValue::Object(object)) if !object.contains_key("cssVars") => {
+                object.insert("cssVars".into(), serde_json::json!({}));
+                std::borrow::Cow::Owned(crate::JsonValue::Object(object.clone()).to_string())
+            }
+            _ => std::borrow::Cow::Borrowed(json),
+        };
+        let read = self.overrides_left_out(&values, drawn)?;
+        Some(read.and_then(|(part, mut left_out)| {
+            let value = value.ok_or_else(|| "not JSON".to_owned())?;
+            left_out.extend(super::theme_file::unknown_sections(&value));
+            let mut out = app.updated_by(&part);
+            if value.get("modifiers").is_some() {
+                let set = out.declarations_arc();
+                let under = match out.modifiers() {
+                    Some(modifiers) => modifiers.under(&out),
+                    None => out.clone(),
+                };
+                let read = |context: &str| self.read_context(set.as_ref(), context, &under);
+                let (modifiers, said) = match out.modifiers() {
+                    Some(modifiers) => {
+                        let (patched, said) = modifiers.patched(json, &value, &under, read);
+                        (Some(patched), said)
+                    }
+                    None => super::ThemeModifiers::read(json, &value, &under, read),
+                };
+                left_out.extend(said);
+                if let Some(modifiers) = modifiers {
+                    out = modifiers.apply(&out);
+                }
+            }
+            Ok((out, left_out))
+        }))
     }
 
     /// The tokens theme file `json` sets, and only those (`var()` against

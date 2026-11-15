@@ -149,6 +149,104 @@ impl ThemeModifiers {
         out
     }
 
+    /// `tokens` under no context: each name a context sets at its own value.
+    pub(crate) fn under(&self, tokens: &Tokens) -> Tokens {
+        self.base.over(tokens)
+    }
+
+    /// These modifiers changed by theme change `value` (`json`, `nsh`'s
+    /// `updateTheme`), whose `"modifiers"` section is a part of a theme
+    /// file's: a modifier it names takes the values its contexts set over
+    /// the ones it has, a context it lacks, and the `default` it names; a
+    /// modifier these lack is read whole, as a file's ([`ThemeModifiers::read`]),
+    /// and comes after them. `under` is the tokens under no context
+    /// ([`ThemeModifiers::under`]), `read` reads a context as `read`'s does.
+    /// The contexts picked stay picked. With what was left out.
+    pub(crate) fn patched(
+        &self,
+        json: &str,
+        value: &crate::JsonValue,
+        under: &Tokens,
+        read: impl Fn(&str) -> Result<(Tokens, Vec<LeftOut>), String>,
+    ) -> (ThemeModifiers, Vec<LeftOut>) {
+        let mut out = self.clone();
+        let mut left_out = Vec::new();
+        let Some(section) = value.get("modifiers") else {
+            return (out, left_out);
+        };
+        let Some(modifiers) = section.as_object() else {
+            left_out.push(LeftOut::said(
+                "modifiers: expected an object of modifier names and their contexts",
+            ));
+            return (out, left_out);
+        };
+        let order = file_order(json);
+        let mut new = serde_json::Map::new();
+        for (name, modifier) in modifiers {
+            let at = format!("modifiers.{name}");
+            let Some(axis) = out.axes.iter_mut().find(|a| *a.name == **name) else {
+                new.insert(name.clone(), modifier.clone());
+                continue;
+            };
+            left_out.extend(unknown_members(&at, modifier, &["default", "contexts"]));
+            if let Some(contexts) = modifier.get("contexts") {
+                let Some(contexts) = contexts.as_object() else {
+                    left_out.push(LeftOut::said(format!(
+                        "{at}: expected `contexts`, an object of contexts"
+                    )));
+                    continue;
+                };
+                // In the change's order, which the parsed value does not keep.
+                let mut names: Vec<&String> = contexts.keys().collect();
+                if let Some((_, written)) = order.iter().find(|(m, _)| m == name) {
+                    names.sort_by_key(|c| written.iter().position(|w| w == *c));
+                }
+                for context in names {
+                    let at = format!("{at}.contexts.{context}");
+                    let part = read_context(&at, &contexts[context], under, &read, &mut left_out);
+                    for token in part.names() {
+                        if out.base.kind(token).is_none() {
+                            out.base.copy_named(under, token);
+                        }
+                    }
+                    match axis.contexts.iter_mut().find(|(c, _)| **c == **context) {
+                        Some((_, values)) => *values = part.over(values),
+                        None => axis.contexts.push((context.as_str().into(), part)),
+                    }
+                }
+            }
+            if let Some(default) = modifier.get("default") {
+                let found = default
+                    .as_str()
+                    .and_then(|d| axis.contexts.iter().position(|(c, _)| **c == *d));
+                match found {
+                    Some(i) => axis.default = i,
+                    None => left_out.push(LeftOut::said(format!(
+                        "{at}: expected `default`, the name of one of its contexts"
+                    ))),
+                }
+            }
+        }
+        if !new.is_empty() {
+            let mut names: Vec<(&String, &crate::JsonValue)> = new.iter().collect();
+            names.sort_by_key(|(n, _)| order.iter().position(|(m, _)| m == *n));
+            let part: serde_json::Map<String, crate::JsonValue> = names
+                .into_iter()
+                .map(|(n, m)| (n.clone(), m.clone()))
+                .collect();
+            let value = serde_json::json!({ "modifiers": part });
+            let (added, said) = ThemeModifiers::read(json, &value, under, read);
+            left_out.extend(said);
+            if let Some(added) = added {
+                match out.clone().merged(added) {
+                    Ok(both) => out = both,
+                    Err(e) => left_out.push(LeftOut::said(format!("modifiers: {e}"))),
+                }
+            }
+        }
+        (out, left_out)
+    }
+
     /// The modifiers of theme file `value`, whose own values are `base`,
     /// with what of them was left out. `read` reads a context (a theme file
     /// of its `cssVars`) against `base`, as the file's changes are read. A
@@ -173,6 +271,7 @@ impl ThemeModifiers {
         let mut touched = Tokens::default();
         for (name, modifier) in modifiers {
             let at = format!("modifiers.{name}");
+            left_out.extend(unknown_members(&at, modifier, &["default", "contexts"]));
             let contexts = modifier
                 .get("contexts")
                 .and_then(crate::JsonValue::as_object);
@@ -192,34 +291,7 @@ impl ThemeModifiers {
             let mut read_contexts = Vec::new();
             for (context, vars) in contexts {
                 let at = format!("{at}.contexts.{context}");
-                if !vars.is_object() {
-                    left_out.push(LeftOut::said(format!(
-                        "{at}: expected `{{ theme, light, dark }}`, as `cssVars` is"
-                    )));
-                    read_contexts.push((context.as_str().into(), Tokens::default()));
-                    continue;
-                }
-                let json = serde_json::json!({ "cssVars": vars }).to_string();
-                let (part, said) = match read(&json) {
-                    Ok(read) => read,
-                    Err(e) => (Tokens::default(), vec![LeftOut::said(e)]),
-                };
-                left_out.extend(said.into_iter().map(|l| l.within(&at)));
-                // Only the theme's own names, each of its own kind.
-                let mut part = part;
-                let unknown: Vec<Box<str>> = part
-                    .names()
-                    .filter(|name| base.kind(name) != part.kind(name))
-                    .map(Into::into)
-                    .collect();
-                for name in &unknown {
-                    part.remove_named(name);
-                }
-                for name in unknown {
-                    left_out.push(LeftOut::said(format!(
-                        "{at}: `{name}`: a context sets only the theme's own tokens"
-                    )));
-                }
+                let part = read_context(&at, vars, base, &read, &mut left_out);
                 for name in part.names() {
                     touched.copy_named(base, name);
                 }
@@ -286,6 +358,104 @@ impl Tokens {
         }
         (modifiers.apply(self), said)
     }
+
+    /// These tokens changed by `layer` (`update_tokens`, `nsh`'s
+    /// `updateTheme`): its values over them, and, where these carry
+    /// modifiers, its values of the names a context sets as those names'
+    /// own values under the contexts, which a context picked still sets
+    /// over.
+    pub(crate) fn updated_by(&self, layer: &Tokens) -> Tokens {
+        let out = layer.over(self);
+        match (self.modifiers(), layer.modifiers()) {
+            (Some(modifiers), None) => modifiers.clone().rebased(layer).apply(&out),
+            _ => out,
+        }
+    }
+
+    /// These tokens, read from a new theme file, with the contexts `old`
+    /// (the tokens before it) had picked, where the new theme has the
+    /// modifier and the context: a theme read again (`setTheme`, a hot
+    /// reload) keeps what the app picked. A modifier `old` left at its
+    /// default takes the new theme's default.
+    pub fn with_picks_of(&self, old: &Tokens) -> Tokens {
+        let (Some(mut modifiers), Some(before)) = (self.modifiers().cloned(), old.modifiers())
+        else {
+            return self.clone();
+        };
+        let mut changed = false;
+        for axis in &before.axes {
+            if axis.selected == axis.default {
+                continue;
+            }
+            if let Ok(picked) = modifiers.select(&axis.name, &axis.contexts[axis.selected].0) {
+                modifiers = picked;
+                changed = true;
+            }
+        }
+        if changed {
+            modifiers.apply(self)
+        } else {
+            self.clone()
+        }
+    }
+}
+
+/// Context `vars` (a partial `cssVars`, at `at`) read by `read` against
+/// `base`: only the theme's own names, each of its own kind; what was left
+/// out joins `left_out`.
+fn read_context(
+    at: &str,
+    vars: &crate::JsonValue,
+    base: &Tokens,
+    read: &impl Fn(&str) -> Result<(Tokens, Vec<LeftOut>), String>,
+    left_out: &mut Vec<LeftOut>,
+) -> Tokens {
+    if !vars.is_object() {
+        left_out.push(LeftOut::said(format!(
+            "{at}: expected `{{ theme, light, dark }}`, as `cssVars` is"
+        )));
+        return Tokens::default();
+    }
+    left_out.extend(unknown_members(at, vars, &["theme", "light", "dark"]));
+    let json = serde_json::json!({ "cssVars": vars }).to_string();
+    let (mut part, said) = match read(&json) {
+        Ok(read) => read,
+        Err(e) => (Tokens::default(), vec![LeftOut::said(e)]),
+    };
+    left_out.extend(said.into_iter().map(|l| l.within(at)));
+    let unknown: Vec<Box<str>> = part
+        .names()
+        .filter(|name| base.kind(name) != part.kind(name))
+        .map(Into::into)
+        .collect();
+    for name in &unknown {
+        part.remove_named(name);
+    }
+    for name in unknown {
+        left_out.push(LeftOut::said(format!(
+            "{at}: `{name}`: a context sets only the theme's own tokens"
+        )));
+    }
+    part
+}
+
+/// A sentence for each member of object `value` (at `at`) that is none of
+/// `known`.
+pub(crate) fn unknown_members(at: &str, value: &crate::JsonValue, known: &[&str]) -> Vec<LeftOut> {
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    object
+        .keys()
+        .filter(|k| !known.contains(&k.as_str()))
+        .map(|k| {
+            let expected: Vec<String> = known.iter().map(|k| format!("`{k}`")).collect();
+            LeftOut::said(format!(
+                "{at}.{k}: no such member (expected {})",
+                expected.join(", ")
+            ))
+        })
+        .collect()
 }
 
 /// The modifiers of theme file `json` and each one's contexts, in the

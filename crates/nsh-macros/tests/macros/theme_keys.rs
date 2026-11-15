@@ -80,3 +80,27 @@ fn the_documents_default_contexts_are_read_and_another_is_picked() {
         Some(AdaptiveColor::rgb(0x16a34a, 0x4ade80))
     );
 }
+
+/// A modifier's enum is what a `ThemeScope` picks: `Brand::Forest.into()`,
+/// and `.and(…)` for another modifier.
+#[test]
+fn a_modifiers_enum_picks_a_scopes_context() {
+    use keys::modifiers::{Brand, HighContrast};
+    use nsh_core::element::ScopeModifiers;
+    let picks: ScopeModifiers = Brand::Forest.into();
+    assert_eq!(picks, ScopeModifiers::new([("brand", "forest")]));
+    let both = picks.and(HighContrast::On).and(Brand::Ocean);
+    assert_eq!(
+        both,
+        ScopeModifiers::new([("high-contrast", "on"), ("brand", "ocean")])
+    );
+    let mut registry = Registry::ui_set("ds/native");
+    registry.theme_document(include_str!("theme_keys/theme.json"));
+    let tokens = registry.tokens(None).unwrap().unwrap().0;
+    let (forest, said) = tokens.picked(&ScopeModifiers::from(Brand::Forest).0);
+    assert!(said.is_empty(), "{said:?}");
+    assert_eq!(
+        forest.key(keys::INK),
+        Some(AdaptiveColor::rgb(0x16a34a, 0x4ade80))
+    );
+}

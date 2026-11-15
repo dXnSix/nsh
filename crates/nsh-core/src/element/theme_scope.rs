@@ -114,6 +114,38 @@ impl ScopeModifiers {
                 .collect(),
         )
     }
+
+    /// These picks and context `context` of another modifier (one of the
+    /// enums `theme_keys!` makes): `Brand::Forest.into()` then
+    /// `.and(Density::Compact)`. A context of a modifier these pick already
+    /// takes its place.
+    #[must_use]
+    pub fn and<C: ModifierContext>(self, context: C) -> Self {
+        let mut picks: Vec<(Box<str>, Box<str>)> = self
+            .0
+            .iter()
+            .filter(|(name, _)| **name != *C::MODIFIER)
+            .cloned()
+            .collect();
+        picks.push((C::MODIFIER.into(), context.context().into()));
+        Self(picks.into())
+    }
+}
+
+/// A context of a theme modifier as a typed value: the enums `theme_keys!`
+/// makes per modifier implement it (`modifiers::Brand::Forest`).
+pub trait ModifierContext: Copy {
+    /// The modifier's name (`brand`).
+    const MODIFIER: &'static str;
+    /// The context's name (`forest`).
+    fn context(self) -> &'static str;
+}
+
+/// A scope that picks context `context`.
+impl<C: ModifierContext> From<C> for ScopeModifiers {
+    fn from(context: C) -> Self {
+        Self::new([(C::MODIFIER, context.context())])
+    }
 }
 
 /// In TS an object of modifiers' names and contexts' (`{ brand: "forest" }`).

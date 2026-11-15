@@ -426,6 +426,8 @@ unsafe extern "C" fn set_theme(
         return err;
     }
     if let Some(tokens) = tokens {
+        // The contexts the app picked stay picked, as in the core.
+        let tokens = tokens.with_picks_of(&e.tokens.borrow());
         set_tokens(cx, Arc::new(tokens));
     }
     reactive::finish_value(cx, UNDEFINED)
@@ -787,7 +789,7 @@ pub(crate) const SET_THEME_EXPORT: crate::modules::Item = (
     "setTheme",
     Export::Function(set_theme, 1),
     Ts::function(
-        "Makes `theme` the app's theme while it runs, in place of `nsh.json`'s\n`\"theme\"` and over shadcn/ui's tokens as that one is: `token()` reads it\nat once, and classes naming tokens, `nsh/base` and Rust components'\n`theme()` follow with the next frame. An embedding app's theme overrides\nstill win. `null` gives back the theme the app was built with. The theme\nis read whole: a value NSH cannot read (a color it does not know, a value\nthat is no color in one appearance where the other's is) throws a\n`TypeError` naming it, and the theme shown stays.",
+        "Makes `theme` the app's theme while it runs, in place of `nsh.json`'s\n`\"theme\"` and over shadcn/ui's tokens as that one is: `token()` reads it\nat once, and classes naming tokens, `nsh/base` and Rust components'\n`theme()` follow with the next frame. An embedding app's theme overrides\nstill win. `null` gives back the theme the app was built with. The\ncontexts the app picked (`setModifier`) stay picked where the new theme\nhas them. The theme is read whole: a value NSH cannot read (a color it does not know, a value\nthat is no color in one appearance where the other's is) throws a\n`TypeError` naming it, and the theme shown stays.",
         &["(theme: Theme | null): void"],
     ),
 );
@@ -797,8 +799,8 @@ pub(crate) const UPDATE_THEME_EXPORT: crate::modules::Item = (
     "updateTheme",
     Export::Function(update_theme, 1),
     Ts::function(
-        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. The theme is read whole, as\n`setTheme`'s: a value NSH cannot read throws a `TypeError` naming it, and\nno token changes.",
-        &["(theme: Theme): void"],
+        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. Its `modifiers` change the\ntheme's: the values a context sets, a context or modifier added, a\n`default` moved, the contexts picked staying picked. A token a context sets\ntakes the change's value as its own, under the contexts. The theme is read\nwhole, as `setTheme`'s: a value NSH cannot read throws a `TypeError`\nnaming it, and no token changes.",
+        &["(theme: ThemeChange): void"],
     ),
 );
 
