@@ -55,16 +55,17 @@ pub(crate) struct Ambient {
     /// The main window's close presses: how many, and the last one's
     /// reason ([`crate::element::desktop::WindowRef::on_close_press`]).
     main_close_press: Option<Signal<(u64, crate::desktop::CloseReason)>>,
-    /// The theme types read of the tokens ([`super::theme_of`]): by type,
-    /// the tokens read and the theme.
-    themes: FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>,
+    /// The theme types read of the tokens ([`super::theme_of`]).
+    themes: ThemeCache,
 }
+
+/// The theme types read of the tokens ([`super::theme_of`]): by type and
+/// by the appearance read in, the tokens read and the theme.
+pub(crate) type ThemeCache = FxHashMap<(TypeId, bool), (Arc<Tokens>, Box<dyn Any>)>;
 
 /// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
 /// with the surface's data borrowed: it runs no app code.
-pub(crate) fn with_theme_cache<R>(
-    f: impl FnOnce(&mut FxHashMap<TypeId, (Arc<Tokens>, Box<dyn Any>)>) -> R,
-) -> R {
+pub(crate) fn with_theme_cache<R>(f: impl FnOnce(&mut ThemeCache) -> R) -> R {
     with_data(|d| f(&mut d.ambient.themes))
 }
 
@@ -419,6 +420,16 @@ pub fn tokens() -> Arc<Tokens> {
     with_data(|d| d.ambient.tokens)
         .expect("the core sets the tokens")
         .get()
+}
+
+/// The design token `name` as the app is shown (TS: `token()`): a number
+/// its value in the appearance shown ([`Tokens::get_in`]), any other kind
+/// as [`Tokens::get`] gives it. Reading it subscribes, as [`tokens`] does,
+/// and to the appearance for a number with a dark value.
+pub fn token(name: &str) -> Option<super::Token> {
+    let tokens = tokens();
+    let dark = tokens.has_dark_number(name) && dark();
+    tokens.get_in(name, dark)
 }
 
 /// Draws the app with the design tokens `tokens` (the app's own, which an

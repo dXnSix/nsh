@@ -417,13 +417,14 @@ impl Theme {
         self.edit(|t| t.set_font(name, family));
     }
 
-    /// Its design tokens.
+    /// Its design tokens. Of [`theme`] they are the tokens as shown where
+    /// it was read: where the app is dark, each number its dark value.
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
 
     /// Its design tokens, for the core ([`nsh_core::element::Root::tokens`],
-    /// an engine's host theme).
+    /// an engine's host theme); of [`theme`], as [`Theme::tokens`] are.
     pub fn into_tokens(self) -> Tokens {
         Arc::unwrap_or_clone(self.tokens)
     }

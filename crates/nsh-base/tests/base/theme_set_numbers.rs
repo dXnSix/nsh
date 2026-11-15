@@ -1,7 +1,8 @@
 //! `set_theme` of `nsh_base::Theme` and `radius`'s dark value: `radius` is
-//! the token's light value, so a theme read, changed in a color and set
-//! keeps the dark radius, and a radius it changes is both appearances'. A
-//! derived type's number fields keep theirs the same way.
+//! the token's value in the appearance shown (the light one here), so a
+//! theme read, changed in a color and set keeps the dark radius, and a
+//! radius it changes is both appearances'. A derived type's number fields
+//! keep theirs the same way.
 
 use std::time::Duration;
 

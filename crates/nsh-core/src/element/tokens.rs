@@ -27,6 +27,14 @@ pub const FONT_MONO: &str = "font-mono";
 /// Design tokens by name: colors with a value per appearance, numbers and
 /// font families. The default has none.
 ///
+/// A name is a token of one kind: set as another kind (or laid over one,
+/// [`Tokens::over`]) it is that kind alone, so every reader answers the
+/// same kind for it. Its form says the kind, as a theme file reads it: a
+/// font family is `font-*`, a weight `font-weight-*`, a shadow `shadow-*`,
+/// and no color or other number is `font-*`. A setter leaves out (and
+/// logs) a name of another kind's form, so a theme file written of the
+/// tokens (`theme_file::write`) reads back as the same tokens.
+///
 /// They may map [`Role`]s, what NSH's own parts draw with, onto tokens of
 /// other names ([`Tokens::with_role`]): a theme whose surface for popovers
 /// is `surface-overlay` maps [`role::POPOVER`] onto it, and every part that
@@ -397,11 +405,17 @@ impl Tokens {
 
     /// Sets the color named `name`.
     pub fn set_color(&mut self, name: &str, color: AdaptiveColor) {
+        if misnamed(name, Kind::Color) {
+            return;
+        }
+        self.clear_but(name, Kind::Color);
         self.colors.insert(name.into(), color);
     }
 
     /// The number named `name` (its light value, the only one of most
-    /// numbers).
+    /// numbers). [`Tokens::number_in`] reads it in either appearance; a
+    /// theme type's number field ([`super::theme_of`]) and
+    /// [`super::token`] read it in the appearance shown.
     pub fn number(&self, name: &str) -> Option<f32> {
         self.numbers.get(name).copied()
     }
@@ -418,6 +432,10 @@ impl Tokens {
     /// Sets the number named `name`, in both appearances (a dark value it
     /// had goes).
     pub fn set_number(&mut self, name: &str, value: f32) {
+        if misnamed(name, Kind::Number) {
+            return;
+        }
+        self.clear_but(name, Kind::Number);
         self.numbers.insert(name.into(), value);
         self.dark_numbers.remove(name);
     }
@@ -425,6 +443,9 @@ impl Tokens {
     /// Gives the number named `name` a value of its own in the dark
     /// appearance (its light one is [`Tokens::set_number`]'s).
     pub fn set_dark_number(&mut self, name: &str, value: f32) {
+        if misnamed(name, Kind::Number) {
+            return;
+        }
         self.dark_numbers.insert(name.into(), value);
     }
 
@@ -435,6 +456,10 @@ impl Tokens {
 
     /// Sets the font family named `name`.
     pub fn set_font(&mut self, name: &str, family: impl Into<Arc<str>>) {
+        if misnamed(name, Kind::Font) {
+            return;
+        }
+        self.clear_but(name, Kind::Font);
         self.fonts.insert(name.into(), family.into());
     }
 
@@ -445,6 +470,10 @@ impl Tokens {
 
     /// Sets the box shadows named `name`.
     pub fn set_shadow(&mut self, name: &str, shadow: impl Into<AdaptiveShadow>) {
+        if misnamed(name, Kind::Shadow) {
+            return;
+        }
+        self.clear_but(name, Kind::Shadow);
         self.shadows.insert(name.into(), shadow.into());
     }
 
@@ -454,7 +483,9 @@ impl Tokens {
     }
 
     /// The token named `name`, of any kind (a color first, as classes take
-    /// it).
+    /// it), as kept: a color and a shadow with their values in both
+    /// appearances, a number its light value ([`Tokens::get_in`] gives it
+    /// in either).
     pub fn get(&self, name: &str) -> Option<Token> {
         if let Some(c) = self.colors.get(name) {
             return Some(Token::Color(*c));
@@ -466,6 +497,77 @@ impl Tokens {
             return Some(Token::Font(f.clone()));
         }
         self.shadows.get(name).cloned().map(Token::Shadow)
+    }
+
+    /// The token named `name` in the dark appearance (`dark`) or the light
+    /// one: a number its value there ([`Tokens::number_in`]), any other
+    /// kind as [`Tokens::get`] gives it. Where the app is shown, Rust reads
+    /// it with [`super::token`], as TS's `token()` does.
+    pub fn get_in(&self, name: &str, dark: bool) -> Option<Token> {
+        match self.get(name)? {
+            Token::Number(_) => self.number_in(name, dark).map(Token::Number),
+            token => Some(token),
+        }
+    }
+
+    /// Whether a number has a dark value of its own.
+    pub(crate) fn has_dark_numbers(&self) -> bool {
+        !self.dark_numbers.is_empty()
+    }
+
+    /// Whether number `name` has a dark value of its own.
+    pub(crate) fn has_dark_number(&self, name: &str) -> bool {
+        self.dark_numbers.contains_key(name)
+    }
+
+    /// These tokens as the dark appearance shows them, for what reads one
+    /// value of each number ([`super::theme_of`]): each number its dark
+    /// value. `None`: no number has a dark value of its own, so they are
+    /// shown as they are.
+    pub(crate) fn shown_dark(&self) -> Option<Tokens> {
+        if self.dark_numbers.is_empty() {
+            return None;
+        }
+        let mut out = self.clone();
+        for (name, n) in std::mem::take(&mut out.dark_numbers) {
+            if let Some(light) = out.numbers.get_mut(&name) {
+                *light = n;
+            }
+        }
+        Some(out)
+    }
+
+    /// The kind of token `name` (a color first, as [`Tokens::get`] takes
+    /// it).
+    pub(crate) fn kind(&self, name: &str) -> Option<Kind> {
+        if self.colors.contains_key(name) {
+            Some(Kind::Color)
+        } else if self.numbers.contains_key(name) {
+            Some(Kind::Number)
+        } else if self.fonts.contains_key(name) {
+            Some(Kind::Font)
+        } else if self.shadows.contains_key(name) {
+            Some(Kind::Shadow)
+        } else {
+            None
+        }
+    }
+
+    /// Removes token `name` of any kind but `kind`: a name is one kind.
+    fn clear_but(&mut self, name: &str, kind: Kind) {
+        if kind != Kind::Color {
+            self.colors.remove(name);
+        }
+        if kind != Kind::Number {
+            self.numbers.remove(name);
+            self.dark_numbers.remove(name);
+        }
+        if kind != Kind::Font {
+            self.fonts.remove(name);
+        }
+        if kind != Kind::Shadow {
+            self.shadows.remove(name);
+        }
     }
 
     /// These tokens with `role` mapped onto the token named `token` (in
@@ -567,8 +669,11 @@ impl Tokens {
     }
 
     /// Gives token `to` what token `from` is, of whatever kind, unless
-    /// there is a `to` of that kind already; `from` stays.
+    /// there is a `to` already; `from` stays.
     pub(crate) fn copy_as(&mut self, from: &str, to: &str) {
+        if self.kind(to).is_some() {
+            return;
+        }
         fn copy<V: Clone>(map: &mut FxHashMap<Box<str>, V>, from: &str, to: &str) {
             if !map.contains_key(to)
                 && let Some(value) = map.get(from).cloned()
@@ -621,41 +726,55 @@ impl Tokens {
 
     /// `self` with the tokens of `base` it does not have.
     pub fn over(&self, base: &Tokens) -> Tokens {
-        self.over_with(base, false)
+        self.over_with(base, None)
     }
 
     /// [`Tokens::over`] for tokens a theme type's fields wrote
-    /// ([`super::set_theme`]). A number field is its token's light value
-    /// and knows no dark one, so a number `self` leaves at the light value
-    /// `base` has keeps the dark value `base` has; one it changes is its
-    /// value in both appearances, as [`Tokens::set_number`] makes it.
-    pub(crate) fn over_as_fields(&self, base: &Tokens) -> Tokens {
-        self.over_with(base, true)
+    /// ([`super::set_theme`]), read in the dark appearance (`dark`) or the
+    /// light one. A number field is its token's value there and knows no
+    /// other, so a number `self` leaves at the value `base` has there
+    /// keeps both values `base` has; one it changes is its value in both
+    /// appearances, as [`Tokens::set_number`] makes it.
+    pub(crate) fn over_as_fields(&self, base: &Tokens, dark: bool) -> Tokens {
+        self.over_with(base, Some(dark))
     }
 
-    /// `self` over `base`; `fields`: as a theme type's fields
-    /// ([`Tokens::over_as_fields`]).
-    fn over_with(&self, base: &Tokens, fields: bool) -> Tokens {
+    /// `self` over `base`; `fields`: as a theme type's fields read in the
+    /// appearance it says, dark or not ([`Tokens::over_as_fields`]).
+    fn over_with(&self, base: &Tokens, fields: Option<bool>) -> Tokens {
+        // A name of `self` is the kind `self` has it, whatever `base` has.
         let mut out = base.clone();
-        out.colors
-            .extend(self.colors.iter().map(|(k, c)| (k.clone(), *c)));
+        for (k, c) in &self.colors {
+            out.clear_but(k, Kind::Color);
+            out.colors.insert(k.clone(), *c);
+        }
         // A number of `self` is its values: a dark one of `base`'s goes
         // unless `self` has its own.
         for (k, n) in &self.numbers {
-            let unchanged =
-                fields && !self.dark_numbers.contains_key(k) && base.numbers.get(k) == Some(n);
+            let unchanged = fields.is_some_and(|dark| {
+                !self.dark_numbers.contains_key(k) && base.number_in(k, dark) == Some(*n)
+            });
             if unchanged {
                 continue;
             }
+            out.clear_but(k, Kind::Number);
             out.numbers.insert(k.clone(), *n);
             out.dark_numbers.remove(k);
         }
-        out.dark_numbers
-            .extend(self.dark_numbers.iter().map(|(k, n)| (k.clone(), *n)));
-        out.fonts
-            .extend(self.fonts.iter().map(|(k, f)| (k.clone(), f.clone())));
-        out.shadows
-            .extend(self.shadows.iter().map(|(k, s)| (k.clone(), s.clone())));
+        out.dark_numbers.extend(
+            (self.dark_numbers.iter())
+                .filter(|(k, _)| out.kind(k).is_none_or(|kind| kind == Kind::Number))
+                .map(|(k, n)| (k.clone(), *n))
+                .collect::<Vec<_>>(),
+        );
+        for (k, f) in &self.fonts {
+            out.clear_but(k, Kind::Font);
+            out.fonts.insert(k.clone(), f.clone());
+        }
+        for (k, s) in &self.shadows {
+            out.clear_but(k, Kind::Shadow);
+            out.shadows.insert(k.clone(), s.clone());
+        }
         if let Some(roles) = &self.roles {
             out.roles = match out.roles {
                 Some(base) => {
@@ -667,6 +786,59 @@ impl Tokens {
             };
         }
         out
+    }
+}
+
+/// Whether a token `name` of `kind` is one a theme file would read as
+/// another kind ([`Kind::names`]): a setter leaves it out, and logs it.
+fn misnamed(name: &str, kind: Kind) -> bool {
+    let refused = !kind.names(name);
+    if refused {
+        log::warn!(
+            "design token `{name}` not set: a {} is named as no {} is ({})",
+            kind.name(),
+            kind.name(),
+            Kind::FORMS
+        );
+    }
+    refused
+}
+
+/// The kind of a token: a name is one ([`Tokens`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Color,
+    Number,
+    Font,
+    Shadow,
+}
+
+impl Kind {
+    /// The name forms that say a kind, as a sentence lists them.
+    pub(crate) const FORMS: &str =
+        "a font is `font-*`, a shadow `shadow-*`, a weight `font-weight-*`";
+
+    /// Whether a theme file reads a token named `name` as this kind: the
+    /// name says its kind, as a CSS variable's does ([`Tokens`]).
+    pub(crate) fn names(self, name: &str) -> bool {
+        let font = name.starts_with("font-");
+        let weight = name.starts_with("font-weight-");
+        match self {
+            Kind::Font => font && !weight,
+            Kind::Shadow => name.starts_with("shadow-"),
+            Kind::Color => !font,
+            Kind::Number => !font || weight,
+        }
+    }
+
+    /// The kind as a sentence names it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Kind::Color => "color",
+            Kind::Number => "number",
+            Kind::Font => "font family",
+            Kind::Shadow => "shadow",
+        }
     }
 }
 
@@ -691,7 +863,7 @@ pub(crate) fn sample() -> Tokens {
     ] {
         tokens.set_color(key, AdaptiveColor::rgb(light, dark));
     }
-    for (key, n) in [("radius", 12.0), ("radius-lg", 16.0), ("font-size", 16.0)] {
+    for (key, n) in [("radius", 12.0), ("radius-lg", 16.0), ("body-size", 16.0)] {
         tokens.set_number(key, n);
     }
     tokens
@@ -746,7 +918,7 @@ mod theme_set_numbers {
         let mut fields = Tokens::default();
         fields.set_number("radius-card", 10.0);
         fields.set_color("ink", rgb(0x222222).into());
-        let tokens = fields.over_as_fields(&base());
+        let tokens = fields.over_as_fields(&base(), false);
         assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
         assert_eq!(tokens.number_in("radius-card", true), Some(6.0));
         assert_eq!(tokens.color("ink"), Some(rgb(0x222222).into()));
@@ -763,7 +935,7 @@ mod theme_set_numbers {
         let mut fields = Tokens::default();
         fields.set_number("radius-card", 12.0);
         fields.set_number("radius-chip", 4.0);
-        let tokens = fields.over_as_fields(&base());
+        let tokens = fields.over_as_fields(&base(), false);
         assert_eq!(tokens.number_in("radius-card", false), Some(12.0));
         assert_eq!(tokens.number_in("radius-card", true), Some(12.0));
         assert_eq!(tokens.number_in("radius-chip", true), Some(4.0));
@@ -774,7 +946,7 @@ mod theme_set_numbers {
         let mut fields = Tokens::default();
         fields.set_number("radius-card", 10.0);
         fields.set_dark_number("radius-card", 8.0);
-        let tokens = fields.over_as_fields(&base());
+        let tokens = fields.over_as_fields(&base(), false);
         assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
         assert_eq!(tokens.number_in("radius-card", true), Some(8.0));
     }
@@ -904,5 +1076,155 @@ mod theme_roles {
         themed.set_themed(true);
         assert_eq!(themed, sample());
         assert!(!sample().is_themed());
+    }
+}
+
+/// A name is a token of one kind: set as another kind or laid over a
+/// token of another kind, it is never two at once, so `get`, `token()`,
+/// classes and `tokens.d.ts` answer the same kind for it.
+#[cfg(test)]
+mod one_kind {
+    use super::*;
+    use crate::color::rgb;
+
+    fn layer() -> crate::BoxShadow {
+        crate::BoxShadow {
+            blur: crate::geometry::Points(2.0),
+            color: crate::Color(0x0000_001a),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_name_set_as_another_kind_is_that_kind_alone() {
+        let mut t = Tokens::default();
+        t.set_number("radius", 8.0);
+        t.set_dark_number("radius", 12.0);
+        t.set_color("radius", rgb(0x111111).into());
+        assert_eq!(t.number("radius"), None);
+        assert_eq!(t.number_in("radius", true), None);
+        assert!(matches!(t.get("radius"), Some(Token::Color(_))));
+        t.set_number("radius", 4.0);
+        assert_eq!(t.color("radius"), None);
+        assert_eq!(t.get("radius"), Some(Token::Number(4.0)));
+        t.set_shadow("shadow-soft-blur", [layer()]);
+        t.set_number("shadow-soft-blur", 2.0);
+        assert!(t.shadow("shadow-soft-blur").is_none());
+    }
+
+    #[test]
+    fn tokens_over_another_kind_of_the_name_replace_it() {
+        let mut base = Tokens::default();
+        base.set_number("radius", 8.0);
+        base.set_dark_number("radius", 12.0);
+        base.set_color("ring", rgb(0x111111).into());
+        let mut top = Tokens::default();
+        top.set_color("radius", rgb(0x222222).into());
+        top.set_number("ring", 2.0);
+        let out = top.over(&base);
+        assert!(matches!(out.get("radius"), Some(Token::Color(_))));
+        assert_eq!(out.number("radius"), None);
+        assert_eq!(out.number_in("radius", true), None);
+        assert_eq!(out.get("ring"), Some(Token::Number(2.0)));
+        assert_eq!(out.color("ring"), None);
+    }
+
+    #[test]
+    fn a_theme_file_over_a_base_gives_the_name_the_files_kind() {
+        let mut base = Tokens::default();
+        base.set_number("radius", 8.0);
+        let (tokens, ignored) = super::super::theme_file::parse(
+            r##"{ "cssVars": { "theme": { "radius": "#ffffff" } } }"##,
+            &base,
+        )
+        .unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert!(matches!(tokens.get("radius"), Some(Token::Color(_))));
+        assert_eq!(tokens.number("radius"), None);
+    }
+
+    #[test]
+    fn a_copy_leaves_a_name_of_another_kind_as_it_is() {
+        let mut t = Tokens::default();
+        t.set_color("popover", rgb(0x111111).into());
+        t.set_number("surface", 4.0);
+        t.copy_as("popover", "surface");
+        assert_eq!(t.get("surface"), Some(Token::Number(4.0)));
+        assert_eq!(t.color("surface"), None);
+    }
+}
+
+/// A token's name says its kind, as a theme file reads it: a setter takes
+/// no name the file would read as another kind, so the tokens read back
+/// from a theme file written of them (`theme_file::write`) are the same.
+#[cfg(test)]
+mod name_forms {
+    use super::{super::theme_file, *};
+    use crate::color::rgb;
+
+    fn layer(rgba: u32) -> crate::BoxShadow {
+        crate::BoxShadow {
+            offset_y: crate::geometry::Points(1.0),
+            blur: crate::geometry::Points(2.0),
+            color: crate::Color(rgba),
+            ..Default::default()
+        }
+    }
+
+    /// Each name with its kind, sorted.
+    fn kinds(t: &Tokens) -> Vec<(String, Kind)> {
+        let mut out: Vec<(String, Kind)> = (t.colors().map(|(n, _)| (n, Kind::Color)))
+            .chain(t.numbers().map(|(n, _)| (n, Kind::Number)))
+            .chain(t.fonts().map(|(n, _)| (n, Kind::Font)))
+            .chain(t.shadows().map(|(n, _)| (n, Kind::Shadow)))
+            .map(|(n, k)| (n.to_owned(), k))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    #[test]
+    fn a_setter_takes_no_name_of_another_kinds_form() {
+        let mut t = Tokens::default();
+        t.set_shadow("elevation", [layer(0x0000_001a)]);
+        t.set_number("font-scale", 1.2);
+        t.set_dark_number("font-scale", 1.4);
+        t.set_color("font-color", rgb(0xffffff).into());
+        t.set_font("code", "Berkeley Mono");
+        t.set_font("font-weight-strong", "Inter");
+        assert_eq!(kinds(&t), []);
+        assert_eq!(t.dark_numbers().count(), 0);
+        // Each in its own kind's form is set.
+        t.set_shadow("shadow-elevation", [layer(0x0000_001a)]);
+        t.set_number("scale", 1.2);
+        t.set_number("font-weight-strong", 650.0);
+        t.set_color("color-font", rgb(0xffffff).into());
+        t.set_font("font-code", "Berkeley Mono");
+        assert_eq!(kinds(&t).len(), 5);
+    }
+
+    #[test]
+    fn tokens_written_to_a_theme_file_read_back_as_they_are() {
+        let mut t = Tokens::default();
+        t.set_color("primary", AdaptiveColor::rgb(0x111111, 0x222222));
+        t.set_color("shadow-color", rgb(0x333333).into());
+        t.set_number("radius", 8.0);
+        t.set_dark_number("radius", 12.0);
+        t.set_number("font-weight-strong", 650.0);
+        t.set_font("font-sans", "Inter");
+        t.set_shadow(
+            "shadow-raised",
+            AdaptiveShadow::new([layer(0x0000_001a)], [layer(0xffff_ff33)]),
+        );
+        // Names a file reads as another kind, which it would lose.
+        t.set_shadow("elevation", [layer(0x0000_001a)]);
+        t.set_number("font-scale", 1.2);
+        let (back, ignored) =
+            theme_file::parse(&theme_file::write(&t), &Tokens::default()).unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert_eq!(kinds(&back), kinds(&t));
+        assert_eq!(back.number_in("radius", true), Some(12.0));
+        assert_eq!(back.number("font-weight-strong"), Some(650.0));
+        assert_eq!(back.font("font-sans").map(|f| &**f), Some("Inter"));
     }
 }

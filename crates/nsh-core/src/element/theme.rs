@@ -439,6 +439,17 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
+    /// The kind [`Tokens`] keeps it as: a namespaced number is a number.
+    pub(crate) fn stored(self) -> super::tokens::Kind {
+        use super::tokens::Kind;
+        match self {
+            TokenKind::Color => Kind::Color,
+            TokenKind::Font => Kind::Font,
+            TokenKind::Shadow => Kind::Shadow,
+            _ => Kind::Number,
+        }
+    }
+
     /// Its name, as the toolchain writes it.
     pub fn name(self) -> &'static str {
         match self {
@@ -654,19 +665,12 @@ impl ThemeSet {
         for (i, (name, kind, plays)) in tokens.iter().enumerate() {
             // A theme file's value is read by the name's form: the name
             // says what its kind is, as a CSS variable's does.
-            let read_as = |prefix: &str| name.starts_with(prefix);
-            let readable = match kind {
-                TokenKind::Font => read_as("font-") && !read_as("font-weight-"),
-                TokenKind::Shadow => read_as("shadow-"),
-                TokenKind::Color => !read_as("font-"),
-                _ => !read_as("font-") || read_as("font-weight-"),
-            };
-            if !readable {
+            if !kind.stored().names(name) {
                 return Err(format!(
-                    "`{type_name}`: the {} token `{name}` is named as no {} is (a font is `font-*`, a shadow \
-                     `shadow-*`, a weight `font-weight-*`)",
+                    "`{type_name}`: the {} token `{name}` is named as no {} is ({})",
                     kind.name(),
-                    kind.name()
+                    kind.name(),
+                    super::tokens::Kind::FORMS
                 ));
             }
             if tokens[..i].iter().any(|(n, ..)| n == name) {
@@ -853,13 +857,19 @@ fn said((tokens, left_out): (Tokens, Vec<String>)) -> (Tokens, Vec<super::theme_
 
 /// The theme of type `T` the surface is drawn with now: its names in the
 /// tokens ([`super::tokens`]), each a field (a name they lack keeps
-/// [`Default`]'s). Reading it subscribes, as [`super::tokens`] does: a
-/// binding reading it runs again when the tokens change. It is read once
-/// per change of the tokens, per surface.
+/// [`Default`]'s). A number field is its token's value in the appearance
+/// shown ([`super::dark`]), as TS's `token()` and classes read it. Reading
+/// it subscribes, as [`super::tokens`] does, and to the appearance where a
+/// number has a dark value: a binding reading it runs again when they
+/// change. It is read once per change of the tokens, per appearance and
+/// surface.
 pub fn theme_of<T: AppTheme>() -> Arc<T> {
     let tokens = super::tokens();
+    // Tokens without a dark number read the same in both appearances, and
+    // need not follow it.
+    let dark = tokens.has_dark_numbers() && super::dark();
     let cached = super::ambient::with_theme_cache(|cache| {
-        let (seen, theme) = cache.get(&TypeId::of::<T>())?;
+        let (seen, theme) = cache.get(&(TypeId::of::<T>(), dark))?;
         Arc::ptr_eq(seen, &tokens)
             .then(|| theme.downcast_ref::<Arc<T>>().cloned())
             .flatten()
@@ -869,10 +879,11 @@ pub fn theme_of<T: AppTheme>() -> Arc<T> {
     }
     // The type's own code runs with the cache let go: it may read the
     // tokens or another type.
-    let theme = Arc::new(T::read_tokens(&tokens, ""));
+    let shown = if dark { tokens.shown_dark() } else { None };
+    let theme = Arc::new(T::read_tokens(shown.as_ref().unwrap_or(&tokens), ""));
     super::ambient::with_theme_cache(|cache| {
         cache.insert(
-            TypeId::of::<T>(),
+            (TypeId::of::<T>(), dark),
             (tokens.clone(), Box::new(theme.clone()) as Box<dyn Any>),
         );
     });
@@ -883,11 +894,12 @@ pub fn theme_of<T: AppTheme>() -> Arc<T> {
 /// token stays (another type's, the app's own). In order with the app's
 /// other actions, as [`super::update_tokens`].
 ///
-/// A number field is its token's light value. A number `theme` leaves at
-/// the value it has keeps the dark value it has, so a theme read
-/// ([`theme_of`]), changed in one field and set changes that field only;
-/// one `theme` changes is that value in both appearances, as
-/// [`update_theme`] makes a number it sets.
+/// A number field is its token's value in the appearance shown where it
+/// is set, as [`theme_of`] reads it there. A number `theme` leaves at that
+/// value keeps both values it has, so a theme read ([`theme_of`]), changed
+/// in one field and set changes that field only; one `theme` changes is
+/// that value in both appearances, as [`update_theme`] makes a number it
+/// sets.
 ///
 /// A type that is not registered and whose tokens play roles
 /// (`nsh_base::Theme`: shadcn's names, each the role of its name) sets, in
@@ -900,6 +912,7 @@ pub fn set_theme<T: AppTheme>(theme: T) {
     super::ambient::theme_action(super::task::Action::SetTheme {
         tokens: theme_tokens(&theme),
         played: played::<T>(),
+        dark: Some(super::reactive::untracked(super::dark)),
     });
 }
 

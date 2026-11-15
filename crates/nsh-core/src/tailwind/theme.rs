@@ -71,7 +71,7 @@ pub struct Theme {
 /// color utilities (`bg-primary`, `text-muted-foreground/70`) when the
 /// Tailwind theme has no color of that name, and every token is a
 /// variable (`bg-(--primary)`, `rounded-(--radius-lg)`,
-/// `text-(length:--font-size)`, `font-(family-name:--font-mono)`). The
+/// `text-(length:--body-size)`, `font-(family-name:--font-mono)`). The
 /// fonts `font-sans` and `font-mono` are what `font-sans` and `font-mono`
 /// set, as `--font-sans` and `--font-mono` are in Tailwind.
 ///

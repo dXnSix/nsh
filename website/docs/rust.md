@@ -580,11 +580,11 @@ values of the light appearance, `dark` those of the dark one, and `theme` those 
   `.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())` draws it, following theme
   changes and switching with the appearance natively as `.bg(..)` does. `.shadow(layers)` takes static layers, the
   same in both.
-- **Numbers per appearance.** A number in `dark` is its dark value (`"dark": { "radius-card": "6px" }`): classes and
-  TSX's `token()` follow the appearance, and Rust reads it with `tokens().number_in("radius-card", dark())`
-  (`number()` is the light value, the only one of a number the theme gives once). `theme().radius` and
-  `theme().number(..)` are light values too: read one that has a dark value with `number_in`.
-  `Tokens::set_dark_number` gives one in code.
+- **Numbers per appearance.** A number in `dark` is its dark value (`"dark": { "radius-card": "6px" }`): classes,
+  TSX's `token()` and Rust's `element::token("radius-card")` follow the appearance shown, and so do `theme().radius`,
+  `theme().number(..)` and a theme type's number fields. `tokens().number(..)` and `tokens().get(..)` give the light
+  value (the only one of a number the theme gives once); `number_in("radius-card", dark)` and `get_in(.., dark)` read
+  either. `Tokens::set_dark_number` gives one in code.
 - **Your own tokens.** Any other name is a token of the app, as a variable in Tailwind's `@theme` is: `"up"` above is
   `theme().color("up")` in Rust, `bg-up` / `text-up/70` in classes and `token("up")` in TSX
   ([Theme tokens](./tailwind.md#theme-tokens)). A number such as `"radius-card": "14px"` is `theme().number("radius-card")`
@@ -752,8 +752,9 @@ reset_theme::<DsTheme>(); // the app's action again
   app's theme (`nsh.json`'s over the types' defaults). They apply in order with the app's other actions, as
   `update_tokens` does; a synchronous `#[module]` function has `cx.set_theme(..)`, `cx.update_theme::<T>(..)` and
   `cx.reset_theme::<T>()` of its `ModuleCx`.
-- A number field is its token's light value. `set_theme` leaves the dark value of a number whose value it does not
-  change, so reading a theme, changing one field and setting it changes that field only:
+- A number field is its token's value in the appearance shown. `set_theme` compares it with the value of the
+  appearance shown where it runs and leaves both values of a number it does not change, so reading a theme, changing
+  one field and setting it changes that field only:
   `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`. A number it does change, and one a
   patch sets, is that value in both appearances; give it a dark value again with `Tokens::set_dark_number` and
   `update_tokens`.

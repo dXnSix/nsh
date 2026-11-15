@@ -524,9 +524,10 @@ fn the_module_formats_money() {
   是阴影 token：`tokens().shadow("shadow-raised")` 是一个 `AdaptiveShadow`，`.adaptive_shadow(move ||
   tokens().shadow("shadow-raised").cloned().unwrap_or_default())` 绘制它，跟随主题变化，并像 `.bg(..)` 一样随外观原生切换。
   `.shadow(layers)` 接受静态的阴影层，两种外观相同。
-- **按外观区分的数字。** `dark` 中的数字是它的深色值（`"dark": { "radius-card": "6px" }`）：类名和 TSX 的 `token()` 跟随外观，Rust
-  用 `tokens().number_in("radius-card", dark())` 读取（`number()` 是浅色值，也是主题只给出一次的数字的唯一值）。`theme().radius` 和
-  `theme().number(..)` 也是浅色值：有深色值的数字请用 `number_in` 读取。`Tokens::set_dark_number` 在代码中设置深色值。
+- **按外观区分的数字。** `dark` 中的数字是它的深色值（`"dark": { "radius-card": "6px" }`）：类名、TSX 的 `token()` 和 Rust 的
+  `element::token("radius-card")` 跟随当前显示的外观，`theme().radius`、`theme().number(..)` 和主题类型的数字字段也是如此。
+  `tokens().number(..)` 和 `tokens().get(..)` 给出浅色值（也是主题只给出一次的数字的唯一值）；`number_in("radius-card", dark)` 和
+  `get_in(.., dark)` 可读取任一外观的值。`Tokens::set_dark_number` 在代码中设置深色值。
 - **应用自己的令牌。** 其他任何名称都是应用的令牌，就像 Tailwind `@theme` 中的变量：上例的 `"up"` 在 Rust 中是 `theme().color("up")`，
   在类名中是 `bg-up` / `text-up/70`，在 TSX 中是 `token("up")`（[主题 token](./tailwind.md#主题-token)）。数值如 `"radius-card": "14px"`
   是 `theme().number("radius-card")` 和 `rounded-(--radius-card)`。
@@ -682,7 +683,8 @@ reset_theme::<DsTheme>(); // 恢复应用的 action
   `reset_theme::<T>()` 把 `T` 的名称恢复为应用主题中的值（叠加在各类型默认值之上的 `nsh.json` 主题）。它们与应用的其他操作按顺序生效，
   和 `update_tokens` 一样；同步的 `#[module]` 函数使用其 `ModuleCx` 的 `cx.set_theme(..)`、`cx.update_theme::<T>(..)` 和
   `cx.reset_theme::<T>()`。
-- 数字字段是其令牌的浅色值。`set_theme` 不会改动值未变化的数字的深色值，所以读取主题、修改一个字段再设置回去，只会改变这一个字段：
+- 数字字段是其令牌在当前显示外观下的值。`set_theme` 将它与运行处所显示外观下的值比较，不会改动值未变化的数字的两个值，所以读取主题、
+  修改一个字段再设置回去，只会改变这一个字段：
   `let mut t = (*theme_of::<DsTheme>()).clone(); t.action = red; set_theme(t);`。被它改变的数字，以及补丁设置的数字，
   在两种外观下都是这个值；要再给它一个深色值，使用 `Tokens::set_dark_number` 和 `update_tokens`。
 
