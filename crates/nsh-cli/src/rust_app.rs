@@ -1063,7 +1063,8 @@ fn root_config(
         }
     };
     // What the theme leaves out is warned of once the app's sets are
-    // described ([`theme_warnings`]): its theme types decide its names.
+    // described ([`theme_warnings`]): the tokens their theme documents
+    // declare decide its names.
     if let Some(theme) = &theme {
         let json = fs::read_to_string(theme)?;
         nsh_core::element::theme_file::check(&json)
@@ -3723,14 +3724,17 @@ fn stamp(program: &Path) -> anyhow::Result<String> {
 }
 
 /// What `nsh.json`'s theme `json` leaves out, which the CLI warns of: read
-/// against the theme types `sets` register (a name no type declares, a
-/// value of another kind), else as `nsh/base` reads it (a value it cannot
-/// read).
+/// by the tokens the theme documents of `sets`, or the file itself, declare
+/// (a name nothing declares, a value of another kind), else as `nsh/base`
+/// reads it (a value it cannot read).
 fn theme_warnings(json: &str, sets: &[SetDescription]) -> anyhow::Result<Vec<String>> {
-    let types = nsh_core::element::description::theme_types(sets)
-        .map_err(|e| anyhow::anyhow!("the app's theme types: {e}"))?;
-    let (_, ignored) = match types {
-        Some(types) => types.read(Some(json)),
+    let documents = nsh_core::element::description::declarations(sets)
+        .map_err(|e| anyhow::anyhow!("the app's theme documents: {e}"))?;
+    let declared = documents.or_else(|| {
+        nsh_core::element::theme_file::declares(json).then(nsh_core::element::Declarations::default)
+    });
+    let (_, ignored) = match declared {
+        Some(declared) => declared.read(Some(json)),
         None => nsh_base::Theme::from_json_lenient(json)
             .map(|(theme, ignored)| (theme.into_tokens(), ignored))
             .map_err(|e| e.0),
@@ -4529,7 +4533,10 @@ mod tests {
         // default, so `nsh package` can turn off those it does not use.
         let lib = read("android/Cargo.toml");
         assert_eq!(lib.matches("default-features = false").count(), 2, "{lib}");
-        assert!(lib.contains("plot = [\"nsh-platform-android/plot\"]"), "{lib}");
+        assert!(
+            lib.contains("plot = [\"nsh-platform-android/plot\"]"),
+            "{lib}"
+        );
         assert!(lib.contains("default = [\"js\", \"shader\""), "{lib}");
         let web = read("rust-web/lib.rs");
         // Only `nsh/base`'s core part: the root makes the components it uses
@@ -6041,62 +6048,48 @@ panic = \"abort\"
         }
     }
 
-    /// Under the app's theme types, `nsh.json`'s theme is checked against
-    /// them: a name no type declares is warned of.
-    mod typed_theme {
-        use nsh_core::element::{
-            AdaptiveColor, AppTheme, Registry, TokenKind, TokenSpec, Tokens,
-            description::SetDescription, role,
-        };
+    /// Under the app's theme documents, `nsh.json`'s theme is checked by
+    /// the tokens they declare: a name nothing declares is warned of.
+    mod declared_theme {
+        use nsh_core::element::{Registry, description::SetDescription};
 
-        #[derive(Debug, Clone, PartialEq, Default)]
-        struct Ds;
+        const DS: &str = r##"{
+            "cssVars": { "theme": { "surface-overlay": "#111111" } },
+            "tokens": { "surface-overlay": { "kind": "color" } },
+            "roles": { "popover": "surface-overlay" }
+        }"##;
 
-        impl AppTheme for Ds {
-            type Patch = ();
-
-            fn token_specs() -> &'static [TokenSpec] {
-                static SPECS: std::sync::LazyLock<Vec<TokenSpec>> =
-                    std::sync::LazyLock::new(|| {
-                        vec![
-                            TokenSpec::new("surface-overlay", TokenKind::Color).role(role::POPOVER),
-                        ]
-                    });
-                &SPECS
-            }
-
-            fn write_tokens(&self, _: &str, out: &mut Tokens) {
-                out.set_color("surface-overlay", AdaptiveColor::rgb(0x111111, 0x111111));
-            }
-
-            fn read_tokens(_: &Tokens, _: &str) -> Self {
-                Ds
-            }
-
-            fn write_patch(_: &(), _: &str, _: &mut Tokens) {}
-        }
-
-        /// Under types: names no type declares; a `var()` of a type's
+        /// Under documents: names nothing declares; a `var()` of a declared
         /// token is no warning.
         #[test]
-        fn a_theme_is_checked_against_the_described_types() {
+        fn a_theme_is_checked_by_the_described_documents() {
             let mut registry = Registry::ui_set("ds/native");
-            registry.theme::<Ds>();
+            registry.theme_document(DS);
             let sets = [SetDescription::from(&registry)];
             let json = r##"{ "cssVars": { "light": { "surface-overlay": "#333333", "brand": "#000000", "popover": "var(--surface-overlay)" } } }"##;
             let warned = super::super::theme_warnings(json, &sets).unwrap();
             assert_eq!(
                 warned,
                 [
-                    "`brand`: no theme type declares it",
+                    "`brand`: no theme document declares it",
                     "`popover`: the token its role is mapped onto, `surface-overlay`, is set too"
                 ]
             );
         }
 
-        /// Without types, what `nsh/base` leaves out, as before.
+        /// A theme file that declares its own tokens is checked by them.
         #[test]
-        fn without_types_nsh_base_reads_it() {
+        fn a_theme_that_declares_its_tokens_is_checked_by_them() {
+            let set = SetDescription::from(&Registry::ui_set("app/native"));
+            let json = r##"{ "cssVars": { "light": { "page": "#ffffff", "brand": "#000000" } },
+                             "tokens": { "page": { "kind": "color" } } }"##;
+            let warned = super::super::theme_warnings(json, &[set]).unwrap();
+            assert_eq!(warned, ["`brand`: no theme document declares it"]);
+        }
+
+        /// Without declared tokens, what `nsh/base` leaves out, as before.
+        #[test]
+        fn without_declared_tokens_nsh_base_reads_it() {
             let set = SetDescription::from(&Registry::ui_set("app/native"));
             let warned = super::super::theme_warnings(
                 r##"{ "cssVars": { "light": { "brand": "#zz" } } }"##,

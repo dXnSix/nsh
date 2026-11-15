@@ -275,7 +275,7 @@ function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
 ```
 
 What the theme role `name` draws with in the appearance shown, as [`token()`](#token) gives a token: the token the
-app's theme maps the role onto (a theme type's `role = …`), else the token of the role's name, else `undefined`.
+app's theme maps the role onto (a theme document's `"roles"`), else the token of the role's name, else `undefined`.
 A role is what a part of the UI is for (`popover`, `border`, `warning`), whatever an app's design system calls the
 token: a component written against roles is themed by any of them. Reading it is reactive, as `token()` is.
 
@@ -306,6 +306,13 @@ interface Theme {
     dark?: Record<string, string | number>;
   };
   roles?: Record<string, string>;
+  tokens?: Record<string, TokenDeclaration>;
+}
+
+interface TokenDeclaration {
+  kind: "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow" | "gradient";
+  path?: string;
+  doc?: string;
 }
 ```
 
@@ -317,10 +324,16 @@ back the theme the app was built with.
 
 `roles` maps theme roles onto the theme's tokens by name: `roles: { popover: "surface" }` has everything that draws
 with `popover` (`nsh/base`'s popovers, [`role("popover")`](#role)) draw with the token `surface`, and follow it when
-it changes, where `"popover": "var(--surface)"` would copy its color once. It is how an app without a Rust theme type
-names its tokens its own way. A role mapped onto a name that is no token of the theme, and under theme types a role
-a type already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
+it changes, where `"popover": "var(--surface)"` would copy its color once. It is how an app names its tokens its own
+way. A role mapped onto a name that is no token of the theme, and under [declared tokens](../docs/rust.md#theme-documents-and-typed-keys) a role
+a theme document already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
 `updateTheme` adds to the roles mapped.
+
+`tokens` declares the theme's tokens: what each holds (`kind`), its place in the designer's tree (`path`) and its doc
+(`tokens: { "radius-card": { kind: "radius", path: "radius.card" } }`). A theme that declares its tokens is read by
+them, each value as its token's kind, and replaces the default theme: a name it does not declare is left out
+([Theme documents](../docs/rust.md#theme-documents-and-typed-keys)). An `updateTheme` may declare tokens of its own
+beside the app's.
 
 The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz`, `lab()` or
 `rgb(255 0 0)garbage`, a `var()`
@@ -361,7 +374,7 @@ shown now, and a value of no kind a token has is left out, so that token keeps i
 
 `resetTheme` puts the tokens `names` back to their values in the app's theme, `nsh.json`'s or the one `setTheme` set;
 without names, every token. A name the theme does not have is removed. The tokens it does not name stay as they are.
-Under [theme types](../docs/rust.md#theme-types) a role's name names the token the role is mapped onto, as it does in
+Under [declared tokens](../docs/rust.md#theme-documents-and-typed-keys) a role's name names the token the role is mapped onto, as it does in
 a theme file.
 Rust: `update_tokens` and `reset_tokens` ([Theme](../docs/rust.md#theme)).
 
@@ -1205,7 +1218,7 @@ In a scope, everything that follows the appearance follows the scope's: `dark:` 
 
 With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
 
-As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` and `ScopeTheme::of(&theme)` for tokens and a theme type's value made in Rust; `dark()`, `color()`, `tokens()` and `theme_of()` answer for the scope around the binding that reads them.
+As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` for tokens made in Rust; `dark()`, `color()`, `tokens()`, `token()` and a typed key's `get()` answer for the scope around the binding that reads them.
 
 ```rust tabs
 view().flex_row().flex_1().child(

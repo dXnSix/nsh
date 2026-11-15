@@ -4,59 +4,23 @@
 
 use std::time::Duration;
 
-use nsh_base::{role, theme};
+use nsh_base::theme;
 use nsh_core::{
     Color, Size,
-    element::{AppTheme, Registry, Root, TokenKind, TokenSpec, Tokens},
+    element::{Registry, Root, TokenKey, Tokens},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
 use nsh_testing::Headless;
 
 /// One surface for cards and popovers.
-#[derive(Debug, Clone, PartialEq)]
-struct Flat {
-    surface: AdaptiveColor,
-}
+const FLAT: &str = r##"{
+    "cssVars": { "theme": { "surface": "#0a0b0c" } },
+    "tokens": { "surface": { "kind": "color" } },
+    "roles": { "card": "surface", "popover": "surface" }
+}"##;
 
-impl Default for Flat {
-    fn default() -> Self {
-        Flat {
-            surface: AdaptiveColor::rgb(0x0a0b0c, 0x0a0b0c),
-        }
-    }
-}
-
-impl AppTheme for Flat {
-    type Patch = AdaptiveColor;
-
-    fn token_specs() -> &'static [TokenSpec] {
-        static SPECS: std::sync::LazyLock<Vec<TokenSpec>> = std::sync::LazyLock::new(|| {
-            vec![
-                TokenSpec::new("surface", TokenKind::Color)
-                    .role(role::CARD)
-                    .role(role::POPOVER),
-            ]
-        });
-        &SPECS
-    }
-
-    fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
-        out.set_color(&format!("{prefix}surface"), self.surface);
-    }
-
-    fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
-        Flat {
-            surface: tokens
-                .color(&format!("{prefix}surface"))
-                .unwrap_or(Flat::default().surface),
-        }
-    }
-
-    fn write_patch(patch: &AdaptiveColor, prefix: &str, out: &mut Tokens) {
-        out.set_color(&format!("{prefix}surface"), *patch);
-    }
-}
+const SURFACE: TokenKey<AdaptiveColor> = TokenKey::new("surface");
 
 fn hex(c: AdaptiveColor) -> String {
     format!("#{:08x}", Color::from(c.light).0)
@@ -74,7 +38,7 @@ fn shown() -> String {
 fn Surfaces() -> impl IntoElement {
     let first = shown();
     set_timeout(Duration::from_millis(50), || {
-        update_theme::<Flat>(AdaptiveColor::rgb(0x123456, 0x123456));
+        update_tokens(Tokens::default().with(SURFACE, AdaptiveColor::rgb(0x123456, 0x123456)));
     });
     text(move || format!("first {first}, now {}", shown()))
 }
@@ -82,7 +46,7 @@ fn Surfaces() -> impl IntoElement {
 #[test]
 fn theme_reads_one_token_through_both_roles_and_both_follow_it() {
     let mut ds = Registry::new();
-    ds.theme::<Flat>();
+    ds.theme_document(FLAT);
     let mut app = Headless::start(EngineConfig {
         viewport: Size::new(px(390.0), px(844.0)),
         ui_sets: vec![nsh_base::registry(), ds],

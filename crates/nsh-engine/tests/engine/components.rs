@@ -36,7 +36,7 @@ pub(crate) fn start_with(
 }
 
 /// [`start_with`] with the UI sets `sets` beside `nsh/base` and `test/ui`
-/// (a design system's, with its theme types).
+/// (a design system's, with its theme document).
 pub(crate) fn start_with_sets(
     app: &str,
     environment: Environment,

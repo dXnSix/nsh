@@ -19,6 +19,8 @@
 //!
 //! - `asset!("logo@2x.png")` / `assets!()`: the files a crate ships in its
 //!   `assets/` directory, read at compile time.
+//! - `theme_keys!("design/theme.json")`: a typed key of each design token a
+//!   theme document declares, read at compile time.
 //!
 //! - `#[native_module("gallery/native")]` on a function of an app's crate:
 //!   the UI set it registers, which nsh's generated workspace links.
@@ -42,7 +44,7 @@ mod js_ops;
 mod native_components;
 mod native_module;
 mod root;
-mod theme;
+mod theme_keys;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -1877,49 +1879,25 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     })
 }
 
-/// `#[derive(AppTheme)]` on a struct: a theme type of its fields
-/// (`nsh_core::element::AppTheme`), each one token or an inner theme type.
-///
-/// - `#[token(color | number | radius | spacing | text | weight | tracking |
-///   leading | blur | font | shadow | gradient)]`: a token of that kind,
-///   named after the field in kebab case, a namespaced kind with its
-///   namespace (`#[token(radius)] card` is `radius-card`, `weight`
-///   `font-weight-*`, `font` `font-*`, `shadow` `shadow-*`, `gradient`
-///   `background-image-*`); a color (`AdaptiveColor`), a number (`f32`,
-///   `Points`), a font family (`SharedString`, `String`), box shadows
-///   (`AdaptiveShadow`) or gradients (`AdaptiveGradient`). `name = "…"` names it; `role = <path>`
-///   maps a role onto it, the role's constant by its path
-///   (`role = nsh_base::role::POPOVER`, or a component library's own),
-///   once for each role it plays (`role = role::CARD, role = role::POPOVER`:
-///   one surface for both). The role reads what the token holds: the
-///   compiler refuses a number's role on a color.
-/// - `#[token(nested)]`: a field of another `AppTheme` type, its names under
-///   `<field>-`: in front of a color's or a number's name (`surface-raised`),
-///   after a namespaced kind's namespace, so its classes still read it
-///   (`radius-surface-card`, `rounded-surface-card`; `shadow-surface-raised`;
-///   `TokenKind::prefixed`). `#[token(flatten)]` is the same with no prefix.
-///   A name the tokens lack keeps the inner type's `Default`, not the value
-///   the outer `Default` gives the field.
-/// - `#[token(skip)]`: no token; the field keeps `Default`'s value.
-///
-/// A number field is its token's light value (`Tokens::number`); a dark
-/// value is read with `Tokens::number_in`, and `set_theme` drops it.
-///
-/// A field's doc comment is its token's doc (TS's `tokens.d.ts`). It makes
-/// `<Type>Patch`, every field an `Option` (a nested one its type's patch),
-/// for `update_theme`, each documented with its token and the classes that
-/// read it. These are compile errors: a name given twice, empty, or of the
-/// wrong form for its kind (only a font is `font-*`, but a weight
-/// `font-weight-*`; a shadow is `shadow-*`; a namespaced kind's name, also
-/// one given with `name`, starts with its namespace); a kind that does not fit the
-/// field's type, an unknown kind, two kinds, or a kind with `nested`,
-/// `flatten` or `skip`; a role of no name, of another kind of token, or
-/// mapped twice; `name` or `role` on a field that is no token; a second
-/// `#[token]`; a nested field named `font…` or `weight…`; and a generic struct.
-#[proc_macro_derive(AppTheme, attributes(token))]
-pub fn derive_app_theme(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    theme::derive(input)
+/// `theme_keys!("design/theme.json")`: a typed key
+/// (`nsh_core::element::TokenKey`) for each token the theme document
+/// declares in its `"tokens"` section, the path relative to the crate's
+/// manifest. Each key is a constant in modules by the token's path
+/// (`"path": "colors.backgrounds.primary"` is
+/// `colors::backgrounds::PRIMARY`; a token without a path is named after
+/// its name, `RADIUS_CARD`), documented with the token's doc, of the type
+/// its kind's value is: a color `AdaptiveColor`, a number, weight or line
+/// height `f32`, a radius, spacing, size, tracking or blur `Points`, a font
+/// `SharedString`, shadows `AdaptiveShadow`, gradients `AdaptiveGradient`.
+/// Path segments are snake case for modules and upper snake case for
+/// constants (`type-scale`, `fontSize` are `type_scale`, `FONT_SIZE`; a
+/// digit first takes `_`). Read at compile time: a changed document builds
+/// the crate again. A missing or broken document fails the build, as do a
+/// kind there is not and two tokens of one key.
+#[proc_macro]
+pub fn theme_keys(input: TokenStream) -> TokenStream {
+    let lit = parse_macro_input!(input as LitStr);
+    theme_keys::expand(lit)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

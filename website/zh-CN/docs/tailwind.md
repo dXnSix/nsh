@@ -261,7 +261,7 @@ token 的名称就是主题文件中 CSS 变量去掉 `--` 后的名称：`muted
 | 数字 token 名称在其命名空间的工具类中 | Tailwind 4 命名空间中的数字 token，按名称的其余部分 | `rounded-card`（`radius-card`）、`p-gutter`、`gap-x-gutter`（`spacing-gutter`）、`text-body`（`text-body`）、`font-strong`（`font-weight-strong`）、`tracking-label`、`leading-body`、`blur-soft` |
 
 - **应用自己的令牌。** 主题文件中的每个名称都是 token，就像 CSS `@theme` 中的每个变量：`"up": "#16a34a"` 生成 `bg-up`、`text-up` 和 `bg-up/30`；`"radius-card": "14px"` 生成 `rounded-(--radius-card)`；`"font-display": "Pacifico"` 生成 `font-(family-name:--font-display)`。长度的单位是点；`(number:--name)` 传入不带单位的数值。
-- **主题角色。** 变量也可以指名[主题角色](../modules/nsh.md#role)：当主题没有名为 `popover` 的 token，并把角色 `popover` 映射到自己的 token `overlay`（主题类型的 `role = …`，或主题文件的 `"roles": { "popover": "overlay" }`）时，`bg-(--popover)` 在每种外观下都是 `overlay` 的颜色，并随它变化。因此在多个应用之间共享的组件只需写一次 `bg-(--popover) rounded-(--radius)`，就适用于每个设计系统。同名的 token 优先，而不带括号的类（`bg-popover`）只指名 token。构建时会根据主题映射的角色检查该变量。
+- **主题角色。** 变量也可以指名[主题角色](../modules/nsh.md#role)：当主题没有名为 `popover` 的 token，并把角色 `popover` 映射到自己的 token `overlay`（主题文档或主题文件的 `"roles": { "popover": "overlay" }`）时，`bg-(--popover)` 在每种外观下都是 `overlay` 的颜色，并随它变化。因此在多个应用之间共享的组件只需写一次 `bg-(--popover) rounded-(--radius)`，就适用于每个设计系统。同名的 token 优先，而不带括号的类（`bg-popover`）只指名 token。构建时会根据主题映射的角色检查该变量。
 - **字体。** `font-sans` 是应用的字体：没有设置自己字体族的文字都用它绘制，就像网页使用 Tailwind 的 `--font-sans`。`font-mono` 是 `font-mono` 类和 `TextView` 中代码的字体。未设置时两者都是系统字体。
 - **两种外观。** token 带有主题的浅色值和深色值：`bg-primary`、`theme().primary` 和 `token("primary")` 都会随外观自动切换，不需要 `dark:` 类。只在一种外观里设置的颜色在两种外观下都使用该值。数字也可以有深色值：在浅色的 `14px` 之外写 `"dark": { "radius-card": "6px" }`，`rounded-card` 和 `rounded-(--radius-card)` 在浅色外观下为 14 点，在深色外观下为 6 点，`token("radius-card")` 取当前显示外观的值；主题只给出一次的数字在两种外观下相同。
 - **具名数字类名。** 名称以 Tailwind 4 某个命名空间开头的数字 token，是该命名空间工具类的一个类名，按名称的其余部分命名，就像 Tailwind 中 `--radius-card` 产生 `rounded-card`：`radius-` 对应圆角工具类（`rounded-card`、`rounded-t-card`、`rounded-bl-card`）；`spacing-` 对应内边距、外边距、间距、尺寸、偏移和平移（`p-gutter`、`-mt-gutter`、`gap-x-gutter`、`w-gutter`、`inset-x-gutter`）；`text-` 对应字号；`font-weight-` 对应字重（`"font-weight-strong": "650"` 产生 `font-strong`）；`tracking-`、`leading-` 和 `blur-` 对应各自的工具类。`tracking-` token 是以点为单位的长度（`px` 或 `rem`）；`em` 单位的值会被略过，shadcn 的 `tracking-normal: 0em` 一直如此。它们可以用在变体下，并像所有 token 类名一样跟随主题。`text-` 也是颜色工具类：同名的颜色在那里仍然优先；其他情况下较长的工具类优先（`inset-shadow-card` 是内阴影的颜色 `card`）。
@@ -272,9 +272,9 @@ token 的名称就是主题文件中 CSS 变量去掉 `--` 后的名称：`muted
 - **主题可以在运行时改变。** 嵌入原生应用的 NSH 应用拿到宿主的主题时，以及主题每次变化时，引用 token 的类、读取 `theme()` 的 Rust 绑定和读取 `token()` 的 TSX 代码都会更新，其中类和绑定在原生侧更新。宿主主题里没有的 token 使用应用自己 `"theme"` 中的值（再没有则用默认主题的值）。只想加上自己品牌的宿主给出主题覆盖，即用同样的文件格式写出其品牌要改的 token（[iOS](./ios.md#主题覆盖)、[Android](./android.md#主题覆盖)，桌面端为 `AppView::set_theme_overrides`）。
 - **应用可以换一个主题。** `nsh` 的 [`setTheme(theme)`](../modules/nsh.md#settheme) 在应用运行时把一个同样格式的主题设为应用的主题，取代它的 `"theme"`，在每个平台和 `nsh test` 里都一样；`setTheme(null)` 恢复应用自己的主题。`token()` 立即读到新的 token。主题要整个读得懂：有读不懂的值时抛出列出该值的 `TypeError`，正在显示的主题保持不变。请从应用自己的主题文件出发构造新主题，这样类名引用的每个 token 都还有值。Rust 应用用 `set_tokens(theme.into())` 设置一个 `nsh_base::Theme` 的 token。
 - **与其他类名一样检查。** 既不是默认主题、也不是应用 `"theme"` 中 token 的名称，在构建时会报告为未知类（`unknown class 'bg-chart-up'`）。要使用只有宿主或运行时设置的主题提供的 token，在应用的 `"theme"` 里也给它一个值：应用单独运行时显示这个值。
-- **主题类型。** 应用的 crate 注册了[主题类型](./rust.md#主题类型)时，各类型的 token 就是主题的 token，以类型的默认值为起点：类名像使用任何 token
+- **已声明的令牌。** 应用的 crate 注册了[主题文档](./rust.md#主题文档与类型化键)，或应用的主题文件声明了它的令牌时，已声明的 token 就是主题的 token，以文档的默认值为起点：类名像使用任何 token
   一样使用它们（`bg-surface-raised`、`text-action/70`，`radius-card` 对应 `rounded-card`，`spacing-gutter` 对应 `p-gutter`），`token()` 读取它们。
-  角色是 NSH 自己的部分绘制时使用的，类名使用的是 token：设计系统把 `primary` 角色映射到 `action` 时，它的类名是 `bg-action`，而只有某个类型声明了
+  角色是 NSH 自己的部分绘制时使用的，类名使用的是 token：设计系统把 `primary` 角色映射到 `action` 时，它的类名是 `bg-action`，而只有某份文档声明了
   `primary`，`bg-primary` 才是已知的类名。
 
 引用 token 的类和其他类一样，每套主题只解析一次：绘制时的开销与调色板颜色相同。
@@ -299,7 +299,7 @@ import { Canvas, token } from "nsh";
 />
 ```
 
-名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。使用主题类型时，它列出各类型的 token，每个按其种类标注类型（`number`，颜色、字体和阴影为 `string`），并附带文档注释。
+名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。使用已声明的令牌时，它列出已声明的 token，每个按其种类标注类型（`number`，颜色、字体和阴影为 `string`），并附带文档注释。
 
 ### 应用某一部分的 token
 

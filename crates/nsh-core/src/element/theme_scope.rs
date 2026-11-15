@@ -9,8 +9,8 @@
 //! running) and the tokens (`Core::classes_at`: a class list that reads a
 //! token the scope changes is parsed with the scope's values, once). What
 //! reads them in code reads the nearest scope's: [`super::dark`],
-//! [`super::color`], [`super::tokens`] and [`super::theme_of`] through the
-//! context a scope provides to what it renders, TS's `colorScheme()` and
+//! [`super::color`], [`super::tokens`], [`super::token`] and typed keys
+//! ([`super::TokenKey::get`]) through the context a scope provides to what it renders, TS's `colorScheme()` and
 //! `token()` through `nsh-js`'s (`components.rs`).
 //!
 //! A scope's tokens are its `theme`'s values over the tokens around it,
@@ -46,12 +46,6 @@ impl ScopeTheme {
     /// The theme file `json`.
     pub fn file(json: impl Into<Arc<str>>) -> Self {
         Self::File(json.into())
-    }
-
-    /// The tokens of a theme type's value (the app's own, or `nsh-base`'s
-    /// `Theme`).
-    pub fn of<T: super::AppTheme>(theme: &T) -> Self {
-        Self::Tokens(Arc::new(super::theme::theme_tokens(theme)))
     }
 
     /// The tokens a scope with this theme draws with: its values over
@@ -213,8 +207,8 @@ impl ScopeTokens {
 /// # Rust
 ///
 /// Read the appearance and the tokens where they are used (a binding, a
-/// style's closure): [`dark`], [`color`], [`tokens`] and
-/// [`super::theme_of`] answer for the scope around what reads them, and an
+/// style's closure): [`dark`], [`color`], [`tokens`], [`super::token`] and
+/// typed keys answer for the scope around what reads them, and an
 /// element built before the scope places it is built outside it.
 #[component]
 pub fn ThemeScope(props: ThemeScopeProps, _cx: Scope<NoEvent>) -> impl IntoElement {

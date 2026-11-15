@@ -964,13 +964,13 @@ impl<M: TextEngine> Core<M> {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
         }
-        let typed = registry.has_theme_types();
+        let typed = registry.has_declarations();
         self.components.registry = registry;
         self.components
             .runtime
             .set_theme_tokens(self.theme_tokens());
-        // The tokens were sent before the registry was in place: an app with
-        // theme types has a theme of its own (`Tokens::is_themed`).
+        // The tokens were sent before the registry was in place: an app whose
+        // sets declare tokens has a theme of its own (`Tokens::is_themed`).
         if typed {
             self.tokens_changed();
         }
@@ -1027,51 +1027,8 @@ impl<M: TextEngine> Core<M> {
         self.tokens_changed();
     }
 
-    /// Takes the tokens a theme type's fields wrote
-    /// ([`crate::element::set_theme`]), read in the dark appearance
-    /// (`dark`) or the light one, as [`Core::update_tokens`] takes tokens,
-    /// but a number left at its value there keeps both its values: a
-    /// number field is the value of one appearance, and setting a theme
-    /// that was read must not change what it could not read. Applied in
-    /// order, as an update.
-    pub(crate) fn set_theme_tokens(&mut self, tokens: Tokens, dark: bool) {
-        self.components.app_tokens =
-            Arc::new(tokens.over_as_fields(&self.components.app_tokens, dark));
-        self.tokens_changed();
-    }
-
-    /// `tokens`, written by a theme type whose tokens play the roles
-    /// `played` (each with its token's name), as the app's tokens take
-    /// them: a token playing a role the app's tokens map onto a token of
-    /// another name is that token. So a type that is not registered
-    /// (`nsh-base`'s `Theme`, whose `popover` plays the role `popover`)
-    /// sets what its fields read, the design system's `surface-overlay`,
-    /// as a theme file's `popover` key does; a token one of whose roles is
-    /// not mapped away keeps its own name too. A registered type's roles
-    /// are mapped onto its own tokens, so its tokens are as it wrote them.
-    /// The mapping is the one of now: the action runs in order.
-    fn through_roles(&self, mut tokens: Tokens, played: &[(Box<str>, Box<str>)]) -> Tokens {
-        let app = &self.components.app_tokens;
-        let (mut moved, mut stays): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
-        for (role, name) in played {
-            match app.mapped(role) {
-                Some(token) if *token != **name => {
-                    tokens.copy_as(name, token);
-                    moved.push(name);
-                }
-                _ => stays.push(name),
-            }
-        }
-        for name in moved {
-            if !stays.contains(&name) {
-                tokens.remove_named(name);
-            }
-        }
-        tokens
-    }
-
-    /// The tokens that `names` name as a theme file names them: under theme
-    /// types a role's name is the token it is mapped onto
+    /// The tokens that `names` name as a theme file names them: under
+    /// declared tokens a role's name is the token it is mapped onto
     /// (`TokenProvider::token_name`).
     pub(super) fn theme_file_names(&self, mut names: Vec<Box<str>>) -> Vec<Box<str>> {
         if let Some(provider) = self.components.registry.token_provider() {
@@ -1248,9 +1205,10 @@ impl<M: TextEngine> Core<M> {
         };
         // Whether the app has a theme of its own, which the platforms'
         // controls take their colors from only then.
-        // An app whose sets register theme types has a theme of its own,
-        // its design system's.
-        let themed = self.components.registry.has_theme_types()
+        // An app whose sets or theme file declare tokens has a theme of its
+        // own, its design system's.
+        let themed = self.components.registry.has_declarations()
+            || tokens.declarations().is_some()
             || match &self.components.default_tokens {
                 Some(default) => *tokens != **default,
                 None => !tokens.is_empty(),
@@ -6219,31 +6177,6 @@ impl<M: TextEngine> Core<M> {
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
             Action::UpdateTokens(tokens) => self.update_tokens(tokens),
-            Action::SetTheme {
-                tokens,
-                played,
-                dark,
-            } => {
-                let tokens = self.through_roles(tokens, &played);
-                let dark = dark.unwrap_or_else(|| self.shown_dark());
-                self.set_theme_tokens(tokens, dark);
-            }
-            Action::UpdateTheme { tokens, played } => {
-                let tokens = self.through_roles(tokens, &played);
-                self.update_tokens(tokens);
-            }
-            Action::ResetTheme { mut names, played } => {
-                // The tokens the type's roles are mapped onto go back with
-                // its own names.
-                for (role, _) in &played {
-                    if let Some(token) = self.components.app_tokens.mapped(role)
-                        && !names.iter().any(|n| **n == *token)
-                    {
-                        names.push(token.into());
-                    }
-                }
-                self.reset_tokens(Some(&names));
-            }
             Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),

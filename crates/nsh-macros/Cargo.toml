@@ -20,6 +20,7 @@ imagesize.workspace = true
 proc-macro-crate.workspace = true
 proc-macro2.workspace = true
 quote.workspace = true
+serde_json.workspace = true
 syn.workspace = true
 ttf-parser.workspace = true
 # WOFF and WOFF2 fonts' family names (`asset!`), read from what they hold.

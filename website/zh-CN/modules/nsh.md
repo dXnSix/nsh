@@ -271,7 +271,7 @@ effect(() => console.log("primary is", token("primary"), "radius", token("radius
 function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
 ```
 
-主题角色 `name` 在当前外观下用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用主题把该角色映射到的令牌（主题类型的 `role = …`），
+主题角色 `name` 在当前外观下用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用主题把该角色映射到的令牌（主题文档的 `"roles"`），
 否则是与角色同名的令牌，否则是 `undefined`。角色说明 UI 的某个部分是做什么用的（`popover`、`border`、`warning`），无论应用的设计系统如何命名
 对应的令牌：按角色编写的组件可以被任何设计系统主题化。读取它是响应式的，与 `token()` 一样。
 
@@ -300,13 +300,25 @@ interface Theme {
     dark?: Record<string, string | number>;
   };
   roles?: Record<string, string>;
+  tokens?: Record<string, TokenDeclaration>;
+}
+
+interface TokenDeclaration {
+  kind: "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow" | "gradient";
+  path?: string;
+  doc?: string;
 }
 ```
 
 `roles` 按名称把主题角色映射到主题的令牌上：`roles: { popover: "surface" }` 让所有用 `popover` 绘制的部分（`nsh/base` 的弹出层、
-[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。没有 Rust 主题类型的
-应用用它按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在主题类型下映射某个类型已经映射的角色，会像无法读取的值一样被拒绝；
+[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。应用用它
+按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在[已声明的令牌](../docs/rust.md#主题文档与类型化键)下映射某个主题文档已经映射的角色，会像无法读取的值一样被拒绝；
 没有任何 UI 集合拥有的角色名会产生构建警告。`updateTheme` 会在已映射的角色之上追加。
+
+`tokens` 声明主题的令牌：每个令牌保存什么（`kind`）、在设计者的树中的位置（`path`）以及说明（`doc`）
+（`tokens: { "radius-card": { kind: "radius", path: "radius.card" } }`）。声明了令牌的主题按它们读取，每个值都按其令牌的种类读取，
+并取代默认主题：它没有声明的名称会被忽略（[主题文档](../docs/rust.md#主题文档与类型化键)）。`updateTheme` 可以在应用已有的令牌旁边
+声明自己的令牌。
 
 在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
 它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。
@@ -348,7 +360,7 @@ function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
 嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先。
 
 `resetTheme` 把 `names` 中的令牌恢复为应用主题中的值，即 `nsh.json` 的主题或 `setTheme` 设置的主题；不传名字时恢复全部令牌。
-主题中没有的名字会被移除。没有列出的令牌保持不变。在[主题类型](../docs/rust.md#主题类型)下，角色的名称指该角色所映射的令牌，与主题文件中一样。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
+主题中没有的名字会被移除。没有列出的令牌保持不变。在[已声明的令牌](../docs/rust.md#主题文档与类型化键)下，角色的名称指该角色所映射的令牌，与主题文件中一样。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
 
 ```tsx
 import { resetTheme, updateTheme } from "nsh";
@@ -1157,7 +1169,7 @@ interface ThemeScopeProps {
 
 设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
 
-与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 和 `ScopeTheme::of(&theme)` 传入在 Rust 中构造的令牌和主题类型的值；`dark()`、`color()`、`tokens()` 和 `theme_of()` 给出读取它们的绑定所在作用域的结果。
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 传入在 Rust 中构造的令牌；`dark()`、`color()`、`tokens()`、`token()` 和类型化键的 `get()` 给出读取它们的绑定所在作用域的结果。
 
 ```rust tabs
 view().flex_row().flex_1().child(

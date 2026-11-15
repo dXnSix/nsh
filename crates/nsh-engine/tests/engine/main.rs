@@ -11,7 +11,6 @@ use crossbeam_channel::Sender;
 use nsh_core::MountBatch;
 use nsh_engine::MountSink;
 
-mod app_theme;
 mod assets;
 mod canvas;
 mod class_bench;
@@ -75,6 +74,7 @@ mod storage;
 mod system;
 mod test_ui;
 mod theme;
+mod theme_document;
 mod theme_overrides;
 mod theme_root;
 mod theme_scope;

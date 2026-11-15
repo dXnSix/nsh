@@ -546,7 +546,7 @@ pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
     "resetTheme",
     Export::Function(reset_theme, 1),
     Ts::function(
-        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme types map it onto, as it does in a theme file.",
+        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme documents map it onto, as it does in a theme file.",
         &["(names?: (keyof Tokens | keyof Roles)[]): void"],
     ),
 );
@@ -638,7 +638,7 @@ pub(crate) const ROLE_EXPORT: crate::modules::Item = (
     "role",
     Export::Function(role, 1),
     Ts::function(
-        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme type's `role = …`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
+        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme document's `\"roles\"`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
         &["<K extends keyof Roles>(name: K): Roles[K] | undefined"],
     ),
 );

@@ -3653,7 +3653,7 @@ style id:faded color #138a5a80
 covers [nsh] token
 
 # base-role
-# A role without a theme type: the token of its name, in the appearance
+# A role without declared tokens: the token of its name, in the appearance
 # shown; none until the theme has one.
 tap id:case-base-role
 expect role popover #ffffffff

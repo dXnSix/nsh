@@ -380,7 +380,9 @@ export interface Roles {}
  * appearances, `light`'s in the light one and in the dark one where `dark`
  * leaves them out, `dark`'s in the dark one. `roles` maps theme roles onto
  * its tokens by name (`{ popover: "surface" }`): what draws with the role
- * draws with that token, and follows it.
+ * draws with that token, and follows it. `tokens` declares its tokens
+ * (`{ "radius-card": { kind: "radius" } }`): the theme is then read by them,
+ * and replaces the default theme.
  */
 export interface Theme {
   cssVars: {
@@ -389,6 +391,14 @@ export interface Theme {
     dark?: Record<string, string | number>;
   };
   roles?: Record<string, string>;
+  tokens?: Record<string, TokenDeclaration>;
+}
+
+/** A token a theme declares (its `tokens`): what it holds, its place in the designer's tree and its doc. A theme that declares its tokens is read by them. */
+export interface TokenDeclaration {
+  kind: "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow" | "gradient";
+  path?: string;
+  doc?: string;
 }
 
 /** The app as it was built (`appInfo()`). */

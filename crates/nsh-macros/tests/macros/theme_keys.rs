@@ -1,0 +1,51 @@
+//! `theme_keys!`: a typed key for each token a theme document declares, in
+//! modules by its path, typed by its kind, reading the tokens the document
+//! makes.
+
+use nsh_core::{
+    element::{AdaptiveColor, AdaptiveShadow, Registry, SharedString, TokenKey},
+    geometry::Points,
+};
+
+mod keys {
+    nsh_core::element::theme_keys!("tests/macros/theme_keys/theme.json");
+}
+
+#[test]
+fn keys_follow_the_paths_and_kinds() {
+    let primary: TokenKey<AdaptiveColor> = keys::colors::backgrounds::PRIMARY;
+    assert_eq!(primary.name(), "colors-backgrounds-primary");
+    // A token without a path is named after its name.
+    let ink: TokenKey<AdaptiveColor> = keys::INK;
+    assert_eq!(ink.name(), "ink");
+    let card: TokenKey<Points> = keys::radius::CARD;
+    assert_eq!(card.name(), "radius-card");
+    // Segments become Rust names: `type-scale` a module `type_scale`,
+    // `type` a raw one, a digit first takes `_`.
+    let gutter: TokenKey<Points> = keys::type_scale::GUTTER;
+    assert_eq!(gutter.name(), "spacing-gutter");
+    let strong: TokenKey<f32> = keys::r#type::STRONG;
+    assert_eq!(strong.name(), "font-weight-strong");
+    let body: TokenKey<SharedString> = keys::r#type::body::FAMILY;
+    assert_eq!(body.name(), "font-body");
+    let raised: TokenKey<AdaptiveShadow> = keys::effects::_2xl::RAISED;
+    assert_eq!(raised.name(), "shadow-raised");
+}
+
+#[test]
+fn keys_read_the_tokens_the_document_declares() {
+    let mut registry = Registry::ui_set("ds/native");
+    registry.theme_document(include_str!("theme_keys/theme.json"));
+    let tokens = registry.tokens(None).unwrap().unwrap().0;
+    assert_eq!(
+        tokens.key(keys::colors::backgrounds::PRIMARY),
+        Some(AdaptiveColor::rgb(0xffffff, 0x0b0b0f))
+    );
+    assert_eq!(tokens.key(keys::radius::CARD), Some(Points(12.0)));
+    assert_eq!(tokens.key(keys::r#type::STRONG), Some(650.0));
+    assert_eq!(
+        tokens.key(keys::r#type::body::FAMILY).as_deref(),
+        Some("Inter")
+    );
+    assert!(tokens.key(keys::effects::_2xl::RAISED).is_some());
+}
