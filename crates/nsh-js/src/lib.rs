@@ -27,6 +27,8 @@ mod host;
 mod host_channel;
 mod hot;
 mod i18n;
+#[cfg(test)]
+mod js_handles;
 mod keymap;
 mod list;
 mod modules;

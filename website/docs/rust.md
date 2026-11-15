@@ -380,7 +380,8 @@ returning a value gives `Promise<T>`. Arguments and results are typed from the s
 `#[derive(JsObject)]` structs and `#[derive(PropEnum)]` enums, instances of your classes, and TSX functions
 (`Callback<A, R>`, which Rust calls at once inside a call, or later with `post` and `call_async`; TS sees
 `(value: number) => void` for a `Callback<f64>`, and `#[args(balance)] listener: Callback<f64>` names the argument,
-`(balance: number) => void`). A function that starts listening is named `on(event, listener)` and returns `Stop`
+`(balance: number) => void`), and any TSX object Rust keeps as it is (`JsHandle`, TS `object`: stored in a field or
+a map, compared by identity and given back to TSX as the same object). A function that starts listening is named `on(event, listener)` and returns `Stop`
 (`Stop::new(|| …)`), which TSX gets as a function that stops it (`() => void`); it runs once, when TSX calls it or
 when what called `on` goes (a component, or the module's run under hot reload). An event's handler gets one object: a variant's value is its field `value`, which
 `#[args(price)]` on the variant names (`onSelect({ price })`), and `#[args(open, reason)]` names the fields of a

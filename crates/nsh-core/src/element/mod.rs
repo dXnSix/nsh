@@ -47,6 +47,7 @@ mod engine_context;
 pub(crate) mod env;
 mod events;
 pub(crate) mod flow;
+mod handle;
 pub mod header;
 pub(crate) mod host;
 mod js;
@@ -159,6 +160,7 @@ pub use self::{
         TextSelectionEvent, VideoInfo, VideoProgress, WebNavigation,
     },
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic, each, when},
+    handle::JsHandle,
     host::{
         CanvasArg, CanvasPaint, CanvasView, Input, InputAccessoryView, IntoUniform, Modal,
         NativeView, Orientation, Overlay, Painter, Screen, Scroll, ShaderView, Stack, Svg, Uniform,

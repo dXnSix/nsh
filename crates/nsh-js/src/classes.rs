@@ -1085,6 +1085,16 @@ impl JsHost for CallHost<'_> {
         Some(new_callback(self.cx, from_raw(v)))
     }
 
+    fn object(&self, v: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
+        // Kept as it is: a promise among them stays the app's to handle.
+        let v = from_raw(v);
+        js::is_object(v).then(|| new_callback(self.cx, v))
+    }
+
+    fn vm(&self) -> Option<usize> {
+        Some(self.cx as usize)
+    }
+
     fn free(&self, v: JsRaw) {
         // SAFETY: an owned value.
         unsafe { qjs::JS_FreeValue(self.cx, from_raw(v)) };
@@ -1345,11 +1355,14 @@ impl Functions {
     }
 }
 
-/// A JS function as Rust keeps it.
+/// A JS function (or any value) as Rust keeps it.
 pub(crate) struct JsCallback {
     functions: Rc<Functions>,
     key: u64,
     posts: Posts,
+    /// The address of the object it keeps (0 for a primitive): what tells
+    /// it apart while kept, as QuickJS never moves an object.
+    object: usize,
 }
 
 impl JsCallback {
@@ -1402,10 +1415,20 @@ impl JsCallback {
 }
 
 impl CallbackHandle for JsCallback {
-    fn value(&self, _host: &dyn nsh_core::element::JsHost) -> Option<JsRaw> {
+    fn value(&self, host: &dyn nsh_core::element::JsHost) -> Option<JsRaw> {
         let (cx, v) = JsCallback::value(self)?;
+        // A value of this VM, for a host of this VM only.
+        if host.vm().is_some_and(|vm| vm != cx as usize) {
+            return None;
+        }
         // SAFETY: a new reference for the caller, of a value the table owns.
         Some(to_raw(unsafe { qjs::JS_DupValue(cx, v) }))
+    }
+
+    fn identity(&self) -> Option<(usize, usize)> {
+        // The table is the VM's (a new VM has a new one): an address a
+        // freed object leaves behind names no object of another VM.
+        (self.object != 0).then_some((Rc::as_ptr(&self.functions) as usize, self.object))
     }
 
     fn call_now(&self, call: JsCall) {
@@ -1475,10 +1498,17 @@ fn new_callback(cx: Ctx, v: Raw) -> Rc<dyn CallbackHandle> {
     // SAFETY: the table owns the new reference.
     let v = unsafe { qjs::JS_DupValue(cx, v) };
     functions.values.borrow_mut().insert(key, v);
+    let object = if js::is_object(v) {
+        // SAFETY: an inline pointer read of an object.
+        unsafe { qjs::JS_VALUE_GET_PTR(v) as usize }
+    } else {
+        0
+    };
     Rc::new(JsCallback {
         functions,
         key,
         posts: c.posts.clone(),
+        object,
     })
 }
 

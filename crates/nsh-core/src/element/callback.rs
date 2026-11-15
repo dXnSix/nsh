@@ -33,8 +33,16 @@ pub trait CallbackHandle: std::any::Any {
     /// Queues `call` for the next JS turn.
     fn post(&self, call: JsCall);
     /// The value it keeps, as an owned value of `host` (a new reference the
-    /// caller frees); `None` once the VM is gone.
+    /// caller frees); `None` once the VM is gone, or for a host of another
+    /// VM.
     fn value(&self, _host: &dyn JsHost) -> Option<super::JsRaw> {
+        None
+    }
+    /// What tells the object it keeps apart from every other live object
+    /// (a [`super::JsHandle`]'s equality): the same for two handles of one
+    /// object. `None`: the handle itself does (a host keeping one handle
+    /// per object).
+    fn identity(&self) -> Option<(usize, usize)> {
         None
     }
 }
@@ -506,6 +514,11 @@ impl<'a> Tracer<'a> {
     pub fn new(mark: &'a mut dyn FnMut(&dyn CallbackHandle)) -> Self {
         Self { mark }
     }
+
+    /// Reports `handle` (a value Rust keeps through this one alone).
+    pub(super) fn report(&mut self, handle: &dyn CallbackHandle) {
+        (self.mark)(handle);
+    }
 }
 
 impl fmt::Debug for Tracer<'_> {
@@ -516,7 +529,7 @@ impl fmt::Debug for Tracer<'_> {
 
 /// What reports the callbacks a value keeps, for QuickJS's collector.
 /// `#[class]` on a struct implements it from the fields whose types
-/// implement it (`Callback`, `Instance`, and `Option`, `Box`, `RefCell`,
+/// implement it (`Callback`, `JsHandle`, `Instance`, and `Option`, `Box`, `RefCell`,
 /// `Vec`, `VecDeque`, `HashMap` / `BTreeMap` values and pairs of them);
 /// other fields are not reported, which is always safe: what they keep
 /// stays alive while they do.

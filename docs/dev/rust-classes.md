@@ -247,6 +247,7 @@ For that, two choices of the first version change:
   instance of another app's or set's class is refused with a `TypeError`. `async` members and module functions keep
   what they take: `Instance<Other>`, not `&Other`.
 - **JS functions** (callbacks), below.
+- **JS objects** Rust keeps (`JsHandle`), below.
 - **Not in the first version:** events emitted by an instance (`EventTarget`) and iterators. Constructors honor
   `new.target` as the web classes' do, so a TS class may extend a Rust one.
 
@@ -316,7 +317,7 @@ impl Downloader {
 - **Keeping it:** a `Callback` can be stored (in an instance's field, a `Vec`, a global) and called any number of
   times; dropping the last clone releases the JS function. A callback an instance keeps is reported to QuickJS's
   collector through the class's mark hook, as the web classes report the JS values they hold. `#[class]` traces
-  every field whose type implements the `unsafe trait Trace` (`Callback`, `Instance`, and `Option`, `Box`,
+  every field whose type implements the `unsafe trait Trace` (`Callback`, `JsHandle`, `Instance`, and `Option`, `Box`,
   `RefCell`, `Vec`, `VecDeque`, map values and pairs of them; chosen by type, so aliases count and other types are
   skipped) and reports them while the object is the instance's only owner and the callback has no other clone,
   so a callback that captures the object owning the instance does not keep both alive forever. Callbacks held
@@ -339,6 +340,41 @@ impl Downloader {
   first; calling it unregisters the cleanup, so a long-lived owner does not collect stopped listeners. The
   Node-shaped standard modules keep Node's `on` returning the instance (`child.on(..)` chains).
 
+## JS objects
+
+A parameter `JsHandle` takes any JS object, array or function (TS `object`) and keeps it: Rust stores it as long as
+it likes (a field, a map, a task) and gives it back to JS as the very same object (`===`). It is how Rust keeps what
+TS made, a service or a token, without converting it.
+
+```rust
+#[class]
+impl Services {
+    /// Keeps `service` under `token`.
+    pub fn add(&mut self, token: JsHandle, service: JsHandle) {
+        self.by_token.insert(token, service);
+    }
+
+    /// What `token` was given, or `null`.
+    pub fn get(&self, token: JsHandle) -> Option<JsHandle> {
+        self.by_token.get(&token).cloned()
+    }
+}
+```
+
+- **Identity.** Two handles are equal (`Eq`, `Hash`) when they keep the same object, so a handle is a map key: the
+  same object converted twice gives equal handles, two objects with the same fields do not.
+- **Wherever a value crosses.** It is a `JsValue`, so `Option<JsHandle>` (`object | null`), `Vec<JsHandle>`, a
+  callback's result (`Callback<(), JsHandle>`, a factory TS passes) and a field of a `#[derive(JsObject)]` struct
+  take it too. `null`, `undefined` and primitives are refused with a `TypeError` (``Keeper.keep: `object`: expected
+  an object, got 3``).
+- **Kept as a callback is.** The object sits in the table of the values Rust keeps, where callbacks' functions are
+  (`nsh-js` `classes.rs`; the web runtime's handles), and is released when the last clone drops. A handle a
+  `#[class]` field holds alone is reported to the collector through the class's `Trace`, so an object that reaches
+  the instance's own JS object (a service holding its registry) is collected with it; one held elsewhere (a static,
+  a task, an `Rc` two instances share) is a root until dropped.
+- **Its VM's, on the engine thread.** It is not `Send`. A host of another VM (two engines on one thread) refuses it
+  (`the object belongs to a VM that is gone, or another`), and once its VM goes it is dead: giving it back to JS
+  fails, its equality still holds.
 
 ## How calls cross
 
@@ -386,7 +422,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   It implements `element::Class` (`Class::DEF`, a `ClassDef`: name, doc, members, each a `Member` with its
   `MemberCall`), as `#[module]` implements `Module`; on the struct it implements `Trace` (the callbacks the fields
   keep) and `Ret` (a value of the struct is a new instance).
-- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Callback<A, R>`, `Posts`,
+- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Callback<A, R>`, `JsHandle`, `Posts`,
   `Registry::class::<C>()`; the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
   `to_js`); the typed calls (`call.rs`: `RustOp`, `RustCall`, `JsEvent`, `AnyValue`, `ToJs`); the core runs
   them in order with the ops (`Core::run_rust`).

@@ -428,6 +428,15 @@ impl JsHost for Bindings {
     fn retain(&self, value: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
         Some(self.keep_callback(value))
     }
+    fn object(&self, value: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
+        // One handle per object (`keep_callback`): the handle is its
+        // identity.
+        matches!(
+            self.kind(value),
+            JsKind::Object | JsKind::Function | JsKind::Array
+        )
+        .then(|| self.keep_callback(value) as Rc<dyn CallbackHandle>)
+    }
     fn free(&self, value: JsRaw) {
         drop(Value(id(value)));
     }

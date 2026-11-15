@@ -89,6 +89,7 @@ pub use crate::element::{
     IntoTooltip,
     Items,
     JsError,
+    JsHandle,
     JsObject,
     JsValue,
     KeyCapture,

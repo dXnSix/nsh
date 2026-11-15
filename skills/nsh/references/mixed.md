@@ -255,6 +255,7 @@ A synchronous call that blocks freezes the app too. A synchronous call costs abo
 | `Callback<f64>` | `(value: number) => void` |
 | `#[args(value, index)] Callback<(f64, u32), bool>` | `(value: number, index: number) => boolean` |
 | `Stop` | `() => void` |
+| `JsHandle` | `object`: any TS object, array or function, kept as it is and given back as the same object; `Eq` / `Hash` by identity |
 | A `#[class]` value, or `Instance<T>` | The class. One object per live instance: `a.badge === a.badge` |
 | `&T`, `&mut T` of a class, in a class's sync member | The class, borrowed for the call |
 

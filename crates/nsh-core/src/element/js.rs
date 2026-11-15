@@ -254,6 +254,18 @@ pub trait JsHost {
     fn retain(&self, _v: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
         None
     }
+    /// The JS object, array or function `v` is, kept alive until the handle
+    /// goes and given back as itself ([`super::JsHandle`]). `None` where
+    /// the host keeps no values.
+    fn object(&self, _v: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
+        None
+    }
+    /// What tells the VM this host's values belong to apart from other VMs
+    /// on the thread (`None`: the host does not say): a handle gives its
+    /// value to a host of its own VM only.
+    fn vm(&self) -> Option<usize> {
+        None
+    }
 
     /// Frees owned value `v`.
     fn free(&self, v: JsRaw);
