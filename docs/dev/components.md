@@ -826,12 +826,14 @@ A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: 
 where `dark` leaves them out). Values are CSS: colors (hex, `rgb()`, `hsl()`, `oklch()`, `oklab()`, names,
 `color-mix()`, `var(--x[, fallback])` of the same appearance's tokens, the file's or the default's), lengths (`rem`
 is 16 pt, `px`) and font family lists for `font-*` names (the first family that is not generic, `system-ui` /
-`sans-serif` / ... meaning the system's); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
+`sans-serif` / ... meaning the system's; a color or a number there, and a `font-weight-*` value that is no number,
+is left out and reported); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
 (`Tokens::shadow`, per appearance), a `background-image-*` value that reads as CSS gradients a gradient token
 (`Tokens::gradient`, per appearance, a `var()` in a stop read as the theme's color in each; its class is `bg-<n>`
 through the arbitrary `bg-[…]`, after a utility or a color of that name, `ClassTokens::substitute`; written back
 by `Gradient::css`, which `css::gradient` reads as the same gradient), and values of no kind a token has (a letter spacing in `em`) are left out. A
-value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color) is left out and reported, and so
+value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color; one naming a number, a font family,
+a shadow or a gradient says what it names, as `var()` copies colors only) is left out and reported, and so
 is one that is no color in one appearance where the other's is a color (that color is both's): `nsh build` warns of
 them, the core logs them, `setTheme` refuses the file for them. An
 app sets its own in `nsh.json`: `"theme": "brand.json"` (relative to `nsh.json`) or the same JSON inline, over the
@@ -938,19 +940,25 @@ whether it is only a name no type declares, which `ThemeTokens::checked` / `upda
 (`setTheme` leaves the name out, #1190). Nothing reads a sentence back; the public readers and `TokenProvider::read`
 list the sentences (`theme_file::sentences`), `read_left_out` / `overrides_left_out` the `LeftOut`s.
 `ThemeSet::try_add` also refuses a token named as no value of its kind is read (a font not `font-*`, a shadow not
-`shadow-*`, another kind `font-*` but a weight's `font-weight-*`) and a name or a role a type gives twice. An app with
+`shadow-*`, another kind `font-*` but a weight's `font-weight-*`: `tokens::Kind::names`) and a name or a role a type
+gives twice. `Tokens`' setters keep to the same rule (they leave such a name out and log it) and keep a name to one
+kind (a setter clears it from the others, `over` lets the upper layer's kind win), so the tokens `theme_file::write`
+writes read back as the same tokens. An app with
 a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_theme_types`).
 `theme_file::write(tokens)` writes tokens back as a theme file (a value both appearances share in `theme`, the others
 in `light` and `dark`; roles none of it), which the descriptions carry as a type's defaults.
 
 `theme_of::<T>()` reads `tokens()` (so it subscribes, as `tokens()` does) and caches per surface in `Ambient`'s `themes`
-(`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read and the `Arc<T>` as `Box<dyn Any>`): while the cached
-tokens are pointer-equal to the current ones the cached theme is returned, else `T::read_tokens(&tokens, "")` is cached
-in its place. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
+(`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read, the appearance and the `Arc<T>` as `Box<dyn Any>`):
+while the cached tokens are pointer-equal to the current ones the cached theme is returned, else
+`T::read_tokens(&tokens, "")` is cached in its place. Where a number has a dark value and `dark()` is true (which it
+then subscribes to), it reads `Tokens::shown_dark()` instead, the tokens with each number its dark value, so a number
+field is the value shown, as `token()` (`Tokens::get_in`) and the classes read it. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
 `set_theme` takes its tokens without the roles its specs map (`theme::theme_tokens`: the registered types' roles
 stay) as `update_tokens` does, but as a type's fields (`Action::SetTheme`, `Core::set_theme_tokens`,
-`Tokens::over_as_fields`): a number field is the light value, so a number left at the light value the app's tokens
-have keeps their dark one, and a theme read and set back changes nothing. `update_theme` is `update_tokens` of the
+`Tokens::over_as_fields`): a number field is the value of the appearance shown where `set_theme` runs (the action's
+`dark`; `None` from a `ModuleCx`, the surface's), so a number left at that value keeps both values the app's tokens
+have, and a theme read and set back changes nothing. `update_theme` is `update_tokens` of the
 patch's tokens (`theme::patch_tokens`), and `reset_theme` `reset_tokens` of `T`'s names; `ModuleCx` has the three for
 synchronous `#[module]` functions. Each of the three is an action of its own (`Action::SetTheme`, `UpdateTheme`,
 `ResetTheme`) carrying the roles `T`'s tokens play with their names (`theme::played`), and the core sets through

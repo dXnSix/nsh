@@ -56,15 +56,15 @@ impl ScopeTheme {
 
     /// The tokens a scope with this theme draws with: its values over
     /// `around`, the tokens around the scope. What it cannot set (a value
-    /// that does not read, a name `around` lacks) is left out with a
-    /// warning.
+    /// that does not read, a name `around` lacks or has as another kind)
+    /// is left out with a warning.
     fn within(&self, around: &Arc<Tokens>) -> Arc<Tokens> {
         let (tokens, left_out) = match self {
             ScopeTheme::Tokens(tokens) => {
                 let (tokens, unknown) = (**tokens).clone().within(around);
                 let said = unknown
                     .iter()
-                    .map(|name| format!("`{name}`: the theme has no token of this name"))
+                    .map(|name| super::tokens::scope_left_out(name, around))
                     .collect();
                 (tokens, said)
             }

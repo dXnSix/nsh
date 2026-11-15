@@ -228,6 +228,9 @@ pub(crate) enum Action {
     SetTheme {
         tokens: super::Tokens,
         played: super::theme::Played,
+        /// The appearance its number fields were read in, dark or not:
+        /// where [`super::set_theme`] ran (`None`: the surface's).
+        dark: Option<bool>,
     },
     /// Sets the tokens a theme type's patch wrote, over the app's others
     /// ([`super::update_theme`]), through the roles as

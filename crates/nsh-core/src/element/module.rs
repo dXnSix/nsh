@@ -420,6 +420,7 @@ impl ModuleCx {
         self.actions.push(Action::SetTheme {
             tokens: crate::element::theme::theme_tokens(&theme),
             played: crate::element::theme::played::<T>(),
+            dark: None,
         });
     }
 

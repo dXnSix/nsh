@@ -357,7 +357,7 @@ import { Text, ThemeScope, View } from "nsh";
 </ThemeScope>
 ```
 
-A scope sets values of tokens the app's theme has: a name the theme lacks is left out with a warning, so every class means a token everywhere. The tokens it leaves alone stay the app's and follow `setTheme` and `updateTheme`; a scope inside another starts from the outer one's values. With `appearance` a scope also shows its content light or dark ([Device and environment](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)).
+A scope sets values of tokens the app's theme has, each of the kind the theme has it: a name the theme lacks, or holds as another kind (a color where the theme has a number), is left out with a warning, so every class means one token of one kind everywhere. The tokens it leaves alone stay the app's and follow `setTheme` and `updateTheme`; a scope inside another starts from the outer one's values. With `appearance` a scope also shows its content light or dark ([Device and environment](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)).
 
 ## The class check
 
