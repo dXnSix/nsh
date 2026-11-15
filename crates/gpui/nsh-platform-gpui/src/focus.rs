@@ -723,11 +723,17 @@ fn arrow(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
 }
 
 /// Enter or Space: presses the view with this module's focus when it takes
-/// presses and shows (an auto-repeat presses nothing more).
+/// presses and shows (an auto-repeat presses nothing more). A view the
+/// newest modal covers (a popup gave the focus back to its trigger as a
+/// dialog opened) is not pressed: the dialog's bindings keep the key, as
+/// in `key_focus::key`.
 fn press(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let Some(view) = focused(surface) else {
         return false;
     };
+    if !crate::navigation::in_focus_scope(surface, &view) {
+        return false;
+    }
     let (id, events, frame) = {
         let s = view.state();
         (s.id, s.events, s.frame)
