@@ -270,8 +270,8 @@ reasons: `reactive-components.md`.
   `Owner::scope`, no batch, so writes notify as they happen), so the signals, animated values, refs and tasks it
   makes are that owner's and go with it rather than living as long as the surface. Once that owner is disposed the
   listener no longer runs (its view is gone), events already queued for its node included: a region that runs again
-  disposes its last run's owner at once, while the core drops that run's handlers only when it reconciles the region,
-  in the commit. A node made again that goes on listening to its layout reports its frame to the new run's listener,
+  disposes its last run's owner at once, while the core drops that run's handlers at the end of the binding batch,
+  before the next event round in the commit. A node made again that goes on listening to its layout reports its frame to the new run's listener,
   as a listener added after layout learns it. This initialization targets the new run's listeners alone; listeners
   retained from outside the region and JS handlers keep receiving frame changes. The same rule applies to a
   placed slot: initialization uses the app element that receives the slot's handlers, while retained listeners stay installed. When the owner is disposed while a listener or task runs under it (a
@@ -294,7 +294,9 @@ reasons: `reactive-components.md`.
   the host itself (no view of its own); a region as the root goes in the host view.
   The core reuses retained `each` rows in the same key order while their item bindings update the content
   (`core/components.rs`). Region placement checks the actual child order before moving nodes
-  (`core/views.rs`), after updating anchors and slots.
+  (`core/views.rs`), after updating anchors and slots. Regions that only populate or retain nodes skip listener and
+  binding cleanup. When nodes leave, affected views are cleaned once per binding batch; recycled list cells use the
+  same boundary when their static children leave.
 - **Canvases** draw what a `Painter` recorded (the Canvas 2D operations: `.fill_style(..)` / `.stroke_style(..)` take
   colors, `CanvasGradient::linear` / `radial` / `conic` and animated values; `.stroke_path(&canvas::svg_path(d))`;
   `measure_text(font, text)` is `measureText`; `.fill_style_from_view(initial)`, `.stroke_style_from_view(initial)`,
@@ -1131,14 +1133,14 @@ what changed.
   when the list rebinds the cell to another row (`cellIndex`) and whose count when the number of rows changes, so
   only the wrapper's bindings that read them run. The row the app rendered goes into the wrapper. Binding,
   recycling, measuring and positioning stay the list's.
-- The component's own rows (`virtual_list(count, |at| row)`, layout from `ListLayout`, `.keys(ids)` for splices):
+- The component's own rows (`virtual_list(count, |at| row)`, layout from `ListLayout`, `.keys(ids)` to match rows by key):
   the core creates the list and binds its cells itself, within the commit that needs them (`Core::commit` binds and
   lays out again; JS is not involved). Each cell's content (`Inner::VirtualRow`) is made once, under an owner of its
   own made under the owner `virtual_list` was called in (the view's, or a `when` / `dynamic` / `each` run's), so the
   rows see that run's context and are disposed with it (also when the list is passed as another component's `Items`; a list a later run keeps moves to that run, and the earlier run's end leaves it alone); it shows the row its `Position` says: a memo of the list's count and keys moves the cells' index signals
-  (`move_rows`) before the bindings that read them run, so a splice runs only the bindings of the rows that moved
-  and never shows a row with another row's data. With keys, rows removed or inserted before others leave their
-  cells and sizes alone. A cell past the end (the list shrank) disposes its content until the list binds it again.
+  (`move_rows`) before the bindings that read them run, so a change runs only the bindings of the rows that changed
+  and never shows a row with another row's data. With keys, a row that stays keeps its cell and size wherever it
+  moves, and rows removed or inserted before others leave the others alone. A cell past the end (the list shrank) disposes its content until the list binds it again.
   The header, footer and empty view are part of the view (their `CellSlot`s), outside the recycling; a separator
   goes into each row's cell, after the row (before it, inverted), while the row is not the last.
 - Another component's rows (`ComponentElement::items(virtual_list(..))`): the list is content of the nested
@@ -1351,8 +1353,9 @@ waits that long, then unmounts, and `onClose` follows. A generation counter keep
 a newer change: opened again on its way out, the popup goes back to its look (its transitions run back) and was
 never gone, so neither `onClose` nor `onOpen` fires. On its way out it takes no keys either: the keyboard focus inside
 goes back to the trigger as it closes, not once it is gone (`PopupPresence::focus_back_on_close`, `Popover`'s and a
-desktop menu's; a dropdown's `Presence::back`), unless the choice that closed it moved the focus elsewhere in the
-same turn (`ElementRef::focus_back` yields to any `focus()` in its commit), and a menu's items neither move the focus nor choose while their level is closed, so a key pressed
+desktop menu's; a dropdown's `Presence::back`, a combobox's to its input), unless the choice that closed it moved the
+focus out of the popup in the same turn (`ElementRef::focus_back` yields to a `focus()` outside the popup in its
+commit, so an item or an `onChange` that focuses the next field keeps it there), and a menu's items neither move the focus nor choose while their level is closed, so a key pressed
 during the exit is the trigger's (Return opens it again, taking it back). Without a look for a state, or while the user asks for less
 motion, it skips that state: a popup with no ending look is gone in the turn that closed it, and nothing more is sent
 for one with no looks. The state's classes are important (`!`) over the part's `class` and `style`, as a toast's; its
@@ -1432,9 +1435,9 @@ starting from `defaultQuery`, or the app's `query`, whose changes highlight the 
 footer is a part of the popup after the rows (`listbox::Footer`). Mod+Return closes it with `"select"`. A press on
 the input opens and closes the list in every idiom, as `gpui-component`'s trigger does (`"triggerPress"`); on touch
 screens the focus a tap gives opens it, and the press of that tap is then skipped (`focus_opened`). The input reports
-the press after the focus it takes: the terminal (`docs/dev/tui.md`) and the headless driver report an `Input`'s
-`onPress` today; the other backends follow in a later change, and until then a press on the input there opens the
-list on touch screens only (through the focus).
+the press after the focus it takes: the terminal (`docs/dev/tui.md`), Linux (`docs/dev/linux.md`) and the headless
+driver report an `Input`'s `onPress` today; the other backends follow in a later change, and until then a press on the
+input there opens the list on touch screens only (through the focus).
 
 `DatePicker` (`date_picker.rs`) is `Select`'s popup (`popup::dropdown`, at least as wide as the trigger, a sheet on
 touch screens) around presets, a calendar and, with `timePrecision`, a time field. Its calendar is `calendar.rs`'s grid

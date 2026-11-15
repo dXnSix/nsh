@@ -47,6 +47,7 @@ mod scrollbar;
 mod select;
 mod sheet;
 mod slider;
+mod split_view;
 mod status_roles;
 mod submenu;
 mod switch;
