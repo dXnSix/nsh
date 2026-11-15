@@ -187,11 +187,16 @@ async function setup(children, answer = () => null, autoAnswer = () => null) {
   return { player, root, wasm, scrolls, pasts, requests: wasm.requests ?? [], autos: wasm.autos ?? [] };
 }
 
-/** A key event of `key` on the page, which records whether it was prevented. */
+/** A key event of `key` on the page, which records whether it was prevented.
+ * Its path, as a browser's, runs from the focused element up, fixed as the
+ * key is pressed (`keyDown` reads where the key was pressed from it). */
 function key(key, extra = {}) {
+  const path = [];
+  for (let el = document.activeElement; el; el = el.parentNode) path.push(el);
   return {
     key, code: key, repeat: false, isComposing: false, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false,
     defaultPrevented: false,
+    composedPath: () => path,
     preventDefault() { this.defaultPrevented = true; },
     stopPropagation() {},
     ...extra,

@@ -190,12 +190,15 @@ function fakePlayer(options) {
 
 /** Runs `fn` with the globals `environment()` reads standing in. */
 function onPage(fn) {
-  const names = ["document", "window", "getComputedStyle", "matchMedia", "devicePixelRatio"];
+  const names = ["document", "window", "getComputedStyle", "matchMedia", "devicePixelRatio", "addEventListener", "removeEventListener"];
   const saved = Object.fromEntries(names.map(name => [name, globalThis[name]]));
   Object.assign(globalThis, {
     devicePixelRatio: 1,
     document: { documentElement: { getAttribute: () => null }, visibilityState: "visible", hasFocus: () => true },
     window: globalThis,
+    // The player watches the page's end (`pagehide`) once the app starts.
+    addEventListener() {},
+    removeEventListener() {},
     getComputedStyle: () => ({ fontSize: "16px" }),
     // A mouse: the pointer heuristic alone would say "desktop".
     matchMedia: () => ({ matches: true, addEventListener() {} }),
