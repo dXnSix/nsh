@@ -1228,7 +1228,11 @@ fn themed_rules(
     };
     let mut parse = |dark: bool| {
         read.truncate(known);
-        let decls = utilities::parse(theme, &tokens.substitute(utility, dark, read)?)?;
+        let mut decls = utilities::parse(theme, &tokens.substitute(utility, dark, read)?)?;
+        // A text style's class sets its parts too.
+        for part in tokens.typography_parts(utility, dark, read) {
+            decls.extend(utilities::parse(theme, &part)?);
+        }
         (!pseudo.pseudo() || pseudo.pseudo_color(&decls).is_some()).then_some(decls)
     };
     let rule = |cond: Condition, decls: Vec<Decl>| Rule {

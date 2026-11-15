@@ -2427,6 +2427,42 @@ mod declared_theme {
         );
     }
 
+    /// Strings, booleans, durations, easings and text styles: typed by
+    /// kind in `tokens.d.ts` (a text style's parts too), and their classes
+    /// known to the class check.
+    #[test]
+    fn the_newer_kinds_are_typed_and_make_classes() {
+        let dir = app(
+            r##"{ "cssVars": { "theme": { "brand-name": "Acme", "feature-beta": true, "duration-fast": "120ms",
+                    "ease-snappy": "ease-out", "text-title": "24px", "text-title--font-weight": "650" } },
+                  "tokens": { "brand-name": { "kind": "string" }, "feature-beta": { "kind": "boolean" },
+                    "duration-fast": { "kind": "duration" }, "ease-snappy": { "kind": "easing" },
+                    "text-title": { "kind": "typography" } } }"##,
+        );
+        let setup = super::tailwind_setup(&dir, false, &super::AppInfo::default(), &[]).unwrap();
+        let unknown = crate::classes::check(
+            r#"const a = <View class="transition duration-fast delay-fast ease-snappy text-title" />;"#,
+            SourceType::tsx(),
+            &setup.theme,
+        );
+        assert!(unknown.is_empty(), "{:?}", unknown.iter().map(|u| &u.class).collect::<Vec<_>>());
+        let tokens = super::theme_tokens_of(&dir, &[]).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let declaration = crate::types::tokens_declaration(&tokens);
+        for line in [
+            "    \"brand-name\": string;",
+            "    \"feature-beta\": boolean;",
+            "    \"duration-fast\": number;",
+            "    \"ease-snappy\": string;",
+            "    \"text-title\": number;",
+            "    \"text-title--font-weight\": number;",
+            "    \"feature-beta\": \"boolean\";",
+            "    \"text-title\": \"typography\";",
+        ] {
+            assert!(declaration.contains(line), "{line}\n{declaration}");
+        }
+    }
+
     #[test]
     fn an_apps_theme_file_declares_its_own_tokens() {
         let dir = app(

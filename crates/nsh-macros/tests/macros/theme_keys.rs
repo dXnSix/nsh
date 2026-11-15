@@ -104,3 +104,37 @@ fn a_modifiers_enum_picks_a_scopes_context() {
         Some(AdaptiveColor::rgb(0x16a34a, 0x4ade80))
     );
 }
+
+mod kinds {
+    nsh_core::element::theme_keys!("tests/macros/theme_keys/kinds.json");
+}
+
+/// A string, a boolean, a duration, an easing and a text style each get a
+/// key of their own type, which reads the document's value.
+#[test]
+fn the_newer_kinds_are_typed() {
+    use nsh_core::element::{CubicBezier, Typography};
+    let name: TokenKey<String> = kinds::brand::NAME;
+    let beta: TokenKey<bool> = kinds::features::BETA;
+    let fast: TokenKey<std::time::Duration> = kinds::motion::FAST;
+    let snappy: TokenKey<CubicBezier> = kinds::motion::SNAPPY;
+    let title: TokenKey<Typography> = kinds::r#type::TITLE;
+    let mut registry = Registry::ui_set("ds/kinds");
+    registry.theme_document(include_str!("theme_keys/kinds.json"));
+    let tokens = registry.tokens(None).unwrap().unwrap().0;
+    assert_eq!(tokens.key(name).as_deref(), Some("Acme"));
+    assert_eq!(tokens.key(beta), Some(true));
+    assert_eq!(
+        tokens.key(fast),
+        Some(std::time::Duration::from_millis(120))
+    );
+    assert_eq!(tokens.key(snappy), Some(CubicBezier([0.2, 0.0, 0.0, 1.0])));
+    assert_eq!(
+        tokens.key(title),
+        Some(Typography {
+            size: Points(24.0),
+            line_height: Some(1.25),
+            ..Typography::default()
+        })
+    );
+}

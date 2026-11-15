@@ -691,11 +691,18 @@ source in place of nsh-base's shadcn theme; an app with none keeps the shadcn th
 ```
 
 - `kind` is what the token holds: `color`, `number`, `radius`, `spacing`, `text`, `weight`, `tracking`, `leading`,
-  `blur`, `font`, `shadow` or `gradient`. A theme file is read by it: each value as its token's kind.
+  `blur`, `font`, `shadow`, `gradient`, `string`, `boolean`, `duration`, `easing` or `typography`. A theme file is read
+  by it: each value as its token's kind. A `string` is a JSON string (`"Acme"`), a `boolean` `true` or `false`, a
+  `duration` `150ms`, `0.2s` or a number of milliseconds, an `easing` a CSS easing (`cubic-bezier(0.2, 0, 0, 1)`,
+  `ease-out`); a string, a boolean and an easing are one value in both appearances. A `typography` token is a text
+  style, as Tailwind 4's `--text-*` with its sub-values: `text-title` is its size, and the numbers
+  `text-title--line-height`, `text-title--letter-spacing` and `text-title--font-weight` its parts, which it declares
+  (each may be left out); the class `text-title` sets them together.
 - A token's name is the one classes, `var()` and `token()` use. A color's and a number's are free (`surface-raised`,
   `action`); a namespaced kind's starts with its Tailwind namespace, which its classes read it by (`radius-card` is
-  `rounded-card`; `spacing-`, `text-`, `font-weight-`, `tracking-`, `leading-`, `blur-`); a font's starts with
-  `font-`, a shadow's with `shadow-`, a gradient's with `background-image-`.
+  `rounded-card`; `spacing-`, `text-`, `font-weight-`, `tracking-`, `leading-`, `blur-`, a duration's `duration-`,
+  which `duration-fast` and `delay-fast` read, a text style's `text-`); a font's starts with `font-`, a shadow's with
+  `shadow-`, a gradient's with `background-image-`, an easing's with `ease-` (`ease-snappy` is the class too).
 - `path` is the token's place in the designer's tree (`surface.raised`), and `doc` its description, which
   `.nsh/types/nsh/tokens.d.ts` shows on `token()`. A path names one token: a second token at the same path is
   refused, in one document, across documents and in the app's theme file.
@@ -730,7 +737,9 @@ reset_tokens([keys::ACTION.name()]); // the app's action again
 
 - A key is a `TokenKey<V>`: its token's name with the type of its value. A color is an `AdaptiveColor`; a number,
   weight or line height an `f32`; a radius, spacing, size, tracking or blur `Points`; a font a `SharedString`; shadows
-  an `AdaptiveShadow`; gradients an `AdaptiveGradient`. Its doc is the token's.
+  an `AdaptiveShadow`; gradients an `AdaptiveGradient`; a string a `String`; a boolean a `bool`; a duration a
+  `std::time::Duration`; an easing a `CubicBezier`; a text style a `Typography` (`size`, `line_height`,
+  `letter_spacing`, `font_weight`). Its doc is the token's.
 - `key.get()` reads the token where it is used: the nearest [`ThemeScope`](../modules/nsh.md#themescope)'s, a number in the
   appearance shown. It is reactive as `tokens()` is. `tokens().key(key)` reads it from tokens in hand (a number its
   light value), and `tokens().get_as::<V>(name)` reads a token by name, with an error that says whether it is missing

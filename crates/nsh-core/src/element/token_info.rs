@@ -57,6 +57,9 @@ impl Tokens {
             Kind::Font => "font",
             Kind::Shadow => "shadow",
             Kind::Gradient => "gradient",
+            Kind::String => "string",
+            Kind::Boolean => "boolean",
+            Kind::Easing => "easing",
         })
     }
 
@@ -83,10 +86,33 @@ impl Tokens {
 
     /// Token `name` as JSON: `{ kind, light, dark }`, its value in each
     /// appearance as TS's `token()` gives it (a color as `#rrggbbaa`, a
-    /// number in points, a font family, shadows and gradients as CSS).
+    /// number in points, a duration in milliseconds, a font family, shadows,
+    /// gradients and an easing as CSS, a string, a boolean; a typography
+    /// token as `{ size, lineHeight?, letterSpacing?, fontWeight? }`).
     /// `None`: there is none.
     pub fn value_json(&self, name: &str) -> Option<JsonValue> {
         let kind = self.kind_name(name)?;
+        // A text style: its size and the parts it has.
+        if kind == "typography" {
+            let style = |dark: bool| {
+                let t = self.typography_in(name, dark)?;
+                let mut out = serde_json::Map::new();
+                out.insert("size".into(), t.size.0.into());
+                for (key, value) in [
+                    ("lineHeight", t.line_height),
+                    ("letterSpacing", t.letter_spacing.map(|p| p.0)),
+                    ("fontWeight", t.font_weight),
+                ] {
+                    if let Some(value) = value {
+                        out.insert(key.into(), value.into());
+                    }
+                }
+                Some(JsonValue::Object(out))
+            };
+            return Some(
+                serde_json::json!({ "kind": kind, "light": style(false)?, "dark": style(true)? }),
+            );
+        }
         let (light, dark): (JsonValue, JsonValue) = match self.get(name)? {
             Token::Color(c) => {
                 let hex = |c| JsonValue::from(format!("#{:08x}", Color::from(c).0));
@@ -99,6 +125,9 @@ impl Tokens {
             Token::Font(f) => (JsonValue::from(&*f), JsonValue::from(&*f)),
             Token::Shadow(s) => (s.css(false).into(), s.css(true).into()),
             Token::Gradient(g) => (g.css(false).into(), g.css(true).into()),
+            Token::String(s) => (JsonValue::from(&*s), JsonValue::from(&*s)),
+            Token::Boolean(b) => (b.into(), b.into()),
+            Token::Easing(e) => (e.css().into(), e.css().into()),
         };
         Some(serde_json::json!({ "kind": kind, "light": light, "dark": dark }))
     }

@@ -54,6 +54,9 @@ pub struct Tokens {
     shadows: FxHashMap<Box<str>, AdaptiveShadow>,
     /// Gradients (a `background-image`'s), per appearance.
     gradients: FxHashMap<Box<str>, AdaptiveGradient>,
+    /// The tokens with one value in both appearances: strings, booleans and
+    /// easing curves.
+    plain: FxHashMap<Box<str>, Plain>,
     /// A role's name -> the name of the token it reads (`None`: each its
     /// own name).
     roles: Option<Arc<FxHashMap<Box<str>, Box<str>>>>,
@@ -77,6 +80,7 @@ impl PartialEq for Tokens {
             && self.fonts == other.fonts
             && self.shadows == other.shadows
             && self.gradients == other.gradients
+            && self.plain == other.plain
             && self.roles == other.roles
             && self.modifiers == other.modifiers
     }
@@ -368,6 +372,94 @@ pub enum Token {
     Shadow(AdaptiveShadow),
     /// Gradients, per appearance.
     Gradient(AdaptiveGradient),
+    /// A string (a label, a name, an icon's), one in both appearances.
+    String(Arc<str>),
+    /// A boolean (a feature on or off), one in both appearances.
+    Boolean(bool),
+    /// An easing curve (`ease-*`: `ease-snappy`), one in both appearances.
+    Easing(CubicBezier),
+}
+
+/// A token of one value in both appearances ([`Tokens`]' plain map).
+#[derive(Debug, Clone, PartialEq)]
+enum Plain {
+    String(Arc<str>),
+    Boolean(bool),
+    Easing(CubicBezier),
+}
+
+/// An easing curve: a cubic Bézier `x1, y1, x2, y2`, as CSS's
+/// `cubic-bezier()` and a transition's easing ([`crate::effects::Transition`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CubicBezier(pub [f32; 4]);
+
+impl CubicBezier {
+    /// CSS `linear`.
+    pub const LINEAR: CubicBezier = CubicBezier([0.0, 0.0, 1.0, 1.0]);
+    /// CSS `ease`.
+    pub const EASE: CubicBezier = CubicBezier([0.25, 0.1, 0.25, 1.0]);
+    /// CSS `ease-in`.
+    pub const EASE_IN: CubicBezier = CubicBezier([0.42, 0.0, 1.0, 1.0]);
+    /// CSS `ease-out`.
+    pub const EASE_OUT: CubicBezier = CubicBezier([0.0, 0.0, 0.58, 1.0]);
+    /// CSS `ease-in-out`.
+    pub const EASE_IN_OUT: CubicBezier = CubicBezier([0.42, 0.0, 0.58, 1.0]);
+
+    /// A CSS easing: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`
+    /// or `cubic-bezier(x1, y1, x2, y2)` (`x1` and `x2` in `0..=1`).
+    pub fn parse(css: &str) -> Option<CubicBezier> {
+        let css = css.trim();
+        Some(match css {
+            "linear" => Self::LINEAR,
+            "ease" => Self::EASE,
+            "ease-in" => Self::EASE_IN,
+            "ease-out" => Self::EASE_OUT,
+            "ease-in-out" => Self::EASE_IN_OUT,
+            _ => {
+                let args = css.strip_prefix("cubic-bezier(")?.strip_suffix(')')?;
+                let n: Vec<f32> = args
+                    .split(',')
+                    .map(|a| a.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
+                    .collect::<Option<_>>()?;
+                let [x1, y1, x2, y2] = n.as_slice() else {
+                    return None;
+                };
+                if !(0.0..=1.0).contains(x1) || !(0.0..=1.0).contains(x2) {
+                    return None;
+                }
+                CubicBezier([*x1, *y1, *x2, *y2])
+            }
+        })
+    }
+
+    /// As CSS writes it: `cubic-bezier(x1, y1, x2, y2)`.
+    pub fn css(self) -> String {
+        let [a, b, c, d] = self.0;
+        format!("cubic-bezier({a}, {b}, {c}, {d})")
+    }
+}
+
+/// A text style as one token (`typography`, Tailwind v4's `--text-*` with
+/// its sub-values): `text-title` is its size, and `text-title--line-height`,
+/// `text-title--letter-spacing` and `text-title--font-weight` its other
+/// parts, each a number token of its own; the class `text-title` sets
+/// them together.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Typography {
+    /// The font size.
+    pub size: crate::geometry::Points,
+    /// The line height, as `leading-*` takes it.
+    pub line_height: Option<f32>,
+    /// The letter spacing.
+    pub letter_spacing: Option<crate::geometry::Points>,
+    /// The font weight (`100`…`900`).
+    pub font_weight: Option<f32>,
+}
+
+impl Typography {
+    /// The suffixes of its parts' names after its own (`--line-height`), in
+    /// the order of its fields.
+    pub const PARTS: [&'static str; 3] = ["--line-height", "--letter-spacing", "--font-weight"];
 }
 
 /// Makes the tokens of a theme file's content (`Some`), or the defaults
@@ -652,6 +744,112 @@ impl Tokens {
         self.gradients.iter().map(|(k, g)| (&**k, g))
     }
 
+    /// The string named `name`.
+    pub fn string(&self, name: &str) -> Option<&Arc<str>> {
+        match self.plain.get(name)? {
+            Plain::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Sets the string named `name`.
+    pub fn set_string(&mut self, name: &str, value: impl Into<Arc<str>>) {
+        if misnamed(name, Kind::String) {
+            return;
+        }
+        self.clear_but(name, Kind::String);
+        self.plain.insert(name.into(), Plain::String(value.into()));
+    }
+
+    /// The boolean named `name`.
+    pub fn boolean(&self, name: &str) -> Option<bool> {
+        match self.plain.get(name)? {
+            Plain::Boolean(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Sets the boolean named `name`.
+    pub fn set_boolean(&mut self, name: &str, value: bool) {
+        if misnamed(name, Kind::Boolean) {
+            return;
+        }
+        self.clear_but(name, Kind::Boolean);
+        self.plain.insert(name.into(), Plain::Boolean(value));
+    }
+
+    /// The easing curve named `name` (`ease-snappy`).
+    pub fn easing(&self, name: &str) -> Option<CubicBezier> {
+        match self.plain.get(name)? {
+            Plain::Easing(e) => Some(*e),
+            _ => None,
+        }
+    }
+
+    /// Sets the easing curve named `name`, which starts with `ease-`.
+    pub fn set_easing(&mut self, name: &str, value: CubicBezier) {
+        if misnamed(name, Kind::Easing) {
+            return;
+        }
+        self.clear_but(name, Kind::Easing);
+        self.plain.insert(name.into(), Plain::Easing(value));
+    }
+
+    /// Each string by name.
+    pub fn strings(&self) -> impl Iterator<Item = (&str, &Arc<str>)> {
+        self.plain.iter().filter_map(|(k, v)| match v {
+            Plain::String(s) => Some((&**k, s)),
+            _ => None,
+        })
+    }
+
+    /// Each boolean by name.
+    pub fn booleans(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.plain.iter().filter_map(|(k, v)| match v {
+            Plain::Boolean(b) => Some((&**k, *b)),
+            _ => None,
+        })
+    }
+
+    /// Each easing curve by name.
+    pub fn easings(&self) -> impl Iterator<Item = (&str, CubicBezier)> {
+        self.plain.iter().filter_map(|(k, v)| match v {
+            Plain::Easing(e) => Some((&**k, *e)),
+            _ => None,
+        })
+    }
+
+    /// Typography token `name` (`text-title`, a size) with its parts
+    /// ([`Typography::PARTS`]), in the dark appearance (`dark`) or the
+    /// light one. `None`: it has no number of that name.
+    pub fn typography_in(&self, name: &str, dark: bool) -> Option<Typography> {
+        let part = |suffix: &str| self.number_in(&format!("{name}{suffix}"), dark);
+        Some(Typography {
+            size: crate::geometry::Points(self.number_in(name, dark)?),
+            line_height: part(Typography::PARTS[0]),
+            letter_spacing: part(Typography::PARTS[1]).map(crate::geometry::Points),
+            font_weight: part(Typography::PARTS[2]),
+        })
+    }
+
+    /// Sets typography token `name` and its parts; a part it has not is
+    /// removed.
+    pub fn set_typography(&mut self, name: &str, value: Typography) {
+        self.set_number(name, value.size.0);
+        let parts = [
+            value.line_height,
+            value.letter_spacing.map(|p| p.0),
+            value.font_weight,
+        ];
+        for (suffix, part) in Typography::PARTS.iter().zip(parts) {
+            let part_name = format!("{name}{suffix}");
+            match part {
+                Some(n) => self.set_number(&part_name, n),
+                None => self.remove_named(&part_name),
+            }
+        }
+    }
+
     /// The token named `name`, of any kind (a color first, as classes take
     /// it), as kept: a color, a shadow and a gradient with their values in
     /// both appearances, a number its light value ([`Tokens::get_in`]
@@ -669,7 +867,14 @@ impl Tokens {
         if let Some(s) = self.shadows.get(name) {
             return Some(Token::Shadow(s.clone()));
         }
-        self.gradients.get(name).cloned().map(Token::Gradient)
+        if let Some(g) = self.gradients.get(name) {
+            return Some(Token::Gradient(g.clone()));
+        }
+        self.plain.get(name).map(|v| match v {
+            Plain::String(s) => Token::String(s.clone()),
+            Plain::Boolean(b) => Token::Boolean(*b),
+            Plain::Easing(e) => Token::Easing(*e),
+        })
     }
 
     /// The token named `name` in the dark appearance (`dark`) or the light
@@ -701,7 +906,11 @@ impl Tokens {
         } else if self.gradients.contains_key(name) {
             Some(Kind::Gradient)
         } else {
-            None
+            self.plain.get(name).map(|v| match v {
+                Plain::String(_) => Kind::String,
+                Plain::Boolean(_) => Kind::Boolean,
+                Plain::Easing(_) => Kind::Easing,
+            })
         }
     }
 
@@ -722,6 +931,9 @@ impl Tokens {
         }
         if kind != Kind::Gradient {
             self.gradients.remove(name);
+        }
+        if self.plain.get(name).is_some_and(|v| v.kind() != kind) {
+            self.plain.remove(name);
         }
     }
 
@@ -836,6 +1048,7 @@ impl Tokens {
             .chain(self.fonts.keys())
             .chain(self.shadows.keys())
             .chain(self.gradients.keys())
+            .chain(self.plain.keys())
             .map(|name| &**name)
     }
 
@@ -847,6 +1060,7 @@ impl Tokens {
             && self.fonts.is_empty()
             && self.shadows.is_empty()
             && self.gradients.is_empty()
+            && self.plain.is_empty()
     }
 
     /// Each color by name.
@@ -880,6 +1094,7 @@ impl Tokens {
             .chain(self.fonts.keys().map(|n| (n, Kind::Font)))
             .chain(self.shadows.keys().map(|n| (n, Kind::Shadow)))
             .chain(self.gradients.keys().map(|n| (n, Kind::Gradient)))
+            .chain(self.plain.iter().map(|(n, v)| (n, v.kind())))
             .filter(|(name, kind)| base.kind(name) != Some(*kind))
             .map(|(name, _)| name.clone())
             .collect();
@@ -899,6 +1114,7 @@ impl Tokens {
         self.fonts.remove(name);
         self.shadows.remove(name);
         self.gradients.remove(name);
+        self.plain.remove(name);
     }
 
     /// Makes token `name` what it is in `from`, of whatever kind, or
@@ -924,6 +1140,7 @@ impl Tokens {
         copy(&mut self.fonts, &from.fonts, name);
         copy(&mut self.shadows, &from.shadows, name);
         copy(&mut self.gradients, &from.gradients, name);
+        copy(&mut self.plain, &from.plain, name);
     }
 
     /// `self` with the tokens of `base` it does not have; what declares
@@ -959,6 +1176,10 @@ impl Tokens {
         for (k, g) in &self.gradients {
             out.clear_but(k, Kind::Gradient);
             out.gradients.insert(k.clone(), g.clone());
+        }
+        for (k, v) in &self.plain {
+            out.clear_but(k, v.kind());
+            out.plain.insert(k.clone(), v.clone());
         }
         if let Some(roles) = &self.roles {
             out.roles = match out.roles {
@@ -1016,12 +1237,26 @@ pub(crate) enum Kind {
     Font,
     Shadow,
     Gradient,
+    String,
+    Boolean,
+    Easing,
+}
+
+impl Plain {
+    fn kind(&self) -> Kind {
+        match self {
+            Plain::String(_) => Kind::String,
+            Plain::Boolean(_) => Kind::Boolean,
+            Plain::Easing(_) => Kind::Easing,
+        }
+    }
 }
 
 impl Kind {
     /// The name forms that say a kind, as a sentence lists them.
     pub(crate) const FORMS: &str = "a font is `font-*`, a shadow `shadow-*`, a gradient \
-                                    `background-image-*`, a weight `font-weight-*`";
+                                    `background-image-*`, a weight `font-weight-*`, an easing \
+                                    `ease-*`";
 
     /// Whether a theme file reads a token named `name` as this kind: the
     /// name says its kind, as a CSS variable's does ([`Tokens`]).
@@ -1032,8 +1267,9 @@ impl Kind {
             Kind::Font => font && !weight,
             Kind::Shadow => name.starts_with("shadow-"),
             Kind::Gradient => name.starts_with(super::theme_file::GRADIENTS),
-            Kind::Color => !font,
+            Kind::Color | Kind::String | Kind::Boolean => !font,
             Kind::Number => !font || weight,
+            Kind::Easing => name.starts_with("ease-"),
         }
     }
 
@@ -1045,6 +1281,9 @@ impl Kind {
             Kind::Font => "font family",
             Kind::Shadow => "shadow",
             Kind::Gradient => "gradient",
+            Kind::String => "string",
+            Kind::Boolean => "boolean",
+            Kind::Easing => "easing",
         }
     }
 }

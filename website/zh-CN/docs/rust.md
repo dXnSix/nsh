@@ -623,10 +623,10 @@ shadcn 主题，成为应用的令牌来源；没有主题文档的应用保留�
 ```
 
 - `kind` 是令牌保存的内容：`color`、`number`、`radius`、`spacing`、`text`、`weight`、`tracking`、`leading`、`blur`、
-  `font`、`shadow` 或 `gradient`。主题文件按它读取：每个值都按其令牌的种类读取。
+  `font`、`shadow`、`gradient`、`string`、`boolean`、`duration`、`easing` 或 `typography`。主题文件按它读取：每个值都按其令牌的种类读取。`string` 是 JSON 字符串（`"Acme"`），`boolean` 是 `true` 或 `false`，`duration` 是 `150ms`、`0.2s` 或毫秒数，`easing` 是 CSS 缓动（`cubic-bezier(0.2, 0, 0, 1)`、`ease-out`）；字符串、布尔值和缓动在两种外观下是同一个值。`typography` 令牌是一种文字样式，与 Tailwind 4 带子值的 `--text-*` 一样：`text-title` 是它的字号，数值 `text-title--line-height`、`text-title--letter-spacing` 和 `text-title--font-weight` 是它的组成部分（由它声明，每个都可以省略）；类名 `text-title` 同时设置它们。
 - 令牌的名称是类名、`var()` 和 `token()` 使用的名称。颜色和数值的名称自由（`surface-raised`、`action`）；带命名空间的种类以其
   Tailwind 命名空间开头，类名按它读取（`radius-card` 即 `rounded-card`；`spacing-`、`text-`、`font-weight-`、`tracking-`、
-  `leading-`、`blur-`）；字体以 `font-` 开头，阴影以 `shadow-` 开头，渐变以 `background-image-` 开头。
+  `leading-`、`blur-`，时长的 `duration-`，由 `duration-fast` 和 `delay-fast` 读取，文字样式的 `text-`）；字体以 `font-` 开头，阴影以 `shadow-` 开头，渐变以 `background-image-` 开头，缓动以 `ease-` 开头（`ease-snappy` 也是类名）。
 - `path` 是令牌在设计者的树中的位置（`surface.raised`），`doc` 是它的说明，`.nsh/types/nsh/tokens.d.ts` 在 `token()` 上显示它。一个路径只对应一个令牌：同一路径上的第二个令牌会被拒绝，无论是在同一文档中、跨文档，还是在应用的主题文件中。
 - 主题文档只有这些部分：`cssVars`、`tokens`、`modifiers`、`roles`（以及供编辑器使用的 `$schema`）。其他部分会被略过并给出说明。shadcn 或 tweakcn 文件既不声明令牌也没有修饰符，照旧读取，它们自己的成员（`name`、`type`、`css`）被跳过。
 - `"roles"` 把 NSH 自身部件绘制所用的角色映射到文档的令牌上（见下文）。
@@ -655,7 +655,7 @@ reset_tokens([keys::ACTION.name()]); // 恢复应用的 action
 ```
 
 - 键是一个 `TokenKey<V>`：令牌的名称加上其值的类型。颜色是 `AdaptiveColor`；数值、字重或行高是 `f32`；圆角、间距、尺寸、
-  字间距或模糊是 `Points`；字体是 `SharedString`；阴影是 `AdaptiveShadow`；渐变是 `AdaptiveGradient`。它的文档就是令牌的说明。
+  字间距或模糊是 `Points`；字体是 `SharedString`；阴影是 `AdaptiveShadow`；渐变是 `AdaptiveGradient`；字符串是 `String`；布尔值是 `bool`；时长是 `std::time::Duration`；缓动是 `CubicBezier`；文字样式是 `Typography`（`size`、`line_height`、`letter_spacing`、`font_weight`）。它的文档就是令牌的说明。
 - `key.get()` 在使用处读取令牌：最近的 [`ThemeScope`](../modules/nsh.md#themescope) 的值，数值取当前显示外观下的值。它和
   `tokens()` 一样是响应式的。`tokens().key(key)` 从手中的令牌读取（数值取浅色值），`tokens().get_as::<V>(name)` 按名称读取令牌，
   出错时说明它不存在还是种类不同。

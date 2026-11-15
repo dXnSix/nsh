@@ -390,9 +390,9 @@ export interface Roles {}
  */
 export interface Theme {
   cssVars: {
-    theme?: Record<string, string | number>;
-    light?: Record<string, string | number>;
-    dark?: Record<string, string | number>;
+    theme?: Record<string, string | number | boolean>;
+    light?: Record<string, string | number | boolean>;
+    dark?: Record<string, string | number | boolean>;
   };
   roles?: Record<string, string>;
   tokens?: Record<string, TokenDeclaration>;
@@ -421,17 +421,33 @@ export interface ThemeModifiers {}
 /** A token's kind: the one declared for it, else the kind it is kept as. */
 export type TokenKind =
   | "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur"
-  | "font" | "shadow" | "gradient";
+  | "font" | "shadow" | "gradient" | "string" | "boolean" | "duration" | "easing" | "typography";
+
+/** A text style's value (`typography`): its size and the parts it has. */
+export interface TypographyValue {
+  size: number;
+  lineHeight?: number;
+  letterSpacing?: number;
+  fontWeight?: number;
+}
+
+/** What a token of kind `K` holds in an appearance. */
+export type TokenKindValue<K extends TokenKind> =
+  K extends "typography" ? TypographyValue
+  : K extends "boolean" ? boolean
+  : K extends "color" | "font" | "shadow" | "gradient" | "string" | "easing" ? string
+  : number;
 
 /**
  * A token as `tokens.get` gives it: its kind and its value in each
- * appearance (a color as `#rrggbbaa`, a number in points, a font family,
- * shadows and gradients as CSS).
+ * appearance (a color as `#rrggbbaa`, a number in points, a duration in
+ * milliseconds, a font family, shadows, gradients and an easing as CSS, a
+ * string, a boolean, a text style's size and parts).
  */
 export interface TokenValue<K extends TokenKind = TokenKind> {
   kind: K;
-  light: K extends "color" | "font" | "shadow" | "gradient" ? string : number;
-  dark: K extends "color" | "font" | "shadow" | "gradient" ? string : number;
+  light: TokenKindValue<K>;
+  dark: TokenKindValue<K>;
 }
 
 /** A token as `tokens.entries` lists it. */

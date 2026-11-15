@@ -892,6 +892,10 @@ fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
         Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
         // Gradients as CSS writes them, of the appearance shown.
         Some(Token::Gradient(g)) => string(cx, &g.css(dark)),
+        Some(Token::String(s)) => string(cx, &s),
+        Some(Token::Boolean(b)) => boolean(b),
+        // An easing as CSS writes it.
+        Some(Token::Easing(e)) => string(cx, &e.css()),
         _ => UNDEFINED,
     }
 }
@@ -911,7 +915,7 @@ pub(crate) const TOKEN_EXPORT: crate::modules::Item = (
     "token",
     Export::Function(token, 1),
     Ts::function(
-        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family, box shadows and\ngradients as CSS writes them. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
+        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points, a duration in milliseconds), a\nfont family, box shadows, gradients and an easing as CSS writes them, a\nstring, a boolean. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
         &["<K extends keyof Tokens>(name: K): Tokens[K]"],
     ),
 );

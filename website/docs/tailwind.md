@@ -273,6 +273,14 @@ A token's name is its CSS variable's without `--`, as the theme file writes it: 
   as shadcn's `tracking-normal: 0em` always was. They work under variants and follow the theme as every token class
   does. `text-` is a color utility's too: there a color of the same name stays first; elsewhere the longer utility
   wins (`inset-shadow-card` is the inset shadow's color `card`).
+- **Duration, easing and text style tokens.** A `duration-<n>` entry (`"duration-fast": "150ms"`, or `0.2s`) is a
+  duration in milliseconds, which `duration-fast` and `delay-fast` read; an `ease-<n>` entry written as a CSS easing
+  (`"ease-snappy": "cubic-bezier(0.2, 0, 0, 1)"`) is an easing, which the class `ease-snappy` reads, as Tailwind 4's
+  `--ease-*` are. A text size `text-<n>` with sub-values (`"text-title": "24px"`, `"text-title--line-height": "1.25"`,
+  `"text-title--letter-spacing": "-0.5px"`, `"text-title--font-weight": "650"`), as Tailwind 4's `--text-*`, makes
+  `text-title` set the size and each part it has. A theme document may declare them as `duration`, `easing` and
+  `typography` tokens, and declares strings and booleans, which no name says ([Theme
+  documents](./rust.md#theme-documents-and-typed-keys)).
 - **Gradient tokens.** A `background-image-<n>` entry written as CSS gradients (`"background-image-hero":
   "linear-gradient(135deg, #7c3aed, #db2777)"`, a value per appearance in `light` and `dark`; linear, radial and
   conic, repeating, one or several) is a gradient token, as Tailwind 4's `--background-image-*` are: the class

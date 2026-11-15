@@ -305,7 +305,9 @@ interface Theme {
 }
 
 interface TokenDeclaration {
-  kind: "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow" | "gradient";
+  kind:
+    | "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow"
+    | "gradient" | "string" | "boolean" | "duration" | "easing" | "typography";
   path?: string;
   doc?: string;
 }
@@ -399,7 +401,7 @@ interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string
 ```
 
 把应用的设计令牌作为字典，供事先不知道其名称的代码使用：编辑器、工具、智能体。`tokens.get("radius-card")` 是该令牌及其种类
-和每种外观下的值（`{ kind: "radius", light: 12, dark: 12 }`；颜色为 `#rrggbbaa`，字体为字体族名，阴影和渐变为 CSS）。令牌的种类是主题为它
+和每种外观下的值（`{ kind: "radius", light: 12, dark: 12 }`；颜色为 `#rrggbbaa`，字体为字体族名，阴影、渐变和缓动为 CSS，时长为毫秒数，字符串、布尔值照原样，文字样式为其字号及各部分：`{ size: 24, lineHeight: 1.25, fontWeight: 650 }`）。令牌的种类是主题为它
 声明的种类（`radius`、`spacing` 等），否则是它保存的种类（`color`、`number`、`font`、`shadow`、`gradient`）。`tokens.kind(name)` 只给出种类，
 `tokens.names()` 给出所有令牌的名称并排序（`tokens.names({ kind: "radius" })`、`tokens.names({ prefix: "colors-" })`），`tokens.entries()` 给出
 每个令牌及其种类，以及主题声明它时的路径、说明和所有者。四者都是响应式的：`get` 与 [`token()`](#token) 一样跟随它的令牌，其他三个跟随

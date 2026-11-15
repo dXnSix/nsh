@@ -302,6 +302,11 @@ fn value_type(kind: &str) -> Option<fn(&TokenStream2) -> TokenStream2> {
         "font" => |c| quote!(#c::element::SharedString),
         "shadow" => |c| quote!(#c::element::AdaptiveShadow),
         "gradient" => |c| quote!(#c::element::AdaptiveGradient),
+        "string" => |_| quote!(::std::string::String),
+        "boolean" => |_| quote!(::core::primitive::bool),
+        "duration" => |_| quote!(::core::time::Duration),
+        "easing" => |c| quote!(#c::element::CubicBezier),
+        "typography" => |c| quote!(#c::element::Typography),
         _ => return None,
     })
 }

@@ -62,6 +62,18 @@ pub enum TokenKind {
     Shadow,
     /// Gradients per appearance (`background-image-*`: `bg-*`).
     Gradient,
+    /// A string (a label, a name), one in both appearances.
+    String,
+    /// A boolean (a feature on or off), one in both appearances.
+    Boolean,
+    /// A duration in milliseconds (`duration-*`: `duration-*`, `delay-*`).
+    Duration,
+    /// An easing curve (`ease-*`: `ease-*`), one in both appearances.
+    Easing,
+    /// A text style (`text-*`): its size, with its line height, letter
+    /// spacing and font weight as parts (`text-title--line-height`, …),
+    /// which the class `text-title` sets together.
+    Typography,
 }
 
 impl TokenKind {
@@ -73,6 +85,9 @@ impl TokenKind {
             TokenKind::Font => Kind::Font,
             TokenKind::Shadow => Kind::Shadow,
             TokenKind::Gradient => Kind::Gradient,
+            TokenKind::String => Kind::String,
+            TokenKind::Boolean => Kind::Boolean,
+            TokenKind::Easing => Kind::Easing,
             _ => Kind::Number,
         }
     }
@@ -92,8 +107,17 @@ impl TokenKind {
             TokenKind::Font => "font",
             TokenKind::Shadow => "shadow",
             TokenKind::Gradient => "gradient",
+            TokenKind::String => "string",
+            TokenKind::Boolean => "boolean",
+            TokenKind::Duration => "duration",
+            TokenKind::Easing => "easing",
+            TokenKind::Typography => "typography",
         }
     }
+
+    /// Every kind's name, as a sentence lists them.
+    pub const NAMES: &'static str = "color, number, radius, spacing, text, weight, tracking, \
+        leading, blur, font, shadow, gradient, string, boolean, duration, easing, typography";
 
     /// The kind of this name ([`TokenKind::name`]).
     pub fn from_name(name: &str) -> Option<TokenKind> {
@@ -110,6 +134,11 @@ impl TokenKind {
             "font" => TokenKind::Font,
             "shadow" => TokenKind::Shadow,
             "gradient" => TokenKind::Gradient,
+            "string" => TokenKind::String,
+            "boolean" => TokenKind::Boolean,
+            "duration" => TokenKind::Duration,
+            "easing" => TokenKind::Easing,
+            "typography" => TokenKind::Typography,
             _ => return None,
         })
     }
@@ -120,7 +149,11 @@ impl TokenKind {
         match self {
             TokenKind::Color => Some(RoleKind::Color),
             TokenKind::Font => Some(RoleKind::Font),
-            TokenKind::Shadow | TokenKind::Gradient => None,
+            TokenKind::Shadow
+            | TokenKind::Gradient
+            | TokenKind::String
+            | TokenKind::Boolean
+            | TokenKind::Easing => None,
             _ => Some(RoleKind::Number),
         }
     }
@@ -129,15 +162,35 @@ impl TokenKind {
     pub fn is_number(self) -> bool {
         !matches!(
             self,
-            TokenKind::Color | TokenKind::Font | TokenKind::Shadow | TokenKind::Gradient
+            TokenKind::Color
+                | TokenKind::Font
+                | TokenKind::Shadow
+                | TokenKind::Gradient
+                | TokenKind::String
+                | TokenKind::Boolean
+                | TokenKind::Easing
         )
+    }
+
+    /// The TS type `token()` gives its value: `number` (a number, a
+    /// duration in milliseconds, a text style's size), `boolean`, or
+    /// `string` (a color, a font family, CSS, a string).
+    pub fn ts_type(self) -> &'static str {
+        match self {
+            TokenKind::Boolean => "boolean",
+            kind if kind.is_number() => "number",
+            _ => "string",
+        }
     }
 
     /// The namespace its names take, which its classes read them by
     /// (`radius-`: `rounded-*`); a color's and a number's is none.
     pub fn namespace(self) -> &'static str {
         match self {
-            TokenKind::Color | TokenKind::Number => "",
+            TokenKind::Color | TokenKind::Number | TokenKind::String | TokenKind::Boolean => "",
+            TokenKind::Duration => "duration-",
+            TokenKind::Easing => "ease-",
+            TokenKind::Typography => "text-",
             TokenKind::Radius => "radius-",
             TokenKind::Spacing => "spacing-",
             TokenKind::Text => "text-",
@@ -158,6 +211,9 @@ impl TokenKind {
             TokenKind::Font => tokens.font(name).is_some(),
             TokenKind::Shadow => tokens.shadow(name).is_some(),
             TokenKind::Gradient => tokens.gradient(name).is_some(),
+            TokenKind::String => tokens.string(name).is_some(),
+            TokenKind::Boolean => tokens.boolean(name).is_some(),
+            TokenKind::Easing => tokens.easing(name).is_some(),
             _ => tokens.number(name).is_some(),
         }
     }
@@ -183,6 +239,10 @@ pub struct Declared {
     pub path: Option<Box<str>>,
     /// Its doc, for the toolchain's declarations (`tokens.d.ts`).
     pub doc: Box<str>,
+    /// The typography token it is a part of (`text-title` of
+    /// `text-title--line-height`), which declares it: a part may have no
+    /// value.
+    pub part_of: Option<Box<str>>,
 }
 
 /// The tokens theme documents declare, merged: each name's kind, owner,
@@ -273,7 +333,10 @@ impl Declarations {
             super::theme_file::overrides_declared(json, &Tokens::default(), &own)?;
         left_out.extend(read_out);
         for (name, d) in &declared {
-            if !d.kind.holds(&defaults, name) && !left_out.iter().any(|l| l.is_about(name)) {
+            if d.part_of.is_none()
+                && !d.kind.holds(&defaults, name)
+                && !left_out.iter().any(|l| l.is_about(name))
+            {
                 left_out.push(super::theme_file::LeftOut::no_value(name));
             }
         }

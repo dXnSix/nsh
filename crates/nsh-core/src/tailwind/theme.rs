@@ -94,6 +94,8 @@ pub(crate) struct ClassTokens {
     shadows: FxHashMap<Box<str>, crate::element::AdaptiveShadow>,
     /// Gradients, per appearance (`background-image-hero`: `bg-hero`).
     gradients: FxHashMap<Box<str>, crate::element::AdaptiveGradient>,
+    /// Easing curves (`ease-snappy`: `ease-snappy`).
+    easings: FxHashMap<Box<str>, crate::element::CubicBezier>,
     /// Whether a number's name is in one of Tailwind's namespaces
     /// (`radius-card`): without one no utility names a number
     /// ([`ClassTokens::named_number`]), which a theme without such
@@ -124,6 +126,7 @@ impl ClassTokens {
                 .gradients()
                 .map(|(k, g)| (k.into(), g.clone()))
                 .collect(),
+            easings: theme.easings().map(|(k, e)| (k.into(), e)).collect(),
             namespaced: theme
                 .numbers()
                 .chain(theme.dark_numbers())
@@ -141,6 +144,7 @@ impl ClassTokens {
             .chain(self.fonts.keys())
             .chain(self.shadows.keys())
             .chain(self.gradients.keys())
+            .chain(self.easings.keys())
             .map(|n| &**n)
     }
 
@@ -153,6 +157,8 @@ impl ClassTokens {
             && self.fonts.len() == other.fonts.len()
             && self.shadows.len() == other.shadows.len()
             && self.gradients.len() == other.gradients.len()
+            && self.easings.len() == other.easings.len()
+            && self.easings.keys().all(|k| other.easings.contains_key(k))
             && self.shadows.keys().all(|k| other.shadows.contains_key(k))
             && self
                 .gradients
@@ -195,6 +201,9 @@ impl ClassTokens {
         for (name, gradient) in &self.gradients {
             differ(name, other.gradients.get(name) == Some(gradient));
         }
+        for (name, easing) in &self.easings {
+            differ(name, other.easings.get(name) == Some(easing));
+        }
         changed
     }
 
@@ -222,6 +231,13 @@ impl ClassTokens {
         if let Some(family) = self.fonts.get(utility) {
             read.push(token_key(utility));
             return Some(format!("font-[family-name:{}]", family.replace(' ', "_")));
+        }
+        // An easing token is the class of its name (`ease-snappy`), as
+        // Tailwind's `--ease-*` are: its curve as an arbitrary value.
+        if let Some(easing) = self.easings.get(utility) {
+            read.push(token_key(utility));
+            let [a, b, c, d] = easing.0;
+            return Some(format!("ease-[cubic-bezier({a},{b},{c},{d})]"));
         }
         // A shadow token is the class of its name (`shadow-raised`), as
         // Tailwind's `--shadow-*` are: its layers as an arbitrary value.
@@ -346,7 +362,8 @@ impl ClassTokens {
             || self.dark_numbers.contains_key(name)
             || self.fonts.contains_key(name)
             || self.shadows.contains_key(name)
-            || self.gradients.contains_key(name);
+            || self.gradients.contains_key(name)
+            || self.easings.contains_key(name);
         match self.roles.get(name) {
             Some(mapped) if !token => mapped,
             _ => name,
@@ -355,6 +372,39 @@ impl ClassTokens {
 
     /// The number named `name` in the dark appearance or the light one
     /// ([`crate::element::Tokens::number_in`]).
+    /// The parts a typography token's class sets beside its size
+    /// (`text-title`: `leading-[1.25] tracking-[-0.2px] font-[650]`), from
+    /// the number tokens `text-title--line-height`, `--letter-spacing` and
+    /// `--font-weight`, as Tailwind 4's `--text-*` sub-values; none for a
+    /// class that is no size token's. The tokens it read are added to
+    /// `read`.
+    pub(crate) fn typography_parts(
+        &self,
+        utility: &str,
+        dark: bool,
+        read: &mut Vec<u64>,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        if !utility.starts_with("text-") || !self.numbers.contains_key(utility) {
+            return out;
+        }
+        for (suffix, prefix, length) in [
+            ("--line-height", "leading", false),
+            ("--letter-spacing", "tracking", true),
+            ("--font-weight", "font", false),
+        ] {
+            let part = format!("{utility}{suffix}");
+            if let Some(value) = self.number(&part, dark) {
+                read.push(token_key(&part));
+                out.push(match length {
+                    true => format!("{prefix}-[{value}px]"),
+                    false => format!("{prefix}-[{value}]"),
+                });
+            }
+        }
+        out
+    }
+
     fn number(&self, name: &str, dark: bool) -> Option<f32> {
         dark.then(|| self.dark_numbers.get(name).copied())
             .flatten()
@@ -433,7 +483,7 @@ impl ClassTokens {
 }
 
 /// Tailwind 4's namespaces of number tokens (`radius-card`).
-const NAMESPACES: [&str; 7] = [
+const NAMESPACES: [&str; 8] = [
     "radius",
     "spacing",
     "text",
@@ -441,6 +491,7 @@ const NAMESPACES: [&str; 7] = [
     "tracking",
     "leading",
     "blur",
+    "duration",
 ];
 
 /// The utilities whose values a namespace's tokens are: each prefix, its
@@ -468,6 +519,8 @@ const PREFIXES: &[(&str, &str, bool)] = &[
     ("leading", "leading", false),
     ("blur", "blur", true),
     ("backdrop-blur", "blur", true),
+    ("duration", "duration", false),
+    ("delay", "duration", false),
     ("p", "spacing", true),
     ("px", "spacing", true),
     ("py", "spacing", true),

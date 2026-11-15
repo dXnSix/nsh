@@ -78,11 +78,7 @@ pub fn tokens_declaration(tokens: &nsh_core::element::Tokens) -> String {
             if !d.doc.is_empty() {
                 let _ = writeln!(out, "    /** {} */", d.doc.replace("*/", "*\\/"));
             }
-            let ty = if d.kind.is_number() {
-                "number"
-            } else {
-                "string"
-            };
+            let ty = d.kind.ts_type();
             let _ = writeln!(out, "    {name:?}: {ty};");
         }
         out.push_str("  }\n");
@@ -101,6 +97,9 @@ pub fn tokens_declaration(tokens: &nsh_core::element::Tokens) -> String {
         .chain(tokens.fonts().map(|(n, _)| (n, "string")))
         .chain(tokens.shadows().map(|(n, _)| (n, "string")))
         .chain(tokens.gradients().map(|(n, _)| (n, "string")))
+        .chain(tokens.strings().map(|(n, _)| (n, "string")))
+        .chain(tokens.booleans().map(|(n, _)| (n, "boolean")))
+        .chain(tokens.easings().map(|(n, _)| (n, "string")))
         .collect();
     names.sort_unstable();
     names.dedup_by_key(|(n, _)| *n);

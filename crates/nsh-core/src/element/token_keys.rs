@@ -60,7 +60,7 @@ impl<V: TokenValue> TokenKey<V> {
     /// kind.
     pub fn get(self) -> Option<V> {
         let tokens = super::tokens();
-        let dark = tokens.has_dark_number(self.name) && super::dark();
+        let dark = V::per_appearance(&tokens, self.name) && super::dark();
         V::read(&tokens, self.name, dark)
     }
 }
@@ -106,6 +106,15 @@ pub trait TokenValue: Sized + sealed::Sealed {
     /// Sets it as the token `name` of `tokens`.
     #[doc(hidden)]
     fn write(self, name: &str, tokens: &mut Tokens);
+
+    /// Whether token `name` of `tokens` read as this differs between the
+    /// appearances in a way [`TokenValue::read`]'s `dark` decides (a
+    /// number with a dark value of its own): [`TokenKey::get`] reads the
+    /// appearance only then.
+    #[doc(hidden)]
+    fn per_appearance(tokens: &Tokens, name: &str) -> bool {
+        tokens.has_dark_number(name)
+    }
 }
 
 mod sealed {
@@ -117,6 +126,82 @@ mod sealed {
     impl Sealed for std::sync::Arc<str> {}
     impl Sealed for super::AdaptiveShadow {}
     impl Sealed for super::AdaptiveGradient {}
+    impl Sealed for String {}
+    impl Sealed for bool {}
+    impl Sealed for std::time::Duration {}
+    impl Sealed for crate::element::CubicBezier {}
+    impl Sealed for crate::element::Typography {}
+}
+
+impl TokenValue for String {
+    const KIND: &'static str = "string";
+
+    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
+        tokens.string(name).map(|s| s.to_string())
+    }
+
+    fn write(self, name: &str, tokens: &mut Tokens) {
+        tokens.set_string(name, self);
+    }
+}
+
+impl TokenValue for bool {
+    const KIND: &'static str = "boolean";
+
+    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
+        tokens.boolean(name)
+    }
+
+    fn write(self, name: &str, tokens: &mut Tokens) {
+        tokens.set_boolean(name, self);
+    }
+}
+
+/// A duration token, kept as a number of milliseconds.
+impl TokenValue for std::time::Duration {
+    const KIND: &'static str = "number";
+
+    fn read(tokens: &Tokens, name: &str, dark: bool) -> Option<Self> {
+        let ms = tokens.number_in(name, dark)?;
+        (ms.is_finite() && ms >= 0.0)
+            .then(|| std::time::Duration::from_secs_f64(f64::from(ms) / 1000.0))
+    }
+
+    fn write(self, name: &str, tokens: &mut Tokens) {
+        tokens.set_number(name, (self.as_secs_f64() * 1000.0) as f32);
+    }
+}
+
+impl TokenValue for super::CubicBezier {
+    const KIND: &'static str = "easing";
+
+    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
+        tokens.easing(name)
+    }
+
+    fn write(self, name: &str, tokens: &mut Tokens) {
+        tokens.set_easing(name, self);
+    }
+}
+
+/// A text style: its size token and its parts' ([`super::Typography::PARTS`]).
+impl TokenValue for super::Typography {
+    const KIND: &'static str = "number";
+
+    fn read(tokens: &Tokens, name: &str, dark: bool) -> Option<Self> {
+        tokens.typography_in(name, dark)
+    }
+
+    fn write(self, name: &str, tokens: &mut Tokens) {
+        tokens.set_typography(name, self);
+    }
+
+    fn per_appearance(tokens: &Tokens, name: &str) -> bool {
+        tokens.has_dark_number(name)
+            || super::Typography::PARTS
+                .iter()
+                .any(|suffix| tokens.has_dark_number(&format!("{name}{suffix}")))
+    }
 }
 
 impl TokenValue for AdaptiveColor {

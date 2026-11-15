@@ -311,7 +311,9 @@ interface Theme {
 }
 
 interface TokenDeclaration {
-  kind: "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow" | "gradient";
+  kind:
+    | "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow"
+    | "gradient" | "string" | "boolean" | "duration" | "easing" | "typography";
   path?: string;
   doc?: string;
 }
@@ -422,7 +424,9 @@ interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string
 
 The app's design tokens as a dictionary, for code that does not know their names ahead: an editor, a tool, an agent.
 `tokens.get("radius-card")` is the token with its kind and its value in each appearance
-(`{ kind: "radius", light: 12, dark: 12 }`; a color as `#rrggbbaa`, a font as its family, shadows and gradients as CSS).
+(`{ kind: "radius", light: 12, dark: 12 }`; a color as `#rrggbbaa`, a font as its family, shadows, gradients and an
+easing as CSS, a duration in milliseconds, a string, a boolean, and a text style as its size with its parts:
+`{ size: 24, lineHeight: 1.25, fontWeight: 650 }`).
 A token's kind is the one its theme declares (`radius`, `spacing`, …), else the kind it is kept as (`color`,
 `number`, `font`, `shadow`, `gradient`). `tokens.kind(name)` gives the kind alone, `tokens.names()` every token's name,
 sorted (`tokens.names({ kind: "radius" })`, `tokens.names({ prefix: "colors-" })`), and `tokens.entries()` every token

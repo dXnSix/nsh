@@ -244,6 +244,10 @@ impl Runtime {
                     )),
                     Some(Token::Shadow(s)) => Value::string(&s.css(dark)),
                     Some(Token::Gradient(g)) => Value::string(&g.css(dark)),
+                    Some(Token::String(s)) => Value::string(&s),
+                    // `true` and `false`, as the page's values are kept.
+                    Some(Token::Boolean(b)) => Ok(Value(if b { 3 } else { 2 })),
+                    Some(Token::Easing(e)) => Value::string(&e.css()),
                     _ => Ok(Value(0)),
                 }
             }

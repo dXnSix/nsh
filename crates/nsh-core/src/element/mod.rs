@@ -207,8 +207,8 @@ pub use self::{
     token_info::TokenInfo,
     token_keys::{TokenError, TokenKey, TokenValue},
     tokens::{
-        AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleSpec, RoleValue,
-        ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,
+        AnyRole, CubicBezier, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleSpec,
+        RoleValue, ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, Typography, role,
     },
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},

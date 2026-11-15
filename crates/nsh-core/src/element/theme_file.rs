@@ -230,7 +230,7 @@ pub(crate) fn declared_tokens(
                 None => {
                     left_out.push(LeftOut::about(
                         &at,
-                        format_args!(": no kind `{kind}` (color, number, radius, spacing, text, weight, tracking, leading, blur, font, shadow, gradient)"),
+                        format_args!(": no kind `{kind}` ({})", super::TokenKind::NAMES),
                     ));
                     continue;
                 }
@@ -284,8 +284,24 @@ pub(crate) fn declared_tokens(
                 kind,
                 path: text("path").map(Into::into),
                 doc: text("doc").unwrap_or_default().into(),
+                part_of: None,
             },
         ));
+        // A text style declares its parts, numbers of their own names.
+        if kind == super::TokenKind::Typography {
+            for suffix in super::Typography::PARTS {
+                declared.push((
+                    format!("{name}{suffix}").into(),
+                    super::theme::Declared {
+                        owner: owner.into(),
+                        kind: super::TokenKind::Number,
+                        path: text("path").map(|p| format!("{p}.{}", &suffix[2..]).into()),
+                        doc: Box::default(),
+                        part_of: Some(name.as_str().into()),
+                    },
+                ));
+            }
+        }
     }
     (declared, left_out)
 }
@@ -305,6 +321,9 @@ pub(crate) fn overrides_declared(
     let mut value: JsonValue = serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
     let (kept, mut left_out) = declared_names(&mut value, set);
     let mut read = Tokens::default();
+    // Strings, booleans, durations and easings by their declared kind,
+    // which their values cannot say.
+    left_out.extend(read_plain(&mut read, &mut value, set));
     left_out.extend(read_into(&mut read, base, &value));
     let mut out = Tokens::default();
     for (name, kind) in set.names() {
@@ -536,13 +555,38 @@ pub fn write(tokens: &Tokens) -> String {
             JsonValue::from(g.css(true)),
         );
     }
+    for (name, e) in tokens.easings() {
+        put(name, JsonValue::from(e.css()), JsonValue::from(e.css()));
+    }
+    // A string's and a boolean's value cannot say its kind: the file
+    // declares every token then.
+    let plain = tokens.strings().next().is_some() || tokens.booleans().next().is_some();
+    for (name, s) in tokens.strings() {
+        put(name, JsonValue::from(&**s), JsonValue::from(&**s));
+    }
+    for (name, b) in tokens.booleans() {
+        put(name, JsonValue::from(b), JsonValue::from(b));
+    }
     let mut vars = serde_json::Map::new();
     for (key, section) in [("theme", theme), ("light", light), ("dark", dark)] {
         if !section.is_empty() {
             vars.insert(key.to_owned(), JsonValue::Object(section));
         }
     }
-    serde_json::json!({ "cssVars": vars }).to_string()
+    if !plain {
+        return serde_json::json!({ "cssVars": vars }).to_string();
+    }
+    let mut declared = serde_json::Map::new();
+    for name in tokens.names() {
+        let part = tokens
+            .declarations()
+            .and_then(|d| d.get(name))
+            .is_some_and(|d| d.part_of.is_some());
+        if let (false, Some(kind)) = (part, tokens.kind_name(name)) {
+            declared.insert(name.to_owned(), serde_json::json!({ "kind": kind }));
+        }
+    }
+    serde_json::json!({ "cssVars": vars, "tokens": declared }).to_string()
 }
 
 /// Whether `json` can be a theme file at all: it is JSON. What a reader
@@ -732,6 +776,135 @@ fn font_family(value: &str) -> Option<&str> {
 /// points (`px`, `rem`). A value written as a color that is none is left
 /// out, and one that is no color where the other appearance has a color
 /// gives way to that color; both are listed in `ignored`.
+/// A duration as a theme file writes it: `150ms`, `0.2s`, or a plain
+/// number of milliseconds; in milliseconds.
+pub(crate) fn duration(value: &str) -> Option<f32> {
+    let value = value.trim();
+    let ms = if let Some(n) = value.strip_suffix("ms") {
+        n.trim().parse::<f32>().ok()?
+    } else if let Some(n) = value.strip_suffix('s') {
+        n.trim().parse::<f32>().ok()? * 1000.0
+    } else {
+        value.parse::<f32>().ok()?
+    };
+    (ms.is_finite() && ms >= 0.0).then_some(ms)
+}
+
+/// Takes the values of the tokens `set` declares as strings, booleans,
+/// durations or easings out of theme file `value`'s `cssVars` and sets them
+/// in `tokens`, each read as its kind: a string a JSON string, a boolean
+/// `true` or `false`, a duration `150ms` / `0.2s` / milliseconds (per
+/// appearance, as a number), an easing a CSS easing. A string, a boolean
+/// and an easing are one value in both appearances. Returns what it left
+/// out.
+fn read_plain(
+    tokens: &mut Tokens,
+    value: &mut JsonValue,
+    set: &super::theme::Declarations,
+) -> Vec<LeftOut> {
+    use super::TokenKind as K;
+    let mut left_out = Vec::new();
+    let Some(vars) = value.get_mut("cssVars").and_then(JsonValue::as_object_mut) else {
+        return left_out;
+    };
+    // Each name's value in `theme`, `light` and `dark`.
+    let mut found: FxHashMap<String, [Option<JsonValue>; 3]> = FxHashMap::default();
+    for (i, section) in ["theme", "light", "dark"].into_iter().enumerate() {
+        let Some(JsonValue::Object(fields)) = vars.get_mut(section) else {
+            continue;
+        };
+        let names: Vec<String> = fields
+            .keys()
+            .filter(|n| {
+                matches!(
+                    set.kind_of(n),
+                    Some(K::String | K::Boolean | K::Duration | K::Easing)
+                )
+            })
+            .cloned()
+            .collect();
+        for name in names {
+            let v = fields.remove(&name);
+            found.entry(name).or_default()[i] = v;
+        }
+    }
+    let mut names: Vec<&String> = found.keys().collect();
+    names.sort();
+    for name in names {
+        let [theme, light, dark] = &found[name];
+        let light = light.as_ref().or(theme.as_ref());
+        let dark = dark.as_ref().or(light);
+        let (Some(light), Some(dark)) = (light, dark) else {
+            continue;
+        };
+        let text = |v: &JsonValue| match v {
+            JsonValue::String(s) => Some(s.clone()),
+            JsonValue::Number(n) => Some(n.to_string()),
+            _ => None,
+        };
+        let kind = set.kind_of(name).unwrap_or(K::String);
+        if kind == K::Duration {
+            match (
+                text(light).and_then(|v| duration(&v)),
+                text(dark).and_then(|v| duration(&v)),
+            ) {
+                (Some(l), Some(d)) => {
+                    tokens.set_number(name, l);
+                    if d != l {
+                        tokens.set_dark_number(name, d);
+                    }
+                }
+                _ => left_out.push(LeftOut::about(
+                    name,
+                    format_args!(": {dark} is no duration (`150ms`, `0.2s`)"),
+                )),
+            }
+            continue;
+        }
+        if light != dark {
+            left_out.push(LeftOut::about(
+                name,
+                format_args!(": a {} is one value in both appearances", kind.name()),
+            ));
+            continue;
+        }
+        let ok = match kind {
+            K::String => match light {
+                JsonValue::String(s) => {
+                    tokens.set_string(name, s.as_str());
+                    true
+                }
+                _ => false,
+            },
+            K::Boolean => match light {
+                JsonValue::Bool(b) => {
+                    tokens.set_boolean(name, *b);
+                    true
+                }
+                JsonValue::String(s) if s == "true" || s == "false" => {
+                    tokens.set_boolean(name, s == "true");
+                    true
+                }
+                _ => false,
+            },
+            _ => match text(light).and_then(|v| super::CubicBezier::parse(&v)) {
+                Some(e) => {
+                    tokens.set_easing(name, e);
+                    true
+                }
+                None => false,
+            },
+        };
+        if !ok {
+            left_out.push(LeftOut::about(
+                name,
+                format_args!(": {light} is no {}", kind.name()),
+            ));
+        }
+    }
+    left_out
+}
+
 fn apply_css_vars(
     tokens: &mut Tokens,
     base: &Tokens,
@@ -816,6 +989,47 @@ fn apply_css_vars(
                 // No gradient in an appearance: read as any other value.
                 _ => {}
             }
+        }
+        // An easing (`ease-snappy`: `cubic-bezier(0.2, 0, 0, 1)`), as
+        // Tailwind's `--ease-*`: one in both appearances.
+        if name.starts_with("ease-") {
+            let (l, d) = (light_vars.get(name), dark_vars.get(name));
+            match (
+                l.map(|v| super::CubicBezier::parse(v)),
+                d.map(|v| super::CubicBezier::parse(v)),
+            ) {
+                (Some(Some(l)), Some(Some(d))) if l == d => tokens.set_easing(name, l),
+                (None, Some(Some(d))) => tokens.set_easing(name, d),
+                (Some(Some(_)), Some(Some(_))) => ignored.push(LeftOut::about(
+                    name,
+                    ": an easing is one value in both appearances",
+                )),
+                _ => ignored.push(LeftOut::about(
+                    name,
+                    format_args!(": {value} is no easing (`cubic-bezier(…)`, `ease-in-out`, …)"),
+                )),
+            }
+            continue;
+        }
+        // A duration (`duration-fast`: `150ms`), per appearance, kept as a
+        // number of milliseconds; `duration-*` and `delay-*` read it.
+        if name.starts_with("duration-") {
+            let Some(dark_ms) = duration(value) else {
+                ignored.push(LeftOut::about(
+                    name,
+                    format_args!(": {value} is no duration (`150ms`, `0.2s`)"),
+                ));
+                continue;
+            };
+            let light_ms = light_vars
+                .get(name)
+                .and_then(|v| duration(v))
+                .unwrap_or(dark_ms);
+            tokens.set_number(name, light_ms);
+            if dark_ms != light_ms {
+                tokens.set_dark_number(name, dark_ms);
+            }
+            continue;
         }
         // A weight (`font-weight-strong`: `650`) is a number, as
         // Tailwind's `--font-weight-*`; every other `font-*` a family. A

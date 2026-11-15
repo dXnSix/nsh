@@ -48640,3 +48640,243 @@ mod theme_modifiers {
         );
     }
 }
+
+/// The kinds a token may be beside colors, numbers, fonts, shadows and
+/// gradients: strings, booleans, durations, easings and text styles
+/// (typography), read by their declared kind, refused when their value is
+/// of no such kind, typed by keys, and written back.
+mod token_kinds {
+    use crate::element::{CubicBezier, Registry, TokenKey, Tokens, Typography};
+    use crate::geometry::Points;
+
+    const DOCUMENT: &str = r##"{
+        "cssVars": {
+            "theme": {
+                "brand-name": "Acme", "feature-beta": true, "duration-fast": "120ms",
+                "ease-snappy": "cubic-bezier(0.2, 0, 0, 1)",
+                "text-title": "24px", "text-title--line-height": "1.25",
+                "text-title--letter-spacing": "-0.5px", "text-title--font-weight": "650"
+            },
+            "light": { "ink": "#111111" },
+            "dark": { "ink": "#eeeeee", "duration-fast": "0.2s" }
+        },
+        "tokens": {
+            "ink": { "kind": "color" },
+            "brand-name": { "kind": "string", "path": "brand.name" },
+            "feature-beta": { "kind": "boolean", "path": "features.beta" },
+            "duration-fast": { "kind": "duration", "path": "motion.fast" },
+            "ease-snappy": { "kind": "easing", "path": "motion.snappy" },
+            "text-title": { "kind": "typography", "path": "type.title" }
+        }
+    }"##;
+
+    fn read(json: &'static str) -> Tokens {
+        let mut registry = Registry::ui_set("ds/native");
+        registry.theme_document(json);
+        registry.tokens(None).unwrap().unwrap().0
+    }
+
+    #[test]
+    fn a_document_reads_each_kind_by_its_declaration() {
+        let tokens = read(DOCUMENT);
+        assert_eq!(tokens.string("brand-name").map(|s| &**s), Some("Acme"));
+        assert_eq!(tokens.boolean("feature-beta"), Some(true));
+        assert_eq!(tokens.number_in("duration-fast", false), Some(120.0));
+        assert_eq!(tokens.number_in("duration-fast", true), Some(200.0));
+        assert_eq!(
+            tokens.easing("ease-snappy"),
+            Some(CubicBezier([0.2, 0.0, 0.0, 1.0]))
+        );
+        assert_eq!(
+            tokens.typography_in("text-title", false),
+            Some(Typography {
+                size: Points(24.0),
+                line_height: Some(1.25),
+                letter_spacing: Some(Points(-0.5)),
+                font_weight: Some(650.0),
+            })
+        );
+        for (name, kind) in [
+            ("brand-name", "string"),
+            ("feature-beta", "boolean"),
+            ("duration-fast", "duration"),
+            ("ease-snappy", "easing"),
+            ("text-title", "typography"),
+            ("text-title--line-height", "number"),
+        ] {
+            assert_eq!(tokens.kind_name(name), Some(kind), "{name}");
+        }
+        // A part takes its path from its text style's.
+        let declared = tokens.declarations().unwrap();
+        assert_eq!(
+            declared.path_of("text-title--font-weight"),
+            Some("type.title.font-weight")
+        );
+        assert_eq!(
+            declared
+                .get("text-title--font-weight")
+                .unwrap()
+                .part_of
+                .as_deref(),
+            Some("text-title")
+        );
+        // As TS's `tokens.get` gives them.
+        assert_eq!(
+            tokens.value_json("brand-name").unwrap(),
+            serde_json::json!({ "kind": "string", "light": "Acme", "dark": "Acme" })
+        );
+        assert_eq!(
+            tokens.value_json("feature-beta").unwrap(),
+            serde_json::json!({ "kind": "boolean", "light": true, "dark": true })
+        );
+        assert_eq!(
+            tokens.value_json("duration-fast").unwrap(),
+            serde_json::json!({ "kind": "duration", "light": 120.0, "dark": 200.0 })
+        );
+        assert_eq!(
+            tokens.value_json("ease-snappy").unwrap(),
+            serde_json::json!({ "kind": "easing", "light": "cubic-bezier(0.2, 0, 0, 1)", "dark": "cubic-bezier(0.2, 0, 0, 1)" })
+        );
+        assert_eq!(
+            tokens.value_json("text-title").unwrap()["light"],
+            serde_json::json!({ "size": 24.0, "lineHeight": 1.25, "letterSpacing": -0.5, "fontWeight": 650.0 })
+        );
+    }
+
+    #[test]
+    fn typed_keys_read_and_write_each_kind() {
+        const NAME: TokenKey<String> = TokenKey::new("brand-name");
+        const BETA: TokenKey<bool> = TokenKey::new("feature-beta");
+        const FAST: TokenKey<std::time::Duration> = TokenKey::new("duration-fast");
+        const SNAPPY: TokenKey<CubicBezier> = TokenKey::new("ease-snappy");
+        const TITLE: TokenKey<Typography> = TokenKey::new("text-title");
+        let tokens = read(DOCUMENT);
+        assert_eq!(tokens.key(NAME).as_deref(), Some("Acme"));
+        assert_eq!(tokens.key(BETA), Some(true));
+        assert_eq!(
+            tokens.key(FAST),
+            Some(std::time::Duration::from_millis(120))
+        );
+        assert_eq!(tokens.key(SNAPPY), Some(CubicBezier([0.2, 0.0, 0.0, 1.0])));
+        assert_eq!(tokens.key(TITLE).map(|t| t.font_weight), Some(Some(650.0)));
+        let changed = tokens
+            .clone()
+            .with(NAME, "Initech".to_owned())
+            .with(BETA, false)
+            .with(FAST, std::time::Duration::from_millis(90))
+            .with(SNAPPY, CubicBezier::EASE_OUT)
+            .with(
+                TITLE,
+                Typography {
+                    size: Points(20.0),
+                    ..Typography::default()
+                },
+            );
+        assert_eq!(changed.key(NAME).as_deref(), Some("Initech"));
+        assert_eq!(changed.key(BETA), Some(false));
+        assert_eq!(
+            changed.key(FAST),
+            Some(std::time::Duration::from_millis(90))
+        );
+        assert_eq!(changed.key(SNAPPY), Some(CubicBezier::EASE_OUT));
+        assert_eq!(
+            changed.key(TITLE),
+            Some(Typography {
+                size: Points(20.0),
+                ..Typography::default()
+            })
+        );
+        // A key of another kind reads nothing.
+        assert!(tokens.get_as::<bool>("brand-name").is_err());
+        assert_eq!(tokens.key(TokenKey::<bool>::new("brand-name")), None);
+    }
+
+    #[test]
+    fn a_value_of_no_such_kind_is_refused_and_said() {
+        let mut registry = Registry::ui_set("ds/native");
+        registry.theme_document(DOCUMENT);
+        let provider = registry.token_provider().unwrap();
+        let (tokens, said) = provider
+            .read_left_out(Some(
+                r##"{ "cssVars": {
+                    "theme": { "feature-beta": "yes", "duration-fast": "fast", "ease-snappy": "bounce" },
+                    "light": { "brand-name": "Acme" }, "dark": { "brand-name": "Acme Night" } } }"##,
+            ))
+            .unwrap();
+        let said: Vec<String> = said.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            said,
+            [
+                "`brand-name`: a string is one value in both appearances",
+                "`duration-fast`: \"fast\" is no duration (`150ms`, `0.2s`)",
+                "`ease-snappy`: \"bounce\" is no easing",
+                "`feature-beta`: \"yes\" is no boolean",
+            ]
+        );
+        // What it refused keeps the document's value.
+        assert_eq!(tokens.boolean("feature-beta"), Some(true));
+        assert_eq!(tokens.string("brand-name").map(|s| &**s), Some("Acme"));
+    }
+
+    /// A theme file that declares nothing says an easing and a duration by
+    /// their names, as Tailwind's `--ease-*`; a boolean and a string cannot
+    /// say theirs.
+    #[test]
+    fn an_undeclared_file_reads_easings_and_durations_by_name() {
+        let (tokens, said) = crate::element::theme_file::parse(
+            r##"{ "cssVars": { "theme": {
+                "ease-snappy": "cubic-bezier(0.2, 0, 0, 1)", "duration-fast": "150ms",
+                "ease-broken": "wobbly", "flag": true } } }"##,
+            &Tokens::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            tokens.easing("ease-snappy"),
+            Some(CubicBezier([0.2, 0.0, 0.0, 1.0]))
+        );
+        assert_eq!(tokens.number("duration-fast"), Some(150.0));
+        assert!(
+            said.iter()
+                .any(|s| s.starts_with("`ease-broken`: wobbly is no easing")),
+            "{said:?}"
+        );
+        assert!(
+            said.iter()
+                .any(|s| s.starts_with("cssVars.theme.flag: expected a CSS value")),
+            "{said:?}"
+        );
+    }
+
+    /// Written and read back, strings and booleans keep their kind: the
+    /// written file declares its tokens.
+    #[test]
+    fn strings_and_booleans_are_written_and_read_back() {
+        let tokens = read(DOCUMENT);
+        let json = crate::element::theme_file::write(&tokens);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value["tokens"]["brand-name"],
+            serde_json::json!({ "kind": "string" })
+        );
+        assert_eq!(
+            value["tokens"]["text-title"],
+            serde_json::json!({ "kind": "typography" })
+        );
+        assert!(value["tokens"].get("text-title--line-height").is_none());
+        let mut registry = Registry::ui_set("ds/other");
+        registry.theme_document(Box::leak(json.into_boxed_str()));
+        let back = registry.tokens(None).unwrap().unwrap().0;
+        for name in [
+            "brand-name",
+            "feature-beta",
+            "duration-fast",
+            "ease-snappy",
+            "text-title",
+            "text-title--line-height",
+            "ink",
+        ] {
+            assert_eq!(back.get(name), tokens.get(name), "{name}");
+            assert_eq!(back.kind_name(name), tokens.kind_name(name), "{name}");
+        }
+    }
+}
