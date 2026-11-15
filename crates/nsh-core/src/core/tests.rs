@@ -33417,3 +33417,84 @@ mod theme_roles {
         assert!(sent(&mut c).last().is_some_and(|t| t.is_themed()));
     }
 }
+
+/// A number with a dark value of its own, read in Rust where the app is
+/// shown dark, is its dark value, as TS's `token()` and classes read it:
+/// `token()` follows the appearance shown and `Tokens::get_in` reads
+/// either.
+mod numbers_shown {
+    use super::*;
+    use crate::{
+        Prop,
+        element::{Root, Token, token},
+        platform::Appearance,
+        prelude::*,
+    };
+
+    /// A core drawn with `radius-card` at 8 points, and 12 in the dark
+    /// appearance.
+    fn card_core() -> Core<FakeEngine> {
+        let mut c = core();
+        let mut tokens = crate::element::tokens::sample();
+        tokens.set_number("radius-card", 8.0);
+        tokens.set_dark_number("radius-card", 12.0);
+        c.set_tokens(tokens);
+        c
+    }
+
+    fn appearance(c: &mut Core<FakeEngine>, appearance: Appearance) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::Appearance(appearance),
+            }],
+        );
+    }
+
+    fn shown(c: &mut Core<FakeEngine>) -> Option<String> {
+        let mut last = None;
+        while let Some(batch) = c.commit() {
+            if let Some(t) = text_item(&batch) {
+                last = Some(t.text.to_string());
+            }
+        }
+        last
+    }
+
+    /// The token by name.
+    #[component]
+    fn CardRadius() -> impl IntoElement {
+        text(move || match token("radius-card") {
+            Some(Token::Number(n)) => n.to_string(),
+            _ => "none".into(),
+        })
+    }
+
+    #[test]
+    fn token_reads_a_number_in_the_appearance_shown() {
+        let mut c = card_core();
+        c.mount_root(&Root::of::<CardRadius>());
+        assert_eq!(shown(&mut c).as_deref(), Some("8"));
+        appearance(&mut c, Appearance::Dark);
+        assert_eq!(shown(&mut c).as_deref(), Some("12"));
+        appearance(&mut c, Appearance::Light);
+        assert_eq!(shown(&mut c).as_deref(), Some("8"));
+    }
+
+    #[test]
+    fn get_in_reads_a_token_in_either_appearance() {
+        let c = card_core();
+        let tokens = c.tokens();
+        assert_eq!(
+            tokens.get_in("radius-card", true),
+            Some(Token::Number(12.0))
+        );
+        assert_eq!(
+            tokens.get_in("radius-card", false),
+            Some(Token::Number(8.0))
+        );
+        assert_eq!(tokens.get_in("primary", true), tokens.get("primary"));
+        assert_eq!(tokens.get_in("nothing", true), None);
+    }
+}

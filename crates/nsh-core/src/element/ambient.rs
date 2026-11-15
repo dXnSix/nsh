@@ -410,6 +410,16 @@ pub fn tokens() -> Arc<Tokens> {
         .get()
 }
 
+/// The design token `name` as the app is shown (TS: `token()`): a number
+/// its value in the appearance shown ([`Tokens::get_in`]), any other kind
+/// as [`Tokens::get`] gives it. Reading it subscribes, as [`tokens`] does,
+/// and to the appearance for a number with a dark value.
+pub fn token(name: &str) -> Option<super::Token> {
+    let tokens = tokens();
+    let dark = tokens.has_dark_number(name) && dark();
+    tokens.get_in(name, dark)
+}
+
 /// Draws the app with the design tokens `tokens` (the app's own, which an
 /// embedding app's still win over), in place of the UI set's defaults or
 /// the theme file's: Tailwind's token classes, [`tokens`] and the

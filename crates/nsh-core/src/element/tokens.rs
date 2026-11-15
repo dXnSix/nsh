@@ -379,7 +379,8 @@ impl Tokens {
     }
 
     /// The number named `name` (its light value, the only one of most
-    /// numbers).
+    /// numbers). [`Tokens::number_in`] reads it in either appearance and
+    /// [`super::token`] in the appearance shown.
     pub fn number(&self, name: &str) -> Option<f32> {
         self.numbers.get(name).copied()
     }
@@ -417,7 +418,8 @@ impl Tokens {
     }
 
     /// The token named `name`, of any kind (a color first, as classes take
-    /// it).
+    /// it), as kept: a color with its values in both appearances, a number
+    /// its light value ([`Tokens::get_in`] gives it in either).
     pub fn get(&self, name: &str) -> Option<Token> {
         if let Some(c) = self.colors.get(name) {
             return Some(Token::Color(*c));
@@ -426,6 +428,22 @@ impl Tokens {
             return Some(Token::Number(*n));
         }
         self.fonts.get(name).cloned().map(Token::Font)
+    }
+
+    /// The token named `name` in the dark appearance (`dark`) or the light
+    /// one: a number its value there ([`Tokens::number_in`]), any other
+    /// kind as [`Tokens::get`] gives it. Where the app is shown, Rust reads
+    /// it with [`super::token`], as TS's `token()` does.
+    pub fn get_in(&self, name: &str, dark: bool) -> Option<Token> {
+        match self.get(name)? {
+            Token::Number(_) => self.number_in(name, dark).map(Token::Number),
+            token => Some(token),
+        }
+    }
+
+    /// Whether number `name` has a dark value of its own.
+    pub(crate) fn has_dark_number(&self, name: &str) -> bool {
+        self.dark_numbers.contains_key(name)
     }
 
     /// The kind of token `name` (a color first, as [`Tokens::get`] takes
