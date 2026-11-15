@@ -1028,12 +1028,15 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Takes the tokens a theme type's fields wrote
-    /// ([`crate::element::set_theme`]), as [`Core::update_tokens`] takes
-    /// tokens, but a number left at its value keeps its dark one: a number
-    /// field is the light value, and setting a theme that was read must
-    /// not change what it could not read. Applied in order, as an update.
-    pub(crate) fn set_theme_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(tokens.over_as_fields(&self.components.app_tokens));
+    /// ([`crate::element::set_theme`]), read in the dark appearance
+    /// (`dark`) or the light one, as [`Core::update_tokens`] takes tokens,
+    /// but a number left at its value there keeps both its values: a
+    /// number field is the value of one appearance, and setting a theme
+    /// that was read must not change what it could not read. Applied in
+    /// order, as an update.
+    pub(crate) fn set_theme_tokens(&mut self, tokens: Tokens, dark: bool) {
+        self.components.app_tokens =
+            Arc::new(tokens.over_as_fields(&self.components.app_tokens, dark));
         self.tokens_changed();
     }
 
@@ -6216,9 +6219,14 @@ impl<M: TextEngine> Core<M> {
             Action::Appearance(appearance) => self.set_appearance(appearance),
             Action::Tokens(tokens) => self.set_tokens(tokens),
             Action::UpdateTokens(tokens) => self.update_tokens(tokens),
-            Action::SetTheme { tokens, played } => {
+            Action::SetTheme {
+                tokens,
+                played,
+                dark,
+            } => {
                 let tokens = self.through_roles(tokens, &played);
-                self.set_theme_tokens(tokens);
+                let dark = dark.unwrap_or_else(|| self.shown_dark());
+                self.set_theme_tokens(tokens, dark);
             }
             Action::UpdateTheme { tokens, played } => {
                 let tokens = self.through_roles(tokens, &played);

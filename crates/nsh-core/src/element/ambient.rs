@@ -82,10 +82,11 @@ pub(crate) fn with_theme_cache<R>(f: impl FnOnce(&mut ThemeCache) -> R) -> R {
     with_data(|d| f(&mut d.ambient.themes))
 }
 
-/// The theme types read so far ([`super::theme_of`]): by type and by the
-/// tokens read (the surface's, and each [`super::ThemeScope`]'s), the theme.
+/// The theme types read so far ([`super::theme_of`]): by type, by the
+/// tokens read (the surface's, and each [`super::ThemeScope`]'s) and by the
+/// appearance read in, the theme.
 #[derive(Default)]
-pub(crate) struct ThemeCache(FxHashMap<(TypeId, usize), ReadTheme>);
+pub(crate) struct ThemeCache(FxHashMap<(TypeId, usize, bool), ReadTheme>);
 
 /// A theme type's value, with the tokens it was read of.
 type ReadTheme = (Arc<Tokens>, Box<dyn Any>);
@@ -95,21 +96,29 @@ impl ThemeCache {
     /// over (tokens no longer drawn with go with it).
     const KEPT: usize = 32;
 
-    /// The theme of type `ty` read of `tokens`, if it was.
-    pub(crate) fn get(&self, ty: TypeId, tokens: &Arc<Tokens>) -> Option<&dyn Any> {
+    /// The theme of type `ty` read of `tokens` in the dark appearance
+    /// (`dark`) or the light one, if it was.
+    pub(crate) fn get(&self, ty: TypeId, tokens: &Arc<Tokens>, dark: bool) -> Option<&dyn Any> {
         self.0
-            .get(&(ty, Arc::as_ptr(tokens) as usize))
+            .get(&(ty, Arc::as_ptr(tokens) as usize, dark))
             .map(|(_, theme)| &**theme)
     }
 
-    /// Keeps `theme`, the type `ty` read of `tokens`.
-    pub(crate) fn insert(&mut self, ty: TypeId, tokens: Arc<Tokens>, theme: Box<dyn Any>) {
+    /// Keeps `theme`, the type `ty` read of `tokens` in the dark
+    /// appearance (`dark`) or the light one.
+    pub(crate) fn insert(
+        &mut self,
+        ty: TypeId,
+        tokens: Arc<Tokens>,
+        dark: bool,
+        theme: Box<dyn Any>,
+    ) {
         if self.0.len() >= Self::KEPT {
             self.0.clear();
         }
         // The tokens are held, so their address names them while kept.
         self.0
-            .insert((ty, Arc::as_ptr(&tokens) as usize), (tokens, theme));
+            .insert((ty, Arc::as_ptr(&tokens) as usize, dark), (tokens, theme));
     }
 }
 
@@ -596,6 +605,17 @@ pub fn is_tv() -> bool {
 /// tokens reach what read them).
 pub fn tokens() -> Arc<Tokens> {
     super::theme_scope::ScopeTokens::nearest().unwrap_or_else(surface_tokens)
+}
+
+/// The design token `name` as the app is shown where it is read (TS:
+/// `token()`): the nearest [`super::ThemeScope`]'s, a number its value in
+/// the appearance there ([`Tokens::get_in`]), any other kind as
+/// [`Tokens::get`] gives it. Reading it subscribes, as [`tokens`] does, and
+/// to the appearance for a number with a dark value.
+pub fn token(name: &str) -> Option<super::Token> {
+    let tokens = tokens();
+    let dark = tokens.has_dark_number(name) && dark();
+    tokens.get_in(name, dark)
 }
 
 /// The design tokens the surface is drawn with, whatever scope is around.

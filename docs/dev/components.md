@@ -949,13 +949,16 @@ a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_th
 in `light` and `dark`; roles none of it), which the descriptions carry as a type's defaults.
 
 `theme_of::<T>()` reads `tokens()` (so it subscribes, as `tokens()` does) and caches per surface in `Ambient`'s `themes`
-(`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read and the `Arc<T>` as `Box<dyn Any>`): while the cached
-tokens are pointer-equal to the current ones the cached theme is returned, else `T::read_tokens(&tokens, "")` is cached
-in its place. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
+(`ambient::with_theme_cache`: by `TypeId`, the `Arc<Tokens>` read, the appearance and the `Arc<T>` as `Box<dyn Any>`):
+while the cached tokens are pointer-equal to the current ones the cached theme is returned, else
+`T::read_tokens(&tokens, "")` is cached in its place. Where a number has a dark value and `dark()` is true (which it
+then subscribes to), it reads `Tokens::shown_dark()` instead, the tokens with each number its dark value, so a number
+field is the value shown, as `token()` (`Tokens::get_in`) and the classes read it. The type's `read_tokens` runs with the cache let go, so it may read the tokens or another type.
 `set_theme` takes its tokens without the roles its specs map (`theme::theme_tokens`: the registered types' roles
 stay) as `update_tokens` does, but as a type's fields (`Action::SetTheme`, `Core::set_theme_tokens`,
-`Tokens::over_as_fields`): a number field is the light value, so a number left at the light value the app's tokens
-have keeps their dark one, and a theme read and set back changes nothing. `update_theme` is `update_tokens` of the
+`Tokens::over_as_fields`): a number field is the value of the appearance shown where `set_theme` runs (the action's
+`dark`; `None` from a `ModuleCx`, the surface's), so a number left at that value keeps both values the app's tokens
+have, and a theme read and set back changes nothing. `update_theme` is `update_tokens` of the
 patch's tokens (`theme::patch_tokens`), and `reset_theme` `reset_tokens` of `T`'s names; `ModuleCx` has the three for
 synchronous `#[module]` functions. Each of the three is an action of its own (`Action::SetTheme`, `UpdateTheme`,
 `ResetTheme`) carrying the roles `T`'s tokens play with their names (`theme::played`), and the core sets through

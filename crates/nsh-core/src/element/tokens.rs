@@ -523,7 +523,9 @@ impl Tokens {
     }
 
     /// The number named `name` (its light value, the only one of most
-    /// numbers).
+    /// numbers). [`Tokens::number_in`] reads it in either appearance; a
+    /// theme type's number field ([`super::theme_of`]) and
+    /// [`super::token`] read it in the appearance shown.
     pub fn number(&self, name: &str) -> Option<f32> {
         self.numbers.get(name).copied()
     }
@@ -610,7 +612,9 @@ impl Tokens {
     }
 
     /// The token named `name`, of any kind (a color first, as classes take
-    /// it).
+    /// it), as kept: a color, a shadow and a gradient with their values in
+    /// both appearances, a number its light value ([`Tokens::get_in`]
+    /// gives it in either).
     pub fn get(&self, name: &str) -> Option<Token> {
         if let Some(c) = self.colors.get(name) {
             return Some(Token::Color(*c));
@@ -625,6 +629,44 @@ impl Tokens {
             return Some(Token::Shadow(s.clone()));
         }
         self.gradients.get(name).cloned().map(Token::Gradient)
+    }
+
+    /// The token named `name` in the dark appearance (`dark`) or the light
+    /// one: a number its value there ([`Tokens::number_in`]), any other
+    /// kind as [`Tokens::get`] gives it. Where the app is shown, Rust reads
+    /// it with [`super::token`], as TS's `token()` does.
+    pub fn get_in(&self, name: &str, dark: bool) -> Option<Token> {
+        match self.get(name)? {
+            Token::Number(_) => self.number_in(name, dark).map(Token::Number),
+            token => Some(token),
+        }
+    }
+
+    /// Whether a number has a dark value of its own.
+    pub(crate) fn has_dark_numbers(&self) -> bool {
+        !self.dark_numbers.is_empty()
+    }
+
+    /// Whether number `name` has a dark value of its own.
+    pub(crate) fn has_dark_number(&self, name: &str) -> bool {
+        self.dark_numbers.contains_key(name)
+    }
+
+    /// These tokens as the dark appearance shows them, for what reads one
+    /// value of each number ([`super::theme_of`]): each number its dark
+    /// value. `None`: no number has a dark value of its own, so they are
+    /// shown as they are.
+    pub(crate) fn shown_dark(&self) -> Option<Tokens> {
+        if self.dark_numbers.is_empty() {
+            return None;
+        }
+        let mut out = self.clone();
+        for (name, n) in std::mem::take(&mut out.dark_numbers) {
+            if let Some(light) = out.numbers.get_mut(&name) {
+                *light = n;
+            }
+        }
+        Some(out)
     }
 
     /// The kind of token `name`.
@@ -852,21 +894,22 @@ impl Tokens {
 
     /// `self` with the tokens of `base` it does not have.
     pub fn over(&self, base: &Tokens) -> Tokens {
-        self.over_with(base, false)
+        self.over_with(base, None)
     }
 
     /// [`Tokens::over`] for tokens a theme type's fields wrote
-    /// ([`super::set_theme`]). A number field is its token's light value
-    /// and knows no dark one, so a number `self` leaves at the light value
-    /// `base` has keeps the dark value `base` has; one it changes is its
-    /// value in both appearances, as [`Tokens::set_number`] makes it.
-    pub(crate) fn over_as_fields(&self, base: &Tokens) -> Tokens {
-        self.over_with(base, true)
+    /// ([`super::set_theme`]), read in the dark appearance (`dark`) or the
+    /// light one. A number field is its token's value there and knows no
+    /// other, so a number `self` leaves at the value `base` has there
+    /// keeps both values `base` has; one it changes is its value in both
+    /// appearances, as [`Tokens::set_number`] makes it.
+    pub(crate) fn over_as_fields(&self, base: &Tokens, dark: bool) -> Tokens {
+        self.over_with(base, Some(dark))
     }
 
-    /// `self` over `base`; `fields`: as a theme type's fields
-    /// ([`Tokens::over_as_fields`]).
-    fn over_with(&self, base: &Tokens, fields: bool) -> Tokens {
+    /// `self` over `base`; `fields`: as a theme type's fields read in the
+    /// appearance it says, dark or not ([`Tokens::over_as_fields`]).
+    fn over_with(&self, base: &Tokens, fields: Option<bool>) -> Tokens {
         // A name of `self` is the kind `self` has it, whatever `base` has.
         let mut out = base.clone();
         for (k, c) in &self.colors {
@@ -876,8 +919,9 @@ impl Tokens {
         // A number of `self` is its values: a dark one of `base`'s goes
         // unless `self` has its own.
         for (k, n) in &self.numbers {
-            let unchanged =
-                fields && !self.dark_numbers.contains_key(k) && base.numbers.get(k) == Some(n);
+            let unchanged = fields.is_some_and(|dark| {
+                !self.dark_numbers.contains_key(k) && base.number_in(k, dark) == Some(*n)
+            });
             if unchanged {
                 continue;
             }
@@ -1041,8 +1085,8 @@ mod tests {
 }
 
 /// Tokens a theme type's fields wrote, over the app's
-/// ([`Tokens::over_as_fields`]): a number left at its light value keeps the
-/// dark one.
+/// ([`Tokens::over_as_fields`]), read in the light appearance: a number
+/// left at its light value keeps the dark one.
 #[cfg(test)]
 mod theme_set_numbers {
     use super::*;
@@ -1062,7 +1106,7 @@ mod theme_set_numbers {
         let mut fields = Tokens::default();
         fields.set_number("radius-card", 10.0);
         fields.set_color("ink", rgb(0x222222).into());
-        let tokens = fields.over_as_fields(&base());
+        let tokens = fields.over_as_fields(&base(), false);
         assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
         assert_eq!(tokens.number_in("radius-card", true), Some(6.0));
         assert_eq!(tokens.color("ink"), Some(rgb(0x222222).into()));
@@ -1079,7 +1123,7 @@ mod theme_set_numbers {
         let mut fields = Tokens::default();
         fields.set_number("radius-card", 12.0);
         fields.set_number("radius-chip", 4.0);
-        let tokens = fields.over_as_fields(&base());
+        let tokens = fields.over_as_fields(&base(), false);
         assert_eq!(tokens.number_in("radius-card", false), Some(12.0));
         assert_eq!(tokens.number_in("radius-card", true), Some(12.0));
         assert_eq!(tokens.number_in("radius-chip", true), Some(4.0));
@@ -1090,7 +1134,7 @@ mod theme_set_numbers {
         let mut fields = Tokens::default();
         fields.set_number("radius-card", 10.0);
         fields.set_dark_number("radius-card", 8.0);
-        let tokens = fields.over_as_fields(&base());
+        let tokens = fields.over_as_fields(&base(), false);
         assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
         assert_eq!(tokens.number_in("radius-card", true), Some(8.0));
     }

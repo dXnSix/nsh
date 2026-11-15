@@ -43089,7 +43089,8 @@ mod app_theme {
         assert_eq!(shown(&mut c).as_deref(), Some("333333ff 10 ff0000ff"));
     }
 
-    /// A number field is its token's light value: `update_theme` of other
+    /// A number field is its token's value in the appearance shown (the
+    /// light one here): `update_theme` of other
     /// fields and `set_theme` with the number at its value keep a dark one
     /// the theme file gave; `set_theme` with another value is both
     /// appearances'.
@@ -43322,7 +43323,8 @@ mod app_theme {
 }
 
 /// `set_theme` and the dark values of a type's numbers: a number field is
-/// the light value, so a theme read and set back keeps what it could not
+/// the value of the appearance shown (the light one here, the dark one in
+/// `numbers_shown`), so a theme read and set back keeps what it could not
 /// read, and a number it changes is its value in both appearances.
 mod theme_set_numbers {
     use super::{
@@ -43502,6 +43504,153 @@ mod theme_set_numbers {
         let _ = sent(&mut c);
         assert_eq!(overlay(&c), Some(AdaptiveColor::rgb(0x444444, 0x444444)));
         assert_eq!(card(&c), (Some(10.0), Some(6.0)));
+    }
+}
+
+/// A number with a dark value of its own, read in Rust where the app is
+/// shown dark, is its dark value, as TS's `token()` and classes read it: a
+/// theme type's number field (`theme_of`), `token()` and
+/// `Tokens::get_in`. `set_theme` takes a number field back as the value
+/// of the appearance it is set in, so a theme read and set back there
+/// keeps both values.
+mod numbers_shown {
+    use super::{
+        app_theme::{Ds, sets},
+        *,
+    };
+    use crate::{
+        Prop,
+        element::{AdaptiveColor, Root, Token, token},
+        platform::Appearance,
+        prelude::*,
+    };
+
+    /// A core with the design system's types, whose theme file gives
+    /// `radius-card` 8 points, and 12 in the dark appearance.
+    fn themed_core() -> Core<FakeEngine> {
+        let mut c = core();
+        c.set_components(sets());
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(
+                    r##"{ "cssVars": { "light": { "radius-card": "8px" }, "dark": { "radius-card": "12px" } } }"##.into(),
+                ),
+            }],
+        );
+        c
+    }
+
+    fn appearance(c: &mut Core<FakeEngine>, appearance: Appearance) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::Appearance(appearance),
+            }],
+        );
+    }
+
+    /// `radius-card` in the light and in the dark appearance.
+    fn card(c: &Core<FakeEngine>) -> (Option<f32>, Option<f32>) {
+        (
+            c.tokens().number_in("radius-card", false),
+            c.tokens().number_in("radius-card", true),
+        )
+    }
+
+    fn shown(c: &mut Core<FakeEngine>) -> Option<String> {
+        let mut last = None;
+        while let Some(batch) = c.commit() {
+            if let Some(t) = text_item(&batch) {
+                last = Some(t.text.to_string());
+            }
+        }
+        last
+    }
+
+    /// The theme type's field and the token by name.
+    #[component]
+    fn CardRadius() -> impl IntoElement {
+        text(move || {
+            let by_name = match token("radius-card") {
+                Some(Token::Number(n)) => n,
+                _ => -1.0,
+            };
+            format!("{} {by_name}", theme_of::<Ds>().card)
+        })
+    }
+
+    #[test]
+    fn rust_reads_a_number_in_the_appearance_shown() {
+        let mut c = themed_core();
+        c.mount_root(&Root::of::<CardRadius>());
+        assert_eq!(shown(&mut c).as_deref(), Some("8 8"));
+        appearance(&mut c, Appearance::Dark);
+        assert_eq!(shown(&mut c).as_deref(), Some("12 12"));
+        appearance(&mut c, Appearance::Light);
+        assert_eq!(shown(&mut c).as_deref(), Some("8 8"));
+    }
+
+    #[test]
+    fn get_in_reads_a_token_in_either_appearance() {
+        let c = themed_core();
+        let tokens = c.tokens();
+        assert_eq!(
+            tokens.get_in("radius-card", true),
+            Some(Token::Number(12.0))
+        );
+        assert_eq!(
+            tokens.get_in("radius-card", false),
+            Some(Token::Number(8.0))
+        );
+        assert_eq!(
+            tokens.get_in("surface-overlay", true),
+            tokens.get("surface-overlay")
+        );
+        assert_eq!(tokens.get_in("nothing", true), None);
+    }
+
+    /// Reads the theme where the app is dark, changes its color and sets it.
+    #[component]
+    fn SetsInTheDark() -> impl IntoElement {
+        let mut theme = (*theme_of::<Ds>()).clone();
+        assert_eq!(theme.card, 12.0);
+        theme.overlay = AdaptiveColor::rgb(0x444444, 0x444444);
+        set_theme(theme);
+        view()
+    }
+
+    #[test]
+    fn a_theme_read_and_set_in_the_dark_keeps_both_values_of_a_number() {
+        let mut c = themed_core();
+        appearance(&mut c, Appearance::Dark);
+        c.mount_root(&Root::of::<SetsInTheDark>());
+        let _ = shown(&mut c);
+        assert_eq!(
+            c.tokens().color("surface-overlay"),
+            Some(AdaptiveColor::rgb(0x444444, 0x444444))
+        );
+        assert_eq!(card(&c), (Some(8.0), Some(12.0)));
+    }
+
+    /// Sets the number another value where the app is dark.
+    #[component]
+    fn ChangesInTheDark() -> impl IntoElement {
+        let mut theme = (*theme_of::<Ds>()).clone();
+        theme.card = 20.0;
+        set_theme(theme);
+        view()
+    }
+
+    #[test]
+    fn a_number_changed_in_the_dark_is_its_value_in_both_appearances() {
+        let mut c = themed_core();
+        appearance(&mut c, Appearance::Dark);
+        c.mount_root(&Root::of::<ChangesInTheDark>());
+        let _ = shown(&mut c);
+        assert_eq!(card(&c), (Some(20.0), Some(20.0)));
     }
 }
 
