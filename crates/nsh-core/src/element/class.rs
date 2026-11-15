@@ -55,6 +55,10 @@ pub struct ClassDef {
     /// of it: declared as an `interface` (`#[class(interface)]`: `fs`'s
     /// `Stats`).
     pub interface: bool,
+    /// Its TypeScript type parameters (`#[class(generic = "T")]`), each
+    /// one's name and declaration (`T extends object = object`); none for
+    /// most classes, and none in builds without declarations.
+    pub generics: &'static [(&'static str, &'static str)],
 }
 
 impl ClassDef {
@@ -105,9 +109,10 @@ pub struct Member {
     pub refs: ClassRefs,
     /// How it runs.
     pub call: MemberCall,
-    /// The signatures TypeScript sees instead of the one its types give
-    /// (`#[overload(fn(..) -> ..)]`), as a module function's: what an
-    /// argument selects (`on("exit", ..)`).
+    /// The signatures TypeScript sees instead of the one its types give,
+    /// as a module function's: what an argument selects
+    /// (`#[overload(fn(..) -> ..)]`: `on("exit", ..)`), or TypeScript's
+    /// own text (`#[ts("<T>(token: Key<T>): T")]`).
     pub overloads: &'static [super::Overload],
 }
 
@@ -693,14 +698,7 @@ impl ClassSpec {
                 overloads: m
                     .overloads
                     .iter()
-                    .map(|o| {
-                        let params = o
-                            .params
-                            .iter()
-                            .map(|(n, ts, optional)| (*n, ts(&mut types), *optional))
-                            .collect();
-                        (params, o.returns.map(|ts| ts(&mut types)))
-                    })
+                    .map(|o| super::OverloadSpec::of(o, &mut types))
                     .collect(),
             })
             .collect();
@@ -936,6 +934,8 @@ pub(crate) mod __private {
         const DOC: &'static str;
         /// `#[class(interface)]`: [`super::ClassDef::interface`].
         const INTERFACE: bool;
+        /// `#[class(generic = "T")]`: [`super::ClassDef::generics`].
+        const GENERICS: &'static [(&'static str, &'static str)];
     }
 
     /// The documentation of a module (`#[module]` on its struct, or the
@@ -1407,5 +1407,139 @@ export declare class Finder {
         let value = host.value(serde_json::json!({}));
         let error = Constructor::from_js(JsIn::new(&host, value)).unwrap_err();
         assert_eq!(error.0, "expected a Rust class, got {}");
+    }
+}
+
+#[cfg(test)]
+mod generic_tests {
+    use crate::{
+        element::{Registry, declarations},
+        prelude::*,
+    };
+
+    /// Names a service of type `T`.
+    #[class(generic = "T")]
+    struct ServiceToken {
+        name: String,
+    }
+
+    #[class]
+    impl ServiceToken {
+        /// A token of `T` named `name`.
+        #[ts("<T>(name: string): ServiceToken<T>")]
+        pub(crate) fn create(name: String) -> ServiceToken {
+            ServiceToken { name }
+        }
+
+        /// Its name.
+        #[getter]
+        pub(crate) fn name(&self) -> String {
+            self.name.clone()
+        }
+    }
+
+    /// Options of type `T`.
+    #[class(generic = "T extends object = object, const K extends string = string")]
+    struct OptionsToken;
+
+    #[class]
+    impl OptionsToken {
+        /// The token of `T`'s options under `key`.
+        #[ts("<T extends object, K extends string>(key: K): OptionsToken<T, K>")]
+        pub(crate) fn of(key: String) -> OptionsToken {
+            let _ = key;
+            OptionsToken
+        }
+    }
+
+    /// Keeps tokens.
+    #[class]
+    struct Tokens;
+
+    #[class]
+    impl Tokens {
+        /// The first token: the Rust types name no `T`.
+        pub(crate) fn first(&self) -> Option<Instance<ServiceToken>> {
+            None
+        }
+
+        /// All of them.
+        pub(crate) fn all(&self) -> Vec<Instance<ServiceToken>> {
+            Vec::new()
+        }
+
+        /// Adds one, borrowed for the call.
+        pub(crate) fn add(&mut self, token: &ServiceToken) {
+            let _ = token;
+        }
+    }
+
+    #[test]
+    fn generic_classes_are_declared_with_their_type_parameters() {
+        let mut registry = Registry::ui_set("test/generic");
+        registry.class::<Tokens>().class::<OptionsToken>();
+        // The classes the Rust types name are registered with `Tokens`.
+        assert_eq!(
+            declarations(&registry, &[]),
+            r#"/** Options of type `T`. */
+export declare class OptionsToken<T extends object = object, const K extends string = string> {
+  /** Its type parameters, kept in its type (no value at run time). */
+  #types: [T, K];
+  /** Made by the class's members only. */
+  private constructor();
+  /** The token of `T`'s options under `key`. */
+  static of<T extends object, K extends string>(key: K): OptionsToken<T, K>;
+  /** Frees the Rust value now (else when the object is collected); the object throws after. */
+  dispose(): void;
+  [Symbol.dispose](): void;
+}
+
+/** Names a service of type `T`. */
+export declare class ServiceToken<T> {
+  /** Its type parameters, kept in its type (no value at run time). */
+  #types: [T];
+  /** Made by the class's members only. */
+  private constructor();
+  /** A token of `T` named `name`. */
+  static create<T>(name: string): ServiceToken<T>;
+  /** Its name. */
+  get name(): string;
+  /** Frees the Rust value now (else when the object is collected); the object throws after. */
+  dispose(): void;
+  [Symbol.dispose](): void;
+}
+
+/** Keeps tokens. */
+export declare class Tokens {
+  /** Made by the class's members only. */
+  private constructor();
+  /** The first token: the Rust types name no `T`. */
+  first(): ServiceToken<any> | null;
+  /** All of them. */
+  all(): ServiceToken<any>[];
+  /** Adds one, borrowed for the call. */
+  add(token: ServiceToken<any>): void;
+  /** Frees the Rust value now (else when the object is collected); the object throws after. */
+  dispose(): void;
+  [Symbol.dispose](): void;
+}
+
+"#
+        );
+    }
+
+    #[test]
+    fn a_class_is_generic_in_its_declarations_only() {
+        use crate::element::Class;
+        let def = <ServiceToken as Class>::DEF;
+        assert_eq!(def.name, "ServiceToken");
+        assert_eq!(def.generics, [("T", "T")]);
+        assert!(<Tokens as Class>::DEF.generics.is_empty());
+        let mut types = crate::element::TsTypes::default();
+        assert_eq!(types.class(def), "ServiceToken<any>");
+        assert_eq!(
+            types.class(<OptionsToken as Class>::DEF),
+            "OptionsToken<any, any>"
+        );
     }
 }

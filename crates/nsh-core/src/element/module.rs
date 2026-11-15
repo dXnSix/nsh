@@ -165,25 +165,54 @@ pub struct Function {
     /// A getter of the module's object (`#[getter]`: `process.env`), read
     /// as a property and never a named export of a flat module.
     pub getter: bool,
-    /// The signatures TypeScript sees instead of the one above, when the
-    /// result's type depends on the arguments (`#[overload(..)]`).
+    /// The signatures TypeScript sees instead of the one above: when the
+    /// result's type depends on the arguments (`#[overload(..)]`), or
+    /// written in TypeScript (`#[ts("..")]`, generic ones too).
     pub overloads: &'static [Overload],
 }
 
-/// One TypeScript signature of a function with several
-/// (`#[overload(fn(path: String) -> Vec<u8>)]`): its parameters and the
-/// type of its result (a promise of it when the function's is one).
+/// One TypeScript signature declared instead of the one a function's or a
+/// member's types give: `#[overload(fn(path: String) -> Vec<u8>)]` (one of
+/// several, from Rust types) or `#[ts("<T>(token: Key<T>): T")]` (from
+/// TypeScript text). Its type parameters, its parameters and the type of
+/// its result (a promise of it when the function's is one).
 #[derive(Debug, Clone, Copy)]
 pub struct Overload {
+    /// Its type parameters as TypeScript writes them, brackets included
+    /// (`<T>`); empty for most.
+    pub generics: &'static str,
     /// Its parameters.
     pub params: &'static [ModuleParam],
     /// The TypeScript type of its result.
     pub returns: Option<TsType>,
 }
 
-/// A signature of [`FunctionSpec::overloads`]: its parameters (JS name,
-/// TypeScript type, optional) and its result's type.
-pub type OverloadSpec = (Vec<(&'static str, String, bool)>, Option<String>);
+/// A signature of [`FunctionSpec::overloads`] and
+/// [`super::MemberSpec::overloads`] ([`Overload`]), its types written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverloadSpec {
+    /// Its type parameters (`<T>`), or empty.
+    pub generics: &'static str,
+    /// Its parameters: JS name, TypeScript type, optional.
+    pub params: Vec<(&'static str, String, bool)>,
+    /// The TypeScript type of its result.
+    pub returns: Option<String>,
+}
+
+impl OverloadSpec {
+    /// `overload`'s, declaring the named types it uses in `types`.
+    pub(crate) fn of(overload: &Overload, types: &mut TsTypes) -> Self {
+        Self {
+            generics: overload.generics,
+            params: overload
+                .params
+                .iter()
+                .map(|(n, ts, optional)| (*n, ts(types), *optional))
+                .collect(),
+            returns: overload.returns.map(|ts| ts(types)),
+        }
+    }
+}
 
 /// One function, for the glue and its declarations.
 #[derive(Debug, Clone)]
@@ -261,14 +290,7 @@ impl ModuleSpec {
                 overloads: f
                     .overloads
                     .iter()
-                    .map(|o| {
-                        let params = o
-                            .params
-                            .iter()
-                            .map(|(n, ts, optional)| (*n, ts(&mut types), *optional))
-                            .collect();
-                        (params, o.returns.map(|ts| ts(&mut types)))
-                    })
+                    .map(|o| OverloadSpec::of(o, &mut types))
                     .collect(),
             })
             .collect();

@@ -70,10 +70,15 @@ pub struct InterfaceMember {
     pub params: &'static [ModuleParam],
     /// The TypeScript type of what JS returns (or the property holds).
     pub returns: TsType,
-    /// An `async` method: TS returns a promise.
+    /// An `async` method: Rust awaits it, so TS returns a promise (or a
+    /// value, which Rust awaits as one already settled).
     pub is_async: bool,
     /// The trait has a default body: TS may leave it out.
     pub optional: bool,
+    /// The signatures TS declares instead of the one above, written in
+    /// TypeScript (`#[ts("(): boolean")]` on the trait's method): what JS
+    /// returns, declared as written (no `Promise` added).
+    pub overloads: &'static [super::Overload],
     /// The classes its parameters and result name.
     pub refs: ClassRefs,
 }
@@ -136,6 +141,32 @@ fn declare(def: &'static InterfaceDef, types: &mut TsTypes) -> String {
                 let _ = writeln!(out, "  /** {} */", m.doc);
             }
             let optional = if m.optional { "?" } else { "" };
+            if !m.overloads.is_empty() {
+                for (i, o) in m.overloads.iter().enumerate() {
+                    if i > 0 && !m.doc.is_empty() {
+                        let _ = writeln!(out, "  /** {} */", m.doc);
+                    }
+                    let returns = o.returns.map_or_else(|| "void".to_owned(), |ts| ts(types));
+                    if m.kind == MemberKind::Getter {
+                        let _ = writeln!(out, "  readonly {}{optional}: {returns};", m.name);
+                        continue;
+                    }
+                    let params = o
+                        .params
+                        .iter()
+                        .map(|(name, ts, opt)| {
+                            format!("{name}{}: {}", if *opt { "?" } else { "" }, ts(types))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = writeln!(
+                        out,
+                        "  {}{optional}{}({params}): {returns};",
+                        m.name, o.generics
+                    );
+                }
+                continue;
+            }
             let returns = (m.returns)(types);
             if m.kind == MemberKind::Getter {
                 let _ = writeln!(out, "  readonly {}{optional}: {returns};", m.name);

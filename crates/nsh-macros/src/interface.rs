@@ -10,7 +10,7 @@ use syn::{
     FnArg, Ident, ItemTrait, Pat, ReturnType, TraitItem, TraitItemFn, Type, spanned::Spanned,
 };
 
-use crate::{camel, decl, docs};
+use crate::{camel, decl, docs, is_unit, result_ok};
 
 /// A method of the trait.
 struct Method<'a> {
@@ -88,7 +88,7 @@ pub(crate) fn interface(item: ItemTrait) -> syn::Result<TokenStream2> {
         let attrs: Vec<_> = f
             .attrs
             .iter()
-            .filter(|a| !a.path().is_ident("getter"))
+            .filter(|a| !a.path().is_ident("getter") && !a.path().is_ident("ts"))
             .collect();
         let names: Vec<&Ident> = m.params.iter().map(|(n, _)| *n).collect();
         let tys: Vec<&Type> = m.params.iter().map(|(_, t)| *t).collect();
@@ -193,6 +193,27 @@ pub(crate) fn interface(item: ItemTrait) -> syn::Result<TokenStream2> {
             quote!(Method)
         };
         let param_names: Vec<String> = names.iter().map(|n| camel(&n.to_string())).collect();
+        // `#[ts("(): boolean")]`: what JS returns, declared as written (an
+        // `async fn` awaits a plain value as it does a promise).
+        let js_params: Vec<(String, bool)> =
+            param_names.iter().map(|n| (n.clone(), false)).collect();
+        let value = result_ok(ret).unwrap_or(ret);
+        let shape = crate::ts::Shape {
+            kind: if m.getter {
+                crate::ts::SigKind::Getter
+            } else {
+                crate::ts::SigKind::Function
+            },
+            params: &js_params,
+            value: !is_unit(value),
+            answers: crate::ts::Answers::Js { awaited: is_async },
+        };
+        let overloads = f
+            .attrs
+            .iter()
+            .filter(|a| a.path().is_ident("ts"))
+            .map(|a| crate::ts::overload(a, &shape))
+            .collect::<syn::Result<Vec<_>>>()?;
         members.push(quote! {
             #(#cfgs)*
             #ui::InterfaceMember {
@@ -203,6 +224,7 @@ pub(crate) fn interface(item: ItemTrait) -> syn::Result<TokenStream2> {
                 returns: #private::interface_ret_ts::<#ret>(),
                 is_async: #is_async,
                 optional: #optional,
+                overloads: &[#(#overloads),*],
                 refs: |__out| {
                     let _ = &__out;
                     #(#private::ret_classes::<#tys>(__out);)*

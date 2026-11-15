@@ -241,6 +241,32 @@ For that, two choices of the first version change:
   (repeatable) on a module function or a member declares those signatures, from their Rust types, instead of
   the one its own types give (the result is a promise when the function's is): what an argument selects
   (`on("exit", ..)`, `readFile(path, "utf8")`).
+- **Signatures written in TypeScript**: `#[ts("<T>(token: { readonly prototype: T }): T")]` (repeatable, in order
+  with any `#[overload]`) on a module function or a member declares that signature as written, generic ones too,
+  where the Rust types are looser than the TS should be (`getRequiredService(token: JsHandle) -> JsHandle`, which TS
+  gets as `getRequiredService<T>(token: { readonly prototype: T }): T`; `{ readonly prototype: T }` is how a class
+  with a `private constructor()` is taken, as no `new (..) => T` takes it). The text is TypeScript's: type
+  parameters, then the parameters, then `: Result` (or nothing for `void`); the result is a promise of it when the
+  function's is. `nsh-macros` (`ts.rs`) checks it against the Rust function at compile time: its parameters are the
+  ones JS passes (not `System` or `CallCx`), with their names in TS and in order; a trailing optional one may be left
+  out, and only an optional one takes `?`; it gives a result exactly when the function returns a value; a
+  constructor, getter or setter has no type parameters (and a getter's is `(): T`). The types themselves are left to
+  TypeScript, and the classes the text names are not registered by it: the set registers them, or a Rust type of the
+  signature names them.
+- **Generic classes**: `#[class(generic = "T")]` on the struct declares the class generic over those TypeScript type
+  parameters, written as TypeScript writes them (`T extends object = object, K`; `in` / `out` are refused): `export
+  declare class ServiceToken<T>`. The class itself is one Rust type and one JS class; only its declaration is
+  generic. TypeScript compares classes by their members, so a type parameter no member names would let a
+  `ServiceToken<A>` pass for a `ServiceToken<B>`: the declaration keeps them in an ES private member, `#types: [T]`,
+  which no code can read (it has no value at run time) and which makes them covariant. Its `#[ts]` signatures name
+  them (`#[ts("<T>(name: string): ServiceToken<T>")]` on a static); a Rust type naming the class (`Instance<ServiceToken>`,
+  a result `ServiceToken`) is `ServiceToken<any>`. A `#[class(interface)]` is not generic (an `interface` has no
+  private member).
+- **Type aliases the signatures share**: `registry.ts_alias(TsAlias { name: "ServiceKey<T>", ts: "{ readonly
+  prototype: T } | ServiceToken<T>", doc: "…" })` exports `export type ServiceKey<T> = …;` with the set's named types,
+  so `#[ts("<T>(token: ServiceKey<T>): T")]` signatures need not repeat the union. A declaration only (TS imports it
+  with `import type`); its name is the set's like a class's (a class, interface, module or component of that name
+  panics, as two of those do), and `Registry::undocumented` lists one without a doc.
 - **Instances of classes**, by reference: a parameter `&Other` / `&mut Other` borrows another instance for the call
   (TS: `other: Other`), `Instance<Other>` keeps a handle (to store one instance in another), and a result `Other`
   or `Instance<Other>` is a JS object (`Self` from `new` and statics; `Option<Instance<Other>>` for none). An
@@ -438,6 +464,13 @@ export interface Startable {
   timer), one returning `()` is posted for JS's next turn, in order with the other posts (`Callback::post`), and one
   returning a value fails (the `Err` of a `Result`): JS is not running there. An `async fn` is posted and awaited
   (`call_async`), a promise the JS method returns settled. A getter is read as a method of its kind is called.
+- **Their TS signatures.** NSH declares a member from its Rust types, an `async fn`'s result as a `Promise`. An
+  awaited member also settles with a plain value JS returns, so `#[ts("(): boolean")]` on the trait's method (as
+  on a class's member, checked against its parameters and its result) declares what JS returns as written, with no
+  `Promise` added: `async fn is_initialized(&self) -> Result<bool, String>` with `#[ts("(): boolean")]` is TS
+  `isInitialized(): boolean`, which a task can await. Where Rust wants nothing, any result is let go
+  (`#[ts("(context: Context): Promise<void>")]`); a method that is not `async` takes what JS returns at once, so
+  a `Promise` result is refused there.
 - **Failures.** What JS throws or rejects with is the `Err` of a member returning `Result<T, E>` (`E:
   From<Exception>`: `String` takes the message, `Exception` the stack too), and so is a value that does not convert
   (``Greeter.greet: expected a string, got 3``) or a member that is no function. A member returning a plain value
@@ -504,7 +537,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   `interface.rs`) writes the stand-in and its `element::Interface` (`Interface::DEF`, an `InterfaceDef`: name, doc,
   members, each an `InterfaceMember`).
 - **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle`, `Posts`,
-  `Registry::class::<C>()`, `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
+  `Registry::class::<C>()`, `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
   `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
   `to_js`); the typed calls (`call.rs`: `RustOp`, `RustCall`, `JsEvent`, `AnyValue`, `ToJs`); the core runs
   them in order with the ops (`Core::run_rust`).

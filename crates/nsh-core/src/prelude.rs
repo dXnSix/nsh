@@ -203,6 +203,7 @@ pub use crate::element::{
     TokenSpec,
     Tokens,
     TouchClaim,
+    TsAlias,
     Video,
     VideoInfo,
     VideoProgress,

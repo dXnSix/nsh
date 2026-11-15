@@ -382,13 +382,21 @@ returning a value gives `Promise<T>`. Arguments and results are typed from the s
 `(value: number) => void` for a `Callback<f64>`, and `#[args(balance)] listener: Callback<f64>` names the argument,
 `(balance: number) => void`), and any TSX object Rust keeps as it is (`JsHandle`, TS `object`: stored in a field or
 a map, compared by identity and given back to TSX as the same object), and your classes themselves (`Constructor`,
-TS `Function`: `getRequiredService(I18nService)` tells Rust which class TSX named). A trait marked `#[interface]` is a
+TS `Function`: `getRequiredService(I18nService)` tells Rust which class TSX named). Where those types are looser than
+TS should be, `#[ts("<T>(token: { readonly prototype: T }): T")]` on the member or function declares its TypeScript
+signature as written, generic ones too; the compiler checks that it names the Rust parameters, in their order.
+`#[class(generic = "T")]` on a class's struct declares the class generic (`class ServiceToken<T>`), so a
+`ServiceToken<I18nService>` is no `ServiceToken<Clock>`; Rust's own types name it `ServiceToken<any>`. A type the
+signatures share is the set's too: `registry.ts_alias(TsAlias { name: "ServiceKey<T>",
+ts: "{ readonly prototype: T } | ServiceToken<T>", doc: "…" })` exports `type ServiceKey<T>`. A trait marked
+`#[interface]` is a
 TypeScript interface that TSX objects implement for Rust: the set declares `export interface Startable` (a method per
 trait method, optional where the trait has a default body, `#[getter]` methods as `readonly` properties), and Rust
 calls such an object through the trait's stand-in `JsStartable`, taken as an argument or made from a kept object
 (`JsStartable::new(handle)`); register it with `registry.interface::<JsStartable>()`. A method that is not `async`
 runs the TSX method at once inside a call from TSX (outside one, a method returning `()` runs in TSX's next turn),
-an `async fn` awaits it, and what TSX throws is the `Err` of a method returning a `Result`. A function that starts listening is named `on(event, listener)` and returns `Stop`
+an `async fn` awaits it (a value as well as a Promise: `#[ts("(): boolean")]` on it declares
+`isInitialized(): boolean`), and what TSX throws is the `Err` of a method returning a `Result`. A function that starts listening is named `on(event, listener)` and returns `Stop`
 (`Stop::new(|| …)`), which TSX gets as a function that stops it (`() => void`); it runs once, when TSX calls it or
 when what called `on` goes (a component, or the module's run under hot reload). An event's handler gets one object: a variant's value is its field `value`, which
 `#[args(price)]` on the variant names (`onSelect({ price })`), and `#[args(open, reason)]` names the fields of a

@@ -321,6 +321,80 @@ pub trait Startable {
 A default body makes the member optional in TS; an object without it runs the default. What TS throws is the `Err`
 of a `Result<T, String>` (or `E: From<Exception>`).
 
+An `async fn` is declared `Promise<T>`, but an awaited member settles with a plain value too. To let a task ask a
+TS service something TS answers at once, declare what JS returns with `#[ts]` (as written, no `Promise` added):
+
+```rust
+    /// Whether it has started (TS: `isInitialized(): boolean`).
+    #[ts("(): boolean")]
+    async fn is_initialized(&self) -> Result<bool, String>;
+```
+
+### Signatures written in TypeScript
+
+When the Rust types are looser than the TS should be (a `JsHandle` that is the service a class names),
+`#[ts("…")]` on a member or module function declares its TS signature as written, generic ones too:
+
+```rust
+    /// The service `token` names; throws without one.
+    // TS: getRequiredService<T>(token: { readonly prototype: T }): T
+    #[ts("<T>(token: { readonly prototype: T }): T")]
+    pub fn get_required_service(&self, token: JsHandle) -> Result<JsHandle, String> {
+        self.find(&token).ok_or_else(|| "no such service".to_owned())
+    }
+```
+
+| Rule | Why |
+| --- | --- |
+| `<T>` first, then `(name: Type, …)`, then `: Result` (none for `void`) | TypeScript's own order |
+| The parameters are the Rust ones JS passes, by their TS names, in order | Checked at compile time; a trailing optional one may be left out |
+| A result exactly when the Rust function returns a value | An `async` one's `: T` becomes `Promise<T>` |
+| No `<T>` on `new`, getters (`(): T`) or setters | TypeScript has none there |
+| Repeat `#[ts]` for several signatures | Like overloads; `#[overload(fn(..))]` mixes in, in order |
+
+`{ readonly prototype: T }` takes a class with a `private constructor()` (every Rust class without `new`), which no
+`new (…) => T` type takes. The text names what the set declares: the classes it names are registered by the set
+(`registry.class::<C>()`), not by the text.
+
+A class generic in TS (one Rust type, one JS class; only the declaration is generic):
+
+```rust
+/// Names a service of type `T`.
+// TS: export declare class ServiceToken<T> { #types: [T]; ... }
+#[class(generic = "T")]
+pub struct ServiceToken {
+    name: String,
+}
+
+#[class]
+impl ServiceToken {
+    /// A token of `T` named `name`.
+    #[ts("<T>(name: string): ServiceToken<T>")]
+    pub fn create(name: String) -> ServiceToken {
+        ServiceToken { name }
+    }
+}
+```
+
+The private `#types` member keeps `T` in the type, so a `ServiceToken<A>` is no `ServiceToken<B>`. Constraints and
+defaults are TypeScript's (`generic = "T extends object = object"`); `in` / `out` are refused. A Rust type naming the
+class (`Instance<ServiceToken>`) is `ServiceToken<any>`: give those members a `#[ts]` signature.
+
+A type the signatures share is exported by the set:
+
+```rust
+registry.ts_alias(TsAlias {
+    name: "ServiceKey<T>",
+    ts: "{ readonly prototype: T } | ServiceToken<T>",
+    doc: "What names a service of type `T`: its class, or a token.",
+});
+// TS: export type ServiceKey<T> = { readonly prototype: T } | ServiceToken<T>;
+// so: #[ts("<T>(token: ServiceKey<T>): T")]
+```
+
+TS imports it with `import type { ServiceKey } from "app/native"`. Its name is the set's, like a class's: one already
+taken panics at registration.
+
 ### Listening: `Stop`
 
 A function that starts listening is named `on_*` or `on(event, listener)` and returns `Stop`, built with `Stop::new(|| ...)`.
