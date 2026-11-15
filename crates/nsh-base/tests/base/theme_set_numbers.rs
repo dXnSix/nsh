@@ -1,6 +1,7 @@
 //! `set_theme` of `nsh_base::Theme` and `radius`'s dark value: `radius` is
-//! the token's light value, so a theme read, changed in a color and set
-//! keeps the dark radius, and a radius it changes is both appearances'.
+//! the token's value in the appearance shown (the light one here), so a
+//! theme read, changed in a color and set keeps the dark radius, and a
+//! radius it changes is both appearances'.
 
 use std::time::Duration;
 

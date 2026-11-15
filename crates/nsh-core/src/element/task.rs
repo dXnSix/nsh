@@ -156,12 +156,16 @@ pub(crate) enum Action {
     /// ([`super::update_tokens`]).
     UpdateTokens(super::Tokens),
     /// Sets the tokens a theme type's fields wrote, over the app's others
-    /// ([`super::set_theme`]): a number that keeps its value keeps its
-    /// dark one. `played`: the roles the type's tokens play, through which
+    /// ([`super::set_theme`]): a number that keeps its value in the
+    /// appearance it was read in keeps both its values. `played`: the
+    /// roles the type's tokens play, through which
     /// a type that is not registered sets the tokens they are mapped onto.
     SetTheme {
         tokens: super::Tokens,
         played: super::theme::Played,
+        /// The appearance its number fields were read in, dark or not:
+        /// where [`super::set_theme`] ran (`None`: the surface's).
+        dark: Option<bool>,
     },
     /// Sets the tokens a theme type's patch wrote, over the app's others
     /// ([`super::update_theme`]), through the roles as
