@@ -80,7 +80,7 @@ jobs:
       tizen: ${{ steps.has.outputs.tizen }}
       tv: ${{ steps.has.outputs.tv }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - id: has
         run: |
           tizen=false tv=false
@@ -104,9 +104,9 @@ jobs:
         target: [armv7, x86_64, aarch64]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: dXn.GpuiTizen (cross driver, target specs, symbol check)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: dXnSix/dXn.GpuiTizen
           path: .tizen/dXn.GpuiTizen
@@ -145,7 +145,7 @@ jobs:
           || contains(github.event.pull_request.labels.*.name, 'ci:tizen'))
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Linux packages (GPUI's host, headless Chromium)
         run: |
           sudo apt-get update
@@ -188,9 +188,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: dXn.GpuiTizen
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: dXnSix/dXn.GpuiTizen
           path: .tizen/dXn.GpuiTizen

@@ -95,7 +95,7 @@ jobs:
     steps:
       # A pull request's checkout is its merge with `main`, so the script is
       # `main`'s even for an `up/*` branch, cut from upstream.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Find the jobs this change needs
         id: jobs
         env:
@@ -149,7 +149,7 @@ jobs:
         -p nsh-bundler -p nsh-package -p nsh-testing
         --features nsh-bundler/bundle,nsh-testing/bundle,nsh-testing/agent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # QuickJS is C (bindgen needs libclang).
       - name: Install clang
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
@@ -178,7 +178,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install clang, GTK 4, WebKitGTK and GStreamer
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev xvfb xauth at-spi2-core python3 libxtst6 libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
       - name: Setup Rust
@@ -222,7 +222,7 @@ jobs:
       # bindings (STATUS_STACK_BUFFER_OVERRUN).
       RUST_MIN_STACK: "268435456"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -252,7 +252,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up the environment
         run: |
           mkdir -p "$RUNNER_TEMP/tmp"
@@ -300,7 +300,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install clang
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
       - name: Setup Rust
@@ -328,7 +328,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install clang, GTK 4 and GStreamer
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev jq
       - name: Setup Rust
@@ -367,7 +367,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up temporary files
         run: |
           mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
@@ -405,7 +405,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up temporary files
         run: |
           mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
@@ -437,7 +437,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up temporary files
         run: |
           mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
@@ -467,7 +467,7 @@ jobs:
     if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install clang
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
       # The Android runtime: `javac` + `d8` (Java 17), the SDK's
@@ -509,7 +509,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar).
       - name: Install clang and LLVM
         run: sudo apt-get update && sudo apt-get install -y clang llvm libclang-dev
@@ -538,9 +538,9 @@ jobs:
     env:
       DXN_GPUI_TIZEN: ${{ github.workspace }}/.tizen/dXn.GpuiTizen
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: dXn.GpuiTizen (cross driver, target specs)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: dXnSix/dXn.GpuiTizen
           path: .tizen/dXn.GpuiTizen
