@@ -330,7 +330,7 @@ import { Text, ThemeScope, View } from "nsh";
 </ThemeScope>
 ```
 
-作用域只设置应用主题已有的 token 的值：主题没有的名称会被略过并给出警告，所以每个类在各处都对应一个 token。它没有设置的 token 仍是应用的，并跟随 `setTheme` 和 `updateTheme`；嵌套在内的作用域从外层作用域的值开始。设置 `appearance` 后，作用域还会以浅色或深色显示其内容（[设备与环境](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)）。
+作用域只设置应用主题已有的 token 的值，且种类与主题中的相同：主题没有的名称，或主题中属于另一种类的名称（主题中是数字的名称被设为颜色），会被略过并给出警告，所以每个类在各处都对应同一种类的一个 token。它没有设置的 token 仍是应用的，并跟随 `setTheme` 和 `updateTheme`；嵌套在内的作用域从外层作用域的值开始。设置 `appearance` 后，作用域还会以浅色或深色显示其内容（[设备与环境](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)）。
 
 ## 类名检查
 
