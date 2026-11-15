@@ -1079,13 +1079,16 @@ pub(crate) fn make_scope_tokens(
     cx: *mut JsContext,
     slot: usize,
     theme: JsValue,
+    modifiers: JsValue,
     outer: JsValue,
 ) -> JsValue {
     let e = env(cx);
     // SAFETY: an inline tag check.
     let has_outer = unsafe { qjs::JS_IsFunction(cx, outer) };
-    // SAFETY: an inline tag check.
-    if !unsafe { qjs::JS_IsObject(theme) } {
+    // SAFETY: inline tag checks.
+    let (has_theme, has_modifiers) =
+        unsafe { (qjs::JS_IsObject(theme), qjs::JS_IsObject(modifiers)) };
+    if !has_theme && !has_modifiers {
         // No tokens of its own: the ones around it, by their own value
         // (`undefined`: the surface's, which `token()` follows by name).
         if let Some(held) = e.scope_tokens.borrow_mut().get_mut(slot) {
@@ -1116,14 +1119,36 @@ pub(crate) fn make_scope_tokens(
         reactive::track(cx, e.scopes_signal.get());
         e.tokens.borrow().clone()
     });
-    let json = match to_json(cx, theme) {
-        Ok(json) => json.to_string(),
-        Err(exception) => return exception,
+    // Its modifiers' contexts first, its theme over them; what it leaves
+    // out is said once, by the component in the core.
+    let around = if has_modifiers {
+        let picks = match to_json(cx, modifiers) {
+            Ok(json) => json,
+            Err(exception) => return exception,
+        };
+        let picks: Vec<(String, String)> = picks
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(n, c)| Some((n.clone(), c.as_str()?.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Arc::new(around.picked(&picks).0)
+    } else {
+        around
     };
-    // What it leaves out is said once, by the component in the core.
-    let tokens = match e.theme.borrow().scoped(&around, &json) {
-        Some(Ok((tokens, _))) => Arc::new(tokens),
-        _ => around,
+    let tokens = if has_theme {
+        let json = match to_json(cx, theme) {
+            Ok(json) => json.to_string(),
+            Err(exception) => return exception,
+        };
+        match e.theme.borrow().scoped(&around, &json) {
+            Some(Ok((tokens, _))) => Arc::new(tokens),
+            _ => around,
+        }
+    } else {
+        around
     };
     let mut slots = e.scope_tokens.borrow_mut();
     let Some(held) = slots.get_mut(slot) else {

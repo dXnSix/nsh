@@ -752,7 +752,10 @@ it changes, and they are resolved again when the tokens change (`Components::app
   indicators macOS, Windows, Linux and GPUI draw themselves ask the nearest view with one. Menus, alerts and sheets are the surface's.
   With a `theme` (`ScopeTheme`: a theme file, or tokens made in Rust) the scope also has design tokens of its own:
   its theme's values over the tokens around it, a name those lack left out (`ThemeTokens::scoped`,
-  `Tokens::within`). The component makes them, again whenever the tokens around it change, and gives them to the
+  `Tokens::within`). With `modifiers` (`ScopeModifiers`) it picks contexts of the theme's modifiers first
+  (`Tokens::picked`: the tokens around it carry their `ThemeModifiers`, so a pick lays the contexts over them
+  again and the theme goes over that); nsh-js `env.rs` `make_scope_tokens` and the web's op 411 do the same for
+  TS. The component makes them, again whenever the tokens around it change, and gives them to the
   core whole (`Prop::ScopeTokens`). The core keeps the nearest scope per node (`Node::token_scope`,
   `Core::update_token_scope`) and resolves a class list for a node in one with `Core::classes_at`: the surface's
   list, unless it reads a token whose value in the scope is not the surface's (the read sets of `ClassList`), in

@@ -200,7 +200,9 @@ pub use self::{
     task::{Answer, ClipboardImage, ClipboardItem, DialogAnswer, ImageSize, Task},
     theme::{Declarations, Declared, TokenKind},
     theme_modifiers::{ModifierAxis, ThemeModifiers},
-    theme_scope::{ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
+    theme_scope::{
+        ScopeModifiers, ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope,
+    },
     token_info::TokenInfo,
     token_keys::{TokenError, TokenKey, TokenValue},
     tokens::{

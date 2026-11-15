@@ -263,8 +263,17 @@ test("what a ThemeScope renders reads the scope's appearance and tokens", () => 
   asked.length = 0;
   const violet = { cssVars: { light: { up: "#7c3aed" } } }, pink = { cssVars: { light: { up: "#db2777" } } };
   env.inScope({ theme: violet }, () => { read(); env.inScope({}, read); env.inScope({ theme: pink }, read); });
-  assert.deepEqual(made, [[4, violet, null], [6, pink, 1048580]]);
+  assert.deepEqual(made, [[4, violet, null, null], [6, pink, 1048580, null]]);
   assert.deepEqual(asked.map(args => args[2]), [1048580, 1048580, 1048582]);
+  // A scope with modifiers has tokens of its own too: the engine picks
+  // its contexts, with a theme or without one.
+  made.length = 0;
+  asked.length = 0;
+  const forest = { brand: "forest" };
+  env.inScope({ modifiers: forest }, read);
+  env.inScope({ theme: violet, modifiers: forest }, read);
+  assert.deepEqual(made, [[7, null, null, forest], [8, violet, null, forest]]);
+  assert.deepEqual(asked.map(args => args[2]), [1048583, 1048584]);
 });
 
 test("platform.select checks platform.name before platform.os and reads a built-in OS key once", () => {

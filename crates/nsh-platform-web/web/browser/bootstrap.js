@@ -5559,16 +5559,18 @@
 				const slot = invoke(412, []);
 				reactive.cleanup(() => invoke(413, [slot, true]));
 				const draws = reactive.computed(() => {
-					const theme = props.theme, around = outer ? outer.tokens() : void 0;
-					if (theme === null || typeof theme !== "object") {
+					const theme = props.theme, modifiers = props.modifiers, around = outer ? outer.tokens() : void 0;
+					const object = (value) => value !== null && typeof value === "object";
+					if (!object(theme) && !object(modifiers)) {
 						invoke(413, [slot, false]);
 						return around;
 					}
 					if (around === void 0) tokens();
 					return invoke(411, [
 						slot,
-						theme,
-						around ?? null
+						object(theme) ? theme : null,
+						around ?? null,
+						object(modifiers) ? modifiers : null
 					]);
 				});
 				return scope.Provider({

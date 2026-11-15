@@ -48248,4 +48248,108 @@ mod theme_modifiers {
             Some(Color::from(rgb(0x00ff00)))
         );
     }
+    /// Says the accent and the brand the tokens around it have; made in a
+    /// component, so that it reads the scope it is in.
+    fn say(name: &'static str) -> impl IntoElement {
+        text(move || {
+            let tokens = tokens();
+            let accent = tokens.color("accent").map(|c| Color::from(c.light).0 >> 8);
+            let brand = tokens
+                .modifiers()
+                .and_then(|m| m.selected("brand").map(str::to_owned));
+            format!(
+                "{name} {:06x} {}",
+                accent.unwrap_or(0),
+                brand.unwrap_or_default()
+            )
+        })
+    }
+
+    #[component]
+    fn Out() -> impl IntoElement {
+        say("out")
+    }
+
+    #[component]
+    fn Forest() -> impl IntoElement {
+        say("forest")
+    }
+
+    #[component]
+    fn Compact() -> impl IntoElement {
+        say("compact")
+    }
+
+    #[component]
+    fn Jungle() -> impl IntoElement {
+        say("jungle")
+    }
+
+    /// A reader outside, one in a scope that picks `forest`, one in a scope
+    /// in it that picks `compact`, one in a scope that names a context the
+    /// theme lacks.
+    #[component]
+    fn Scopes() -> impl IntoElement {
+        let picks = |name, context| Some(ScopeModifiers::new([(name, context)]));
+        view()
+            .child(out())
+            .child(
+                theme_scope()
+                    .modifiers(picks("brand", "forest"))
+                    .child(forest())
+                    .child(
+                        theme_scope()
+                            .modifiers(picks("density", "compact"))
+                            .child(compact()),
+                    ),
+            )
+            .child(
+                theme_scope()
+                    .modifiers(picks("brand", "jungle"))
+                    .child(jungle()),
+            )
+    }
+
+    fn all_texts(c: &mut Core<FakeEngine>) -> Vec<String> {
+        let mut texts = Vec::new();
+        while let Some(batch) = c.commit() {
+            texts.extend(batch.items.iter().filter_map(|i| match i {
+                MountItem::Text { text, .. } => Some(text.text.clone()),
+                _ => None,
+            }));
+        }
+        texts.sort();
+        texts
+    }
+
+    #[test]
+    fn a_scope_picks_its_own_contexts_and_follows_the_apps_other_modifiers() {
+        let mut c = themed();
+        c.mount_root(&Root::of::<Scopes>());
+        // The scope's brand inside it, the app's outside; a scope inside
+        // keeps the outer scope's brand and adds its density (the later
+        // modifier wins the accent); a context the theme lacks changes
+        // nothing.
+        assert_eq!(
+            all_texts(&mut c),
+            [
+                "compact ff0000 forest",
+                "forest 00ff00 forest",
+                "jungle 0000ff ocean",
+                "out 0000ff ocean"
+            ]
+        );
+        // The app picks another density: it reaches into the scopes, which
+        // keep their brand; the app's brand does not.
+        pick(&mut c, "density", "compact");
+        pick(&mut c, "brand", "forest");
+        assert_eq!(
+            all_texts(&mut c),
+            [
+                "forest ff0000 forest",
+                "jungle ff0000 forest",
+                "out ff0000 forest"
+            ]
+        );
+    }
 }

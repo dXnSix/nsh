@@ -485,17 +485,34 @@ impl Runtime {
                     .and_then(|named| self.scope_tokens_named(named))
                     .or_else(|| self.tokens.borrow().clone())
                     .unwrap_or_default();
-                let json = protocol::to_json(&compat::Value::new(theme))?.to_string();
-                // What it leaves out is said once, by the component in the
-                // core.
-                let read = self
-                    .theme
-                    .borrow()
-                    .as_ref()
-                    .and_then(|t| t.scoped(&around, &json));
-                let tokens = match read {
-                    Some(Ok((tokens, _))) => std::sync::Arc::new(tokens),
-                    _ => around,
+                // Its modifiers' contexts first (argument 3), its theme over
+                // them; what it leaves out is said once, by the component in
+                // the core.
+                let picks = protocol::to_json(&compat::Value::new(args.index(3)?))
+                    .unwrap_or(serde_json::Value::Null);
+                let around = match picks.as_object() {
+                    Some(picks) => {
+                        let picks: Vec<(&str, &str)> = picks
+                            .iter()
+                            .filter_map(|(n, c)| Some((n.as_str(), c.as_str()?)))
+                            .collect();
+                        std::sync::Arc::new(around.picked(&picks).0)
+                    }
+                    None => around,
+                };
+                let tokens = if theme.is_object() {
+                    let json = protocol::to_json(&compat::Value::new(theme))?.to_string();
+                    let read = self
+                        .theme
+                        .borrow()
+                        .as_ref()
+                        .and_then(|t| t.scoped(&around, &json));
+                    match read {
+                        Some(Ok((tokens, _))) => std::sync::Arc::new(tokens),
+                        _ => around,
+                    }
+                } else {
+                    around
                 };
                 let mut slots = self.scope_tokens.borrow_mut();
                 let Some(held) = slots.get_mut(slot) else {

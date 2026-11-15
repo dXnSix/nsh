@@ -1217,6 +1217,8 @@ interface ThemeScopeProps {
   appearance?: "light" | "dark";
   /** 一个主题文件，它的值叠加在作用域外层的令牌之上；省略时，作用域使用外层的令牌绘制。 */
   theme?: Theme;
+  /** 在作用域内选择的主题修饰符上下文（`{ brand: "forest" }`），位于它的 `theme` 之下。 */
+  modifiers?: { [M in keyof ThemeModifiers]?: ThemeModifiers[M] };
   children?: JSX.Element;
   // 以及视图的 `class`、`classList`、`style`、状态样式、`testID`、`onLayout`
 }
@@ -1228,7 +1230,9 @@ interface ThemeScopeProps {
 
 设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
 
-与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 传入在 Rust 中构造的令牌；`dark()`、`color()`、`tokens()`、`token()` 和类型化键的 `get()` 给出读取它们的绑定所在作用域的结果。
+设置了 `modifiers` 时，作用域为自己选择主题[修饰符](#setmodifier-modifier-modifiers)的上下文：在其中，`{ brand: "forest" }` 的令牌取 forest 上下文的值，它的 `theme` 叠加在其上，`modifier("brand")` 返回 `forest`。它没有指定的修饰符保持外层的上下文，所以 `setModifier("density", "compact")` 会传入作用域，嵌套在内的作用域在外层的选择之上加上自己的选择。主题没有的修饰符或上下文会被略过并给出警告；`.nsh/types/nsh/modifiers.d.ts` 的类型使其成为类型错误。
+
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 传入在 Rust 中构造的令牌，`.modifiers(Some(ScopeModifiers::new([("brand", "forest")])))`；`dark()`、`color()`、`tokens()`、`token()` 和类型化键的 `get()` 给出读取它们的绑定所在作用域的结果。
 
 ```rust tabs
 view().flex_row().flex_1().child(
@@ -1255,6 +1259,11 @@ import { ThemeScope, View } from "nsh";
   <View class="rounded-(--radius) bg-primary p-4">
     <Text class="text-primary-foreground">Upgrade</Text>
   </View>
+</ThemeScope>
+
+// forest 品牌的预览，显示在应用旁边，无论应用选择了什么。
+<ThemeScope modifiers={{ brand: "forest" }}>
+  <Preview />
 </ThemeScope>
 ```
 

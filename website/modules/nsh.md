@@ -1272,6 +1272,8 @@ interface ThemeScopeProps {
   appearance?: "light" | "dark";
   /** A theme file whose values are set over the tokens around the scope; left out, the scope is drawn with those. */
   theme?: Theme;
+  /** Contexts of the theme's modifiers picked in the scope (`{ brand: "forest" }`), under its `theme`. */
+  modifiers?: { [M in keyof ThemeModifiers]?: ThemeModifiers[M] };
   children?: JSX.Element;
   // and a view's `class`, `classList`, `style`, state styles, `testID`, `onLayout`
 }
@@ -1283,7 +1285,9 @@ In a scope, everything that follows the appearance follows the scope's: `dark:` 
 
 With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
 
-As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` for tokens made in Rust; `dark()`, `color()`, `tokens()`, `token()` and a typed key's `get()` answer for the scope around the binding that reads them.
+With `modifiers` the scope picks contexts of the theme's [modifiers](#setmodifier-modifier-modifiers) for itself: in it the tokens of `{ brand: "forest" }` are the forest context's, its `theme` set over them, and `modifier("brand")` says `forest`. A modifier it does not name keeps the context around it, so `setModifier("density", "compact")` reaches into the scope and one inside it adds its own picks to the outer one's. A modifier or context the theme has not is left out with a warning; the types of `.nsh/types/nsh/modifiers.d.ts` make it a type error.
+
+As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` for tokens made in Rust, `.modifiers(Some(ScopeModifiers::new([("brand", "forest")])))`; `dark()`, `color()`, `tokens()`, `token()` and a typed key's `get()` answer for the scope around the binding that reads them.
 
 ```rust tabs
 view().flex_row().flex_1().child(
@@ -1310,6 +1314,11 @@ import { ThemeScope, View } from "nsh";
   <View class="rounded-(--radius) bg-primary p-4">
     <Text class="text-primary-foreground">Upgrade</Text>
   </View>
+</ThemeScope>
+
+// A preview of the forest brand beside the app's, whatever the app picks.
+<ThemeScope modifiers={{ brand: "forest" }}>
+  <Preview />
 </ThemeScope>
 ```
 

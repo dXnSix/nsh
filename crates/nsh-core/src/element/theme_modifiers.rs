@@ -265,6 +265,29 @@ impl ThemeModifiers {
     }
 }
 
+impl Tokens {
+    /// These tokens with the contexts `picks` (each a modifier's name and a
+    /// context's) picked over them, as a [`super::ThemeScope`]'s `modifiers`
+    /// pick them, with a sentence for each pick the theme has not: no
+    /// modifiers, no such modifier, no such context of it.
+    pub fn picked<N: AsRef<str>, C: AsRef<str>>(&self, picks: &[(N, C)]) -> (Tokens, Vec<String>) {
+        let mut said = Vec::new();
+        let Some(mut modifiers) = self.modifiers().cloned() else {
+            if !picks.is_empty() {
+                said.push("modifiers: the theme has no modifiers".to_owned());
+            }
+            return (self.clone(), said);
+        };
+        for (name, context) in picks {
+            match modifiers.select(name.as_ref(), context.as_ref()) {
+                Ok(picked) => modifiers = picked,
+                Err(e) => said.push(format!("modifiers: {e}")),
+            }
+        }
+        (modifiers.apply(self), said)
+    }
+}
+
 /// The modifiers of theme file `json` and each one's contexts, in the
 /// order the file writes them (empty where it is no such file).
 fn file_order(json: &str) -> Vec<(String, Vec<String>)> {

@@ -97,6 +97,56 @@ impl From<Arc<Tokens>> for ScopeTheme {
     }
 }
 
+/// The contexts a [`ThemeScope`] picks of the theme's modifiers: each
+/// modifier's name and the context's (TS: `{ brand: "forest" }`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScopeModifiers(pub Arc<[(Box<str>, Box<str>)]>);
+
+impl ScopeModifiers {
+    /// `picks`, each a modifier's name and a context's.
+    pub fn new<N: Into<Box<str>>, C: Into<Box<str>>>(
+        picks: impl IntoIterator<Item = (N, C)>,
+    ) -> Self {
+        Self(
+            picks
+                .into_iter()
+                .map(|(n, c)| (n.into(), c.into()))
+                .collect(),
+        )
+    }
+}
+
+/// In TS an object of modifiers' names and contexts' (`{ brand: "forest" }`).
+impl JsValue for ScopeModifiers {
+    fn ts_type(_types: &mut TsTypes) -> String {
+        "{ [M in keyof ThemeModifiers]?: ThemeModifiers[M] }".into()
+    }
+
+    fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
+        let json = JsonValue::from_js(value)?;
+        let Some(object) = json.as_object() else {
+            return Err(PropError::expected("modifiers' contexts", &json));
+        };
+        let mut picks = Vec::new();
+        for (name, context) in object {
+            let Some(context) = context.as_str() else {
+                return Err(PropError::expected("a context's name", context));
+            };
+            picks.push((name.as_str(), context));
+        }
+        Ok(Self::new(picks))
+    }
+
+    fn to_js<'a>(&self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
+        let object: serde_json::Map<String, JsonValue> = self
+            .0
+            .iter()
+            .map(|(n, c)| (n.to_string(), JsonValue::from(&**c)))
+            .collect();
+        JsonValue::Object(object).to_js(host)
+    }
+}
+
 /// In TS a theme file's object (`Theme`, as `setTheme` takes it).
 impl JsValue for ScopeTheme {
     fn ts_type(_types: &mut TsTypes) -> String {
@@ -138,6 +188,12 @@ pub struct ThemeScopeProps {
     /// tokens around it.
     #[prop(default)]
     pub theme: Prop<Option<ScopeTheme>>,
+    /// The contexts the scope picks of the theme's modifiers
+    /// (`{ brand: "forest" }`), under its `theme`: the tokens their contexts
+    /// set take those contexts' values in the scope. A modifier or context
+    /// the theme has not is left out with a warning.
+    #[prop(default)]
+    pub modifiers: Prop<Option<ScopeModifiers>>,
     /// What the scope holds.
     pub children: Prop<Children>,
 }
@@ -223,10 +279,25 @@ pub fn ThemeScope(props: ThemeScopeProps, _cx: Scope<NoEvent>) -> impl IntoEleme
     // when either changes), else the ones around it.
     let around = use_context::<ScopeTokens>();
     let theme = props.theme;
+    let modifiers = props.modifiers;
     let own = computed(move || {
-        let theme = theme.get()?;
-        let around = around.map_or_else(super::ambient::surface_tokens, |scope| scope.0.get());
-        Some(theme.within(&around))
+        let (theme, modifiers) = (theme.get(), modifiers.get());
+        if theme.is_none() && modifiers.is_none() {
+            return None;
+        }
+        let mut around = around.map_or_else(super::ambient::surface_tokens, |scope| scope.0.get());
+        // Its modifiers' contexts first, its theme over them.
+        if let Some(modifiers) = modifiers {
+            let (picked, said) = around.picked(&modifiers.0);
+            for what in said {
+                log::warn!("ThemeScope: {what}, ignored");
+            }
+            around = Arc::new(picked);
+        }
+        Some(match theme {
+            Some(theme) => theme.within(&around),
+            None => around,
+        })
     });
     let tokens = computed(move || {
         own.get().unwrap_or_else(|| {

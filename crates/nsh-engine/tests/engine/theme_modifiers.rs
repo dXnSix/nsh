@@ -66,3 +66,48 @@ fn set_modifier_picks_a_context_and_what_reads_its_tokens_follows() {
         "{batches:?}"
     );
 }
+
+const SCOPES: &str = r##"import { mount, setModifier, signal, Text, ThemeScope, token, View } from "nsh";
+
+const step = signal(0);
+const brand = signal<string | undefined>("forest");
+setTimeout(() => { setModifier("brand" as never, "forest" as never); brand.set("ocean"); step.set(1); }, 30);
+setTimeout(() => { brand.set(undefined); step.set(2); }, 60);
+
+function Reader(props: { name: string }) {
+  return <Text>{`${props.name} ${token("accent" as never)}`}</Text>;
+}
+
+mount(() => (
+  <View>
+    <Text>{`step ${step()}`}</Text>
+    <Reader name="out" />
+    <ThemeScope modifiers={(brand() ? { brand: brand() } : undefined) as never}>
+      <Reader name="in" />
+    </ThemeScope>
+  </View>
+));
+"##;
+
+#[test]
+fn a_theme_scope_picks_its_own_contexts() {
+    let (_engine, rx) = start_with(SCOPES, Environment::default(), None, Some(CONFIG));
+    let seen = |step: &str| {
+        let batches = until(&rx, |b| shows(b, step));
+        assert!(batches.iter().any(|b| shows(b, step)), "{batches:?}");
+        batches
+    };
+    let said =
+        |batches: &[nsh_core::MountBatch], text: &str| batches.iter().any(|b| shows(b, text));
+    // The scope's brand in it, the app's outside.
+    let batches = seen("step 0");
+    assert!(said(&batches, "out #0000ffff"), "{batches:?}");
+    assert!(said(&batches, "in #00ff00ff"), "{batches:?}");
+    // The app picks forest, the scope ocean: each keeps its own.
+    let batches = seen("step 1");
+    assert!(said(&batches, "out #00ff00ff"), "{batches:?}");
+    assert!(said(&batches, "in #0000ffff"), "{batches:?}");
+    // Without modifiers of its own the scope is the app's.
+    let batches = seen("step 2");
+    assert!(said(&batches, "in #00ff00ff"), "{batches:?}");
+}

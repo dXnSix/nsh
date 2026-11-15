@@ -164,6 +164,7 @@ pub use crate::element::{
     RevealOptions,
     Rgba,
     Role,
+    ScopeModifiers,
     ScopeTheme,
     Screen,
     ScreenAnimation,

@@ -143,11 +143,12 @@ export function createEnvironment(reactive, invoke, dom) {
       const slot = invoke(412, []);
       reactive.cleanup(() => invoke(413, [slot, true]));
       const draws = reactive.computed(() => {
-        const theme = props.theme, around = outer ? outer.tokens() : undefined;
+        const theme = props.theme, modifiers = props.modifiers, around = outer ? outer.tokens() : undefined;
+        const object = value => value !== null && typeof value === "object";
         // No tokens of its own: the ones around it.
-        if (theme === null || typeof theme !== "object") { invoke(413, [slot, false]); return around; }
+        if (!object(theme) && !object(modifiers)) { invoke(413, [slot, false]); return around; }
         if (around === undefined) tokens();
-        return invoke(411, [slot, theme, around ?? null]);
+        return invoke(411, [slot, object(theme) ? theme : null, around ?? null, object(modifiers) ? modifiers : null]);
       });
       return scope.Provider({ value: { scheme: shows, tokens: draws }, get children() { return children(); } });
     },
