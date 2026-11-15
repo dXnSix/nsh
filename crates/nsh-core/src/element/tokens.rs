@@ -29,7 +29,12 @@ pub const FONT_MONO: &str = "font-mono";
 ///
 /// A name is a token of one kind: set as another kind (or laid over one,
 /// [`Tokens::over`]) it is that kind alone, so every reader answers the
-/// same kind for it.
+/// same kind for it. Its form says the kind, as a theme file reads it: a
+/// font family is `font-*`, a weight `font-weight-*`, a shadow `shadow-*`,
+/// a gradient `background-image-*`, and no color or other number is
+/// `font-*`. A setter leaves out (and logs) a name of another kind's form,
+/// so a theme file written of the tokens (`theme_file::write`) reads back
+/// as the same tokens.
 ///
 /// They may map [`Role`]s, what NSH's own parts draw with, onto tokens of
 /// other names ([`Tokens::with_role`]): a theme whose surface for popovers
@@ -510,6 +515,9 @@ impl Tokens {
 
     /// Sets the color named `name`.
     pub fn set_color(&mut self, name: &str, color: AdaptiveColor) {
+        if misnamed(name, Kind::Color) {
+            return;
+        }
         self.clear_but(name, Kind::Color);
         self.colors.insert(name.into(), color);
     }
@@ -532,6 +540,9 @@ impl Tokens {
     /// Sets the number named `name`, in both appearances (a dark value it
     /// had goes).
     pub fn set_number(&mut self, name: &str, value: f32) {
+        if misnamed(name, Kind::Number) {
+            return;
+        }
         self.clear_but(name, Kind::Number);
         self.numbers.insert(name.into(), value);
         self.dark_numbers.remove(name);
@@ -540,6 +551,9 @@ impl Tokens {
     /// Gives the number named `name` a value of its own in the dark
     /// appearance (its light one is [`Tokens::set_number`]'s).
     pub fn set_dark_number(&mut self, name: &str, value: f32) {
+        if misnamed(name, Kind::Number) {
+            return;
+        }
         self.dark_numbers.insert(name.into(), value);
     }
 
@@ -550,6 +564,9 @@ impl Tokens {
 
     /// Sets the font family named `name`.
     pub fn set_font(&mut self, name: &str, family: impl Into<Arc<str>>) {
+        if misnamed(name, Kind::Font) {
+            return;
+        }
         self.clear_but(name, Kind::Font);
         self.fonts.insert(name.into(), family.into());
     }
@@ -561,6 +578,9 @@ impl Tokens {
 
     /// Sets the box shadows named `name`.
     pub fn set_shadow(&mut self, name: &str, shadow: impl Into<AdaptiveShadow>) {
+        if misnamed(name, Kind::Shadow) {
+            return;
+        }
         self.clear_but(name, Kind::Shadow);
         self.shadows.insert(name.into(), shadow.into());
     }
@@ -577,6 +597,9 @@ impl Tokens {
 
     /// Sets the gradients named `name`.
     pub fn set_gradient(&mut self, name: &str, gradient: impl Into<AdaptiveGradient>) {
+        if misnamed(name, Kind::Gradient) {
+            return;
+        }
         self.clear_but(name, Kind::Gradient);
         self.gradients.insert(name.into(), gradient.into());
     }
@@ -907,6 +930,21 @@ pub(crate) fn scope_left_out(name: &str, around: &Tokens) -> String {
     }
 }
 
+/// Whether a token `name` of `kind` is one a theme file would read as
+/// another kind ([`Kind::names`]): a setter leaves it out, and logs it.
+fn misnamed(name: &str, kind: Kind) -> bool {
+    let refused = !kind.names(name);
+    if refused {
+        log::warn!(
+            "design token `{name}` not set: a {} is named as no {} is ({})",
+            kind.name(),
+            kind.name(),
+            Kind::FORMS
+        );
+    }
+    refused
+}
+
 /// The kind of a token: a name is one ([`Tokens`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -918,6 +956,24 @@ pub(crate) enum Kind {
 }
 
 impl Kind {
+    /// The name forms that say a kind, as a sentence lists them.
+    pub(crate) const FORMS: &str = "a font is `font-*`, a shadow `shadow-*`, a gradient \
+                                    `background-image-*`, a weight `font-weight-*`";
+
+    /// Whether a theme file reads a token named `name` as this kind: the
+    /// name says its kind, as a CSS variable's does ([`Tokens`]).
+    pub(crate) fn names(self, name: &str) -> bool {
+        let font = name.starts_with("font-");
+        let weight = name.starts_with("font-weight-");
+        match self {
+            Kind::Font => font && !weight,
+            Kind::Shadow => name.starts_with("shadow-"),
+            Kind::Gradient => name.starts_with(super::theme_file::GRADIENTS),
+            Kind::Color => !font,
+            Kind::Number => !font || weight,
+        }
+    }
+
     /// The kind as a sentence names it.
     pub(crate) fn name(self) -> &'static str {
         match self {
@@ -951,7 +1007,7 @@ pub(crate) fn sample() -> Tokens {
     ] {
         tokens.set_color(key, AdaptiveColor::rgb(light, dark));
     }
-    for (key, n) in [("radius", 12.0), ("radius-lg", 16.0), ("font-size", 16.0)] {
+    for (key, n) in [("radius", 12.0), ("radius-lg", 16.0), ("body-size", 16.0)] {
         tokens.set_number(key, n);
     }
     tokens
@@ -1201,9 +1257,6 @@ mod one_kind {
         t.set_color("background-image-hero", rgb(0x222222).into());
         t.set_gradient("background-image-hero", AdaptiveGradient::new([], []));
         assert_eq!(t.color("background-image-hero"), None);
-        t.set_font("font-sans", "Inter");
-        t.set_color("font-sans", rgb(0x333333).into());
-        assert_eq!(t.font("font-sans"), None);
     }
 
     #[test]
@@ -1258,5 +1311,91 @@ mod one_kind {
             scope_left_out("glow", &around),
             "`glow`: the theme has no token of this name"
         );
+    }
+}
+
+/// A token's name says its kind, as a theme file reads it: a setter takes
+/// no name the file would read as another kind, so the tokens read back
+/// from a theme file written of them (`theme_file::write`) are the same.
+#[cfg(test)]
+mod name_forms {
+    use super::super::theme_file;
+    use super::*;
+    use crate::color::rgb;
+
+    fn layer(rgba: u32) -> crate::BoxShadow {
+        crate::BoxShadow {
+            offset_y: crate::geometry::Points(1.0),
+            blur: crate::geometry::Points(2.0),
+            color: crate::Color(rgba),
+            ..Default::default()
+        }
+    }
+
+    fn gradient() -> AdaptiveGradient {
+        let layers = crate::css::gradients("linear-gradient(to right, #7c3aed, #db2777)").unwrap();
+        AdaptiveGradient::new(layers.clone(), layers)
+    }
+
+    /// Each name with its kind, sorted.
+    fn kinds(t: &Tokens) -> Vec<(String, Kind)> {
+        let mut out: Vec<(String, Kind)> = (t.colors().map(|(n, _)| (n, Kind::Color)))
+            .chain(t.numbers().map(|(n, _)| (n, Kind::Number)))
+            .chain(t.fonts().map(|(n, _)| (n, Kind::Font)))
+            .chain(t.shadows().map(|(n, _)| (n, Kind::Shadow)))
+            .chain(t.gradients().map(|(n, _)| (n, Kind::Gradient)))
+            .map(|(n, k)| (n.to_owned(), k))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    #[test]
+    fn a_setter_takes_no_name_of_another_kinds_form() {
+        let mut t = Tokens::default();
+        t.set_gradient("hero", gradient());
+        t.set_shadow("elevation", [layer(0x0000_001a)]);
+        t.set_number("font-scale", 1.2);
+        t.set_dark_number("font-scale", 1.4);
+        t.set_color("font-color", rgb(0xffffff).into());
+        t.set_font("code", "Berkeley Mono");
+        t.set_font("font-weight-strong", "Inter");
+        assert_eq!(kinds(&t), []);
+        assert_eq!(t.dark_numbers().count(), 0);
+        // Each in its own kind's form is set.
+        t.set_gradient("background-image-hero", gradient());
+        t.set_shadow("shadow-elevation", [layer(0x0000_001a)]);
+        t.set_number("scale", 1.2);
+        t.set_number("font-weight-strong", 650.0);
+        t.set_color("color-font", rgb(0xffffff).into());
+        t.set_font("font-code", "Berkeley Mono");
+        assert_eq!(kinds(&t).len(), 6);
+    }
+
+    #[test]
+    fn tokens_written_to_a_theme_file_read_back_as_they_are() {
+        let mut t = Tokens::default();
+        t.set_color("primary", AdaptiveColor::rgb(0x111111, 0x222222));
+        t.set_color("shadow-color", rgb(0x333333).into());
+        t.set_number("radius", 8.0);
+        t.set_dark_number("radius", 12.0);
+        t.set_number("font-weight-strong", 650.0);
+        t.set_font("font-sans", "Inter");
+        t.set_shadow(
+            "shadow-raised",
+            AdaptiveShadow::new([layer(0x0000_001a)], [layer(0xffff_ff33)]),
+        );
+        t.set_gradient("background-image-hero", gradient());
+        // Names a file reads as another kind, which it would lose.
+        t.set_gradient("hero", gradient());
+        t.set_shadow("elevation", [layer(0x0000_001a)]);
+        t.set_number("font-scale", 1.2);
+        let (back, ignored) =
+            theme_file::parse(&theme_file::write(&t), &Tokens::default()).unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert_eq!(kinds(&back), kinds(&t));
+        assert_eq!(back.number_in("radius", true), Some(12.0));
+        assert_eq!(back.number("font-weight-strong"), Some(650.0));
+        assert_eq!(back.font("font-sans").map(|f| &**f), Some("Inter"));
     }
 }

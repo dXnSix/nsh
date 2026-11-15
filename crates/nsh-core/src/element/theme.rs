@@ -441,6 +441,18 @@ pub enum TokenKind {
 }
 
 impl TokenKind {
+    /// The kind [`Tokens`] keeps it as: a namespaced number is a number.
+    pub(crate) fn stored(self) -> super::tokens::Kind {
+        use super::tokens::Kind;
+        match self {
+            TokenKind::Color => Kind::Color,
+            TokenKind::Font => Kind::Font,
+            TokenKind::Shadow => Kind::Shadow,
+            TokenKind::Gradient => Kind::Gradient,
+            _ => Kind::Number,
+        }
+    }
+
     /// Its name, as the toolchain writes it.
     pub fn name(self) -> &'static str {
         match self {
@@ -663,20 +675,12 @@ impl ThemeSet {
         for (i, (name, kind, plays)) in tokens.iter().enumerate() {
             // A theme file's value is read by the name's form: the name
             // says what its kind is, as a CSS variable's does.
-            let read_as = |prefix: &str| name.starts_with(prefix);
-            let readable = match kind {
-                TokenKind::Font => read_as("font-") && !read_as("font-weight-"),
-                TokenKind::Shadow => read_as("shadow-"),
-                TokenKind::Gradient => read_as(super::theme_file::GRADIENTS),
-                TokenKind::Color => !read_as("font-"),
-                _ => !read_as("font-") || read_as("font-weight-"),
-            };
-            if !readable {
+            if !kind.stored().names(name) {
                 return Err(format!(
-                    "`{type_name}`: the {} token `{name}` is named as no {} is (a font is `font-*`, a shadow \
-                     `shadow-*`, a gradient `background-image-*`, a weight `font-weight-*`)",
+                    "`{type_name}`: the {} token `{name}` is named as no {} is ({})",
                     kind.name(),
-                    kind.name()
+                    kind.name(),
+                    super::tokens::Kind::FORMS
                 ));
             }
             if tokens[..i].iter().any(|(n, ..)| n == name) {
