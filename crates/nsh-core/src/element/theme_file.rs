@@ -1110,17 +1110,26 @@ fn apply_css_vars(
                     if dark_n != light_n {
                         tokens.set_dark_number(name, dark_n);
                     }
-                    continue;
                 }
-                let mut given: Vec<(&FxHashMap<String, String>, &String)> = [
-                    (&light_vars, light_vars.get(name)),
-                    (&dark_vars, dark_vars.get(name)),
+                // A value written as a color that is none is said, as is
+                // one that is no number in an appearance where the other's
+                // is (`#zz` beside `12px`); a `var()` copied as a number is
+                // not.
+                let mut given: Vec<(&FxHashMap<String, String>, &String, bool)> = [
+                    (&light_vars, light_vars.get(name), false),
+                    (&dark_vars, dark_vars.get(name), true),
                 ]
                 .into_iter()
-                .filter_map(|(vars, v)| Some((vars, v?)))
+                .filter_map(|(vars, v, dark)| Some((vars, v?, dark)))
                 .collect();
                 given.dedup_by(|a, b| a.1 == b.1);
-                for (vars, v) in given.into_iter().filter(|(_, v)| written_as_color(v)) {
+                let copied = |v: &str, vars, dark| {
+                    v.trim_start().starts_with("var(") && number(v, vars, dark).is_some()
+                };
+                for (vars, v, _) in given
+                    .into_iter()
+                    .filter(|(vars, v, dark)| written_as_color(v) && !copied(v, vars, *dark))
+                {
                     let said = no_kind(v, "color", vars, base);
                     ignored.push(LeftOut::about(name, format_args!(": {said}")));
                 }
