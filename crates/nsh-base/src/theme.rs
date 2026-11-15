@@ -30,10 +30,7 @@ use std::sync::{Arc, LazyLock};
 #[cfg(test)]
 use nsh_core::{Color, color::Hsla};
 use nsh_core::{
-    element::{
-        AdaptiveColor, AppTheme, Role, SharedString, TokenKind, TokenSpec, Tokens, theme_file,
-        theme_of,
-    },
+    element::{AdaptiveColor, Role, SharedString, Tokens, theme_file},
     geometry::{Points, px},
 };
 
@@ -54,12 +51,31 @@ impl std::fmt::Display for ThemeError {
 
 impl std::error::Error for ThemeError {}
 
+thread_local! {
+    /// The theme of the tokens last read, and whether its radius is the
+    /// dark one: `theme()` makes one only when they change.
+    static CURRENT: std::cell::RefCell<Option<(Arc<Theme>, bool)>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The theme the app is drawn with (reading it subscribes: a new theme
-/// reaches what read it): [`theme_of`]`::<Theme>()`, read once per change of
-/// the tokens, per surface. Under an app's own theme types its fields are
-/// the tokens their roles are mapped onto.
+/// reaches what read it). Under an app's own declared tokens its fields are
+/// the tokens their roles are mapped onto. `radius` is its value in the
+/// appearance shown, as TS's `token()` and classes read it: a radius with a
+/// dark value of its own subscribes to the appearance too.
 pub fn theme() -> Arc<Theme> {
-    theme_of::<Theme>()
+    let tokens = nsh_core::element::tokens();
+    let radius = tokens.role_name(role::RADIUS);
+    let dark = tokens.number_in(radius, true) != tokens.number(radius) && nsh_core::element::dark();
+    CURRENT.with_borrow_mut(|current| match current {
+        Some((theme, was_dark)) if Arc::ptr_eq(&theme.tokens, &tokens) && *was_dark == dark => {
+            theme.clone()
+        }
+        _ => {
+            let theme = Arc::new(Theme::of_shown(tokens, dark));
+            *current = Some((theme.clone(), dark));
+            theme
+        }
+    })
 }
 
 /// The tokens of theme file `json` over the default's (`None`: the
@@ -250,90 +266,18 @@ macro_rules! theme {
             tokens: Arc<Tokens>,
         }
 
-        /// shadcn/ui's tokens as a theme type: its 31 colors, `radius`,
-        /// `font-sans` and `font-mono`, each playing the role of its name.
-        /// It is not registered ([`nsh_core::element::Registry::theme`]):
-        /// `nsh/base` reads themes with [`read_tokens`], so it stays the
-        /// default and an app's own types win. A patch is tokens by name
-        /// (`update_theme::<Theme>(tokens)`). Under an app's own type its
-        /// setters set what its fields read: a token playing a role the
-        /// type maps (`popover`) is the token the role is mapped onto.
-        impl AppTheme for Theme {
-            type Patch = Tokens;
-
-            fn token_specs() -> &'static [TokenSpec] {
-                static SPECS: LazyLock<Vec<TokenSpec>> = LazyLock::new(|| {
-                    let mut specs = vec![
-                        $(
-                            TokenSpec::new($key, TokenKind::Color)
-                                .doc(concat!($($doc),*))
-                                .role(role::$role),
-                        )*
-                    ];
-                    specs.push(TokenSpec::new("radius", TokenKind::Number).doc("The corner radius.").role(role::RADIUS));
-                    specs.push(TokenSpec::new("font-sans", TokenKind::Font).doc("The app's font family.").role(role::FONT_SANS));
-                    specs.push(TokenSpec::new("font-mono", TokenKind::Font).doc("The monospaced font family.").role(role::FONT_MONO));
-                    specs
-                });
-                &SPECS
-            }
-
-            /// Each field as the token of its name. A field still at the
-            /// default it fell back on, where the tokens the theme was read
-            /// from had no token for its role, is left out: under an app's
-            /// own theme type, a theme read and set makes no shadcn token
-            /// of what the app did not change.
-            fn write_tokens(&self, prefix: &str, out: &mut Tokens) {
-                let fell_back = |role: Role, value: AdaptiveColor| {
-                    self.tokens.role(role).is_none()
-                        && DEFAULT_TOKENS.color(role.name()) == Some(value)
-                };
-                $(
-                    if !fell_back(role::$role, self.$name) {
-                        out.set_color(&format!("{prefix}{}", $key), self.$name);
-                    }
-                )*
-                let radius_fell_back = self.tokens.role(role::RADIUS).is_none()
-                    && DEFAULT_TOKENS.number(role::RADIUS.name()) == Some(self.radius.0);
-                if !radius_fell_back {
-                    out.set_number(&TokenKind::Number.prefixed(prefix, "radius"), self.radius.0);
-                }
-                if let Some(f) = &self.font_sans {
-                    out.set_font(&TokenKind::Font.prefixed(prefix, "font-sans"), f.to_string());
-                }
-                if let Some(f) = &self.font_mono {
-                    out.set_font(&TokenKind::Font.prefixed(prefix, "font-mono"), f.to_string());
-                }
-            }
-
-            fn read_tokens(tokens: &Tokens, prefix: &str) -> Self {
-                if prefix.is_empty() {
-                    return Theme::of(Arc::new(tokens.clone()));
-                }
-                let mut own = Tokens::default();
-                for spec in Self::token_specs() {
-                    rename(tokens, &spec.kind.prefixed(prefix, &spec.name), &mut own, &spec.name);
-                }
-                Theme::of(Arc::new(own))
-            }
-
-            fn write_patch(patch: &Tokens, prefix: &str, out: &mut Tokens) {
-                if prefix.is_empty() {
-                    *out = patch.over(out);
-                    return;
-                }
-                for spec in Self::token_specs() {
-                    rename(patch, &spec.name, out, &spec.kind.prefixed(prefix, &spec.name));
-                }
-            }
-        }
-
         impl Theme {
             /// The theme of `tokens`, each field read through its role (the
             /// token a theme maps it onto, else the token of its name):
             /// shadcn's tokens they leave out (an embedding app's may) are
             /// the default's.
             fn of(tokens: Arc<Tokens>) -> Self {
+                Self::of_shown(tokens, false)
+            }
+
+            /// [`Theme::of`] with `radius` in the dark appearance (`dark`)
+            /// or the light one.
+            fn of_shown(tokens: Arc<Tokens>, dark: bool) -> Self {
                 let color = |role: Role| {
                     tokens
                         .role(role)
@@ -343,7 +287,8 @@ macro_rules! theme {
                 Theme {
                     $( $name: color(role::$role), )*
                     radius: px(tokens
-                        .role(role::RADIUS)
+                        .number_in(tokens.role_name(role::RADIUS), dark)
+                        .or_else(|| tokens.number_in(role::RADIUS.name(), dark))
                         .or_else(|| DEFAULT_TOKENS.number(role::RADIUS.name()))
                         .unwrap_or(0.0)),
                     font_sans: tokens.role(role::FONT_SANS).map(SharedString::from),
@@ -353,29 +298,6 @@ macro_rules! theme {
             }
         }
     };
-}
-
-/// Copies token `from_name` of `from`, of whatever kind, as `to_name` in
-/// `to` (a nested theme's names under a prefix).
-fn rename(from: &Tokens, from_name: &str, to: &mut Tokens, to_name: &str) {
-    if let Some(c) = from.color(from_name) {
-        to.set_color(to_name, c);
-    }
-    if let Some(n) = from.number(from_name) {
-        to.set_number(to_name, n);
-        if let Some(dark) = from.number_in(from_name, true).filter(|d| *d != n) {
-            to.set_dark_number(to_name, dark);
-        }
-    }
-    if let Some(f) = from.font(from_name) {
-        to.set_font(to_name, f.clone());
-    }
-    if let Some(shadow) = from.shadow(from_name) {
-        to.set_shadow(to_name, shadow.clone());
-    }
-    if let Some(gradient) = from.gradient(from_name) {
-        to.set_gradient(to_name, gradient.clone());
-    }
 }
 
 /// The default theme's tokens, which [`Theme::of`] falls back on (the

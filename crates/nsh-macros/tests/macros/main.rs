@@ -6,10 +6,8 @@
 
 use std::cell::RefCell;
 
-mod derive_app_theme;
-mod derive_gradient_token;
-mod derive_token_roles;
 mod native_components;
+mod theme_keys;
 
 // `#[native_components]` as an app's crate has it: at the crate's root, one
 // function per platform, named as the attribute's documentation names it

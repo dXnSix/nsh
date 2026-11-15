@@ -9,8 +9,8 @@
 //! running) and the tokens (`Core::classes_at`: a class list that reads a
 //! token the scope changes is parsed with the scope's values, once). What
 //! reads them in code reads the nearest scope's: [`super::dark`],
-//! [`super::color`], [`super::tokens`] and [`super::theme_of`] through the
-//! context a scope provides to what it renders, TS's `colorScheme()` and
+//! [`super::color`], [`super::tokens`], [`super::token`] and typed keys
+//! ([`super::TokenKey::get`]) through the context a scope provides to what it renders, TS's `colorScheme()` and
 //! `token()` through `nsh-js`'s (`components.rs`).
 //!
 //! A scope's tokens are its `theme`'s values over the tokens around it,
@@ -46,12 +46,6 @@ impl ScopeTheme {
     /// The theme file `json`.
     pub fn file(json: impl Into<Arc<str>>) -> Self {
         Self::File(json.into())
-    }
-
-    /// The tokens of a theme type's value (the app's own, or `nsh-base`'s
-    /// `Theme`).
-    pub fn of<T: super::AppTheme>(theme: &T) -> Self {
-        Self::Tokens(Arc::new(super::theme::theme_tokens(theme)))
     }
 
     /// The tokens a scope with this theme draws with: its values over
@@ -103,6 +97,88 @@ impl From<Arc<Tokens>> for ScopeTheme {
     }
 }
 
+/// The contexts a [`ThemeScope`] picks of the theme's modifiers: each
+/// modifier's name and the context's (TS: `{ brand: "forest" }`).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScopeModifiers(pub Arc<[(Box<str>, Box<str>)]>);
+
+impl ScopeModifiers {
+    /// `picks`, each a modifier's name and a context's.
+    pub fn new<N: Into<Box<str>>, C: Into<Box<str>>>(
+        picks: impl IntoIterator<Item = (N, C)>,
+    ) -> Self {
+        Self(
+            picks
+                .into_iter()
+                .map(|(n, c)| (n.into(), c.into()))
+                .collect(),
+        )
+    }
+
+    /// These picks and context `context` of another modifier (one of the
+    /// enums `theme_keys!` makes): `Brand::Forest.into()` then
+    /// `.and(Density::Compact)`. A context of a modifier these pick already
+    /// takes its place.
+    #[must_use]
+    pub fn and<C: ModifierContext>(self, context: C) -> Self {
+        let mut picks: Vec<(Box<str>, Box<str>)> = self
+            .0
+            .iter()
+            .filter(|(name, _)| **name != *C::MODIFIER)
+            .cloned()
+            .collect();
+        picks.push((C::MODIFIER.into(), context.context().into()));
+        Self(picks.into())
+    }
+}
+
+/// A context of a theme modifier as a typed value: the enums `theme_keys!`
+/// makes per modifier implement it (`modifiers::Brand::Forest`).
+pub trait ModifierContext: Copy {
+    /// The modifier's name (`brand`).
+    const MODIFIER: &'static str;
+    /// The context's name (`forest`).
+    fn context(self) -> &'static str;
+}
+
+/// A scope that picks context `context`.
+impl<C: ModifierContext> From<C> for ScopeModifiers {
+    fn from(context: C) -> Self {
+        Self::new([(C::MODIFIER, context.context())])
+    }
+}
+
+/// In TS an object of modifiers' names and contexts' (`{ brand: "forest" }`).
+impl JsValue for ScopeModifiers {
+    fn ts_type(_types: &mut TsTypes) -> String {
+        "{ [M in keyof ThemeModifiers]?: ThemeModifiers[M] }".into()
+    }
+
+    fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
+        let json = JsonValue::from_js(value)?;
+        let Some(object) = json.as_object() else {
+            return Err(PropError::expected("modifiers' contexts", &json));
+        };
+        let mut picks = Vec::new();
+        for (name, context) in object {
+            let Some(context) = context.as_str() else {
+                return Err(PropError::expected("a context's name", context));
+            };
+            picks.push((name.as_str(), context));
+        }
+        Ok(Self::new(picks))
+    }
+
+    fn to_js<'a>(&self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
+        let object: serde_json::Map<String, JsonValue> = self
+            .0
+            .iter()
+            .map(|(n, c)| (n.to_string(), JsonValue::from(&**c)))
+            .collect();
+        JsonValue::Object(object).to_js(host)
+    }
+}
+
 /// In TS a theme file's object (`Theme`, as `setTheme` takes it).
 impl JsValue for ScopeTheme {
     fn ts_type(_types: &mut TsTypes) -> String {
@@ -144,6 +220,12 @@ pub struct ThemeScopeProps {
     /// tokens around it.
     #[prop(default)]
     pub theme: Prop<Option<ScopeTheme>>,
+    /// The contexts the scope picks of the theme's modifiers
+    /// (`{ brand: "forest" }`), under its `theme`: the tokens their contexts
+    /// set take those contexts' values in the scope. A modifier or context
+    /// the theme has not is left out with a warning.
+    #[prop(default)]
+    pub modifiers: Prop<Option<ScopeModifiers>>,
     /// What the scope holds.
     pub children: Prop<Children>,
 }
@@ -213,8 +295,8 @@ impl ScopeTokens {
 /// # Rust
 ///
 /// Read the appearance and the tokens where they are used (a binding, a
-/// style's closure): [`dark`], [`color`], [`tokens`] and
-/// [`super::theme_of`] answer for the scope around what reads them, and an
+/// style's closure): [`dark`], [`color`], [`tokens`], [`super::token`] and
+/// typed keys answer for the scope around what reads them, and an
 /// element built before the scope places it is built outside it.
 #[component]
 pub fn ThemeScope(props: ThemeScopeProps, _cx: Scope<NoEvent>) -> impl IntoElement {
@@ -229,10 +311,25 @@ pub fn ThemeScope(props: ThemeScopeProps, _cx: Scope<NoEvent>) -> impl IntoEleme
     // when either changes), else the ones around it.
     let around = use_context::<ScopeTokens>();
     let theme = props.theme;
+    let modifiers = props.modifiers;
     let own = computed(move || {
-        let theme = theme.get()?;
-        let around = around.map_or_else(super::ambient::surface_tokens, |scope| scope.0.get());
-        Some(theme.within(&around))
+        let (theme, modifiers) = (theme.get(), modifiers.get());
+        if theme.is_none() && modifiers.is_none() {
+            return None;
+        }
+        let mut around = around.map_or_else(super::ambient::surface_tokens, |scope| scope.0.get());
+        // Its modifiers' contexts first, its theme over them.
+        if let Some(modifiers) = modifiers {
+            let (picked, said) = around.picked(&modifiers.0);
+            for what in said {
+                log::warn!("ThemeScope: {what}, ignored");
+            }
+            around = Arc::new(picked);
+        }
+        Some(match theme {
+            Some(theme) => theme.within(&around),
+            None => around,
+        })
     });
     let tokens = computed(move || {
         own.get().unwrap_or_else(|| {

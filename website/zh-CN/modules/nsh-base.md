@@ -285,10 +285,9 @@ import type {
 | [`Toast`、`ToastStack`、`ToastManager`](../elements/toast.md) | `toast()`、`toast_stack()`、`ToastManager` | 无样式的 toast：语义根、层叠的栈、它们的生命周期。 |
 | 页面和对话框的 `statusBar` | `.status_bar(..)` | 页面或对话框显示期间的状态栏。见[状态栏](#status-bar)。 |
 
-在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。它就是 `theme_of::<Theme>()`：`nsh_base::Theme` 是一个
-[主题类型](../docs/rust.md#主题类型)，即由 shadcn 的 31 种颜色、`radius`、`font-sans` 和 `font-mono` 组成的 `AppTheme`，每个 token
-承担与其同名的角色。它保持未注册，因此是默认的 token 来源，应用注册的类型会取代它。shadcn 应用用 `update_theme::<Theme>(tokens)`
-修改部分 token，补丁是按名称组织的 `Tokens`，`reset_theme::<Theme>()` 再把它们恢复。
+在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。即 shadcn 的 31 种颜色、`radius`、`font-sans` 和 `font-mono`，每个都通过与其同名的角色读取，令牌每次变化后
+只生成一次。shadcn 应用用 `update_tokens(tokens)` 按名称修改部分 token，`reset_tokens(names)` 再把它们恢复；应用的
+[主题文档](../docs/rust.md#主题文档与类型化键)会取代默认主题。
 
 <a id="theme-roles"></a>
 
@@ -319,7 +318,7 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 | `font-mono` | `theme().font_mono` |
 
 `selection`、`success`、`warning`、`info`、`highlight`、`diff-added`、`diff-deleted` 和各 `syntax-*` 角色在默认主题中没有 token：在主题拥有同名 token（`cssVars` 中的
-`"warning": "#b45309"`）或把该角色映射到自己的某个 token（主题类型的 `role = …`，或主题文件的 `"roles": { "warning": "caution" }`）之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
+`"warning": "#b45309"`）或把该角色映射到自己的某个 token（主题文档或主题文件的 `"roles": { "warning": "caution" }`）之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
 
 角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，角色是一个常量，类型为
 `nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`，`role::RADIUS`
@@ -329,7 +328,7 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
 各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
 
-已注册的[主题类型](../docs/rust.md#主题类型)把角色映射到自己的 token 上（`TokenSpec::role`），`theme()` 的字段随之读取这些 token：
+已注册的[主题文档](../docs/rust.md#主题文档与类型化键)把角色映射到自己的 token 上（它的 `"roles"`），`theme()` 的字段随之读取这些 token：
 设计系统把 `role::POPOVER` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件
 都以该设计系统绘制。
 

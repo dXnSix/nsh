@@ -13,8 +13,8 @@
   frames, the web APIs and the control flow components `If` / `Each`), and from the bundler `nsh/assets.d.ts` (what
   image and font imports give) and `nsh/tokens.d.ts` (`nsh_bundler::tokens_declaration_of`: `interface Tokens` of
   `nsh`, every design token of the app's theme, `nsh.json` `"theme"` over the default, by name with its type, which
-  types `token()`; under the app's theme types their names, typed by kind with their docs (`components.md` "Theme
-  types"); a theme that does not parse gives the default's names, and the build reports it) and `nsh/roles.d.ts`
+  types `token()`, with `interface TokenKinds`, each token's kind, which types `tokens.get`; under the tokens the app's theme documents or theme file declare their names, typed by kind with
+  their docs (`components.md` "Theme documents and typed keys"); a theme that does not parse gives the default's names, and the build reports it), `nsh/modifiers.d.ts` (`nsh_bundler::modifiers_declaration`: `interface ThemeModifiers` of `nsh`, the theme's modifiers each with the union of its contexts) and `nsh/roles.d.ts`
   (`nsh_bundler::roles_declaration`: `interface Roles` of `nsh`, the roles the UI sets list and the core's own,
   `description::roles`, by name with what each reads and its doc, which types `role()`). Each file declares its own names; the `import type` lines between them are worked out
   from the names each uses. Next to them nsh writes `.nsh/tsconfig.json` (`nsh_bundler::TSCONFIG_BASE`): the
@@ -983,9 +983,8 @@ program that describes them, builds the hosts and runners with them, and does ev
     `nsh_core::element::description::Description` (format `FORMAT`, the nsh-core version that wrote it, then per crate in
     `"rust"`'s order its specifier, exports with their kinds, TypeScript declarations, re-exported runtime values and
     types, the values nsh-js makes for it, the files it ships, the exports TS sees without a doc comment, which
-    `nsh` warns of as it writes `.nsh/types`, and the theme types it registers, `themes`: each type's tokens with
-    their kinds, docs and roles and its defaults as a theme file, which the bundler and `nsh` read with
-    `description::theme_types`; and the roles it lists, `roles` (`Registry::roles`: name, kind and doc of every role
+    `nsh` warns of as it writes `.nsh/types`, and the theme documents it registers, `theme_documents`, as written,
+    which the bundler and `nsh` read with `description::declarations`; and the roles it lists, `roles` (`Registry::roles`: name, kind and doc of every role
     its components draw with, mapped or not), which `description::roles` merges with the core's own);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);

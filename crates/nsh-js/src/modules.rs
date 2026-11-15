@@ -119,6 +119,10 @@ const NSH: &[Item] = &[
     crate::env::SET_THEME_EXPORT,
     crate::env::UPDATE_THEME_EXPORT,
     crate::env::RESET_THEME_EXPORT,
+    crate::env::TOKENS_EXPORT,
+    crate::env::SET_MODIFIER_EXPORT,
+    crate::env::MODIFIER_EXPORT,
+    crate::env::MODIFIERS_EXPORT,
     crate::env::APP_INFO_EXPORT,
     (
         "signal",
@@ -380,15 +384,114 @@ export interface Roles {}
  * appearances, `light`'s in the light one and in the dark one where `dark`
  * leaves them out, `dark`'s in the dark one. `roles` maps theme roles onto
  * its tokens by name (`{ popover: "surface" }`): what draws with the role
- * draws with that token, and follows it.
+ * draws with that token, and follows it. `tokens` declares its tokens
+ * (`{ "radius-card": { kind: "radius" } }`): the theme is then read by them,
+ * and replaces the default theme.
  */
 export interface Theme {
   cssVars: {
-    theme?: Record<string, string | number>;
-    light?: Record<string, string | number>;
-    dark?: Record<string, string | number>;
+    theme?: Record<string, string | number | boolean>;
+    light?: Record<string, string | number | boolean>;
+    dark?: Record<string, string | number | boolean>;
   };
   roles?: Record<string, string>;
+  tokens?: Record<string, TokenDeclaration>;
+  modifiers?: Record<string, { default: string; contexts: Record<string, Partial<Theme["cssVars"]>> }>;
+}
+
+/**
+ * A change of the app's theme (`updateTheme`): any part of a theme; a
+ * modifier it names takes the contexts' values it gives, the contexts it
+ * adds and the `default` it names.
+ */
+export interface ThemeChange {
+  cssVars?: Theme["cssVars"];
+  roles?: Theme["roles"];
+  tokens?: Theme["tokens"];
+  modifiers?: Record<string, { default?: string; contexts?: Record<string, Partial<Theme["cssVars"]>> }>;
+}
+
+/**
+* The contexts of each theme modifier, by its name (`{ brand: "ocean" |
+ * "forest" }`): nsh writes them per app into `.nsh/types/nsh/modifiers.d.ts`
+ * from its theme.
+ */
+export interface ThemeModifiers {}
+
+/** A token's kind: the one declared for it, else the kind it is kept as. */
+export type TokenKind =
+  | "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur"
+  | "font" | "shadow" | "gradient" | "string" | "boolean" | "duration" | "easing" | "typography";
+
+/** A text style's value (`typography`): its size and the parts it has. */
+export interface TypographyValue {
+  size: number;
+  lineHeight?: number;
+  letterSpacing?: number;
+  fontWeight?: number;
+}
+
+/** What a token of kind `K` holds in an appearance. */
+export type TokenKindValue<K extends TokenKind> =
+  K extends "typography" ? TypographyValue
+  : K extends "boolean" ? boolean
+  : K extends "color" | "font" | "shadow" | "gradient" | "string" | "easing" ? string
+  : number;
+
+/**
+ * A token as `tokens.get` gives it: its kind and its value in each
+ * appearance (a color as `#rrggbbaa`, a number in points, a duration in
+ * milliseconds, a font family, shadows, gradients and an easing as CSS, a
+ * string, a boolean, a text style's size and parts).
+ */
+export interface TokenValue<K extends TokenKind = TokenKind> {
+  kind: K;
+  light: TokenKindValue<K>;
+  dark: TokenKindValue<K>;
+}
+
+/** A token as `tokens.entries` lists it. */
+export interface TokenInfo {
+  name: string;
+  kind: TokenKind;
+  /** Its place in the designer's tree, when it is declared with one. */
+  path?: string;
+  doc?: string;
+  /** Who declares it, when it is declared. */
+  owner?: string;
+}
+
+/**
+ * The kind of each of the app's tokens, by name: nsh writes them per app
+ * into `.nsh/types/nsh/tokens.d.ts` beside `Tokens`.
+ */
+export interface TokenKinds {}
+
+/** The token dictionary (`tokens`). */
+export interface TokenDictionary {
+  /** Token `name` with its kind and its value in each appearance; `undefined` when there is none. */
+  get<N extends keyof TokenKinds>(name: N): TokenValue<TokenKinds[N] & TokenKind>;
+  get(name: string): TokenValue | undefined;
+  /** The kind of token `name`. */
+  kind(name: string): TokenKind | undefined;
+  /** Every token's name, sorted; of `kind`, with `prefix`, when given. */
+  names(filter?: { kind?: TokenKind; prefix?: string }): string[];
+  /** Every token, sorted by name, with its kind and what declares it. */
+  entries(): TokenInfo[];
+}
+
+/** A theme modifier as `modifiers()` lists it. */
+export interface ModifierAxis {
+  name: string;
+  contexts: string[];
+  default: string;
+}
+
+/** A token a theme declares (its `tokens`): what it holds, its place in the designer's tree and its doc. A theme that declares its tokens is read by them. */
+export interface TokenDeclaration {
+  kind: "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow" | "gradient";
+  path?: string;
+  doc?: string;
 }
 
 /** The app as it was built (`appInfo()`). */

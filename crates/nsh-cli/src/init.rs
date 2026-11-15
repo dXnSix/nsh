@@ -361,7 +361,11 @@ pub(crate) fn write_types(dir: &Path) {
         .unwrap_or_else(|_| nsh_base::Theme::default().into_tokens());
     definitions.push((
         "nsh/tokens.d.ts".to_owned(),
-        nsh_bundler::tokens_declaration_of(&tokens, &sets),
+        nsh_bundler::tokens_declaration(&tokens),
+    ));
+    definitions.push((
+        "nsh/modifiers.d.ts".to_owned(),
+        nsh_bundler::modifiers_declaration(&tokens),
     ));
     // The roles the sets list, for `role()`; a role two sets list with two
     // kinds is the build's to report, and names none meanwhile.

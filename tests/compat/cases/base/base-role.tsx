@@ -1,6 +1,6 @@
 // A case of the API's test suite (docs/dev/compatibility.md): `role()`
 // gives what a theme role draws with, as `token()` gives a token. This app
-// has no theme type, so a role is the token of its name: shadcn's `popover`
+// declares no tokens, so a role is the token of its name: shadcn's `popover`
 // in each appearance, and nothing for `warning` until the theme has a token
 // of that name; a theme's `roles` maps a role onto a token of another name,
 // which a class reads as a variable (`bg-(--success)`: no class until the

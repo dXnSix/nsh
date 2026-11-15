@@ -1,0 +1,35 @@
+{
+  "cssVars": {
+    "light": { "colors-backgrounds-primary": "#ffffff", "ink": "#101010" },
+    "dark": { "colors-backgrounds-primary": "#0b0b0f", "ink": "#f0f0f0" },
+    "theme": {
+      "radius-card": "12px",
+      "spacing-gutter": "16px",
+      "font-weight-strong": 650,
+      "font-body": "Inter",
+      "shadow-raised": "0 1px 2px #0000001a"
+    }
+  },
+  "tokens": {
+    "colors-backgrounds-primary": { "kind": "color", "path": "colors.backgrounds.primary", "doc": "The page's background." },
+    "ink": { "kind": "color" },
+    "radius-card": { "kind": "radius", "path": "radius.card" },
+    "spacing-gutter": { "kind": "spacing", "path": "type-scale.gutter" },
+    "font-weight-strong": { "kind": "weight", "path": "type.strong" },
+    "font-body": { "kind": "font", "path": "type.body.family" },
+    "shadow-raised": { "kind": "shadow", "path": "effects.2xl.raised" }
+  },
+  "modifiers": {
+    "brand": {
+      "default": "ocean",
+      "contexts": {
+        "ocean": {},
+        "forest": { "light": { "ink": "#16a34a" }, "dark": { "ink": "#4ade80" } }
+      }
+    },
+    "high-contrast": {
+      "default": "off",
+      "contexts": { "off": {}, "on": { "light": { "ink": "#000000" }, "dark": { "ink": "#ffffff" } } }
+    }
+  }
+}

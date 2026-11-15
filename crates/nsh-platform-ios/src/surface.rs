@@ -868,7 +868,7 @@ impl RootView {
         let fonts = self.ivars().fonts.borrow().clone();
         let engine = match Engine::start_with(config, CoreTextEngine::default, sink, |control| {
             match theme {
-                Some(HostTheme::Tokens(tokens)) => control.set_tokens(Some(tokens)),
+                Some(HostTheme::Tokens(tokens)) => control.set_tokens(Some(*tokens)),
                 Some(HostTheme::File(json)) => control.set_theme_overrides(json),
                 None => {}
             }
@@ -1133,7 +1133,8 @@ impl Surface {
     /// app's own again): sent to the running app at once, and to every app
     /// started later before its first frame.
     pub fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
-        *self.view.ivars().host_theme.borrow_mut() = tokens.clone().map(HostTheme::Tokens);
+        *self.view.ivars().host_theme.borrow_mut() =
+            tokens.clone().map(|t| HostTheme::Tokens(Box::new(t)));
         if let Some(running) = &*self.view.ivars().running.borrow() {
             running.engine.control().set_tokens(tokens);
         }
@@ -1338,6 +1339,7 @@ fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
 /// file the engine reads ([`Surface::set_host_theme`]).
 #[derive(Clone)]
 enum HostTheme {
-    Tokens(nsh_engine::Tokens),
+    /// Boxed: tokens are large beside a file's text.
+    Tokens(Box<nsh_engine::Tokens>),
     File(String),
 }

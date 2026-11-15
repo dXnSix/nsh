@@ -437,31 +437,11 @@ impl ModuleCx {
         ));
     }
 
-    /// Draws the app with theme `theme`, as [`crate::element::set_theme`].
-    pub fn set_theme<T: crate::element::AppTheme>(&mut self, theme: T) {
-        self.actions.push(Action::SetTheme {
-            tokens: crate::element::theme::theme_tokens(&theme),
-            played: crate::element::theme::played::<T>(),
-            dark: None,
-        });
-    }
-
-    /// Changes the fields of `T` that `patch` sets, as
-    /// [`crate::element::update_theme`].
-    pub fn update_theme<T: crate::element::AppTheme>(&mut self, patch: T::Patch) {
-        self.actions.push(Action::UpdateTheme {
-            tokens: crate::element::theme::patch_tokens::<T>(&patch),
-            played: crate::element::theme::played::<T>(),
-        });
-    }
-
-    /// Puts `T`'s tokens back to the app's theme's, as
-    /// [`crate::element::reset_theme`].
-    pub fn reset_theme<T: crate::element::AppTheme>(&mut self) {
-        self.actions.push(Action::ResetTheme {
-            names: crate::element::theme::names::<T>(),
-            played: crate::element::theme::played::<T>(),
-        });
+    /// Gives a theme modifier another context, as
+    /// [`crate::element::set_modifier`] does.
+    pub fn set_modifier(&mut self, name: &str, context: &str) {
+        self.actions
+            .push(Action::SetModifier(name.into(), context.into()));
     }
 
     /// Shows the app in `locale` whatever the user's language (`None`: the

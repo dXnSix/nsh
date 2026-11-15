@@ -891,13 +891,14 @@ pub struct Registry {
     tokens: Option<super::TokenSource>,
     /// Reads the tokens a theme file sets ([`Registry::token_overrides_from`]).
     overrides: Option<super::TokenOverrides>,
-    /// The theme types its sets register ([`Registry::theme`]).
-    themes: Arc<Vec<super::ThemeSpec>>,
+    /// The theme documents its sets register ([`Registry::theme_document`]):
+    /// each one's owner and text.
+    theme_documents: Arc<Vec<(&'static str, &'static str)>>,
     /// The roles its components draw with ([`Registry::roles`]).
     roles: Arc<Vec<super::RoleSpec>>,
-    /// One theme of those types, which replaces [`Self::tokens`] as the
-    /// token source (`None`: no type).
-    theme_set: Option<Arc<super::theme::ThemeSet>>,
+    /// The tokens those documents declare, which replace [`Self::tokens`]
+    /// as the token source (`None`: no document).
+    declarations: Option<Arc<super::Declarations>>,
     /// Makes the views' built-in scroll bars ([`Registry::scrollbars_from`]).
     scrollbars: Option<ScrollbarSource>,
     /// The UI sets served under paths of this one's specifier
@@ -1228,9 +1229,9 @@ impl Registry {
                 out.tokens = set.tokens;
                 out.overrides = set.overrides;
             }
-            for theme in set.themes.iter() {
-                if !out.themes.iter().any(|t| t.type_id() == theme.type_id()) {
-                    Arc::make_mut(&mut out.themes).push(theme.clone());
+            for document in set.theme_documents.iter() {
+                if !out.theme_documents.contains(document) {
+                    Arc::make_mut(&mut out.theme_documents).push(*document);
                 }
             }
             for role in set.roles.iter() {
@@ -1245,10 +1246,11 @@ impl Registry {
                 }
             }
         }
-        // The types of every set make one theme; two declaring one name or
-        // mapping one role panic, as two components of one name do.
-        out.theme_set =
-            (!out.themes.is_empty()).then(|| Arc::new(super::theme::ThemeSet::new(&out.themes)));
+        // The documents of every set make one set of declared tokens; two
+        // declaring one name or mapping one role panic, as two components of
+        // one name do.
+        out.declarations = declarations_of(&out.theme_documents);
+        out.check_role_kinds();
         out
     }
 
@@ -1405,12 +1407,14 @@ impl Registry {
         self.token_provider().map(|provider| provider.read(json))
     }
 
-    /// How theme files are read: with the registered theme types
-    /// ([`Registry::theme`]), which win, else with the set's functions
-    /// ([`Registry::tokens_from`], [`Registry::token_overrides_from`]).
+    /// How theme files are read: by the tokens the registered theme
+    /// documents declare ([`Registry::theme_document`]), which win, else
+    /// with the set's functions ([`Registry::tokens_from`],
+    /// [`Registry::token_overrides_from`]), which read a theme file that
+    /// declares its own tokens by them.
     pub(crate) fn token_provider(&self) -> Option<super::theme::TokenProvider> {
-        if let Some(set) = &self.theme_set {
-            return Some(super::theme::TokenProvider::Themes(set.clone()));
+        if let Some(set) = &self.declarations {
+            return Some(super::theme::TokenProvider::Declared(set.clone()));
         }
         self.tokens.map(|read| super::theme::TokenProvider::Source {
             read,
@@ -1418,28 +1422,51 @@ impl Registry {
         })
     }
 
-    /// Registers theme type `T`: its tokens join the app's theme, which then
-    /// replaces the default source ([`Registry::tokens_from`], `nsh-base`'s
-    /// shadcn theme). Several sets may each register types; a token name
-    /// or a role two types claim panics when the sets are merged.
+    /// Registers the set's theme document `json` (`include_str!` of it): a
+    /// theme file whose `"tokens"` section declares each token's kind, path
+    /// and doc, whose values are their defaults and whose `"roles"` map the
+    /// roles NSH's own parts draw with onto them
+    /// ([`super::theme`](super::theme)). Its tokens join the app's theme,
+    /// which then replaces the default source ([`Registry::tokens_from`],
+    /// `nsh-base`'s shadcn theme). Several sets may each register one.
+    ///
+    /// # Panics
+    ///
+    /// When the document is no theme document or says what it cannot (a
+    /// kind there is not, a value of another kind than its token's, a name
+    /// it does not declare), or when it declares a name or maps a role
+    /// another set's document has (which panics when the sets are merged).
     #[track_caller]
-    pub fn theme<T: super::AppTheme>(&mut self) -> &mut Self {
-        let spec = super::ThemeSpec::of::<T>();
-        if !self.themes.iter().any(|t| t.type_id() == spec.type_id()) {
-            Arc::make_mut(&mut self.themes).push(spec);
+    pub fn theme_document(&mut self, json: &'static str) -> &mut Self {
+        let document = (self.ui_set.unwrap_or("the app's set"), json);
+        if !self.theme_documents.contains(&document) {
+            Arc::make_mut(&mut self.theme_documents).push(document);
         }
-        self.theme_set = Some(Arc::new(super::theme::ThemeSet::new(&self.themes)));
+        self.declarations = declarations_of(&self.theme_documents);
+        self.check_role_kinds();
         self
     }
 
-    /// Whether its sets register theme types ([`Registry::theme`]).
-    pub(crate) fn has_theme_types(&self) -> bool {
-        self.theme_set.is_some()
+    /// Panics when a document maps a role onto a token of another kind than
+    /// the role reads.
+    #[track_caller]
+    fn check_role_kinds(&self) {
+        if let Some(declarations) = &self.declarations
+            && let Err(e) = declarations.check_roles(&self.roles)
+        {
+            panic!("{e}");
+        }
     }
 
-    /// The theme types registered ([`Registry::theme`]), as data.
-    pub fn theme_specs(&self) -> &[super::ThemeSpec] {
-        &self.themes
+    /// Whether its sets register theme documents ([`Registry::theme_document`]).
+    pub(crate) fn has_declarations(&self) -> bool {
+        self.declarations.is_some()
+    }
+
+    /// The theme documents registered ([`Registry::theme_document`]): each
+    /// one's owner and text.
+    pub fn theme_documents(&self) -> &[(&'static str, &'static str)] {
+        &self.theme_documents
     }
 
     /// Lists the roles the set's components draw with, mapped by a theme
@@ -2486,4 +2513,25 @@ mod root_tests {
         let root = Root::of::<Empty>().capabilities_json("not json");
         assert_eq!(root.capabilities_ref(), Some(&Capabilities::default()));
     }
+}
+
+/// The tokens `documents` (each one's owner and text) declare, merged
+/// (`None`: no document).
+///
+/// # Panics
+///
+/// When a document is no theme document, says what it cannot, or declares
+/// a name or maps a role another has.
+#[track_caller]
+fn declarations_of(documents: &[(&'static str, &'static str)]) -> Option<Arc<super::Declarations>> {
+    if documents.is_empty() {
+        return None;
+    }
+    let mut set = super::Declarations::default();
+    for (owner, json) in documents {
+        if let Err(e) = set.add_document(owner, json) {
+            panic!("{e}");
+        }
+    }
+    Some(Arc::new(set))
 }

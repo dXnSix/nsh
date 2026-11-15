@@ -178,3 +178,88 @@ fn a_name_past_the_bound_still_follows_its_token() {
         ["late #123456ff", "late #00ff00ff"]
     );
 }
+
+/// 1 200 readers of a theme's 1 200 colors, and 1 100 readers of names no
+/// theme has, each counting its runs.
+const MANY: &str = r##"import { mount, signal, Text, token, updateTheme, View } from "nsh";
+
+let runs = 0;
+let made_up = 0;
+const status = signal("start");
+setTimeout(() => {
+  updateTheme({ cssVars: { light: { "c-0": "#abcdef" } } });
+  status.set("step 1");
+}, 100);
+setTimeout(() => {
+  // A name made up past the signals' limit, which the theme gains.
+  updateTheme({ cssVars: { light: { "made-1099": "#123123" } } });
+  status.set("step 2");
+}, 200);
+setTimeout(() => status.set("done"), 300);
+
+const theme = Array.from({ length: 1200 }, (_, i) => i);
+const madeUp = Array.from({ length: 1100 }, (_, i) => i);
+
+mount(() => (
+  <View>
+    {theme.map((i) => <Text>{`c-${i} ${token(`c-${i}` as never)} ${++runs}`}</Text>)}
+    {madeUp.map((i) => <Text>{`made-${i} ${token(`made-${i}` as never)} ${++made_up}`}</Text>)}
+    <Text>{`runs ${status()} ${runs} ${made_up}`}</Text>
+    <Text>{status()}</Text>
+  </View>
+));
+"##;
+
+/// A theme of more than 1 024 names gives each name read a signal of its
+/// own: a change of one token runs its reader alone. Names no theme has get
+/// one up to the limit; past it they follow every change, and one the
+/// theme gains reaches its reader.
+#[test]
+fn a_large_themes_names_each_keep_a_signal() {
+    let mut light = serde_json::Map::new();
+    for i in 0..1200 {
+        light.insert(format!("c-{i}"), format!("#{:06x}", 0x100000 + i).into());
+    }
+    let config = serde_json::json!({ "theme": { "cssVars": { "light": light } } }).to_string();
+    let (_engine, rx) =
+        crate::components::start_with(MANY, Environment::default(), None, Some(&config));
+    let batches = crate::components::until(&rx, |b| crate::components::shows(b, "done"));
+    let step = |s: &str| {
+        let at = batches
+            .iter()
+            .position(|b| crate::components::shows(b, s))
+            .unwrap();
+        batches[at]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                MountItem::Text { text, .. } => Some(text.text.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // One token changed: its reader ran, no other theme reader did; the
+    // made-up names past the limit ran, as they follow every change.
+    let one = step("step 1");
+    assert!(one.iter().any(|t| t == "c-0 #abcdefff 1201"), "{one:?}");
+    assert_eq!(
+        one.iter().filter(|t| t.starts_with("c-")).count(),
+        1,
+        "{one:?}"
+    );
+    assert!(
+        one.iter().any(|t| t.starts_with("runs step 1 1201 ")),
+        "{one:?}"
+    );
+    // The made-up name the theme gained reaches its reader.
+    let gained = step("step 2");
+    assert!(
+        gained.iter().any(|t| t.starts_with("made-1099 #123123ff ")),
+        "{gained:?}"
+    );
+    assert_eq!(
+        gained.iter().filter(|t| t.starts_with("c-")).count(),
+        0,
+        "{gained:?}"
+    );
+}

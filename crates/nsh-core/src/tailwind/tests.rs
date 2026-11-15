@@ -910,6 +910,75 @@ fn transitions_and_animations() {
     assert_eq!(s.view.animation.unwrap().keyframes, Keyframes::Spin);
 }
 
+/// Duration, easing and typography tokens make classes: `duration-fast`
+/// and `delay-fast` of `duration-fast`, `ease-snappy` of `ease-snappy`,
+/// and `text-title` sets the size with its parts.
+#[test]
+fn duration_easing_and_typography_tokens_make_classes() {
+    let mut tokens = ui_theme();
+    tokens.set_number("duration-fast", 120.0);
+    tokens.set_easing(
+        "ease-snappy",
+        crate::element::CubicBezier([0.2, 0.0, 0.0, 1.0]),
+    );
+    tokens.set_typography(
+        "text-title",
+        crate::element::Typography {
+            size: crate::geometry::Points(24.0),
+            line_height: Some(1.25),
+            letter_spacing: Some(crate::geometry::Points(-0.5)),
+            font_weight: Some(650.0),
+        },
+    );
+    let mut theme = Theme::default();
+    theme.set_tokens(&tokens);
+    let style = |theme: &Theme, classes: &str| {
+        let list = parse(theme, classes);
+        assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+        let mut style = Style::default();
+        let mut props = ClassProps::default();
+        let group = |_: &str| 0;
+        let context = Context {
+            env: ClassEnvironment::default(),
+            window: crate::geometry::size_pt(390.0, 844.0),
+            rtl: false,
+            states: 0,
+            position: 0,
+            group: &group,
+        };
+        list.apply(&context, theme, &mut style, &mut props, |_| {});
+        (style, list)
+    };
+    let (s, list) = style(
+        &theme,
+        "transition-colors duration-fast delay-fast ease-snappy",
+    );
+    let t = s.view.transition.unwrap();
+    assert_eq!(t.duration, 120.0);
+    assert_eq!(t.delay, 120.0);
+    assert_eq!(t.easing, [0.2, 0.0, 0.0, 1.0]);
+    assert!(list.reads_token("duration-fast") && list.reads_token("ease-snappy"));
+    let (s, list) = style(&theme, "text-title");
+    assert_eq!(s.text.font_size, Some(px(24.0)));
+    assert_eq!(s.text.font_weight, Some(650));
+    assert_eq!(s.text.line_height_multiple, Some(1.25));
+    assert_eq!(s.text.letter_spacing, Some(px(-0.5)));
+    for part in [
+        "text-title",
+        "text-title--line-height",
+        "text-title--letter-spacing",
+        "text-title--font-weight",
+    ] {
+        assert!(list.reads_token(part), "{part}");
+    }
+    // A size token without parts sets the size alone.
+    tokens.set_number("text-caption", 11.0);
+    theme.set_tokens(&tokens);
+    let (s, _) = style(&theme, "text-caption");
+    assert_eq!(s.text.font_size, Some(px(11.0)));
+    assert_eq!(s.text.font_weight, None);
+}
+
 #[test]
 fn display() {
     // As in CSS, a flex container is a row unless a direction utility says

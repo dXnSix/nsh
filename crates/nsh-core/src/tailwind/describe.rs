@@ -21,6 +21,11 @@ pub struct ClassInfo {
     /// It names theme tokens (`bg-primary`): its value follows the theme
     /// and the appearance.
     pub reads_theme: bool,
+    /// The design tokens it reads, by name, sorted: `bg-primary` reads
+    /// `primary`, `rounded-card` `radius-card`, a role's variable
+    /// (`bg-(--popover)`) the token the role is mapped onto. What an editor
+    /// shows as a class's tokens, and what a change of them restyles.
+    pub tokens: Vec<String>,
 }
 
 /// One thing a class sets.
@@ -52,7 +57,8 @@ pub fn describe(theme: &Theme, token: &str) -> Option<ClassInfo> {
         utility = u;
         important = true;
     }
-    let (targets, reads_theme) = match parse_token(theme, token, &mut Vec::new())? {
+    let mut read = Vec::new();
+    let (targets, reads_theme) = match parse_token(theme, token, &mut read)? {
         Token::Rule(rule) => (targets(&rule.decls), false),
         Token::Themed(rule, dark) => {
             let mut t = targets(&rule.decls);
@@ -65,12 +71,22 @@ pub fn describe(theme: &Theme, token: &str) -> Option<ClassInfo> {
         }
         Token::Group(_) | Token::Ignored => (Vec::new(), false),
     };
+    // The class keeps the tokens it reads by key; the theme has their names.
+    let mut tokens: Vec<String> = theme
+        .tokens()
+        .names()
+        .filter(|name| read.contains(&super::theme::token_key(name)))
+        .map(str::to_owned)
+        .collect();
+    tokens.sort_unstable();
+    tokens.dedup();
     Some(ClassInfo {
         variants: variants.iter().map(|v| (*v).to_owned()).collect(),
         utility: utility.to_owned(),
         important,
         targets,
         reads_theme,
+        tokens,
     })
 }
 
@@ -173,6 +189,38 @@ mod describe_tests {
         assert!(primary.reads_theme);
         assert_eq!(primary.targets, [ClassTarget::Style(K::BackgroundColor)]);
         assert!(!describe(&theme, "bg-red-500").unwrap().reads_theme);
+    }
+
+    /// The tokens a class reads, by name: by its utility, by a variable,
+    /// through a role; none for a class of no token.
+    #[test]
+    fn the_tokens_a_class_reads_by_name() {
+        use crate::element::{AdaptiveColor, AnyRole, RoleKind, Tokens};
+        let mut tokens = Tokens::default();
+        tokens.set_color("primary", AdaptiveColor::rgb(0x111111, 0xeeeeee));
+        tokens.set_color("surface", AdaptiveColor::rgb(0xffffff, 0x000000));
+        tokens.set_number("radius-card", 12.0);
+        tokens.set_shadow(
+            "shadow-raised",
+            crate::element::AdaptiveShadow::new(
+                [crate::BoxShadow::default()],
+                [crate::BoxShadow::default()],
+            ),
+        );
+        let tokens = tokens.with_roles([(
+            AnyRole::new("popover", RoleKind::Color),
+            "surface".to_owned(),
+        )]);
+        let mut theme = Theme::default();
+        theme.set_tokens(&tokens);
+        let read = |class: &str| describe(&theme, class).unwrap().tokens;
+        assert_eq!(read("bg-primary"), ["primary"]);
+        assert_eq!(read("md:hover:rounded-card"), ["radius-card"]);
+        assert_eq!(read("border-x-primary/50"), ["primary"]);
+        assert_eq!(read("shadow-raised"), ["shadow-raised"]);
+        assert_eq!(read("bg-(--popover)"), ["surface"]);
+        assert!(read("p-4").is_empty());
+        assert!(read("bg-red-500").is_empty());
     }
 
     #[test]

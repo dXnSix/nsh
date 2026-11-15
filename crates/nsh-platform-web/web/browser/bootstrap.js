@@ -5481,6 +5481,11 @@
 				named ?? null
 			]);
 		};
+		const readDictionary = (op, arg) => {
+			const around = scoped && scope(), named = around ? around.tokens() : void 0;
+			if (named === void 0) tokens();
+			return JSON.parse(invoke(op, [arg, named ?? null]));
+		};
 		const setColorScheme = (scheme) => {
 			if (![
 				"light",
@@ -5535,6 +5540,24 @@
 				resetTheme(names) {
 					invoke(410, [names]);
 					tokens.update((value) => value + 1);
+				},
+				tokens: {
+					get: (name) => readDictionary(418, name) ?? void 0,
+					kind: (name) => readDictionary(419, name) ?? void 0,
+					names: (filter) => readDictionary(420, filter ?? null),
+					entries: () => readDictionary(421, null)
+				},
+				setModifier(name, context) {
+					invoke(415, [name, context]);
+					tokens.update((value) => value + 1);
+				},
+				modifier(name) {
+					tokens();
+					return invoke(416, [name]);
+				},
+				modifiers() {
+					tokens();
+					return JSON.parse(invoke(417, []));
 				}
 			},
 			insets,
@@ -5550,16 +5573,18 @@
 				const slot = invoke(412, []);
 				reactive.cleanup(() => invoke(413, [slot, true]));
 				const draws = reactive.computed(() => {
-					const theme = props.theme, around = outer ? outer.tokens() : void 0;
-					if (theme === null || typeof theme !== "object") {
+					const theme = props.theme, modifiers = props.modifiers, around = outer ? outer.tokens() : void 0;
+					const object = (value) => value !== null && typeof value === "object";
+					if (!object(theme) && !object(modifiers)) {
 						invoke(413, [slot, false]);
 						return around;
 					}
 					if (around === void 0) tokens();
 					return invoke(411, [
 						slot,
-						theme,
-						around ?? null
+						object(theme) ? theme : null,
+						around ?? null,
+						object(modifiers) ? modifiers : null
 					]);
 				});
 				return scope.Provider({

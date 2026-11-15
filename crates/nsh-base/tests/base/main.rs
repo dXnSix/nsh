@@ -2,7 +2,6 @@
 //! what a user does with them and what the app hears and shows.
 
 mod accordion;
-mod app_theme;
 mod avatar;
 mod button;
 mod calendar;
@@ -61,9 +60,8 @@ mod term_cells;
 mod term_input;
 mod terminal;
 mod text_view;
+mod theme_documents;
 mod theme_roles;
-mod theme_set_numbers;
-mod theme_set_roles;
 mod time_field;
 mod toggle;
 mod token_roles;

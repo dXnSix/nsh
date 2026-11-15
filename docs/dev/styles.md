@@ -339,8 +339,10 @@
 
 `nsh_core::tailwind::describe(theme, token)` says what one class token does, parsed exactly as a node's classes
 are (`tailwind/describe.rs`): its variants, its utility, whether it is important, and its `ClassTarget`s, the style
-keys, parts (a shadow's, a ring's, a gradient stop's) and node props (`noWrap`, `spaceX`, ...) it sets, and whether it
-reads the theme's tokens; `None` for a token the parser rejects. Tools use it to show what a class does and to know
+keys, parts (a shadow's, a ring's, a gradient stop's) and node props (`noWrap`, `spaceX`, ...) it sets, whether it
+reads the theme's tokens, and which, by name (`tokens`: `bg-primary` reads `primary`, `rounded-card` `radius-card`, a
+role's variable the token the role is mapped onto; a class keeps them by key, and the theme's names map them back);
+`None` for a token the parser rejects. Tools use it to show what a class does and to know
 which classes of a node a change replaces. A test walks the utilities table (`utilities.rs`' keywords and prefixes)
 and fails when a utility the parser accepts is not described.
 

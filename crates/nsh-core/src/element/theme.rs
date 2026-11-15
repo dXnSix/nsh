@@ -1,413 +1,37 @@
-//! Theme types: an app's or a design system's own design tokens as a Rust
-//! type ([`AppTheme`]), registered by its UI set ([`super::Registry::theme`])
-//! and read where it draws ([`theme_of`]). Several sets may each register
-//! types; their token names merge into one theme, which replaces the default
-//! token source (`nsh-base`'s shadcn theme). A type maps [`Role`]s, what
-//! NSH's own parts draw with, onto its tokens, so `nsh-base`'s components,
-//! the platforms' menus and alerts draw in it.
+//! Declared tokens: what theme documents say their tokens are. A theme
+//! document is a theme file (`cssVars`, the values) with a `tokens` section
+//! that declares each token's kind, its path in the designer's tree and its
+//! doc, and a `roles` section that maps the roles NSH's own parts draw with
+//! onto its tokens:
 //!
-//! The tokens stay flat and by name, as every theme's are: classes name them
-//! (`bg-surface-raised`, `rounded-card`), TS reads them with `token()`, the
-//! app's theme file (`nsh.json` `"theme"`) sets them by name, and a type is a
-//! typed view of its names, read once per change of the tokens.
+//! ```json
+//! {
+//!   "cssVars": { "theme": { "radius-card": "12px" }, "light": { "surface": "#fff" } },
+//!   "tokens": {
+//!     "surface": { "kind": "color", "path": "colors.surface", "doc": "Cards and popovers." },
+//!     "radius-card": { "kind": "radius", "path": "radius.card" }
+//!   },
+//!   "roles": { "popover": "surface" }
+//! }
+//! ```
+//!
+//! A UI set ships its tokens as a document ([`super::Registry::theme_document`]),
+//! and an app's own theme file (`nsh.json`'s `"theme"`, TS's `setTheme`)
+//! may declare tokens too. Declared tokens replace the default token source
+//! (`nsh-base`'s shadcn theme), and a theme file is read by them
+//! ([`Declarations`]): a name no document declares is left out, a value is
+//! read as its token's kind.
+//!
+//! The tokens stay flat and by name: classes name them (`bg-surface`,
+//! `rounded-card`), TS reads them with `token()`, Rust with
+//! [`super::token`] or through typed keys ([`super::TokenKey`], which
+//! `theme_keys!` makes of a document).
 
-use std::{
-    any::{Any, TypeId},
-    borrow::Cow,
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use rustc_hash::FxHashMap;
 
-use super::{AnyRole, Role, RoleKind, RoleValue, Tokens};
-
-/// A theme type: design tokens as the fields of a Rust type. Its token
-/// names are [`AppTheme::token_specs`]'; a field of a nested type is that
-/// type's names under a prefix, after their kind's namespace
-/// ([`TokenKind::prefixed`]: `surface-` with `raised` is `surface-raised`,
-/// with `shadow-raised` `shadow-surface-raised`).
-/// `#[derive(AppTheme)]` writes it of a struct's fields; written by hand,
-/// its four methods agree on the names.
-///
-/// ```
-/// use nsh_core::{
-///     element::{AdaptiveColor, AppTheme, role},
-///     geometry::Points,
-/// };
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     /// Popovers and menus.
-///     #[token(color, role = role::POPOVER)]
-///     overlay: AdaptiveColor,
-///     #[token(radius)]
-///     card: Points,
-/// }
-///
-/// let names: Vec<_> = Ds::token_specs()
-///     .iter()
-///     .map(|s| s.name.to_string())
-///     .collect();
-/// assert_eq!(names, ["overlay", "radius-card"]);
-/// ```
-///
-/// A role is a constant of the crate that draws with it, named by its
-/// path: the core's ([`super::role`]), a UI set's (`nsh_base::role`), or a
-/// component library's own. A token plays several roles with a `role` for
-/// each: one surface for cards and popovers.
-///
-/// ```
-/// use nsh_core::element::{AdaptiveColor, AppTheme, Role, role};
-///
-/// /// What a library's cards draw on.
-/// const CARD: Role = Role::new("card");
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Flat {
-///     #[token(color, role = CARD, role = role::POPOVER)]
-///     surface: AdaptiveColor,
-/// }
-///
-/// let roles: Vec<_> = Flat::token_specs()[0]
-///     .roles
-///     .iter()
-///     .map(|r| r.name())
-///     .collect();
-/// assert_eq!(roles, ["card", "popover"]);
-/// ```
-///
-/// The derive refuses, at the attribute, a name given twice in one type:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color)]
-///     ink: AdaptiveColor,
-///     #[token(color, name = "ink")]
-///     other: AdaptiveColor,
-/// }
-/// ```
-///
-/// a kind that does not fit the field's type:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(radius)]
-///     card: AdaptiveColor,
-/// }
-/// ```
-///
-/// a kind there is not:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(colour)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// a role's name in place of its constant:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color, role = "popover")]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// and the compiler a role there is not:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color, role = role::SURFACE)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// and a role that reads another kind than the token holds (a radius is a
-/// number):
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme, NumberRole, Role};
-///
-/// const RADIUS: NumberRole = Role::new("radius");
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color, role = RADIUS)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// The derive refuses a role on a shadow token, which no role reads:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveShadow, AppTheme, role};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(shadow, role = role::POPOVER)]
-///     raised: AdaptiveShadow,
-/// }
-/// ```
-///
-/// a role mapped twice, onto two tokens:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color, role = role::POPOVER)]
-///     ink: AdaptiveColor,
-///     #[token(color, role = role::POPOVER)]
-///     paper: AdaptiveColor,
-/// }
-/// ```
-///
-/// or twice onto one:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color, role = role::POPOVER, role = role::POPOVER)]
-///     paper: AdaptiveColor,
-/// }
-/// ```
-///
-/// a name of the wrong form for its kind (only a font is `font-*`):
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color)]
-///     font_accent: AdaptiveColor,
-/// }
-/// ```
-///
-/// an empty name:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color, name = "")]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// two kinds:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color, shadow)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// a `name` or `role` on a field that is no token:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme, role};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(skip, role = role::POPOVER)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// a kind with `nested`, `flatten` or `skip`:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(skip, color)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// two of `nested`, `flatten` and `skip`:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(nested, skip)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// a second `#[token]`:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(color)]
-///     #[token(color, name = "paper")]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-///
-/// a nested field whose prefix gives its names another kind's form
-/// (`font-…`, `weight-…`):
-///
-/// ```compile_fail
-/// use nsh_core::element::AppTheme;
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Fonts {
-///     #[token(font)]
-///     body: String,
-/// }
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(nested)]
-///     weight: Fonts,
-/// }
-/// ```
-///
-/// ```compile_fail
-/// use nsh_core::element::AppTheme;
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Fonts {
-///     #[token(font)]
-///     body: String,
-/// }
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(nested)]
-///     font: Fonts,
-/// }
-/// ```
-///
-/// a namespaced kind's name outside its namespace:
-///
-/// ```compile_fail
-/// use nsh_core::{element::AppTheme, geometry::Points};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds {
-///     #[token(radius, name = "card")]
-///     card: Points,
-/// }
-/// ```
-///
-/// and a generic struct:
-///
-/// ```compile_fail
-/// use nsh_core::element::{AdaptiveColor, AppTheme};
-///
-/// #[derive(Clone, PartialEq, Default, AppTheme)]
-/// struct Ds<T: Clone + PartialEq + Default + 'static> {
-///     #[token(skip)]
-///     extra: T,
-///     #[token(color)]
-///     ink: AdaptiveColor,
-/// }
-/// ```
-pub trait AppTheme: Clone + PartialEq + Default + 'static {
-    /// Some of its fields, each `None` for "as it is" ([`update_theme`]).
-    type Patch: Default + Clone + 'static;
-
-    /// Its tokens: names (under no prefix), kinds, docs and the roles they
-    /// play, flattened through nested types.
-    fn token_specs() -> &'static [TokenSpec];
-
-    /// Writes its tokens into `out`, each name under `prefix`
-    /// ([`TokenKind::prefixed`]).
-    fn write_tokens(&self, prefix: &str, out: &mut Tokens);
-
-    /// The theme of `tokens`' names under `prefix`; a name they lack keeps
-    /// [`Default`]'s value (a nested type's field, the nested type's
-    /// `Default`).
-    fn read_tokens(tokens: &Tokens, prefix: &str) -> Self;
-
-    /// Writes the fields `patch` sets into `out`, each name under `prefix`.
-    fn write_patch(patch: &Self::Patch, prefix: &str, out: &mut Tokens);
-
-    /// Its tokens, with the roles its specs map onto them.
-    fn to_tokens(&self) -> Tokens {
-        let mut out = Tokens::default();
-        self.write_tokens("", &mut out);
-        out.with_roles(roles_of(Self::token_specs()))
-    }
-}
-
-/// One token of a theme type: its name, kind, doc and the roles it plays.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TokenSpec {
-    /// Its name (`surface-raised`, `radius-card`).
-    pub name: Cow<'static, str>,
-    /// What it holds.
-    pub kind: TokenKind,
-    /// Its doc comment (the field's), for the toolchain's declarations.
-    pub doc: &'static str,
-    /// The roles it plays (`role::POPOVER`), if any. A design system with
-    /// one surface for cards and popovers has one token play both, so both
-    /// follow every change of it; a role is played by one token.
-    pub roles: Vec<AnyRole>,
-}
-
-impl TokenSpec {
-    /// A token named `name` of `kind`.
-    pub fn new(name: impl Into<Cow<'static, str>>, kind: TokenKind) -> Self {
-        Self {
-            name: name.into(),
-            kind,
-            doc: "",
-            roles: Vec::new(),
-        }
-    }
-
-    /// With the doc comment `doc`.
-    pub fn doc(mut self, doc: &'static str) -> Self {
-        self.doc = doc;
-        self
-    }
-
-    /// Playing `role`, beside the roles it plays already. The role reads
-    /// what the token holds: a color token plays a [`Role`], a number a
-    /// [`super::NumberRole`], a font a [`super::FontRole`] (registering a
-    /// type whose token plays a role of another kind panics).
-    pub fn role<V: RoleValue>(mut self, role: Role<V>) -> Self {
-        let role = AnyRole::from(role);
-        if !self.roles.contains(&role) {
-            self.roles.push(role);
-        }
-        self
-    }
-}
+use super::{AnyRole, RoleKind, Tokens};
 
 /// What a token holds, which decides how a theme file's value is read and
 /// how TS types it.
@@ -438,6 +62,18 @@ pub enum TokenKind {
     Shadow,
     /// Gradients per appearance (`background-image-*`: `bg-*`).
     Gradient,
+    /// A string (a label, a name), one in both appearances.
+    String,
+    /// A boolean (a feature on or off), one in both appearances.
+    Boolean,
+    /// A duration in milliseconds (`duration-*`: `duration-*`, `delay-*`).
+    Duration,
+    /// An easing curve (`ease-*`: `ease-*`), one in both appearances.
+    Easing,
+    /// A text style (`text-*`): its size, with its line height, letter
+    /// spacing and font weight as parts (`text-title--line-height`, …),
+    /// which the class `text-title` sets together.
+    Typography,
 }
 
 impl TokenKind {
@@ -449,11 +85,14 @@ impl TokenKind {
             TokenKind::Font => Kind::Font,
             TokenKind::Shadow => Kind::Shadow,
             TokenKind::Gradient => Kind::Gradient,
+            TokenKind::String => Kind::String,
+            TokenKind::Boolean => Kind::Boolean,
+            TokenKind::Easing => Kind::Easing,
             _ => Kind::Number,
         }
     }
 
-    /// Its name, as the toolchain writes it.
+    /// Its name, as a theme document and the toolchain write it.
     pub fn name(self) -> &'static str {
         match self {
             TokenKind::Color => "color",
@@ -468,8 +107,17 @@ impl TokenKind {
             TokenKind::Font => "font",
             TokenKind::Shadow => "shadow",
             TokenKind::Gradient => "gradient",
+            TokenKind::String => "string",
+            TokenKind::Boolean => "boolean",
+            TokenKind::Duration => "duration",
+            TokenKind::Easing => "easing",
+            TokenKind::Typography => "typography",
         }
     }
+
+    /// Every kind's name, as a sentence lists them.
+    pub const NAMES: &'static str = "color, number, radius, spacing, text, weight, tracking, \
+        leading, blur, font, shadow, gradient, string, boolean, duration, easing, typography";
 
     /// The kind of this name ([`TokenKind::name`]).
     pub fn from_name(name: &str) -> Option<TokenKind> {
@@ -486,6 +134,11 @@ impl TokenKind {
             "font" => TokenKind::Font,
             "shadow" => TokenKind::Shadow,
             "gradient" => TokenKind::Gradient,
+            "string" => TokenKind::String,
+            "boolean" => TokenKind::Boolean,
+            "duration" => TokenKind::Duration,
+            "easing" => TokenKind::Easing,
+            "typography" => TokenKind::Typography,
             _ => return None,
         })
     }
@@ -496,7 +149,11 @@ impl TokenKind {
         match self {
             TokenKind::Color => Some(RoleKind::Color),
             TokenKind::Font => Some(RoleKind::Font),
-            TokenKind::Shadow | TokenKind::Gradient => None,
+            TokenKind::Shadow
+            | TokenKind::Gradient
+            | TokenKind::String
+            | TokenKind::Boolean
+            | TokenKind::Easing => None,
             _ => Some(RoleKind::Number),
         }
     }
@@ -505,15 +162,35 @@ impl TokenKind {
     pub fn is_number(self) -> bool {
         !matches!(
             self,
-            TokenKind::Color | TokenKind::Font | TokenKind::Shadow | TokenKind::Gradient
+            TokenKind::Color
+                | TokenKind::Font
+                | TokenKind::Shadow
+                | TokenKind::Gradient
+                | TokenKind::String
+                | TokenKind::Boolean
+                | TokenKind::Easing
         )
+    }
+
+    /// The TS type `token()` gives its value: `number` (a number, a
+    /// duration in milliseconds, a text style's size), `boolean`, or
+    /// `string` (a color, a font family, CSS, a string).
+    pub fn ts_type(self) -> &'static str {
+        match self {
+            TokenKind::Boolean => "boolean",
+            kind if kind.is_number() => "number",
+            _ => "string",
+        }
     }
 
     /// The namespace its names take, which its classes read them by
     /// (`radius-`: `rounded-*`); a color's and a number's is none.
     pub fn namespace(self) -> &'static str {
         match self {
-            TokenKind::Color | TokenKind::Number => "",
+            TokenKind::Color | TokenKind::Number | TokenKind::String | TokenKind::Boolean => "",
+            TokenKind::Duration => "duration-",
+            TokenKind::Easing => "ease-",
+            TokenKind::Typography => "text-",
             TokenKind::Radius => "radius-",
             TokenKind::Spacing => "spacing-",
             TokenKind::Text => "text-",
@@ -527,21 +204,6 @@ impl TokenKind {
         }
     }
 
-    /// Its token `name` under `prefix` (an [`AppTheme`] nested in another):
-    /// after the namespace when `name` is in it, so the classes still find
-    /// it (`radius-card` under `button-`: `radius-button-card`, which is
-    /// `rounded-button-card`), else in front (`raised`: `button-raised`).
-    /// A namespaced kind's names keep to its namespace (the derive refuses
-    /// others), so a name nested twice is the same whether the prefixes
-    /// are applied one at a time or joined.
-    pub fn prefixed(self, prefix: &str, name: &str) -> String {
-        let namespace = self.namespace();
-        match name.strip_prefix(namespace) {
-            Some(rest) if !namespace.is_empty() => format!("{namespace}{prefix}{rest}"),
-            _ => format!("{prefix}{name}"),
-        }
-    }
-
     /// Whether `tokens` hold `name` as this kind.
     pub(crate) fn holds(self, tokens: &Tokens, name: &str) -> bool {
         match self {
@@ -549,202 +211,300 @@ impl TokenKind {
             TokenKind::Font => tokens.font(name).is_some(),
             TokenKind::Shadow => tokens.shadow(name).is_some(),
             TokenKind::Gradient => tokens.gradient(name).is_some(),
+            TokenKind::String => tokens.string(name).is_some(),
+            TokenKind::Boolean => tokens.boolean(name).is_some(),
+            TokenKind::Easing => tokens.easing(name).is_some(),
             _ => tokens.number(name).is_some(),
         }
     }
-}
 
-/// A registered theme type, as data: its name, specs and defaults
-/// ([`super::Registry::theme`]).
-#[derive(Clone)]
-pub struct ThemeSpec {
-    type_name: &'static str,
-    type_id: fn() -> TypeId,
-    specs: fn() -> &'static [TokenSpec],
-    defaults: fn() -> Tokens,
-}
-
-impl ThemeSpec {
-    /// The spec of `T`.
-    pub fn of<T: AppTheme>() -> Self {
-        Self {
-            type_name: std::any::type_name::<T>(),
-            type_id: TypeId::of::<T>,
-            specs: T::token_specs,
-            defaults: || T::default().to_tokens(),
-        }
-    }
-
-    /// The type's name (`dxn_ds::DsTheme`).
-    pub fn type_name(&self) -> &'static str {
-        self.type_name
-    }
-
-    /// The type's id.
-    pub fn type_id(&self) -> TypeId {
-        (self.type_id)()
-    }
-
-    /// Its tokens.
-    pub fn token_specs(&self) -> &'static [TokenSpec] {
-        (self.specs)()
-    }
-
-    /// Its default tokens (with the roles its specs map).
-    pub fn defaults(&self) -> Tokens {
-        (self.defaults)()
+    /// Whether a token of this kind may be named `name`: its form says the
+    /// kind, as a theme file reads it, and a namespaced kind's name is in
+    /// its namespace, which its classes read it by.
+    pub(crate) fn names(self, name: &str) -> bool {
+        self.stored().names(name) && name.starts_with(self.namespace())
     }
 }
 
-impl std::fmt::Debug for ThemeSpec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ThemeSpec")
-            .field("type", &self.type_name)
-            .finish()
-    }
+/// One token a theme document declares (its `tokens` section).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declared {
+    /// Who declares it: the UI set whose document it is, or the app's
+    /// theme file.
+    pub owner: Box<str>,
+    /// What it holds.
+    pub kind: TokenKind,
+    /// Its place in the designer's tree (`colors.backgrounds.primary`), if
+    /// the document gives one.
+    pub path: Option<Box<str>>,
+    /// Its doc, for the toolchain's declarations (`tokens.d.ts`).
+    pub doc: Box<str>,
+    /// The typography token it is a part of (`text-title` of
+    /// `text-title--line-height`), which declares it: a part may have no
+    /// value.
+    pub part_of: Option<Box<str>>,
 }
 
-/// The roles `specs` map, onto their names.
-fn roles_of(specs: &[TokenSpec]) -> Vec<(AnyRole, Box<str>)> {
-    specs
-        .iter()
-        .flat_map(|s| {
-            s.roles
-                .iter()
-                .map(|role| (role.clone(), s.name.as_ref().into()))
-        })
-        .collect()
-}
-
-/// One theme of every registered type: their token names (each owned by
-/// one type), kinds, the roles they map and the union of their defaults.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ThemeSet {
-    /// Name → (owner type, kind).
-    names: FxHashMap<Box<str>, (Box<str>, TokenKind)>,
-    /// The types, in registration order.
-    types: Vec<Box<str>>,
-    /// The defaults of every type, with the role aliases.
+/// The tokens theme documents declare, merged: each name's kind, owner,
+/// path and doc (one owner per name), the roles they map (one token per
+/// role) and the union of their default values. Tokens read by them carry
+/// them ([`Tokens::declarations`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Declarations {
+    names: FxHashMap<Box<str>, Declared>,
+    /// The defaults of every document, with the roles they map, under no
+    /// modifier's context.
     defaults: Tokens,
+    /// The documents' modifiers, in the order the documents were added.
+    modifiers: Option<super::ThemeModifiers>,
 }
 
-impl ThemeSet {
-    /// The set of `specs`' types.
-    ///
-    /// # Panics
-    ///
-    /// When two types declare one token name or map one role, naming both.
-    #[track_caller]
-    pub(crate) fn new(specs: &[ThemeSpec]) -> Self {
-        let mut set = Self::empty();
-        for spec in specs {
-            let tokens = spec
-                .token_specs()
-                .iter()
-                .map(|s| (s.name.as_ref(), s.kind, s.roles.as_slice()));
-            if let Err(e) = set.try_add(spec.type_name(), tokens, spec.defaults()) {
-                panic!("{e}");
-            }
-        }
-        set
+impl Declarations {
+    /// The kind token `name` is declared as.
+    pub fn kind_of(&self, name: &str) -> Option<TokenKind> {
+        self.names.get(name).map(|d| d.kind)
     }
 
-    pub(crate) fn empty() -> Self {
-        Self {
-            names: FxHashMap::default(),
-            types: Vec::new(),
-            defaults: Tokens::default(),
+    /// The path token `name` is declared at.
+    pub fn path_of(&self, name: &str) -> Option<&str> {
+        self.names.get(name)?.path.as_deref()
+    }
+
+    /// The declared token at `path`.
+    pub fn name_at(&self, path: &str) -> Option<&str> {
+        self.names
+            .iter()
+            .find(|(_, d)| d.path.as_deref() == Some(path))
+            .map(|(name, _)| &**name)
+    }
+
+    /// The declaration of token `name`.
+    pub fn get(&self, name: &str) -> Option<&Declared> {
+        self.names.get(name)
+    }
+
+    /// Each declared token, sorted by name.
+    pub fn tokens(&self) -> Vec<(&str, &Declared)> {
+        let mut all: Vec<_> = self.names.iter().map(|(n, d)| (&**n, d)).collect();
+        all.sort_unstable_by(|a, b| a.0.cmp(b.0));
+        all
+    }
+
+    /// Whether no token is declared.
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// The default values of every document, with the roles they map and
+    /// each of their modifiers' default contexts: the tokens the app is
+    /// drawn with when its theme file sets none.
+    pub fn defaults(&self) -> Tokens {
+        match &self.modifiers {
+            Some(modifiers) => modifiers.clone().apply(&self.defaults),
+            None => self.defaults.clone(),
         }
     }
 
-    /// Adds type `type_name`'s tokens (name, kind, roles) and `defaults`
-    /// (whose roles are set from the tokens'). A type already added is
-    /// skipped. `Err`: a name or a role another type claims, naming both,
-    /// or a role two of its tokens play.
-    pub(crate) fn try_add<'a>(
-        &mut self,
-        type_name: &str,
-        tokens: impl IntoIterator<Item = (&'a str, TokenKind, &'a [AnyRole])>,
-        defaults: Tokens,
-    ) -> Result<(), String> {
-        if self.types.iter().any(|t| **t == *type_name) {
-            return Ok(());
+    /// The tokens of theme file `json` (`None`: the defaults) read by these
+    /// declarations, with what of it was left out: how the toolchain reads
+    /// `nsh.json`'s theme as the core does. `Err`: `json` is not JSON.
+    pub fn read(&self, json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
+        TokenProvider::Declared(Arc::new(self.clone())).read(json)
+    }
+
+    /// Adds the theme document `json` of `owner`: its declared tokens, its
+    /// roles and its values, which become defaults. `Err`: the document is
+    /// no theme document, says what it cannot (a kind there is not, a value
+    /// of another kind, a name it does not declare), or declares a name or
+    /// maps a role another owner has, naming both.
+    pub(crate) fn add_document(&mut self, owner: &str, json: &str) -> Result<(), String> {
+        let value: crate::JsonValue =
+            serde_json::from_str(json).map_err(|e| format!("{owner}: not JSON: {e}"))?;
+        if !super::theme_file::declares_tokens(&value) {
+            return Err(format!(
+                "{owner}: a theme document declares its tokens (`\"tokens\"`)"
+            ));
         }
-        let tokens: Vec<_> = tokens.into_iter().collect();
-        let mut roles = Vec::new();
-        for (i, (name, kind, plays)) in tokens.iter().enumerate() {
-            // A theme file's value is read by the name's form: the name
-            // says what its kind is, as a CSS variable's does.
-            if !kind.stored().names(name) {
-                return Err(format!(
-                    "`{type_name}`: the {} token `{name}` is named as no {} is ({})",
-                    kind.name(),
-                    kind.name(),
-                    super::tokens::Kind::FORMS
-                ));
-            }
-            if tokens[..i].iter().any(|(n, ..)| n == name) {
-                return Err(format!(
-                    "`{type_name}` declares the theme token `{name}` twice"
-                ));
-            }
-            if let Some((owner, _)) = self.names.get(*name) {
-                return Err(format!(
-                    "the theme token `{name}` is declared by both `{owner}` and `{type_name}`"
-                ));
-            }
-            // A token may play several roles; a role is played by one token.
-            for (j, role) in plays.iter().enumerate() {
-                if plays[..j].contains(role) {
-                    continue;
-                }
-                // A role reads what its token holds.
-                if kind.role_kind() != Some(role.kind()) {
-                    return Err(format!(
-                        "`{type_name}`: the role `{}` reads {}, and `{name}` is a {} token",
-                        role.name(),
-                        match role.kind() {
-                            RoleKind::Color => "a color",
-                            RoleKind::Number => "a number",
-                            RoleKind::Font => "a font family",
-                        },
-                        kind.name()
-                    ));
-                }
-                // By name: a role is its name, whoever declares it.
-                let named = |r: &AnyRole| r.name() == role.name();
-                if tokens[..i].iter().any(|(_, _, r)| r.iter().any(named)) {
-                    return Err(format!(
-                        "`{type_name}` maps the role `{}` twice",
-                        role.name()
-                    ));
-                }
-                if let Some(owner) = self.role_owner(role.name()) {
-                    return Err(format!(
-                        "the role `{}` is mapped by both `{owner}` and `{type_name}`",
-                        role.name()
-                    ));
-                }
-                roles.push((role.clone(), Box::<str>::from(*name)));
+        let (declared, mut left_out) = super::theme_file::declared_tokens(&value, owner);
+        left_out.extend(super::theme_file::unknown_sections(&value));
+        let mut own = Declarations::default();
+        own.extend(owner, declared.clone(), &[])?;
+        let (defaults, read_out) =
+            super::theme_file::overrides_declared(json, &Tokens::default(), &own)?;
+        left_out.extend(read_out);
+        for (name, d) in &declared {
+            if d.part_of.is_none()
+                && !d.kind.holds(&defaults, name)
+                && !left_out.iter().any(|l| l.is_about(name))
+            {
+                left_out.push(super::theme_file::LeftOut::no_value(name));
             }
         }
-        for (name, kind, _) in tokens {
-            self.names.insert(name.into(), (type_name.into(), kind));
+        if !left_out.is_empty() {
+            let what: Vec<String> = left_out.iter().map(ToString::to_string).collect();
+            return Err(format!("{owner}'s theme document: {}", what.join("; ")));
         }
-        self.defaults = defaults.with_roles(roles).over(&self.defaults);
-        self.types.push(type_name.into());
+        // Its modifiers, each context read by its own declarations.
+        let (modifiers, said) = super::ThemeModifiers::read(json, &value, &defaults, |context| {
+            super::theme_file::overrides_declared(context, &defaults, &own)
+        });
+        if !said.is_empty() {
+            let what: Vec<String> = said.iter().map(ToString::to_string).collect();
+            return Err(format!("{owner}'s theme document: {}", what.join("; ")));
+        }
+        let modifiers = match (self.modifiers.take(), modifiers) {
+            (Some(ours), Some(theirs)) => Some(
+                ours.merged(theirs)
+                    .map_err(|e| format!("{owner}'s theme document: {e}"))?,
+            ),
+            (ours, theirs) => ours.or(theirs),
+        };
+        let plays: Vec<(String, String)> = defaults
+            .roles()
+            .map(|(role, token)| (role.to_owned(), token.to_owned()))
+            .collect();
+        self.extend(owner, declared, &plays)?;
+        self.defaults = defaults.over(&self.defaults);
+        self.modifiers = modifiers;
         Ok(())
     }
 
-    /// The type mapping the role named `role`, if any.
+    /// Checks that each role of `roles` (what UI sets list, and the core's)
+    /// a document maps reads what its token holds. `Err` names the role
+    /// and the token.
+    pub(crate) fn check_roles(&self, roles: &[super::RoleSpec]) -> Result<(), String> {
+        let core = super::role::all();
+        for spec in roles.iter().chain(&core) {
+            let name = spec.role.name();
+            let Some(token) = self.defaults.mapped(name) else {
+                continue;
+            };
+            let Some(kind) = self.kind_of(token) else {
+                continue;
+            };
+            if kind.role_kind() != Some(spec.role.kind()) {
+                return Err(format!(
+                    "the role `{name}` reads {}, and `{token}` is a {} token",
+                    match spec.role.kind() {
+                        RoleKind::Color => "a color",
+                        RoleKind::Number => "a number",
+                        RoleKind::Font => "a font family",
+                    },
+                    kind.name()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds `declared`, owned by `owner`, and the roles `plays` maps onto
+    /// them (role, token). `Err`: a name or a role another owner has,
+    /// naming both, a role mapped twice, or one that reads another kind
+    /// than its token holds.
+    fn extend(
+        &mut self,
+        owner: &str,
+        declared: Vec<(Box<str>, Declared)>,
+        plays: &[(String, String)],
+    ) -> Result<(), String> {
+        for (i, (name, d)) in declared.iter().enumerate() {
+            if declared[..i].iter().any(|(n, _)| n == name) {
+                return Err(format!("{owner} declares the theme token `{name}` twice"));
+            }
+            if let Some(other) = self.names.get(name) {
+                return Err(format!(
+                    "the theme token `{name}` is declared by both {} and {owner}",
+                    other.owner
+                ));
+            }
+            if let Some(path) = &d.path
+                && let Some(other) = self.name_at(path)
+            {
+                return Err(format!(
+                    "{owner}: the path `{path}` of the theme token `{name}` is the path of `{other}`, which {} declares",
+                    self.names[other].owner
+                ));
+            }
+            debug_assert!(d.kind.names(name));
+        }
+        let mut roles = Vec::new();
+        for (role, token) in plays {
+            let Some((_, d)) = declared.iter().find(|(n, _)| **n == **token) else {
+                return Err(format!(
+                    "{owner}: the role `{role}` is mapped onto `{token}`, which it does not declare"
+                ));
+            };
+            let Some(kind) = d.kind.role_kind() else {
+                return Err(format!(
+                    "{owner}: the role `{role}` is mapped onto `{token}`, a {} token, which no role reads",
+                    d.kind.name()
+                ));
+            };
+            if let Some(other) = self.role_owner(role) {
+                return Err(format!(
+                    "the role `{role}` is mapped by both {other} and {owner}"
+                ));
+            }
+            roles.push((AnyRole::new(role.clone(), kind), Box::<str>::from(&**token)));
+        }
+        for (name, d) in declared {
+            self.names.insert(name, d);
+        }
+        if !roles.is_empty() {
+            self.defaults = std::mem::take(&mut self.defaults).with_roles(roles);
+        }
+        Ok(())
+    }
+
+    /// These declarations with the tokens theme file `value` declares
+    /// itself (the app's own, owned by `owner`), and what of them was left
+    /// out: a name another owner declares as the same kind is theirs, as
+    /// another kind it is left out.
+    pub(crate) fn with_file(
+        &self,
+        value: &crate::JsonValue,
+        owner: &str,
+    ) -> (Declarations, Vec<super::theme_file::LeftOut>) {
+        let (declared, mut left_out) = super::theme_file::declared_tokens(value, owner);
+        let mut out = self.clone();
+        let mut own = Vec::new();
+        for (name, d) in declared {
+            match self.names.get(&name) {
+                Some(other) if other.kind == d.kind => {}
+                Some(other) => left_out.push(super::theme_file::LeftOut::declared_by(
+                    &name,
+                    other.kind,
+                    &other.owner,
+                )),
+                None => match d.path.as_deref().and_then(|path| self.name_at(path)) {
+                    Some(other) => left_out.push(super::theme_file::LeftOut::about(
+                        &format!("tokens.{name}.path"),
+                        format_args!(
+                            ": `{}` is the path of `{other}`, which {} declares",
+                            d.path.as_deref().unwrap_or_default(),
+                            self.names[other].owner
+                        ),
+                    )),
+                    None => own.push((name, d)),
+                },
+            }
+        }
+        if !own.is_empty() {
+            // Only names and roles no other owner has are left: this adds.
+            let _ = out.extend(owner, own, &[]);
+        }
+        (out, left_out)
+    }
+
+    /// The owner mapping the role named `role`, if any.
     fn role_owner(&self, role: &str) -> Option<&str> {
         self.defaults
             .mapped(role)
             .and_then(|name| self.names.get(name))
-            .map(|(owner, _)| &**owner)
+            .map(|d| &*d.owner)
     }
 
-    /// Each role the types map onto a token of another name: the role's
+    /// Each role the documents map onto a token of another name: the role's
     /// name and the token's.
     pub(crate) fn renamed_roles(&self) -> impl Iterator<Item = (&str, &str)> {
         self.defaults
@@ -752,11 +512,9 @@ impl ThemeSet {
             .filter(|(role, token)| role != token && self.names.contains_key(*token))
     }
 
-    /// Each declared name, with its owner type and kind.
-    pub(crate) fn names(&self) -> impl Iterator<Item = (&str, &str, TokenKind)> {
-        self.names
-            .iter()
-            .map(|(name, (owner, kind))| (&**name, &**owner, *kind))
+    /// Each declared name with its kind.
+    pub(crate) fn names(&self) -> impl Iterator<Item = (&str, TokenKind)> {
+        self.names.iter().map(|(name, d)| (&**name, d.kind))
     }
 
     /// The name a theme file's `key` sets: a declared name, else the token
@@ -771,37 +529,40 @@ impl ThemeSet {
     }
 }
 
+/// Who declares the tokens an app's own theme file declares.
+pub(crate) const APP_THEME: &str = "the app's theme";
+
 /// How the core reads a theme file: with a UI set's functions
-/// ([`super::Registry::tokens_from`], [`super::Registry::token_overrides_from`]),
-/// or with the registered theme types.
+/// ([`super::Registry::tokens_from`], [`super::Registry::token_overrides_from`])
+/// while nothing declares tokens, or by the declared tokens.
 #[derive(Clone)]
 pub(crate) enum TokenProvider {
     Source {
         read: super::TokenSource,
         overrides: Option<super::TokenOverrides>,
     },
-    Themes(Arc<ThemeSet>),
+    Declared(Arc<Declarations>),
 }
 
 impl std::fmt::Debug for TokenProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TokenProvider::Source { .. } => f.write_str("TokenProvider::Source"),
-            TokenProvider::Themes(set) => {
-                f.debug_tuple("TokenProvider::Themes").field(set).finish()
+            TokenProvider::Declared(set) => {
+                f.debug_tuple("TokenProvider::Declared").field(set).finish()
             }
         }
     }
 }
 
 impl TokenProvider {
-    /// The token a theme file's `name` names: under theme types the token
-    /// a role of that name is mapped onto ([`ThemeSet::target`]), as
-    /// `setTheme` and `updateTheme` read it; any other name, and every
-    /// name without theme types, is its own.
+    /// The token a theme file's `name` names: under declared tokens the
+    /// token a role of that name is mapped onto ([`Declarations::target`]),
+    /// as `setTheme` and `updateTheme` read it; any other name, and every
+    /// name without declared tokens, is its own.
     pub(crate) fn token_name<'a>(&'a self, name: &'a str) -> &'a str {
         match self {
-            TokenProvider::Themes(set) => set.target(name).unwrap_or(name),
+            TokenProvider::Declared(set) => set.target(name).unwrap_or(name),
             TokenProvider::Source { .. } => name,
         }
     }
@@ -814,22 +575,164 @@ impl TokenProvider {
     }
 
     /// [`TokenProvider::read`], each thing left out with what the core
-    /// asks of it (whether it is only a name no type declares).
+    /// asks of it (whether it is only a name nothing declares). A theme
+    /// file that declares tokens is read by them, with the documents' own,
+    /// and replaces a UI set's defaults.
     pub(crate) fn read_left_out(
         &self,
         json: Option<&str>,
     ) -> Result<(Tokens, Vec<super::theme_file::LeftOut>), String> {
-        match self {
-            TokenProvider::Source { read, .. } => read(json).map(said),
-            TokenProvider::Themes(set) => match json {
-                None => Ok((set.defaults.clone(), Vec::new())),
-                Some(json) => super::theme_file::parse_declared(json, &set.defaults, set),
+        let set = match self {
+            TokenProvider::Declared(set) => set.clone(),
+            TokenProvider::Source { read, .. } => {
+                let declares = json
+                    .and_then(|json| serde_json::from_str::<crate::JsonValue>(json).ok())
+                    .is_some_and(|value| super::theme_file::declares_tokens(&value));
+                if !declares {
+                    let (tokens, mut left_out) = read(json).map(said)?;
+                    if let Some(value) =
+                        json.and_then(|json| serde_json::from_str::<crate::JsonValue>(json).ok())
+                    {
+                        left_out.extend(super::theme_file::unknown_sections(&value));
+                    }
+                    let tokens = match json {
+                        Some(json) => self.with_modifiers(json, tokens, None, None, &mut left_out),
+                        None => tokens,
+                    };
+                    return Ok((tokens, left_out));
+                }
+                Arc::new(Declarations::default())
+            }
+        };
+        let Some(json) = json else {
+            return Ok((with_declarations(set.defaults(), &set), Vec::new()));
+        };
+        let value: crate::JsonValue =
+            serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
+        let (set, mut left_out) = set.with_file(&value, APP_THEME);
+        left_out.extend(super::theme_file::unknown_sections(&value));
+        let set = Arc::new(set);
+        let (tokens, read_out) = super::theme_file::parse_declared(json, &set.defaults, &set)?;
+        left_out.extend(read_out);
+        let tokens = with_declarations(tokens, &set);
+        let documents = set.modifiers.clone();
+        let tokens = self.with_modifiers(json, tokens, Some(&set), documents, &mut left_out);
+        Ok((tokens, left_out))
+    }
+
+    /// `tokens`, read from theme file `json` under no context, with the
+    /// documents' modifiers (`documents`) and the file's own, after them,
+    /// each one's picked context over them, carrying them
+    /// ([`super::ThemeModifiers`]); a file's context is read as a change of
+    /// the tokens is, by `set` when they are declared. What of the
+    /// modifiers was left out joins `left_out`.
+    fn with_modifiers(
+        &self,
+        json: &str,
+        tokens: Tokens,
+        set: Option<&Arc<Declarations>>,
+        documents: Option<super::ThemeModifiers>,
+        left_out: &mut Vec<super::theme_file::LeftOut>,
+    ) -> Tokens {
+        let Ok(value) = serde_json::from_str::<crate::JsonValue>(json) else {
+            return match documents {
+                Some(documents) => documents.rebased(&tokens).apply(&tokens),
+                None => tokens,
+            };
+        };
+        let read = |context: &str| self.read_context(set, context, &tokens);
+        let (file, said) = super::ThemeModifiers::read(json, &value, &tokens, read);
+        left_out.extend(said);
+        let modifiers = match (documents, file) {
+            (Some(documents), Some(file)) => match documents.clone().merged(file) {
+                Ok(both) => Some(both),
+                Err(e) => {
+                    left_out.push(super::theme_file::LeftOut::said(format!("modifiers: {e}")));
+                    Some(documents)
+                }
             },
+            (documents, file) => documents.or(file),
+        };
+        match modifiers {
+            Some(modifiers) => modifiers.rebased(&tokens).apply(&tokens),
+            None => tokens,
         }
     }
 
+    /// A modifier's context `json` (a theme file of its `cssVars`) read
+    /// against `base`, as a change of the tokens is: by `set` when they are
+    /// declared.
+    fn read_context(
+        &self,
+        set: Option<&Arc<Declarations>>,
+        json: &str,
+        base: &Tokens,
+    ) -> Result<(Tokens, Vec<super::theme_file::LeftOut>), String> {
+        match (set, self) {
+            (Some(set), _) => super::theme_file::overrides_declared(json, base, set),
+            (
+                None,
+                TokenProvider::Source {
+                    overrides: Some(overrides),
+                    ..
+                },
+            ) => overrides(json, base).map(said),
+            _ => super::theme_file::overrides(json, base).map(said),
+        }
+    }
+
+    /// The app's tokens `app` changed by theme change `json` (`nsh`'s
+    /// `updateTheme`), its values read against `drawn` (the tokens drawn
+    /// with now, which a `var()` it does not set names): the values its
+    /// `cssVars` sets ([`Tokens::updated_by`]), then its `"modifiers"`
+    /// ([`super::ThemeModifiers::patched`], a theme with none taking the
+    /// change's as a file's). With what was left out. `None`: nothing reads
+    /// changes.
+    pub(crate) fn updated_left_out(
+        &self,
+        json: &str,
+        drawn: &Tokens,
+        app: &Tokens,
+    ) -> Option<Result<(Tokens, Vec<super::theme_file::LeftOut>), String>> {
+        // A change of only its modifiers (or declarations) sets no values.
+        let mut value: Option<crate::JsonValue> = serde_json::from_str(json).ok();
+        let values = match &mut value {
+            Some(crate::JsonValue::Object(object)) if !object.contains_key("cssVars") => {
+                object.insert("cssVars".into(), serde_json::json!({}));
+                std::borrow::Cow::Owned(crate::JsonValue::Object(object.clone()).to_string())
+            }
+            _ => std::borrow::Cow::Borrowed(json),
+        };
+        let read = self.overrides_left_out(&values, drawn)?;
+        Some(read.and_then(|(part, mut left_out)| {
+            let value = value.ok_or_else(|| "not JSON".to_owned())?;
+            left_out.extend(super::theme_file::unknown_sections(&value));
+            let mut out = app.updated_by(&part);
+            if value.get("modifiers").is_some() {
+                let set = out.declarations_arc();
+                let under = match out.modifiers() {
+                    Some(modifiers) => modifiers.under(&out),
+                    None => out.clone(),
+                };
+                let read = |context: &str| self.read_context(set.as_ref(), context, &under);
+                let (modifiers, said) = match out.modifiers() {
+                    Some(modifiers) => {
+                        let (patched, said) = modifiers.patched(json, &value, &under, read);
+                        (Some(patched), said)
+                    }
+                    None => super::ThemeModifiers::read(json, &value, &under, read),
+                };
+                left_out.extend(said);
+                if let Some(modifiers) = modifiers {
+                    out = modifiers.apply(&out);
+                }
+            }
+            Ok((out, left_out))
+        }))
+    }
+
     /// The tokens theme file `json` sets, and only those (`var()` against
-    /// `base`); `None`: the set reads no changes.
+    /// `base`); `None`: nothing reads changes.
     pub(crate) fn overrides(
         &self,
         json: &str,
@@ -842,18 +745,37 @@ impl TokenProvider {
     }
 
     /// [`TokenProvider::overrides`], as [`TokenProvider::read_left_out`].
+    /// The tokens drawn with now (`base`) are read by what declares them
+    /// (the documents and the app's theme file); a change may declare
+    /// tokens of its own beside them.
     pub(crate) fn overrides_left_out(
         &self,
         json: &str,
         base: &Tokens,
     ) -> Option<Result<(Tokens, Vec<super::theme_file::LeftOut>), String>> {
-        match self {
-            TokenProvider::Source { overrides, .. } => Some((*overrides)?(json, base).map(said)),
-            TokenProvider::Themes(set) => {
-                Some(super::theme_file::overrides_declared(json, base, set))
+        let set = match (base.declarations_arc(), self) {
+            (Some(set), _) => set,
+            (None, TokenProvider::Declared(set)) => set.clone(),
+            (None, TokenProvider::Source { overrides, .. }) => {
+                return Some((*overrides)?(json, base).map(said));
             }
-        }
+        };
+        Some((|| {
+            let value: crate::JsonValue =
+                serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
+            let (set, mut left_out) = set.with_file(&value, APP_THEME);
+            let set = Arc::new(set);
+            let (tokens, read_out) = super::theme_file::overrides_declared(json, base, &set)?;
+            left_out.extend(read_out);
+            Ok((with_declarations(tokens, &set), left_out))
+        })())
     }
+}
+
+/// `tokens`, read by `set`, carrying it.
+fn with_declarations(mut tokens: Tokens, set: &Arc<Declarations>) -> Tokens {
+    tokens.set_declarations(Some(set.clone()));
+    tokens
 }
 
 /// A UI set's own reader says what it left out in sentences alone.
@@ -863,124 +785,4 @@ fn said((tokens, left_out): (Tokens, Vec<String>)) -> (Tokens, Vec<super::theme_
         .map(super::theme_file::LeftOut::said)
         .collect();
     (tokens, left_out)
-}
-
-/// The theme of type `T` the surface is drawn with now: its names in the
-/// tokens ([`super::tokens`]), each a field (a name they lack keeps
-/// [`Default`]'s). A number field is its token's value in the appearance
-/// shown where it is read ([`super::dark`]), as TS's `token()` and classes
-/// read it. Reading it subscribes, as [`super::tokens`] does, and to the
-/// appearance where a number has a dark value: a binding reading it runs
-/// again when they change. It is read once per change of the tokens, per
-/// appearance and surface.
-pub fn theme_of<T: AppTheme>() -> Arc<T> {
-    let tokens = super::tokens();
-    // Tokens without a dark number read the same in both appearances, and
-    // need not follow it.
-    let dark = tokens.has_dark_numbers() && super::dark();
-    let cached = super::ambient::with_theme_cache(|cache| {
-        cache
-            .get(TypeId::of::<T>(), &tokens, dark)?
-            .downcast_ref::<Arc<T>>()
-            .cloned()
-    });
-    if let Some(theme) = cached {
-        return theme;
-    }
-    // The type's own code runs with the cache let go: it may read the
-    // tokens or another type.
-    let shown = if dark { tokens.shown_dark() } else { None };
-    let theme = Arc::new(T::read_tokens(shown.as_ref().unwrap_or(&tokens), ""));
-    super::ambient::with_theme_cache(|cache| {
-        cache.insert(
-            TypeId::of::<T>(),
-            tokens.clone(),
-            dark,
-            Box::new(theme.clone()) as Box<dyn Any>,
-        );
-    });
-    theme
-}
-
-/// Draws the app with `theme`: its names take its values, every other
-/// token stays (another type's, the app's own). In order with the app's
-/// other actions, as [`super::update_tokens`].
-///
-/// A number field is its token's value in the appearance shown where it
-/// is set, as [`theme_of`] reads it there. A number `theme` leaves at that
-/// value keeps both values it has, so a theme read ([`theme_of`]), changed
-/// in one field and set changes that field only; one `theme` changes is
-/// that value in both appearances, as [`update_theme`] makes a number it
-/// sets.
-///
-/// A type that is not registered and whose tokens play roles
-/// (`nsh_base::Theme`: shadcn's names, each the role of its name) sets, in
-/// an app whose own theme type maps a role onto another token, that token:
-/// `theme().popover` set there is the design system's `surface-overlay`,
-/// as the role's name sets it in a theme file. So do [`update_theme`] and
-/// [`reset_theme`]. A registered type's roles are mapped onto its own
-/// tokens, which it sets as ever.
-pub fn set_theme<T: AppTheme>(theme: T) {
-    super::ambient::theme_action(super::task::Action::SetTheme {
-        tokens: theme_tokens(&theme),
-        played: played::<T>(),
-        dark: Some(super::reactive::untracked(super::dark)),
-    });
-}
-
-/// The roles a theme type's tokens play, each with its token's name: what
-/// the core needs of the type when one of its setters runs.
-pub(crate) type Played = Vec<(Box<str>, Box<str>)>;
-
-/// The roles `T`'s tokens play ([`Played`]).
-pub(crate) fn played<T: AppTheme>() -> Played {
-    T::token_specs()
-        .iter()
-        .flat_map(|spec| {
-            spec.roles
-                .iter()
-                .map(|role| (role.name().into(), spec.name.as_ref().into()))
-        })
-        .collect()
-}
-
-/// `theme`'s tokens, without the roles its specs map: the roles are the
-/// registered types' (a type set while it runs does not map them again).
-pub(crate) fn theme_tokens<T: AppTheme>(theme: &T) -> Tokens {
-    let mut out = Tokens::default();
-    theme.write_tokens("", &mut out);
-    out
-}
-
-/// Changes the fields of `T` that `patch` sets, the others staying.
-pub fn update_theme<T: AppTheme>(patch: T::Patch) {
-    super::ambient::theme_action(super::task::Action::UpdateTheme {
-        tokens: patch_tokens::<T>(&patch),
-        played: played::<T>(),
-    });
-}
-
-/// Puts `T`'s tokens back to the app's theme's (`nsh.json`'s over the
-/// types' defaults, or the one last set whole), undoing [`set_theme`] and
-/// [`update_theme`].
-pub fn reset_theme<T: AppTheme>() {
-    super::ambient::theme_action(super::task::Action::ResetTheme {
-        names: names::<T>(),
-        played: played::<T>(),
-    });
-}
-
-/// `T`'s token names.
-pub(crate) fn names<T: AppTheme>() -> Vec<Box<str>> {
-    T::token_specs()
-        .iter()
-        .map(|s| s.name.as_ref().into())
-        .collect()
-}
-
-/// The tokens `patch` sets.
-pub(crate) fn patch_tokens<T: AppTheme>(patch: &T::Patch) -> Tokens {
-    let mut out = Tokens::default();
-    T::write_patch(patch, "", &mut out);
-    out
 }

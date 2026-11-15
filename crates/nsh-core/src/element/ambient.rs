@@ -64,9 +64,6 @@ pub(crate) struct Ambient {
     /// The main window's close presses: how many, and the last one's
     /// reason ([`crate::element::desktop::WindowRef::on_close_press`]).
     main_close_press: Option<Signal<(u64, crate::desktop::CloseReason)>>,
-    /// The theme types read of the tokens ([`super::theme_of`]): by type,
-    /// the tokens read and the theme.
-    themes: ThemeCache,
     /// How theme files are read ([`ThemeTokens`]), for a
     /// [`super::ThemeScope`]'s `theme`.
     theme_tokens: Option<super::ThemeTokens>,
@@ -74,52 +71,6 @@ pub(crate) struct Ambient {
     app_url: Option<crate::url_scheme::AppUrlCell>,
     /// A [`super::ThemeScope`] was made on this surface.
     scoped: bool,
-}
-
-/// The surface's cache of theme types read ([`super::theme_of`]). `f` runs
-/// with the surface's data borrowed: it runs no app code.
-pub(crate) fn with_theme_cache<R>(f: impl FnOnce(&mut ThemeCache) -> R) -> R {
-    with_data(|d| f(&mut d.ambient.themes))
-}
-
-/// The theme types read so far ([`super::theme_of`]): by type, by the
-/// tokens read (the surface's, and each [`super::ThemeScope`]'s) and by the
-/// appearance read in, the theme.
-#[derive(Default)]
-pub(crate) struct ThemeCache(FxHashMap<(TypeId, usize, bool), ReadTheme>);
-
-/// A theme type's value, with the tokens it was read of.
-type ReadTheme = (Arc<Tokens>, Box<dyn Any>);
-
-impl ThemeCache {
-    /// Types read of this many tokens are kept; past it the cache starts
-    /// over (tokens no longer drawn with go with it).
-    const KEPT: usize = 32;
-
-    /// The theme of type `ty` read of `tokens` in the dark appearance
-    /// (`dark`) or the light one, if it was.
-    pub(crate) fn get(&self, ty: TypeId, tokens: &Arc<Tokens>, dark: bool) -> Option<&dyn Any> {
-        self.0
-            .get(&(ty, Arc::as_ptr(tokens) as usize, dark))
-            .map(|(_, theme)| &**theme)
-    }
-
-    /// Keeps `theme`, the type `ty` read of `tokens` in the dark
-    /// appearance (`dark`) or the light one.
-    pub(crate) fn insert(
-        &mut self,
-        ty: TypeId,
-        tokens: Arc<Tokens>,
-        dark: bool,
-        theme: Box<dyn Any>,
-    ) {
-        if self.0.len() >= Self::KEPT {
-            self.0.clear();
-        }
-        // The tokens are held, so their address names them while kept.
-        self.0
-            .insert((ty, Arc::as_ptr(&tokens) as usize, dark), (tokens, theme));
-    }
 }
 
 impl Ambient {
@@ -630,7 +581,8 @@ pub(super) fn surface_tokens() -> Arc<Tokens> {
 /// the theme file's: Tailwind's token classes, [`tokens`] and the
 /// platform's own controls (Linux's menus, Android's alerts) follow. An app that picks its
 /// theme while it runs sets it here (`set_tokens(theme.into())` of an
-/// `nsh_base::Theme`).
+/// `nsh_base::Theme`). They are read by nothing declared: tokens a theme
+/// document declares come through the app's theme file (TS's `setTheme`).
 pub fn set_tokens(tokens: impl Into<Tokens>) {
     act(Action::Tokens(tokens.into()));
 }
@@ -644,11 +596,28 @@ pub fn update_tokens(tokens: impl Into<Tokens>) {
     act(Action::UpdateTokens(tokens.into()));
 }
 
-/// Asks for a theme type's change ([`super::set_theme`],
-/// [`super::update_theme`], [`super::reset_theme`]), in order with the
-/// app's other actions as [`update_tokens`].
-pub(crate) fn theme_action(action: Action) {
-    act(action);
+/// Gives the theme's modifier `name` (`brand`) the context `context`
+/// (`forest`): the tokens its contexts set take that context's values, in
+/// order with the app's other actions, and what reads them follows (TS:
+/// `setModifier`). A name or context the theme has not is logged.
+pub fn set_modifier(name: &str, context: &str) {
+    act(Action::SetModifier(name.into(), context.into()));
+}
+
+/// The context the theme's modifier `name` has now where it is read (the
+/// nearest [`super::ThemeScope`]'s tokens'), `None` when the theme has no
+/// such modifier. Reading it subscribes, as [`tokens`] does.
+pub fn modifier(name: &str) -> Option<Box<str>> {
+    tokens().modifiers()?.selected(name).map(Into::into)
+}
+
+/// The theme's modifiers, each with its contexts and default (none when
+/// the theme has none). Reading it subscribes, as [`tokens`] does.
+pub fn modifiers() -> Vec<super::ModifierAxis> {
+    tokens()
+        .modifiers()
+        .map(super::ThemeModifiers::axes)
+        .unwrap_or_default()
 }
 
 /// Puts the design tokens `names` back to their values in the app's theme

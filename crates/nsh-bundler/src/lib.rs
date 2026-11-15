@@ -33,7 +33,7 @@ pub use minify::minify_module;
 pub use natives::{Imported, NativeUse};
 #[cfg(feature = "bundle")]
 pub use types::{
-    TSCONFIG, TSCONFIG_BASE, roles_declaration, tokens_declaration, tokens_declaration_of,
+    TSCONFIG, TSCONFIG_BASE, modifiers_declaration, roles_declaration, tokens_declaration,
     type_definitions,
 };
 

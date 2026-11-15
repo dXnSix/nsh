@@ -1,14 +1,14 @@
-//! The status, diff and syntax roles under an app's own theme type: a
-//! derived type maps them onto its tokens with `role = <path>`, one token
-//! playing two of them, and nsh-base's components draw with those tokens
-//! and follow the type being set.
+//! The status, diff and syntax roles under an app's own theme document: it
+//! maps them onto its tokens in its `"roles"`, one token playing two of
+//! them, and nsh-base's components draw with those tokens and follow a
+//! change of them.
 
 use std::time::Duration;
 
-use nsh_base::{DiffIndicators, DiffLayout, diff_view, role, text_view};
+use nsh_base::{DiffIndicators, DiffLayout, diff_view, text_view};
 use nsh_core::{
     Color, Size,
-    element::{AppTheme, Registry, Root},
+    element::{Registry, Root, TokenKey, Tokens},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -20,28 +20,24 @@ const GREEN: AdaptiveColor = AdaptiveColor::rgb(0x15803d, 0x4ade80);
 const VIOLET: AdaptiveColor = AdaptiveColor::rgb(0x7c3aed, 0xc4b5fd);
 const TEAL: AdaptiveColor = AdaptiveColor::rgb(0x0f766e, 0x2dd4bf);
 
-/// A design system's theme: its caution color is nsh-base's warning, one
-/// green is what succeeded and a diff's added lines, and its keyword color
-/// is the highlighter's.
-#[derive(Debug, Clone, PartialEq, AppTheme)]
-struct Acme {
-    #[token(color, role = role::WARNING)]
-    status_caution: AdaptiveColor,
-    #[token(color, role = role::SUCCESS, role = role::DIFF_ADDED)]
-    status_positive: AdaptiveColor,
-    #[token(color, role = role::SYNTAX_KEYWORD)]
-    code_keyword: AdaptiveColor,
-}
+/// A design system's document: its caution color is nsh-base's warning,
+/// one green is what succeeded and a diff's added lines, and its keyword
+/// color is the highlighter's.
+const ACME: &str = r##"{
+    "cssVars": {
+        "light": { "status-caution": "#b45309", "status-positive": "#15803d", "code-keyword": "#7c3aed" },
+        "dark": { "status-caution": "#fbbf24", "status-positive": "#4ade80", "code-keyword": "#c4b5fd" }
+    },
+    "tokens": {
+        "status-caution": { "kind": "color" },
+        "status-positive": { "kind": "color" },
+        "code-keyword": { "kind": "color" }
+    },
+    "roles": { "warning": "status-caution", "success": "status-positive",
+               "diff-added": "status-positive", "syntax-keyword": "code-keyword" }
+}"##;
 
-impl Default for Acme {
-    fn default() -> Self {
-        Acme {
-            status_caution: AMBER,
-            status_positive: GREEN,
-            code_keyword: VIOLET,
-        }
-    }
-}
+const POSITIVE: TokenKey<AdaptiveColor> = TokenKey::new("status-positive");
 
 fn light(color: AdaptiveColor) -> Color {
     Color::from(color.light)
@@ -85,7 +81,7 @@ fn Shows() -> impl IntoElement {
 
 fn start<C: Component<Props = ()>>() -> Headless {
     let mut acme = Registry::new();
-    acme.theme::<Acme>();
+    acme.theme_document(ACME);
     let mut config = EngineConfig {
         viewport: Size::new(px(900.0), px(700.0)),
         ui_sets: vec![nsh_base::registry(), acme],
@@ -123,26 +119,23 @@ fn see(app: &mut Headless, of: [AdaptiveColor; 4]) {
 }
 
 #[test]
-fn a_derived_types_tokens_color_what_their_roles_draw() {
+fn a_documents_tokens_color_what_their_roles_draw() {
     let mut app = start::<Shows>();
     // The tip and the added line are the one green.
     see(&mut app, [AMBER, GREEN, GREEN, VIOLET]);
 }
 
-/// Sets the type with another green once the content is shown.
+/// Gives the green token another green once the content is shown.
 #[component]
 fn Sets() -> impl IntoElement {
     set_timeout(Duration::from_millis(300), || {
-        set_theme(Acme {
-            status_positive: TEAL,
-            ..Acme::default()
-        });
+        update_tokens(Tokens::default().with(POSITIVE, TEAL));
     });
     content()
 }
 
 #[test]
-fn both_roles_of_one_token_follow_the_type_being_set() {
+fn both_roles_of_one_token_follow_a_change_of_it() {
     let mut app = start::<Sets>();
     see(&mut app, [AMBER, TEAL, TEAL, VIOLET]);
 }

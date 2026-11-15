@@ -54,12 +54,22 @@ pub struct Tokens {
     shadows: FxHashMap<Box<str>, AdaptiveShadow>,
     /// Gradients (a `background-image`'s), per appearance.
     gradients: FxHashMap<Box<str>, AdaptiveGradient>,
+    /// The tokens with one value in both appearances: strings, booleans and
+    /// easing curves.
+    plain: FxHashMap<Box<str>, Plain>,
     /// A role's name -> the name of the token it reads (`None`: each its
     /// own name).
     roles: Option<Arc<FxHashMap<Box<str>, Box<str>>>>,
     /// Whether the app has a theme of its own ([`Tokens::is_themed`]): not
     /// a token, so not compared.
     themed: bool,
+    /// What declares them, when they were read by declared tokens
+    /// ([`Tokens::declarations`]): not a token, so not compared.
+    declarations: Option<Arc<super::theme::Declarations>>,
+    /// The theme's modifiers, with the context each has now
+    /// ([`Tokens::modifiers`]): compared, so a context picked is a change
+    /// even where it changes no value.
+    modifiers: Option<Arc<super::ThemeModifiers>>,
 }
 
 impl PartialEq for Tokens {
@@ -70,7 +80,9 @@ impl PartialEq for Tokens {
             && self.fonts == other.fonts
             && self.shadows == other.shadows
             && self.gradients == other.gradients
+            && self.plain == other.plain
             && self.roles == other.roles
+            && self.modifiers == other.modifiers
     }
 }
 
@@ -360,6 +372,94 @@ pub enum Token {
     Shadow(AdaptiveShadow),
     /// Gradients, per appearance.
     Gradient(AdaptiveGradient),
+    /// A string (a label, a name, an icon's), one in both appearances.
+    String(Arc<str>),
+    /// A boolean (a feature on or off), one in both appearances.
+    Boolean(bool),
+    /// An easing curve (`ease-*`: `ease-snappy`), one in both appearances.
+    Easing(CubicBezier),
+}
+
+/// A token of one value in both appearances ([`Tokens`]' plain map).
+#[derive(Debug, Clone, PartialEq)]
+enum Plain {
+    String(Arc<str>),
+    Boolean(bool),
+    Easing(CubicBezier),
+}
+
+/// An easing curve: a cubic Bézier `x1, y1, x2, y2`, as CSS's
+/// `cubic-bezier()` and a transition's easing ([`crate::effects::Transition`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CubicBezier(pub [f32; 4]);
+
+impl CubicBezier {
+    /// CSS `linear`.
+    pub const LINEAR: CubicBezier = CubicBezier([0.0, 0.0, 1.0, 1.0]);
+    /// CSS `ease`.
+    pub const EASE: CubicBezier = CubicBezier([0.25, 0.1, 0.25, 1.0]);
+    /// CSS `ease-in`.
+    pub const EASE_IN: CubicBezier = CubicBezier([0.42, 0.0, 1.0, 1.0]);
+    /// CSS `ease-out`.
+    pub const EASE_OUT: CubicBezier = CubicBezier([0.0, 0.0, 0.58, 1.0]);
+    /// CSS `ease-in-out`.
+    pub const EASE_IN_OUT: CubicBezier = CubicBezier([0.42, 0.0, 0.58, 1.0]);
+
+    /// A CSS easing: `linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`
+    /// or `cubic-bezier(x1, y1, x2, y2)` (`x1` and `x2` in `0..=1`).
+    pub fn parse(css: &str) -> Option<CubicBezier> {
+        let css = css.trim();
+        Some(match css {
+            "linear" => Self::LINEAR,
+            "ease" => Self::EASE,
+            "ease-in" => Self::EASE_IN,
+            "ease-out" => Self::EASE_OUT,
+            "ease-in-out" => Self::EASE_IN_OUT,
+            _ => {
+                let args = css.strip_prefix("cubic-bezier(")?.strip_suffix(')')?;
+                let n: Vec<f32> = args
+                    .split(',')
+                    .map(|a| a.trim().parse::<f32>().ok().filter(|n| n.is_finite()))
+                    .collect::<Option<_>>()?;
+                let [x1, y1, x2, y2] = n.as_slice() else {
+                    return None;
+                };
+                if !(0.0..=1.0).contains(x1) || !(0.0..=1.0).contains(x2) {
+                    return None;
+                }
+                CubicBezier([*x1, *y1, *x2, *y2])
+            }
+        })
+    }
+
+    /// As CSS writes it: `cubic-bezier(x1, y1, x2, y2)`.
+    pub fn css(self) -> String {
+        let [a, b, c, d] = self.0;
+        format!("cubic-bezier({a}, {b}, {c}, {d})")
+    }
+}
+
+/// A text style as one token (`typography`, Tailwind v4's `--text-*` with
+/// its sub-values): `text-title` is its size, and `text-title--line-height`,
+/// `text-title--letter-spacing` and `text-title--font-weight` its other
+/// parts, each a number token of its own; the class `text-title` sets
+/// them together.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Typography {
+    /// The font size.
+    pub size: crate::geometry::Points,
+    /// The line height, as `leading-*` takes it.
+    pub line_height: Option<f32>,
+    /// The letter spacing.
+    pub letter_spacing: Option<crate::geometry::Points>,
+    /// The font weight (`100`…`900`).
+    pub font_weight: Option<f32>,
+}
+
+impl Typography {
+    /// The suffixes of its parts' names after its own (`--line-height`), in
+    /// the order of its fields.
+    pub const PARTS: [&'static str; 3] = ["--line-height", "--letter-spacing", "--font-weight"];
 }
 
 /// Makes the tokens of a theme file's content (`Some`), or the defaults
@@ -392,7 +492,7 @@ pub struct ThemeTokens {
 }
 
 /// What of `left_out` refuses a file read whole: every value that could not
-/// be read, `; `-separated, but no name only that no theme type declares.
+/// be read, `; `-separated, but no name only that nothing declares.
 fn refused(left_out: &[super::theme_file::LeftOut]) -> Option<String> {
     let what: Vec<String> = left_out
         .iter()
@@ -421,8 +521,8 @@ impl ThemeTokens {
 
     /// [`ThemeTokens::of`] for a theme file that must be read whole (`nsh`'s
     /// `setTheme`): `Err` names each value it cannot read, `; `-separated.
-    /// Under theme types a name no type declares is left out, not refused
-    /// (#1190). `None`: no UI set reads themes.
+    /// Under declared tokens a name nothing declares is left out, not
+    /// refused (#1190). `None`: no UI set reads themes.
     pub fn checked(&self, json: &str) -> Option<Result<Tokens, String>> {
         Some(match self.provider.as_ref()?.read_left_out(Some(json)) {
             Ok((app, left_out)) => match refused(&left_out) {
@@ -440,9 +540,13 @@ impl ThemeTokens {
     /// `None`: no UI set reads theme changes.
     pub fn updated(&self, current: &Tokens, json: &str) -> Option<Result<Tokens, String>> {
         Some(
-            match self.provider.as_ref()?.overrides_left_out(json, current)? {
-                Ok((part, left_out)) => match refused(&left_out) {
-                    None => Ok(self.under_host(part).over(current)),
+            match self
+                .provider
+                .as_ref()?
+                .updated_left_out(json, current, current)?
+            {
+                Ok((tokens, left_out)) => match refused(&left_out) {
+                    None => Ok(self.under_host(tokens)),
                     Some(what) => Err(what),
                 },
                 Err(e) => Err(e),
@@ -453,8 +557,8 @@ impl ThemeTokens {
     /// The tokens drawn with once the tokens `names` (`None`: every one)
     /// go back to their values in the app's theme file `json` (`nsh`'s
     /// `resetTheme`), the others staying as in `current`: a name the file
-    /// and the defaults lack is gone. Under theme types a role's name is
-    /// the token it is mapped onto, as in a theme file. `None`: no UI set
+    /// and the defaults lack is gone. Under declared tokens a role's name
+    /// is the token it is mapped onto, as in a theme file. `None`: no UI set
     /// reads themes, or `json` is not one.
     pub fn reset(
         &self,
@@ -477,6 +581,20 @@ impl ThemeTokens {
         Some(out)
     }
 
+    /// The tokens drawn with once the theme's modifier `name` takes the
+    /// context `context` (`nsh`'s `setModifier`): the tokens its contexts set
+    /// over `current`, under the embedding app's. `Err` says the theme has no
+    /// modifiers, no such modifier or no such context of it.
+    pub fn modifier(&self, current: &Tokens, name: &str, context: &str) -> Result<Tokens, String> {
+        let Some(modifiers) = current.modifiers() else {
+            return Err("the theme has no modifiers".into());
+        };
+        let picked = modifiers.select(name, context)?;
+        let mut out = self.under_host(picked.tokens()).over(current);
+        out.set_modifiers(Some(Arc::new(picked)));
+        Ok(out)
+    }
+
     /// The tokens a [`super::ThemeScope`] draws with: the values theme
     /// file `json` sets, over `current` (the tokens around the scope,
     /// which a `var()` it does not set names). A scope sets values and adds
@@ -490,8 +608,23 @@ impl ThemeTokens {
         json: &str,
     ) -> Option<Result<(Tokens, Vec<String>), String>> {
         let read = self.provider.as_ref()?.overrides_left_out(json, current)?;
+        let value = serde_json::from_str::<crate::JsonValue>(json).ok();
         Some(read.map(|(part, left_out)| {
             let mut said: Vec<String> = left_out.iter().map(ToString::to_string).collect();
+            if let Some(value) = &value {
+                // A scope picks contexts with its own prop, and declares nothing.
+                if value.get("modifiers").is_some() {
+                    said.push(
+                        "theme.modifiers: a scope picks the theme's contexts with its `modifiers` prop"
+                            .to_owned(),
+                    );
+                }
+                said.extend(
+                    super::theme_file::unknown_sections(value)
+                        .iter()
+                        .map(|l| format!("theme.{l}")),
+                );
+            }
             let (tokens, unknown) = part.within(current);
             said.extend(unknown.iter().map(|name| scope_left_out(name, current)));
             (tokens, said)
@@ -523,9 +656,9 @@ impl Tokens {
     }
 
     /// The number named `name` (its light value, the only one of most
-    /// numbers). [`Tokens::number_in`] reads it in either appearance; a
-    /// theme type's number field ([`super::theme_of`]) and
-    /// [`super::token`] read it in the appearance shown.
+    /// numbers). [`Tokens::number_in`] reads it in either appearance;
+    /// [`super::token`] and a key's [`super::TokenKey::get`] read it in the
+    /// appearance shown.
     pub fn number(&self, name: &str) -> Option<f32> {
         self.numbers.get(name).copied()
     }
@@ -611,6 +744,112 @@ impl Tokens {
         self.gradients.iter().map(|(k, g)| (&**k, g))
     }
 
+    /// The string named `name`.
+    pub fn string(&self, name: &str) -> Option<&Arc<str>> {
+        match self.plain.get(name)? {
+            Plain::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Sets the string named `name`.
+    pub fn set_string(&mut self, name: &str, value: impl Into<Arc<str>>) {
+        if misnamed(name, Kind::String) {
+            return;
+        }
+        self.clear_but(name, Kind::String);
+        self.plain.insert(name.into(), Plain::String(value.into()));
+    }
+
+    /// The boolean named `name`.
+    pub fn boolean(&self, name: &str) -> Option<bool> {
+        match self.plain.get(name)? {
+            Plain::Boolean(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Sets the boolean named `name`.
+    pub fn set_boolean(&mut self, name: &str, value: bool) {
+        if misnamed(name, Kind::Boolean) {
+            return;
+        }
+        self.clear_but(name, Kind::Boolean);
+        self.plain.insert(name.into(), Plain::Boolean(value));
+    }
+
+    /// The easing curve named `name` (`ease-snappy`).
+    pub fn easing(&self, name: &str) -> Option<CubicBezier> {
+        match self.plain.get(name)? {
+            Plain::Easing(e) => Some(*e),
+            _ => None,
+        }
+    }
+
+    /// Sets the easing curve named `name`, which starts with `ease-`.
+    pub fn set_easing(&mut self, name: &str, value: CubicBezier) {
+        if misnamed(name, Kind::Easing) {
+            return;
+        }
+        self.clear_but(name, Kind::Easing);
+        self.plain.insert(name.into(), Plain::Easing(value));
+    }
+
+    /// Each string by name.
+    pub fn strings(&self) -> impl Iterator<Item = (&str, &Arc<str>)> {
+        self.plain.iter().filter_map(|(k, v)| match v {
+            Plain::String(s) => Some((&**k, s)),
+            _ => None,
+        })
+    }
+
+    /// Each boolean by name.
+    pub fn booleans(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.plain.iter().filter_map(|(k, v)| match v {
+            Plain::Boolean(b) => Some((&**k, *b)),
+            _ => None,
+        })
+    }
+
+    /// Each easing curve by name.
+    pub fn easings(&self) -> impl Iterator<Item = (&str, CubicBezier)> {
+        self.plain.iter().filter_map(|(k, v)| match v {
+            Plain::Easing(e) => Some((&**k, *e)),
+            _ => None,
+        })
+    }
+
+    /// Typography token `name` (`text-title`, a size) with its parts
+    /// ([`Typography::PARTS`]), in the dark appearance (`dark`) or the
+    /// light one. `None`: it has no number of that name.
+    pub fn typography_in(&self, name: &str, dark: bool) -> Option<Typography> {
+        let part = |suffix: &str| self.number_in(&format!("{name}{suffix}"), dark);
+        Some(Typography {
+            size: crate::geometry::Points(self.number_in(name, dark)?),
+            line_height: part(Typography::PARTS[0]),
+            letter_spacing: part(Typography::PARTS[1]).map(crate::geometry::Points),
+            font_weight: part(Typography::PARTS[2]),
+        })
+    }
+
+    /// Sets typography token `name` and its parts; a part it has not is
+    /// removed.
+    pub fn set_typography(&mut self, name: &str, value: Typography) {
+        self.set_number(name, value.size.0);
+        let parts = [
+            value.line_height,
+            value.letter_spacing.map(|p| p.0),
+            value.font_weight,
+        ];
+        for (suffix, part) in Typography::PARTS.iter().zip(parts) {
+            let part_name = format!("{name}{suffix}");
+            match part {
+                Some(n) => self.set_number(&part_name, n),
+                None => self.remove_named(&part_name),
+            }
+        }
+    }
+
     /// The token named `name`, of any kind (a color first, as classes take
     /// it), as kept: a color, a shadow and a gradient with their values in
     /// both appearances, a number its light value ([`Tokens::get_in`]
@@ -628,7 +867,14 @@ impl Tokens {
         if let Some(s) = self.shadows.get(name) {
             return Some(Token::Shadow(s.clone()));
         }
-        self.gradients.get(name).cloned().map(Token::Gradient)
+        if let Some(g) = self.gradients.get(name) {
+            return Some(Token::Gradient(g.clone()));
+        }
+        self.plain.get(name).map(|v| match v {
+            Plain::String(s) => Token::String(s.clone()),
+            Plain::Boolean(b) => Token::Boolean(*b),
+            Plain::Easing(e) => Token::Easing(*e),
+        })
     }
 
     /// The token named `name` in the dark appearance (`dark`) or the light
@@ -642,31 +888,9 @@ impl Tokens {
         }
     }
 
-    /// Whether a number has a dark value of its own.
-    pub(crate) fn has_dark_numbers(&self) -> bool {
-        !self.dark_numbers.is_empty()
-    }
-
     /// Whether number `name` has a dark value of its own.
     pub(crate) fn has_dark_number(&self, name: &str) -> bool {
         self.dark_numbers.contains_key(name)
-    }
-
-    /// These tokens as the dark appearance shows them, for what reads one
-    /// value of each number ([`super::theme_of`]): each number its dark
-    /// value. `None`: no number has a dark value of its own, so they are
-    /// shown as they are.
-    pub(crate) fn shown_dark(&self) -> Option<Tokens> {
-        if self.dark_numbers.is_empty() {
-            return None;
-        }
-        let mut out = self.clone();
-        for (name, n) in std::mem::take(&mut out.dark_numbers) {
-            if let Some(light) = out.numbers.get_mut(&name) {
-                *light = n;
-            }
-        }
-        Some(out)
     }
 
     /// The kind of token `name`.
@@ -682,7 +906,11 @@ impl Tokens {
         } else if self.gradients.contains_key(name) {
             Some(Kind::Gradient)
         } else {
-            None
+            self.plain.get(name).map(|v| match v {
+                Plain::String(_) => Kind::String,
+                Plain::Boolean(_) => Kind::Boolean,
+                Plain::Easing(_) => Kind::Easing,
+            })
         }
     }
 
@@ -703,6 +931,9 @@ impl Tokens {
         }
         if kind != Kind::Gradient {
             self.gradients.remove(name);
+        }
+        if self.plain.get(name).is_some_and(|v| v.kind() != kind) {
+            self.plain.remove(name);
         }
     }
 
@@ -781,6 +1012,46 @@ impl Tokens {
         self.themed = themed;
     }
 
+    /// What declares these tokens, when they were read by declared tokens:
+    /// each name's kind, path and doc ([`super::Declarations`]).
+    pub fn declarations(&self) -> Option<&super::Declarations> {
+        self.declarations.as_deref()
+    }
+
+    /// [`Tokens::declarations`], shared.
+    pub(crate) fn declarations_arc(&self) -> Option<Arc<super::Declarations>> {
+        self.declarations.clone()
+    }
+
+    /// The theme's modifiers, with the context each has now, when these
+    /// tokens were read from a theme file that has them
+    /// ([`super::ThemeModifiers`]).
+    pub fn modifiers(&self) -> Option<&super::ThemeModifiers> {
+        self.modifiers.as_deref()
+    }
+
+    /// Says what modifiers the theme has (`None`: none).
+    pub(crate) fn set_modifiers(&mut self, modifiers: Option<Arc<super::ThemeModifiers>>) {
+        self.modifiers = modifiers;
+    }
+
+    /// Says what declares these tokens (`None`: nothing).
+    pub(crate) fn set_declarations(&mut self, declarations: Option<Arc<super::Declarations>>) {
+        self.declarations = declarations;
+    }
+
+    /// Each token's name, of whatever kind (in no order).
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.colors
+            .keys()
+            .chain(self.numbers.keys())
+            .chain(self.fonts.keys())
+            .chain(self.shadows.keys())
+            .chain(self.gradients.keys())
+            .chain(self.plain.keys())
+            .map(|name| &**name)
+    }
+
     /// Whether it has no token.
     pub fn is_empty(&self) -> bool {
         self.colors.is_empty()
@@ -789,6 +1060,7 @@ impl Tokens {
             && self.fonts.is_empty()
             && self.shadows.is_empty()
             && self.gradients.is_empty()
+            && self.plain.is_empty()
     }
 
     /// Each color by name.
@@ -811,30 +1083,6 @@ impl Tokens {
         self.fonts.iter().map(|(k, f)| (&**k, f))
     }
 
-    /// Gives token `to` what token `from` is, of whatever kind, unless
-    /// there is a `to` already; `from` stays.
-    pub(crate) fn copy_as(&mut self, from: &str, to: &str) {
-        if self.kind(to).is_some() {
-            return;
-        }
-        fn copy<V: Clone>(map: &mut FxHashMap<Box<str>, V>, from: &str, to: &str) {
-            if !map.contains_key(to)
-                && let Some(value) = map.get(from).cloned()
-            {
-                map.insert(to.into(), value);
-            }
-        }
-        copy(&mut self.colors, from, to);
-        // A number's dark value goes with its light one, not onto another.
-        if !self.numbers.contains_key(to) && self.numbers.contains_key(from) {
-            copy(&mut self.dark_numbers, from, to);
-        }
-        copy(&mut self.numbers, from, to);
-        copy(&mut self.fonts, from, to);
-        copy(&mut self.shadows, from, to);
-        copy(&mut self.gradients, from, to);
-    }
-
     /// These tokens over `base` as a scope's values are over the tokens
     /// around it ([`super::ThemeScope`]): the values of the names `base`
     /// has, each of the kind `base` has it. The names it lacks, or has as
@@ -846,6 +1094,7 @@ impl Tokens {
             .chain(self.fonts.keys().map(|n| (n, Kind::Font)))
             .chain(self.shadows.keys().map(|n| (n, Kind::Shadow)))
             .chain(self.gradients.keys().map(|n| (n, Kind::Gradient)))
+            .chain(self.plain.iter().map(|(n, v)| (n, v.kind())))
             .filter(|(name, kind)| base.kind(name) != Some(*kind))
             .map(|(name, _)| name.clone())
             .collect();
@@ -865,6 +1114,7 @@ impl Tokens {
         self.fonts.remove(name);
         self.shadows.remove(name);
         self.gradients.remove(name);
+        self.plain.remove(name);
     }
 
     /// Makes token `name` what it is in `from`, of whatever kind, or
@@ -890,26 +1140,12 @@ impl Tokens {
         copy(&mut self.fonts, &from.fonts, name);
         copy(&mut self.shadows, &from.shadows, name);
         copy(&mut self.gradients, &from.gradients, name);
+        copy(&mut self.plain, &from.plain, name);
     }
 
-    /// `self` with the tokens of `base` it does not have.
+    /// `self` with the tokens of `base` it does not have; what declares
+    /// `self` and its modifiers, if it has them, are the result's.
     pub fn over(&self, base: &Tokens) -> Tokens {
-        self.over_with(base, None)
-    }
-
-    /// [`Tokens::over`] for tokens a theme type's fields wrote
-    /// ([`super::set_theme`]), read in the dark appearance (`dark`) or the
-    /// light one. A number field is its token's value there and knows no
-    /// other, so a number `self` leaves at the value `base` has there
-    /// keeps both values `base` has; one it changes is its value in both
-    /// appearances, as [`Tokens::set_number`] makes it.
-    pub(crate) fn over_as_fields(&self, base: &Tokens, dark: bool) -> Tokens {
-        self.over_with(base, Some(dark))
-    }
-
-    /// `self` over `base`; `fields`: as a theme type's fields read in the
-    /// appearance it says, dark or not ([`Tokens::over_as_fields`]).
-    fn over_with(&self, base: &Tokens, fields: Option<bool>) -> Tokens {
         // A name of `self` is the kind `self` has it, whatever `base` has.
         let mut out = base.clone();
         for (k, c) in &self.colors {
@@ -919,12 +1155,6 @@ impl Tokens {
         // A number of `self` is its values: a dark one of `base`'s goes
         // unless `self` has its own.
         for (k, n) in &self.numbers {
-            let unchanged = fields.is_some_and(|dark| {
-                !self.dark_numbers.contains_key(k) && base.number_in(k, dark) == Some(*n)
-            });
-            if unchanged {
-                continue;
-            }
             out.clear_but(k, Kind::Number);
             out.numbers.insert(k.clone(), *n);
             out.dark_numbers.remove(k);
@@ -947,6 +1177,10 @@ impl Tokens {
             out.clear_but(k, Kind::Gradient);
             out.gradients.insert(k.clone(), g.clone());
         }
+        for (k, v) in &self.plain {
+            out.clear_but(k, v.kind());
+            out.plain.insert(k.clone(), v.clone());
+        }
         if let Some(roles) = &self.roles {
             out.roles = match out.roles {
                 Some(base) => {
@@ -956,6 +1190,12 @@ impl Tokens {
                 }
                 None => Some(roles.clone()),
             };
+        }
+        if self.declarations.is_some() {
+            out.declarations = self.declarations.clone();
+        }
+        if self.modifiers.is_some() {
+            out.modifiers = self.modifiers.clone();
         }
         out
     }
@@ -997,12 +1237,26 @@ pub(crate) enum Kind {
     Font,
     Shadow,
     Gradient,
+    String,
+    Boolean,
+    Easing,
+}
+
+impl Plain {
+    fn kind(&self) -> Kind {
+        match self {
+            Plain::String(_) => Kind::String,
+            Plain::Boolean(_) => Kind::Boolean,
+            Plain::Easing(_) => Kind::Easing,
+        }
+    }
 }
 
 impl Kind {
     /// The name forms that say a kind, as a sentence lists them.
     pub(crate) const FORMS: &str = "a font is `font-*`, a shadow `shadow-*`, a gradient \
-                                    `background-image-*`, a weight `font-weight-*`";
+                                    `background-image-*`, a weight `font-weight-*`, an easing \
+                                    `ease-*`";
 
     /// Whether a theme file reads a token named `name` as this kind: the
     /// name says its kind, as a CSS variable's does ([`Tokens`]).
@@ -1013,8 +1267,9 @@ impl Kind {
             Kind::Font => font && !weight,
             Kind::Shadow => name.starts_with("shadow-"),
             Kind::Gradient => name.starts_with(super::theme_file::GRADIENTS),
-            Kind::Color => !font,
+            Kind::Color | Kind::String | Kind::Boolean => !font,
             Kind::Number => !font || weight,
+            Kind::Easing => name.starts_with("ease-"),
         }
     }
 
@@ -1026,6 +1281,9 @@ impl Kind {
             Kind::Font => "font family",
             Kind::Shadow => "shadow",
             Kind::Gradient => "gradient",
+            Kind::String => "string",
+            Kind::Boolean => "boolean",
+            Kind::Easing => "easing",
         }
     }
 }
@@ -1081,62 +1339,6 @@ mod tests {
         assert_eq!(tokens.font(FONT_SANS).map(|f| &**f), Some("Inter"));
         assert_eq!(tokens.font(FONT_MONO).map(|f| &**f), Some("Iosevka"));
         assert!(Tokens::default().is_empty());
-    }
-}
-
-/// Tokens a theme type's fields wrote, over the app's
-/// ([`Tokens::over_as_fields`]), read in the light appearance: a number
-/// left at its light value keeps the dark one.
-#[cfg(test)]
-mod theme_set_numbers {
-    use super::*;
-    use crate::color::rgb;
-
-    fn base() -> Tokens {
-        let mut base = Tokens::default();
-        base.set_number("radius-card", 10.0);
-        base.set_dark_number("radius-card", 6.0);
-        base.set_number("spacing-gutter", 16.0);
-        base.set_color("ink", rgb(0x111111).into());
-        base
-    }
-
-    #[test]
-    fn a_number_at_its_light_value_keeps_the_dark_one() {
-        let mut fields = Tokens::default();
-        fields.set_number("radius-card", 10.0);
-        fields.set_color("ink", rgb(0x222222).into());
-        let tokens = fields.over_as_fields(&base(), false);
-        assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
-        assert_eq!(tokens.number_in("radius-card", true), Some(6.0));
-        assert_eq!(tokens.color("ink"), Some(rgb(0x222222).into()));
-        assert_eq!(tokens.number("spacing-gutter"), Some(16.0));
-        // By name, a number set is both appearances'.
-        assert_eq!(
-            fields.over(&base()).number_in("radius-card", true),
-            Some(10.0)
-        );
-    }
-
-    #[test]
-    fn a_number_that_changes_or_is_new_is_both_appearances() {
-        let mut fields = Tokens::default();
-        fields.set_number("radius-card", 12.0);
-        fields.set_number("radius-chip", 4.0);
-        let tokens = fields.over_as_fields(&base(), false);
-        assert_eq!(tokens.number_in("radius-card", false), Some(12.0));
-        assert_eq!(tokens.number_in("radius-card", true), Some(12.0));
-        assert_eq!(tokens.number_in("radius-chip", true), Some(4.0));
-    }
-
-    #[test]
-    fn a_number_written_with_a_dark_value_takes_it() {
-        let mut fields = Tokens::default();
-        fields.set_number("radius-card", 10.0);
-        fields.set_dark_number("radius-card", 8.0);
-        let tokens = fields.over_as_fields(&base(), false);
-        assert_eq!(tokens.number_in("radius-card", false), Some(10.0));
-        assert_eq!(tokens.number_in("radius-card", true), Some(8.0));
     }
 }
 

@@ -3021,7 +3021,7 @@ pub trait Styled: Sized {
     }
 
     /// Gradients as the background, per appearance: a theme's gradient
-    /// token (`move || theme_of::<Acme>().hero.clone()`), or gradients
+    /// token (`move || keys::HERO.get().unwrap_or_default()`), or gradients
     /// read from CSS ([`AdaptiveGradient::parse`]). A closure follows theme
     /// changes, and the platform switches the gradients with the appearance
     /// with nothing running, as [`Styled::bg`] does a color. The first

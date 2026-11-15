@@ -1146,8 +1146,8 @@ unsafe extern "C" fn scope_gone(
     UNDEFINED
 }
 
-/// The tokens a `ThemeScope` draws with: its `theme` over the tokens
-/// around it (`env::make_scope_tokens`).
+/// The tokens a `ThemeScope` draws with: its `modifiers`' contexts and its
+/// `theme` over the tokens around it (`env::make_scope_tokens`).
 unsafe extern "C" fn scope_draws(
     cx: *mut JsContext,
     _this: JsValue,
@@ -1163,8 +1163,18 @@ unsafe extern "C" fn scope_draws(
     if unsafe { qjs::JS_IsException(theme) } {
         return theme;
     }
-    let made = crate::env::make_scope_tokens(cx, scope_slot(cx, slot), theme, outer);
-    unsafe { qjs::JS_FreeValue(cx, theme) };
+    let modifiers = get(cx, props, "modifiers");
+    // SAFETY: a live value, ours.
+    if unsafe { qjs::JS_IsException(modifiers) } {
+        unsafe { qjs::JS_FreeValue(cx, theme) };
+        return modifiers;
+    }
+    let made = crate::env::make_scope_tokens(cx, scope_slot(cx, slot), theme, modifiers, outer);
+    // SAFETY: values ours.
+    unsafe {
+        qjs::JS_FreeValue(cx, theme);
+        qjs::JS_FreeValue(cx, modifiers);
+    }
     made
 }
 

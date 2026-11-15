@@ -97,9 +97,18 @@ pub(crate) struct Env {
     /// The design tokens the app is drawn with ([`set_tokens`]).
     tokens: RefCell<Arc<Tokens>>,
     /// A signal of their version (owned), which every `token()` reads:
-    /// set when most of the tokens read changed (a new theme), and for the
-    /// names past [`TOKEN_SIGNALS`].
+    /// set when most of the tokens read changed (a new theme).
     tokens_signal: Cell<JsValue>,
+    /// A signal of the tokens' shape (owned): set when their names, their
+    /// kinds or the modifiers' contexts change, which `tokens.names`,
+    /// `entries`, `kind` and `modifier()` read.
+    shape_signal: Cell<JsValue>,
+    /// A signal (owned) that what reads a name past [`TOKEN_SIGNALS`] reads
+    /// in place of a signal of its own (a name no theme has, of the many an
+    /// app made up): set on every change of the tokens.
+    overflow_signal: Cell<JsValue>,
+    /// Whether a name was read past [`TOKEN_SIGNALS`] ([`Env::overflow_signal`]).
+    overflowed: Cell<bool>,
     tokens_version: Cell<u32>,
     /// A signal per token `token()` read (owned), set when that token's
     /// value changes and few do: what read a token follows that token,
@@ -147,6 +156,9 @@ impl Default for Env {
             insets: Cell::new(UNDEFINED),
             tokens: RefCell::new(Arc::default()),
             tokens_signal: Cell::new(UNDEFINED),
+            shape_signal: Cell::new(UNDEFINED),
+            overflow_signal: Cell::new(UNDEFINED),
+            overflowed: Cell::new(false),
             tokens_version: Cell::new(0),
             token_signals: RefCell::default(),
             theme: RefCell::new(ThemeTokens::default()),
@@ -220,6 +232,8 @@ impl Env {
             qjs::JS_FreeValue(raw, self.scope_tokens_key.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.scopes_signal.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.tokens_signal.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.shape_signal.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.overflow_signal.replace(UNDEFINED));
             for (_, signal) in self.token_signals.get_mut().drain() {
                 qjs::JS_FreeValue(raw, signal);
             }
@@ -262,12 +276,15 @@ pub(crate) fn init(cx: *mut JsContext) {
     let insets = unsafe { crate::dom::context(cx, UNDEFINED, 1, args.as_mut_ptr()) };
     e.insets.set(insets);
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
+    e.shape_signal.set(reactive::new_signal(cx, number(0.0)));
+    e.overflow_signal.set(reactive::new_signal(cx, number(0.0)));
 }
 
-/// How many tokens get a signal of their own ([`Env::token_signals`]):
-/// the names `token()` reads are a theme's, a few dozen. Once an app has
-/// read more (names it makes up without end), every change of the tokens
-/// sets the signal of all of them.
+/// How many names no theme has get a signal of their own
+/// ([`Env::token_signals`]): a theme's names always do (a design tool's
+/// collection has thousands); past this many made-up names (an app's
+/// without end), what reads another one follows every change of the tokens
+/// ([`Env::overflow_signal`]).
 const TOKEN_SIGNALS: usize = 1024;
 
 /// Takes in the design tokens the app is drawn with: what read a token
@@ -305,16 +322,26 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     // SAFETY: a value the environment owns.
     let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
     // Roles mapped onto other tokens: what read a role reads another one.
-    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names || !old.same_roles(&tokens);
-    if whole && !scoped {
+    // A context picked is read by `modifier()`, of every token.
+    let whole = 2 * changed.len() > names || !old.same_roles(&tokens);
+    // The names, their kinds or the modifiers' contexts changed: what lists
+    // them reads them again.
+    let shape = !old.same_names(&tokens) || old.modifiers() != tokens.modifiers();
+    if whole && !scoped && !shape {
         return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
     }
     reactive::batch_with(cx, || {
+        if shape {
+            reactive::set_signal(cx, e.shape_signal.get(), number(version as f32));
+        }
         if whole {
             reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
         } else {
             for signal in changed {
                 reactive::set_signal(cx, signal, number(version as f32));
+            }
+            if e.overflowed.get() {
+                reactive::set_signal(cx, e.overflow_signal.get(), number(version as f32));
             }
         }
         if scoped {
@@ -324,17 +351,21 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
 }
 
 /// The signal of token `name` (borrowed), made the first time the name is
-/// read; none past [`TOKEN_SIGNALS`] names.
-fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> Option<JsValue> {
+/// read: a theme's name always has one, a name no theme has none past
+/// [`TOKEN_SIGNALS`] names, which reads [`Env::overflow_signal`] then.
+fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> JsValue {
     if let Some(signal) = e.token_signals.borrow().get(name) {
-        return Some(*signal);
+        return *signal;
     }
-    if e.token_signals.borrow().len() >= TOKEN_SIGNALS {
-        return None;
+    if e.token_signals.borrow().len() >= TOKEN_SIGNALS
+        && e.tokens.borrow().kind_name(name).is_none()
+    {
+        e.overflowed.set(true);
+        return e.overflow_signal.get();
     }
     let signal = reactive::new_signal(cx, number(e.tokens_version.get() as f32));
     e.token_signals.borrow_mut().insert(name.into(), signal);
-    Some(signal)
+    signal
 }
 
 /// Sets how the app's theme file makes the tokens it is drawn with
@@ -412,6 +443,8 @@ unsafe extern "C" fn set_theme(
         return err;
     }
     if let Some(tokens) = tokens {
+        // The contexts the app picked stay picked, as in the core.
+        let tokens = tokens.with_picks_of(&e.tokens.borrow());
         set_tokens(cx, Arc::new(tokens));
     }
     reactive::finish_value(cx, UNDEFINED)
@@ -514,6 +547,253 @@ unsafe extern "C" fn reset_theme(
     reactive::finish_value(cx, UNDEFINED)
 }
 
+/// `setModifier(name, context)`: the theme's modifier `name` takes the
+/// context `context`, the tokens its contexts set following at once.
+unsafe extern "C" fn set_modifier(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    const EXPECTED: &str = "setModifier: expected a modifier's name and a context's (strings)";
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let context = crate::dom::string_arg(cx, arg(argc, argv, 1));
+    let (Some(name), Some(context)) = (name, context) else {
+        return type_error(cx, EXPECTED);
+    };
+    let e = env(cx);
+    let current = e.tokens.borrow().clone();
+    let tokens = match e.theme.borrow().modifier(&current, &name, &context) {
+        Ok(tokens) => tokens,
+        Err(what) => return type_error(cx, &format!("setModifier: {what}")),
+    };
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiModifier(name.into(), context.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    set_tokens(cx, Arc::new(tokens));
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// The tokens of the scope around what reads them, else the surface's,
+/// their shape read tracked (the names, kinds and modifiers' contexts).
+fn tracked_tokens(cx: *mut JsContext) -> Result<Arc<Tokens>, JsValue> {
+    let e = env(cx);
+    let scoped = scope_tokens(cx)?;
+    if scoped.is_none() {
+        reactive::track(cx, e.shape_signal.get());
+    }
+    Ok(scoped.unwrap_or_else(|| e.tokens.borrow().clone()))
+}
+
+/// `modifier(name)`: the context the theme's modifier `name` has now.
+unsafe extern "C" fn modifier(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let selected = name.and_then(|name| {
+        tokens
+            .modifiers()
+            .and_then(|m| m.selected(&name))
+            .map(str::to_owned)
+    });
+    match selected {
+        Some(context) => string(cx, &context),
+        None => UNDEFINED,
+    }
+}
+
+/// `modifiers()`: the theme's modifiers, each with its contexts and
+/// default.
+unsafe extern "C" fn modifiers(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let list: Vec<serde_json::Value> = tokens
+        .modifiers()
+        .map(|m| m.axes())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|axis| {
+            serde_json::json!({
+                "name": &*axis.name,
+                "contexts": axis.contexts.iter().map(|c| &**c).collect::<Vec<_>>(),
+                "default": &*axis.default,
+            })
+        })
+        .collect();
+    crate::host::json_to_js(cx, &serde_json::Value::Array(list))
+}
+
+/// `tokens.get(name)`: token `name` with its kind and its value in each
+/// appearance (`Tokens::value_json`), tracked as `token()` tracks it.
+unsafe extern "C" fn tokens_get(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let e = env(cx);
+    let scoped = match scope_tokens(cx) {
+        Ok(scoped) => scoped,
+        Err(exception) => return exception,
+    };
+    if scoped.is_none() {
+        reactive::track(cx, e.tokens_signal.get());
+        if let Some(name) = name.as_deref() {
+            reactive::track(cx, token_signal(cx, e, name));
+        }
+    }
+    let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
+    match name.and_then(|name| tokens.value_json(&name)) {
+        Some(value) => crate::host::json_to_js(cx, &value),
+        None => UNDEFINED,
+    }
+}
+
+/// `tokens.kind(name)`: the kind of token `name` (`Tokens::kind_name`).
+unsafe extern "C" fn tokens_kind(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    match name.and_then(|name| tokens.kind_name(&name)) {
+        Some(kind) => string(cx, kind),
+        None => UNDEFINED,
+    }
+}
+
+/// `tokens.names(filter?)`: every token's name, sorted, of the kind and with
+/// the prefix `filter` gives.
+unsafe extern "C" fn tokens_names(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let filter = match to_json(cx, arg(argc, argv, 0)) {
+        Ok(filter) => filter,
+        Err(exception) => return exception,
+    };
+    let text = |key: &str| {
+        filter
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let (kind, prefix) = (text("kind"), text("prefix"));
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let names: Vec<serde_json::Value> = tokens
+        .infos()
+        .into_iter()
+        .filter(|info| kind.as_deref().is_none_or(|k| info.kind == k))
+        .filter(|info| prefix.as_deref().is_none_or(|p| info.name.starts_with(p)))
+        .map(|info| (*info.name).into())
+        .collect();
+    crate::host::json_to_js(cx, &serde_json::Value::Array(names))
+}
+
+/// `tokens.entries()`: every token, sorted by name, with its kind and what
+/// declares it (`Tokens::infos`).
+unsafe extern "C" fn tokens_entries(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let list = tokens.infos().iter().map(|info| info.to_json()).collect();
+    crate::host::json_to_js(cx, &serde_json::Value::Array(list))
+}
+
+/// The `tokens` object of `nsh`: the token dictionary by name.
+fn make_tokens(cx: *mut JsContext) -> JsValue {
+    use crate::web::js;
+    let made = (|| -> js::R<js::V> {
+        let obj = js::new_object(cx)?;
+        for (name, key, f, length) in [
+            (c"get", "get", tokens_get as js::Native, 1),
+            (c"kind", "kind", tokens_kind as js::Native, 1),
+            (c"names", "names", tokens_names as js::Native, 1),
+            (c"entries", "entries", tokens_entries as js::Native, 0),
+        ] {
+            let function = js::function(cx, name, f, length)?;
+            js::define(cx, obj.raw(), key, function, true)?;
+        }
+        Ok(obj)
+    })();
+    made.map_or(qjs::JS_EXCEPTION, js::V::take)
+}
+
+/// `tokens` of `nsh`.
+pub(crate) const TOKENS_EXPORT: crate::modules::Item = (
+    "tokens",
+    Export::Value(make_tokens),
+    Ts::value(
+        "The app's design tokens by name, reactive, for code that does not know\ntheir names ahead (an editor, a tool, an agent): `get` a token with its\nkind and its value in each appearance, `kind` of a token, `names` of\nevery token (of a kind, with a prefix), `entries` with each one's kind and\nwhat declares it.",
+        "TokenDictionary",
+    ),
+);
+
+/// `setModifier` of `nsh`.
+pub(crate) const SET_MODIFIER_EXPORT: crate::modules::Item = (
+    "setModifier",
+    Export::Function(set_modifier, 2),
+    Ts::function(
+        "Gives the theme's modifier `name` (`\"brand\"`) the context `context`\n(`\"forest\"`): the tokens its contexts set take that context's values,\n`token()` reads them at once, and classes naming tokens, `nsh/base` and\nRust components follow with the next frame. A modifier or context the\ntheme has not throws a `TypeError` naming it.",
+        &["<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void"],
+    ),
+);
+
+/// `modifier` of `nsh`.
+pub(crate) const MODIFIER_EXPORT: crate::modules::Item = (
+    "modifier",
+    Export::Function(modifier, 1),
+    Ts::function(
+        "The context the theme's modifier `name` has now, reactive; `undefined`\nwhen the theme has no such modifier.",
+        &["<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined"],
+    ),
+);
+
+/// `modifiers` of `nsh`.
+pub(crate) const MODIFIERS_EXPORT: crate::modules::Item = (
+    "modifiers",
+    Export::Function(modifiers, 0),
+    Ts::function(
+        "The theme's modifiers in its file's order, reactive: each one's name, its\ncontexts and the context it has when nothing else is picked.",
+        &["(): ModifierAxis[]"],
+    ),
+);
+
 /// Throws a `TypeError` of `message`.
 fn type_error(cx: *mut JsContext, message: &str) -> JsValue {
     let message = std::ffi::CString::new(message.replace('\0', "")).unwrap_or_default();
@@ -526,7 +806,7 @@ pub(crate) const SET_THEME_EXPORT: crate::modules::Item = (
     "setTheme",
     Export::Function(set_theme, 1),
     Ts::function(
-        "Makes `theme` the app's theme while it runs, in place of `nsh.json`'s\n`\"theme\"` and over shadcn/ui's tokens as that one is: `token()` reads it\nat once, and classes naming tokens, `nsh/base` and Rust components'\n`theme()` follow with the next frame. An embedding app's theme overrides\nstill win. `null` gives back the theme the app was built with. The theme\nis read whole: a value NSH cannot read (a color it does not know, a value\nthat is no color in one appearance where the other's is) throws a\n`TypeError` naming it, and the theme shown stays.",
+        "Makes `theme` the app's theme while it runs, in place of `nsh.json`'s\n`\"theme\"` and over shadcn/ui's tokens as that one is: `token()` reads it\nat once, and classes naming tokens, `nsh/base` and Rust components'\n`theme()` follow with the next frame. An embedding app's theme overrides\nstill win. `null` gives back the theme the app was built with. The\ncontexts the app picked (`setModifier`) stay picked where the new theme\nhas them. The theme is read whole: a value NSH cannot read (a color it does not know, a value\nthat is no color in one appearance where the other's is) throws a\n`TypeError` naming it, and the theme shown stays.",
         &["(theme: Theme | null): void"],
     ),
 );
@@ -536,8 +816,8 @@ pub(crate) const UPDATE_THEME_EXPORT: crate::modules::Item = (
     "updateTheme",
     Export::Function(update_theme, 1),
     Ts::function(
-        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. The theme is read whole, as\n`setTheme`'s: a value NSH cannot read throws a `TypeError` naming it, and\nno token changes.",
-        &["(theme: Theme): void"],
+        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. Its `modifiers` change the\ntheme's: the values a context sets, a context or modifier added, a\n`default` moved, the contexts picked staying picked. A token a context sets\ntakes the change's value as its own, under the contexts. The theme is read\nwhole, as `setTheme`'s: a value NSH cannot read throws a `TypeError`\nnaming it, and no token changes.",
+        &["(theme: ThemeChange): void"],
     ),
 );
 
@@ -546,7 +826,7 @@ pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
     "resetTheme",
     Export::Function(reset_theme, 1),
     Ts::function(
-        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme types map it onto, as it does in a theme file.",
+        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme documents map it onto, as it does in a theme file.",
         &["(names?: (keyof Tokens | keyof Roles)[]): void"],
     ),
 );
@@ -597,9 +877,7 @@ fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
     if tracked {
         reactive::track(cx, e.tokens_signal.get());
         for name in [name.as_deref(), mapped.as_deref()].into_iter().flatten() {
-            if let Some(signal) = token_signal(cx, e, name) {
-                reactive::track(cx, signal);
-            }
+            reactive::track(cx, token_signal(cx, e, name));
         }
     }
     // The appearance of the scope around what reads it, else the surface's.
@@ -629,6 +907,10 @@ fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
         Some(Token::Shadow(s)) => string(cx, &s.css(dark)),
         // Gradients as CSS writes them, of the appearance shown.
         Some(Token::Gradient(g)) => string(cx, &g.css(dark)),
+        Some(Token::String(s)) => string(cx, &s),
+        Some(Token::Boolean(b)) => boolean(b),
+        // An easing as CSS writes it.
+        Some(Token::Easing(e)) => string(cx, &e.css()),
         _ => UNDEFINED,
     }
 }
@@ -638,7 +920,7 @@ pub(crate) const ROLE_EXPORT: crate::modules::Item = (
     "role",
     Export::Function(role, 1),
     Ts::function(
-        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme type's `role = …`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
+        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme document's `\"roles\"`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
         &["<K extends keyof Roles>(name: K): Roles[K] | undefined"],
     ),
 );
@@ -648,7 +930,7 @@ pub(crate) const TOKEN_EXPORT: crate::modules::Item = (
     "token",
     Export::Function(token, 1),
     Ts::function(
-        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points), a font family, box shadows and\ngradients as CSS writes them. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
+        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points, a duration in milliseconds), a\nfont family, box shadows, gradients and an easing as CSS writes them, a\nstring, a boolean. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
         &["<K extends keyof Tokens>(name: K): Tokens[K]"],
     ),
 );
@@ -818,13 +1100,16 @@ pub(crate) fn make_scope_tokens(
     cx: *mut JsContext,
     slot: usize,
     theme: JsValue,
+    modifiers: JsValue,
     outer: JsValue,
 ) -> JsValue {
     let e = env(cx);
     // SAFETY: an inline tag check.
     let has_outer = unsafe { qjs::JS_IsFunction(cx, outer) };
-    // SAFETY: an inline tag check.
-    if !unsafe { qjs::JS_IsObject(theme) } {
+    // SAFETY: inline tag checks.
+    let (has_theme, has_modifiers) =
+        unsafe { (qjs::JS_IsObject(theme), qjs::JS_IsObject(modifiers)) };
+    if !has_theme && !has_modifiers {
         // No tokens of its own: the ones around it, by their own value
         // (`undefined`: the surface's, which `token()` follows by name).
         if let Some(held) = e.scope_tokens.borrow_mut().get_mut(slot) {
@@ -855,14 +1140,36 @@ pub(crate) fn make_scope_tokens(
         reactive::track(cx, e.scopes_signal.get());
         e.tokens.borrow().clone()
     });
-    let json = match to_json(cx, theme) {
-        Ok(json) => json.to_string(),
-        Err(exception) => return exception,
+    // Its modifiers' contexts first, its theme over them; what it leaves
+    // out is said once, by the component in the core.
+    let around = if has_modifiers {
+        let picks = match to_json(cx, modifiers) {
+            Ok(json) => json,
+            Err(exception) => return exception,
+        };
+        let picks: Vec<(String, String)> = picks
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(n, c)| Some((n.clone(), c.as_str()?.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Arc::new(around.picked(&picks).0)
+    } else {
+        around
     };
-    // What it leaves out is said once, by the component in the core.
-    let tokens = match e.theme.borrow().scoped(&around, &json) {
-        Some(Ok((tokens, _))) => Arc::new(tokens),
-        _ => around,
+    let tokens = if has_theme {
+        let json = match to_json(cx, theme) {
+            Ok(json) => json.to_string(),
+            Err(exception) => return exception,
+        };
+        match e.theme.borrow().scoped(&around, &json) {
+            Some(Ok((tokens, _))) => Arc::new(tokens),
+            _ => around,
+        }
+    } else {
+        around
     };
     let mut slots = e.scope_tokens.borrow_mut();
     let Some(held) = slots.get_mut(slot) else {

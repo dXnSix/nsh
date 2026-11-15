@@ -244,6 +244,10 @@ impl Runtime {
                     )),
                     Some(Token::Shadow(s)) => Value::string(&s.css(dark)),
                     Some(Token::Gradient(g)) => Value::string(&g.css(dark)),
+                    Some(Token::String(s)) => Value::string(&s),
+                    // `true` and `false`, as the page's values are kept.
+                    Some(Token::Boolean(b)) => Ok(Value(if b { 3 } else { 2 })),
+                    Some(Token::Easing(e)) => Value::string(&e.css()),
                     _ => Ok(Value(0)),
                 }
             }
@@ -292,6 +296,9 @@ impl Runtime {
                     prop: nsh_core::Prop::UiTheme(json.into()),
                 });
                 if let Some(tokens) = tokens {
+                    // The contexts the app picked stay picked, as in the core.
+                    let current = self.tokens.borrow().clone().unwrap_or_default();
+                    let tokens = tokens.with_picks_of(&current);
                     *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
                 }
                 Ok(Value(0))
@@ -364,6 +371,113 @@ impl Runtime {
                 }
                 Ok(Value(0))
             }
+            // `setModifier(name, context)`, as nsh-js's (`env.rs`): the
+            // modifier takes the context, or a `TypeError` naming what the
+            // theme has not.
+            415 => {
+                use nsh_core::element::JsError;
+                let name = args.index(0)?.as_string();
+                let context = args.index(1)?.as_string();
+                let (Some(name), Some(context)) = (name, context) else {
+                    let message =
+                        "setModifier: expected a modifier's name and a context's (strings)";
+                    return Err(self.throw(JsError::Type(message.into())));
+                };
+                let current = self.tokens.borrow().clone().unwrap_or_default();
+                let picked = self
+                    .theme
+                    .borrow()
+                    .as_ref()
+                    .map(|t| t.modifier(&current, &name, &context));
+                let tokens = match picked {
+                    Some(Err(what)) => {
+                        return Err(self.throw(JsError::Type(format!("setModifier: {what}"))));
+                    }
+                    Some(Ok(tokens)) => Some(tokens),
+                    None => None,
+                };
+                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
+                    id: nsh_core::ROOT_ID,
+                    prop: nsh_core::Prop::UiModifier(name.into(), context.into()),
+                });
+                if let Some(tokens) = tokens {
+                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
+                }
+                Ok(Value(0))
+            }
+            // `modifier(name)` (416) and `modifiers()` (417), as nsh-js's: the
+            // context a modifier has now, and every modifier as JSON.
+            416 | 417 => {
+                let tokens = self.tokens.borrow().clone().unwrap_or_default();
+                let Some(modifiers) = tokens.modifiers() else {
+                    return if op == 416 {
+                        Ok(Value(0))
+                    } else {
+                        Value::string("[]")
+                    };
+                };
+                if op == 416 {
+                    let name = args.index(0)?.as_string().unwrap_or_default();
+                    return match modifiers.selected(&name) {
+                        Some(context) => Value::string(context),
+                        None => Ok(Value(0)),
+                    };
+                }
+                let list: Vec<serde_json::Value> = modifiers
+                    .axes()
+                    .into_iter()
+                    .map(|axis| {
+                        serde_json::json!({
+                            "name": &*axis.name,
+                            "contexts": axis.contexts.iter().map(|c| &**c).collect::<Vec<_>>(),
+                            "default": &*axis.default,
+                        })
+                    })
+                    .collect();
+                Value::string(&serde_json::Value::Array(list).to_string())
+            }
+            // `tokens.get` (418), `kind` (419), `names` (420) and `entries`
+            // (421), as nsh-js's (`env.rs`): the token dictionary as JSON
+            // (`Tokens::value_json`, `kind_name`, `infos`), of the scope the
+            // page names (argument 1), else the surface's.
+            418..=421 => {
+                let scoped = args
+                    .index(1)?
+                    .as_number()
+                    .and_then(|named| self.scope_tokens_named(named));
+                let tokens = scoped
+                    .or_else(|| self.tokens.borrow().clone())
+                    .unwrap_or_default();
+                let json = match op {
+                    418 => {
+                        let name = args.index(0)?.as_string().unwrap_or_default();
+                        tokens.value_json(&name).unwrap_or(serde_json::Value::Null)
+                    }
+                    419 => {
+                        let name = args.index(0)?.as_string().unwrap_or_default();
+                        tokens
+                            .kind_name(&name)
+                            .map_or(serde_json::Value::Null, Into::into)
+                    }
+                    420 => {
+                        let filter = protocol::to_json(&compat::Value::new(args.index(0)?))
+                            .unwrap_or(serde_json::Value::Null);
+                        let text = |key: &str| filter.get(key).and_then(serde_json::Value::as_str);
+                        let names = tokens
+                            .infos()
+                            .into_iter()
+                            .filter(|info| text("kind").is_none_or(|k| info.kind == k))
+                            .filter(|info| text("prefix").is_none_or(|p| info.name.starts_with(p)))
+                            .map(|info| serde_json::Value::from(&*info.name))
+                            .collect();
+                        serde_json::Value::Array(names)
+                    }
+                    _ => serde_json::Value::Array(
+                        tokens.infos().iter().map(|info| info.to_json()).collect(),
+                    ),
+                };
+                Value::string(&json.to_string())
+            }
             // A `ThemeScope`'s tokens, as nsh-js's `make_scope_tokens`
             // (`env.rs`): its theme's values over the tokens around it (the
             // ones the scope around it names, else the surface's), kept in
@@ -378,17 +492,34 @@ impl Runtime {
                     .and_then(|named| self.scope_tokens_named(named))
                     .or_else(|| self.tokens.borrow().clone())
                     .unwrap_or_default();
-                let json = protocol::to_json(&compat::Value::new(theme))?.to_string();
-                // What it leaves out is said once, by the component in the
-                // core.
-                let read = self
-                    .theme
-                    .borrow()
-                    .as_ref()
-                    .and_then(|t| t.scoped(&around, &json));
-                let tokens = match read {
-                    Some(Ok((tokens, _))) => std::sync::Arc::new(tokens),
-                    _ => around,
+                // Its modifiers' contexts first (argument 3), its theme over
+                // them; what it leaves out is said once, by the component in
+                // the core.
+                let picks = protocol::to_json(&compat::Value::new(args.index(3)?))
+                    .unwrap_or(serde_json::Value::Null);
+                let around = match picks.as_object() {
+                    Some(picks) => {
+                        let picks: Vec<(&str, &str)> = picks
+                            .iter()
+                            .filter_map(|(n, c)| Some((n.as_str(), c.as_str()?)))
+                            .collect();
+                        std::sync::Arc::new(around.picked(&picks).0)
+                    }
+                    None => around,
+                };
+                let tokens = if theme.is_object() {
+                    let json = protocol::to_json(&compat::Value::new(theme))?.to_string();
+                    let read = self
+                        .theme
+                        .borrow()
+                        .as_ref()
+                        .and_then(|t| t.scoped(&around, &json));
+                    match read {
+                        Some(Ok((tokens, _))) => std::sync::Arc::new(tokens),
+                        _ => around,
+                    }
+                } else {
+                    around
                 };
                 let mut slots = self.scope_tokens.borrow_mut();
                 let Some(held) = slots.get_mut(slot) else {

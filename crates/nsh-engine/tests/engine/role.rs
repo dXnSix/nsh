@@ -1,40 +1,26 @@
 //! `role()` from TSX: what a theme role draws with, as `token()` gives a
-//! token. Under a design system's theme type it is the token the type maps
-//! the role onto; without one, the token of the role's name. A class reads
+//! token. Under a design system's theme document it is the token the
+//! document maps the role onto; without one, the token of the role's name. A class reads
 //! a role as a variable (`bg-(--popover)`).
 
-use nsh_core::{
-    Color, MountBatch, MountItem,
-    element::{AdaptiveColor, AppTheme, Registry},
-};
+use nsh_core::{Color, MountBatch, MountItem, element::Registry};
 use nsh_engine::Environment;
 
 use crate::components::{shows, start_with, start_with_sets, until};
 
 /// A design system that calls the popover's surface `overlay`.
-#[derive(Debug, Clone, PartialEq, AppTheme)]
-struct Brand {
-    #[token(color, role = nsh_base::role::POPOVER)]
-    overlay: AdaptiveColor,
-    #[token(color, role = nsh_base::role::WARNING)]
-    status_caution: AdaptiveColor,
-    #[token(radius, role = nsh_base::role::RADIUS)]
-    corner: f32,
-}
-
-impl Default for Brand {
-    fn default() -> Self {
-        Brand {
-            overlay: AdaptiveColor::rgb(0x111111, 0xeeeeee),
-            status_caution: AdaptiveColor::rgb(0xaa5500, 0xffcc00),
-            corner: 6.0,
-        }
-    }
-}
+const BRAND: &str = r##"{
+    "cssVars": { "light": { "overlay": "#111111", "status-caution": "#aa5500" },
+                 "dark": { "overlay": "#eeeeee", "status-caution": "#ffcc00" },
+                 "theme": { "corner": "6px" } },
+    "tokens": { "overlay": { "kind": "color" }, "status-caution": { "kind": "color" },
+                "corner": { "kind": "number" } },
+    "roles": { "popover": "overlay", "warning": "status-caution", "radius": "corner" }
+}"##;
 
 fn brand() -> Vec<Registry> {
     let mut set = Registry::ui_set("brand/native");
-    set.theme::<Brand>();
+    set.theme_document(BRAND);
     vec![set]
 }
 
@@ -59,7 +45,7 @@ mount(() => (
 "##;
 
 #[test]
-fn a_role_is_the_token_a_theme_type_maps_it_onto() {
+fn a_role_is_the_token_a_theme_document_maps_it_onto() {
     for (appearance, popover, warning, changed) in [
         ("light", "#111111ff", "#aa5500ff", "#333333ff"),
         ("dark", "#eeeeeeff", "#ffcc00ff", "#ccccccff"),
