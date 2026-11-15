@@ -370,6 +370,42 @@ updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb718
 resetTheme(["primary"]); // 恢复应用的 primary
 ```
 
+## setModifier、modifier、modifiers
+
+```ts
+function setModifier<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void;
+function modifier<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined;
+function modifiers(): ModifierAxis[];
+
+interface ModifierAxis {
+  name: string;
+  contexts: string[];
+  default: string;
+}
+```
+
+主题的 `modifiers` 是它的其他模式（品牌、密度、对比度），预先计算好：每个修饰符给出它的 `default` 和 `contexts`，每个上下文是它改变的
+那部分 `cssVars`。主题的令牌是它的 `cssVars`，加上每个修饰符所选上下文的值，按文件中的顺序（两个修饰符改变同一令牌时，后者优先）；
+开始时是每个修饰符的默认上下文。
+
+```json
+"modifiers": {
+  "brand": {
+    "default": "ocean",
+    "contexts": {
+      "ocean": {},
+      "forest": { "light": { "accent": "#16a34a" }, "dark": { "accent": "#4ade80" } }
+    }
+  }
+}
+```
+
+`setModifier("brand", "forest")` 在应用运行时选择一个上下文：调用后 `token()` 立即读取它的令牌，引用令牌的类、`nsh/base` 和 Rust 组件
+在下一帧跟随。主题没有的修饰符或上下文会抛出指明它的 `TypeError`。`modifier("brand")` 是修饰符现在的上下文，`modifiers()` 列出每个
+修饰符及其上下文和默认值；两者都是响应式的。上下文只设置主题已有的令牌，每个都按其种类读取，修饰符需要两个或更多上下文。NSH 把
+修饰符的类型写入 `.nsh/types/nsh/modifiers.d.ts`，因此 `setModifier("brand", "jungle")` 是类型错误。
+Rust：`set_modifier`、`modifier` 和 `modifiers`（[主题文档](../docs/rust.md#主题文档与类型化键)）。
+
 ## appInfo
 
 ```ts

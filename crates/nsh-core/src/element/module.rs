@@ -415,6 +415,13 @@ impl ModuleCx {
         ));
     }
 
+    /// Gives a theme modifier another context, as
+    /// [`crate::element::set_modifier`] does.
+    pub fn set_modifier(&mut self, name: &str, context: &str) {
+        self.actions
+            .push(Action::SetModifier(name.into(), context.into()));
+    }
+
     /// Shows the app in `locale` whatever the user's language (`None`: the
     /// user's again), as [`crate::i18n::set_locale`] does.
     pub fn set_locale(&mut self, locale: Option<crate::platform::Locale>) {

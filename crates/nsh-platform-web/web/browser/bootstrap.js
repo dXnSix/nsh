@@ -5521,6 +5521,18 @@
 				resetTheme(names) {
 					invoke(410, [names]);
 					tokens.update((value) => value + 1);
+				},
+				setModifier(name, context) {
+					invoke(415, [name, context]);
+					tokens.update((value) => value + 1);
+				},
+				modifier(name) {
+					tokens();
+					return invoke(416, [name]);
+				},
+				modifiers() {
+					tokens();
+					return JSON.parse(invoke(417, []));
 				}
 			},
 			insets,

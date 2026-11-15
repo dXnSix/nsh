@@ -364,6 +364,71 @@ impl Runtime {
                 }
                 Ok(Value(0))
             }
+            // `setModifier(name, context)`, as nsh-js's (`env.rs`): the
+            // modifier takes the context, or a `TypeError` naming what the
+            // theme has not.
+            415 => {
+                use nsh_core::element::JsError;
+                let name = args.index(0)?.as_string();
+                let context = args.index(1)?.as_string();
+                let (Some(name), Some(context)) = (name, context) else {
+                    let message =
+                        "setModifier: expected a modifier's name and a context's (strings)";
+                    return Err(self.throw(JsError::Type(message.into())));
+                };
+                let current = self.tokens.borrow().clone().unwrap_or_default();
+                let picked = self
+                    .theme
+                    .borrow()
+                    .as_ref()
+                    .map(|t| t.modifier(&current, &name, &context));
+                let tokens = match picked {
+                    Some(Err(what)) => {
+                        return Err(self.throw(JsError::Type(format!("setModifier: {what}"))));
+                    }
+                    Some(Ok(tokens)) => Some(tokens),
+                    None => None,
+                };
+                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
+                    id: nsh_core::ROOT_ID,
+                    prop: nsh_core::Prop::UiModifier(name.into(), context.into()),
+                });
+                if let Some(tokens) = tokens {
+                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
+                }
+                Ok(Value(0))
+            }
+            // `modifier(name)` (416) and `modifiers()` (417), as nsh-js's: the
+            // context a modifier has now, and every modifier as JSON.
+            416 | 417 => {
+                let tokens = self.tokens.borrow().clone().unwrap_or_default();
+                let Some(modifiers) = tokens.modifiers() else {
+                    return if op == 416 {
+                        Ok(Value(0))
+                    } else {
+                        Value::string("[]")
+                    };
+                };
+                if op == 416 {
+                    let name = args.index(0)?.as_string().unwrap_or_default();
+                    return match modifiers.selected(&name) {
+                        Some(context) => Value::string(context),
+                        None => Ok(Value(0)),
+                    };
+                }
+                let list: Vec<serde_json::Value> = modifiers
+                    .axes()
+                    .into_iter()
+                    .map(|axis| {
+                        serde_json::json!({
+                            "name": &*axis.name,
+                            "contexts": axis.contexts.iter().map(|c| &**c).collect::<Vec<_>>(),
+                            "default": &*axis.default,
+                        })
+                    })
+                    .collect();
+                Value::string(&serde_json::Value::Array(list).to_string())
+            }
             // A `ThemeScope`'s tokens, as nsh-js's `make_scope_tokens`
             // (`env.rs`): its theme's values over the tokens around it (the
             // ones the scope around it names, else the surface's), kept in

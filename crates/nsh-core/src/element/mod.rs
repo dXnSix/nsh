@@ -72,6 +72,7 @@ mod system;
 pub(crate) mod task;
 pub mod theme;
 pub mod theme_file;
+mod theme_modifiers;
 mod theme_scope;
 mod token_keys;
 pub mod tokens;
@@ -197,6 +198,7 @@ pub use self::{
     },
     task::{Answer, ClipboardImage, ClipboardItem, DialogAnswer, ImageSize, Task},
     theme::{Declarations, Declared, TokenKind},
+    theme_modifiers::{ModifierAxis, ThemeModifiers},
     theme_scope::{ScopeTheme, ThemeScope, ThemeScopeElement, ThemeScopeProps, theme_scope},
     token_keys::{TokenError, TokenKey, TokenValue},
     tokens::{

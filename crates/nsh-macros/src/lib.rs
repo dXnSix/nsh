@@ -1891,9 +1891,13 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 /// `SharedString`, shadows `AdaptiveShadow`, gradients `AdaptiveGradient`.
 /// Path segments are snake case for modules and upper snake case for
 /// constants (`type-scale`, `fontSize` are `type_scale`, `FONT_SIZE`; a
-/// digit first takes `_`). Read at compile time: a changed document builds
-/// the crate again. A missing or broken document fails the build, as do a
-/// kind there is not and two tokens of one key.
+/// digit first takes `_`). Each of the document's theme modifiers is an enum
+/// of its contexts in `modifiers` (`"brand"` with `ocean` and `forest`:
+/// `modifiers::Brand::{Ocean, Forest}`, with `NAME`, `ALL`, `DEFAULT`,
+/// `name()`, `set()`, which gives the modifier that context, and
+/// `current()`). Read at compile time: a changed document builds the crate
+/// again. A missing or broken document fails the build, as do a kind there
+/// is not, two tokens of one key and two contexts of one variant.
 #[proc_macro]
 pub fn theme_keys(input: TokenStream) -> TokenStream {
     let lit = parse_macro_input!(input as LitStr);

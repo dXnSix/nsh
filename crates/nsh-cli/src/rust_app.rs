@@ -3736,7 +3736,12 @@ fn theme_warnings(json: &str, sets: &[SetDescription]) -> anyhow::Result<Vec<Str
     let (_, ignored) = match declared {
         Some(declared) => declared.read(Some(json)),
         None => nsh_base::Theme::from_json_lenient(json)
-            .map(|(theme, ignored)| (theme.into_tokens(), ignored))
+            .map(|(theme, mut ignored)| {
+                let (tokens, said) =
+                    nsh_core::element::theme_file::with_modifiers(json, theme.into_tokens());
+                ignored.extend(said);
+                (tokens, ignored)
+            })
             .map_err(|e| e.0),
     }
     .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;

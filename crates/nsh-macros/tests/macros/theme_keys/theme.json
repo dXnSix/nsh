@@ -18,5 +18,18 @@
     "font-weight-strong": { "kind": "weight", "path": "type.strong" },
     "font-body": { "kind": "font", "path": "type.body.family" },
     "shadow-raised": { "kind": "shadow", "path": "effects.2xl.raised" }
+  },
+  "modifiers": {
+    "brand": {
+      "default": "ocean",
+      "contexts": {
+        "ocean": {},
+        "forest": { "light": { "ink": "#16a34a" }, "dark": { "ink": "#4ade80" } }
+      }
+    },
+    "high-contrast": {
+      "default": "off",
+      "contexts": { "off": {}, "on": { "light": { "ink": "#000000" }, "dark": { "ink": "#ffffff" } } }
+    }
   }
 }

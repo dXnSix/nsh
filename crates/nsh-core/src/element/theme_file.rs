@@ -94,6 +94,15 @@ impl LeftOut {
         )
     }
 
+    /// The same, said of a part of the file at `at`
+    /// (`modifiers.brand.contexts.forest: …`).
+    pub(crate) fn within(self, at: &str) -> Self {
+        Self {
+            sentence: format!("{at}: {}", self.sentence),
+            ..self
+        }
+    }
+
     /// Whether it is only a name no theme document declares.
     pub(crate) fn is_undeclared(&self) -> bool {
         self.undeclared
@@ -127,6 +136,27 @@ pub(crate) fn parse_declared(
 ) -> Result<(Tokens, Vec<LeftOut>), String> {
     let (tokens, left_out) = overrides_declared(json, base, set)?;
     Ok((tokens.over(base), left_out))
+}
+
+/// `tokens`, read from theme file `json` by a UI set's reader, with the
+/// file's modifiers' default contexts over them and carrying them
+/// (`super::ThemeModifiers`), each context read as [`overrides`] reads a
+/// change; with what of them was left out. How the toolchain reads a theme
+/// file that declares no tokens as the core does.
+pub fn with_modifiers(json: &str, tokens: Tokens) -> (Tokens, Vec<String>) {
+    let Ok(value) = serde_json::from_str::<JsonValue>(json) else {
+        return (tokens, Vec::new());
+    };
+    let read = |context: &str| {
+        overrides(context, &tokens)
+            .map(|(t, said)| (t, said.into_iter().map(LeftOut::said).collect()))
+    };
+    let (modifiers, left_out) = super::ThemeModifiers::read(json, &value, &tokens, read);
+    let tokens = match modifiers {
+        Some(modifiers) => modifiers.apply(&tokens),
+        None => tokens,
+    };
+    (tokens, sentences(left_out))
 }
 
 /// Whether theme file `json` declares its tokens (a `"tokens"` section):

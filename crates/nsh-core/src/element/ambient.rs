@@ -596,6 +596,30 @@ pub fn update_tokens(tokens: impl Into<Tokens>) {
     act(Action::UpdateTokens(tokens.into()));
 }
 
+/// Gives the theme's modifier `name` (`brand`) the context `context`
+/// (`forest`): the tokens its contexts set take that context's values, in
+/// order with the app's other actions, and what reads them follows (TS:
+/// `setModifier`). A name or context the theme has not is logged.
+pub fn set_modifier(name: &str, context: &str) {
+    act(Action::SetModifier(name.into(), context.into()));
+}
+
+/// The context the theme's modifier `name` has now where it is read (the
+/// nearest [`super::ThemeScope`]'s tokens'), `None` when the theme has no
+/// such modifier. Reading it subscribes, as [`tokens`] does.
+pub fn modifier(name: &str) -> Option<Box<str>> {
+    tokens().modifiers()?.selected(name).map(Into::into)
+}
+
+/// The theme's modifiers, each with its contexts and default (none when
+/// the theme has none). Reading it subscribes, as [`tokens`] does.
+pub fn modifiers() -> Vec<super::ModifierAxis> {
+    tokens()
+        .modifiers()
+        .map(super::ThemeModifiers::axes)
+        .unwrap_or_default()
+}
+
 /// Puts the design tokens `names` back to their values in the app's theme
 /// (the UI set's defaults with `nsh.json`'s theme, or the theme last set
 /// whole with [`set_tokens`] or `setTheme`), undoing [`update_tokens`] for

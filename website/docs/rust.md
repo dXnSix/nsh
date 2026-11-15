@@ -784,6 +784,22 @@ the file is read by them as above. A change (`updateTheme`) may declare tokens o
 `tokens().declarations()` says what declares the tokens: each name's kind (`kind_of`), path (`path_of`), doc and
 owner, and the token at a path (`name_at`).
 
+**Modifiers.** A theme's other modes (a brand, a density, a contrast) are its `"modifiers"`, in a document or the
+app's theme file: each with its `default` and its `contexts`, each context the part of `cssVars` it changes
+([`setModifier`](../modules/nsh.md#setmodifier-modifier-modifiers)). The tokens are the values with each modifier's
+picked context over them, in order: a document's modifiers first, then the app's file's, and the file's values are
+the ones under the contexts. `set_modifier("brand", "forest")` picks a context in order with the app's other actions,
+`modifier("brand")` is the one picked now (reactive) and `modifiers()` lists them, as `tokens().modifiers()` does
+(`ThemeModifiers`: `axes()`, `selected()`, `select()`, `tokens()`). `theme_keys!` makes an enum of each modifier's
+contexts in `keys::modifiers`, so the compiler checks the names:
+
+```rust
+use keys::modifiers::Brand;
+
+Brand::Forest.set(); // set_modifier("brand", "forest")
+let forest = Brand::current() == Some(Brand::Forest); // reactive
+```
+
 **The toolchain.** `nsh build` and `nsh dev` learn the documents from the app's crates and its theme file: classes
 name their tokens (`bg-surface-raised`, `rounded-card`), and `.nsh/types/nsh/tokens.d.ts` types `token()` by kind, with
 the docs ([Theme tokens](./tailwind.md#theme-tokens)).

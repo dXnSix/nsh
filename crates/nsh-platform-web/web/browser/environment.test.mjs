@@ -112,6 +112,23 @@ test("updateTheme and resetTheme hand their values to the engine and read the to
   assert.deepEqual(writes, [1, 2, 3]);
 });
 
+test("setModifier hands the context to the engine, and modifier and modifiers read what it keeps", () => {
+  const calls = [];
+  const { env, writes } = environment((op, args) => {
+    calls.push([op, args]);
+    if (op === 415 && args[1] === "jungle") throw new TypeError("setModifier: the modifier `brand` has no context `jungle`");
+    if (op === 416) return "forest";
+    if (op === 417) return JSON.stringify([{ name: "brand", contexts: ["ocean", "forest"], default: "ocean" }]);
+  });
+  env.api.setModifier("brand", "forest");
+  assert.deepEqual(writes, [1]);
+  assert.equal(env.api.modifier("brand"), "forest");
+  assert.deepEqual(env.api.modifiers(), [{ name: "brand", contexts: ["ocean", "forest"], default: "ocean" }]);
+  assert.deepEqual(calls, [[415, ["brand", "forest"]], [416, ["brand"]], [417, []]]);
+  assert.throws(() => env.api.setModifier("brand", "jungle"), TypeError);
+  assert.deepEqual(writes, [1]);
+});
+
 test("the lifecycle is the engine's", () => {
   const { env } = environment();
   // Before the engine reports, the native environment's default.

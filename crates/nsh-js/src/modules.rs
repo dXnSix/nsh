@@ -119,6 +119,9 @@ const NSH: &[Item] = &[
     crate::env::SET_THEME_EXPORT,
     crate::env::UPDATE_THEME_EXPORT,
     crate::env::RESET_THEME_EXPORT,
+    crate::env::SET_MODIFIER_EXPORT,
+    crate::env::MODIFIER_EXPORT,
+    crate::env::MODIFIERS_EXPORT,
     crate::env::APP_INFO_EXPORT,
     (
         "signal",
@@ -392,6 +395,21 @@ export interface Theme {
   };
   roles?: Record<string, string>;
   tokens?: Record<string, TokenDeclaration>;
+  modifiers?: Record<string, { default: string; contexts: Record<string, Partial<Theme["cssVars"]>> }>;
+}
+
+/**
+* The contexts of each theme modifier, by its name (`{ brand: "ocean" |
+ * "forest" }`): nsh writes them per app into `.nsh/types/nsh/modifiers.d.ts`
+ * from its theme.
+ */
+export interface ThemeModifiers {}
+
+/** A theme modifier as `modifiers()` lists it. */
+export interface ModifierAxis {
+  name: string;
+  contexts: string[];
+  default: string;
 }
 
 /** A token a theme declares (its `tokens`): what it holds, its place in the designer's tree and its doc. A theme that declares its tokens is read by them. */

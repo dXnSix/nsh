@@ -49,3 +49,34 @@ fn keys_read_the_tokens_the_document_declares() {
     );
     assert!(tokens.key(keys::effects::_2xl::RAISED).is_some());
 }
+
+#[test]
+fn each_modifier_is_an_enum_of_its_contexts() {
+    use keys::modifiers::{Brand, HighContrast};
+    assert_eq!(Brand::NAME, "brand");
+    assert_eq!(Brand::ALL, [Brand::Ocean, Brand::Forest]);
+    assert_eq!(Brand::DEFAULT, Brand::Ocean);
+    assert_eq!(Brand::Forest.name(), "forest");
+    assert_eq!(HighContrast::NAME, "high-contrast");
+    assert_eq!(HighContrast::DEFAULT.name(), "off");
+    assert_eq!(HighContrast::ALL, [HighContrast::Off, HighContrast::On]);
+}
+
+#[test]
+fn the_documents_default_contexts_are_read_and_another_is_picked() {
+    use keys::modifiers::Brand;
+    let mut registry = Registry::ui_set("ds/native");
+    registry.theme_document(include_str!("theme_keys/theme.json"));
+    let tokens = registry.tokens(None).unwrap().unwrap().0;
+    assert_eq!(
+        tokens.key(keys::INK),
+        Some(AdaptiveColor::rgb(0x101010, 0xf0f0f0))
+    );
+    let modifiers = tokens.modifiers().unwrap();
+    assert_eq!(modifiers.selected(Brand::NAME), Some(Brand::DEFAULT.name()));
+    let forest = modifiers.select(Brand::NAME, Brand::Forest.name()).unwrap();
+    assert_eq!(
+        forest.tokens().key(keys::INK),
+        Some(AdaptiveColor::rgb(0x16a34a, 0x4ade80))
+    );
+}

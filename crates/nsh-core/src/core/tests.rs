@@ -47984,3 +47984,268 @@ fn padding_on_a_span_is_warned_once() {
     let _ = c.commit();
     assert!(c.span_padding_warned);
 }
+
+/// Theme modifiers: a theme file's precomputed contexts, each modifier's
+/// default over the file's values, another picked while the app runs, a
+/// later modifier winning on a token two change, a context that adds no
+/// names; a document's modifiers beside the app's file's.
+mod theme_modifiers {
+    use super::*;
+    use crate::{
+        Prop,
+        color::rgb,
+        element::{ModifierAxis, Registry, Root},
+        prelude::*,
+    };
+
+    const FILE: &str = r##"{
+        "cssVars": {
+            "light": { "accent": "#111111", "ink": "#222222" },
+            "dark": { "accent": "#aaaaaa", "ink": "#bbbbbb" },
+            "theme": { "radius-card": "8px" }
+        },
+        "modifiers": {
+            "brand": {
+                "default": "ocean",
+                "contexts": {
+                    "ocean": { "light": { "accent": "#0000ff" } },
+                    "forest": { "light": { "accent": "#00ff00" }, "dark": { "accent": "#008800" } }
+                }
+            },
+            "density": {
+                "default": "comfortable",
+                "contexts": {
+                    "comfortable": {},
+                    "compact": { "theme": { "radius-card": "4px" }, "light": { "accent": "#ff0000" } }
+                }
+            }
+        }
+    }"##;
+
+    /// A UI set's reader of `cssVars` theme files, over no defaults.
+    fn css_source(json: Option<&str>) -> Result<(crate::element::Tokens, Vec<String>), String> {
+        crate::element::theme_file::parse(
+            json.unwrap_or(r#"{ "cssVars": {} }"#),
+            &crate::element::Tokens::default(),
+        )
+    }
+
+    fn css_registry() -> Registry {
+        let mut registry = Registry::new();
+        registry.tokens_from(css_source);
+        registry.token_overrides_from(crate::element::theme_file::overrides);
+        registry
+    }
+
+    fn light(c: &Core<FakeEngine>, name: &str) -> Option<Color> {
+        c.tokens().color(name).map(|t| Color::from(t.light))
+    }
+
+    fn themed() -> Core<FakeEngine> {
+        let mut c = core();
+        c.set_components(css_registry());
+        apply(
+            &mut c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiTheme(FILE.into()),
+            }],
+        );
+        c
+    }
+
+    fn pick(c: &mut Core<FakeEngine>, name: &str, context: &str) {
+        apply(
+            c,
+            vec![Op::SetProp {
+                id: ROOT_ID,
+                prop: Prop::UiModifier(name.into(), context.into()),
+            }],
+        );
+    }
+
+    #[test]
+    fn each_modifiers_default_context_is_over_the_files_values() {
+        let c = themed();
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x0000ff))));
+        // A context's value is read as a theme file's: set in `light` only,
+        // it is both appearances'.
+        assert_eq!(
+            c.tokens().color("accent").map(|t| Color::from(t.dark)),
+            Some(Color::from(rgb(0x0000ff)))
+        );
+        assert_eq!(c.tokens().number("radius-card"), Some(8.0));
+        let modifiers = c.tokens().modifiers().unwrap().axes();
+        assert_eq!(
+            modifiers,
+            [
+                ModifierAxis {
+                    name: "brand".into(),
+                    contexts: vec!["ocean".into(), "forest".into()],
+                    default: "ocean".into(),
+                },
+                ModifierAxis {
+                    name: "density".into(),
+                    contexts: vec!["comfortable".into(), "compact".into()],
+                    default: "comfortable".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_context_picked_sets_what_its_contexts_set_and_a_later_modifier_wins() {
+        let mut c = themed();
+        pick(&mut c, "brand", "forest");
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        assert_eq!(
+            c.tokens().color("accent").map(|t| Color::from(t.dark)),
+            Some(Color::from(rgb(0x008800)))
+        );
+        assert_eq!(
+            c.tokens().modifiers().unwrap().selected("brand"),
+            Some("forest")
+        );
+        // `density` comes later: its compact accent wins over the brand's.
+        pick(&mut c, "density", "compact");
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0xff0000))));
+        assert_eq!(c.tokens().number("radius-card"), Some(4.0));
+        // Back to comfortable: the brand's accent again, the file's radius.
+        pick(&mut c, "density", "comfortable");
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+        assert_eq!(c.tokens().number("radius-card"), Some(8.0));
+        // A token no context sets stays the file's throughout.
+        assert_eq!(light(&c, "ink"), Some(Color::from(rgb(0x222222))));
+        // What the theme has not changes nothing.
+        let before = c.tokens().clone();
+        pick(&mut c, "brand", "jungle");
+        pick(&mut c, "season", "spring");
+        assert_eq!(**c.tokens(), *before);
+    }
+
+    #[test]
+    fn a_reset_goes_back_to_the_theme_with_the_contexts_picked() {
+        let mut c = themed();
+        pick(&mut c, "brand", "forest");
+        let mut change = crate::element::Tokens::default();
+        change.set_color("accent", rgb(0x123456).into());
+        c.update_tokens(change);
+        c.reset_tokens(Some(&["accent".into()]));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+    }
+
+    /// Shows the context `brand` has and how many modifiers there are.
+    #[component]
+    fn Picks() -> impl IntoElement {
+        text(move || {
+            format!(
+                "{} of {}",
+                crate::element::modifier("brand").unwrap_or_default(),
+                crate::element::modifiers().len()
+            )
+        })
+    }
+
+    fn shown(c: &mut Core<FakeEngine>) -> Option<String> {
+        let mut last = None;
+        while let Some(batch) = c.commit() {
+            if let Some(t) = text_item(&batch) {
+                last = Some(t.text.to_string());
+            }
+        }
+        last
+    }
+
+    #[test]
+    fn rust_reads_and_picks_a_context() {
+        let mut c = themed();
+        c.mount_root(&Root::of::<Picks>());
+        assert_eq!(shown(&mut c).as_deref(), Some("ocean of 2"));
+        c.apply(Op::Rust(crate::element::RustOp {
+            call: 0,
+            run: crate::element::RustCall::Op(Box::new(|cx: &mut crate::element::ModuleCx| {
+                cx.set_modifier("brand", "forest");
+                Ok(Box::new(()) as Box<dyn crate::element::ToJs>)
+            })),
+        }))
+        .unwrap();
+        assert_eq!(shown(&mut c).as_deref(), Some("forest of 2"));
+        assert_eq!(light(&c, "accent"), Some(Color::from(rgb(0x00ff00))));
+    }
+
+    #[test]
+    fn what_a_file_cannot_give_a_modifier_is_left_out_and_said() {
+        let provider = css_registry().token_provider().unwrap();
+        let (tokens, mut said) = provider
+            .read(Some(
+                r##"{ "cssVars": { "light": { "accent": "#111111" } },
+                      "modifiers": {
+                          "brand": { "default": "ocean", "contexts": {
+                              "ocean": {}, "forest": { "light": { "accent": "#00ff00", "brandnew": "#123456" } } } },
+                          "one": { "default": "a", "contexts": { "a": {} } },
+                          "lost": { "default": "x", "contexts": { "a": {}, "b": {} } }
+                      } }"##,
+            ))
+            .unwrap();
+        said.sort();
+        assert_eq!(
+            said,
+            [
+                "modifiers.brand.contexts.forest: `brandnew`: a context sets only the theme's own tokens",
+                "modifiers.lost: expected `default`, the name of one of its contexts",
+                "modifiers.one: expected `contexts`, an object of two or more contexts",
+            ]
+        );
+        let modifiers = tokens.modifiers().unwrap();
+        assert_eq!(modifiers.axes().len(), 1);
+        let forest = modifiers.select("brand", "forest").unwrap().tokens();
+        assert!(forest.color("brandnew").is_none());
+    }
+
+    /// A design system's document with a brand modifier, and the app's file
+    /// that sets the brand's token itself and adds a modifier of its own.
+    #[test]
+    fn a_documents_modifiers_and_the_files_own_merge_in_order() {
+        let mut ds = Registry::ui_set("ds/native");
+        ds.theme_document(
+            r##"{
+                "cssVars": { "light": { "accent": "#111111", "ink": "#222222" } },
+                "tokens": { "accent": { "kind": "color" }, "ink": { "kind": "color" } },
+                "modifiers": { "brand": { "default": "ocean", "contexts": {
+                    "ocean": {}, "forest": { "light": { "accent": "#00ff00" } } } } }
+            }"##,
+        );
+        let provider = ds.token_provider().unwrap();
+        let (defaults, _) = provider.read(None).unwrap();
+        assert_eq!(
+            defaults.modifiers().unwrap().selected("brand"),
+            Some("ocean")
+        );
+        let (tokens, said) = provider
+            .read(Some(
+                r##"{ "cssVars": { "light": { "accent": "#333333" } },
+                      "modifiers": { "contrast": { "default": "normal", "contexts": {
+                          "normal": {}, "more": { "light": { "ink": "#000000" } } } } } }"##,
+            ))
+            .unwrap();
+        assert!(said.is_empty(), "{said:?}");
+        // The file's accent is the value under the brand's contexts.
+        assert_eq!(
+            tokens.color("accent").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x333333)))
+        );
+        let modifiers = tokens.modifiers().unwrap();
+        let names: Vec<_> = modifiers.axes().into_iter().map(|a| a.name).collect();
+        assert_eq!(names, ["brand".into(), "contrast".into()] as [Box<str>; 2]);
+        let ocean = modifiers.select("brand", "ocean").unwrap().tokens();
+        assert_eq!(
+            ocean.color("accent").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x333333)))
+        );
+        let forest = modifiers.select("brand", "forest").unwrap().tokens();
+        assert_eq!(
+            forest.color("accent").map(|c| Color::from(c.light)),
+            Some(Color::from(rgb(0x00ff00)))
+        );
+    }
+}

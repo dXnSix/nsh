@@ -386,6 +386,45 @@ updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb718
 resetTheme(["primary"]); // the app's primary again
 ```
 
+## setModifier, modifier, modifiers
+
+```ts
+function setModifier<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void;
+function modifier<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined;
+function modifiers(): ModifierAxis[];
+
+interface ModifierAxis {
+  name: string;
+  contexts: string[];
+  default: string;
+}
+```
+
+A theme's `modifiers` are its other modes (a brand, a density, a contrast), precomputed: each modifier names its
+`default` and its `contexts`, each context the part of `cssVars` it changes. The theme's tokens are its `cssVars` with
+each modifier's picked context over them, in the file's order (a later modifier wins on a token two change); at first
+each modifier's default.
+
+```json
+"modifiers": {
+  "brand": {
+    "default": "ocean",
+    "contexts": {
+      "ocean": {},
+      "forest": { "light": { "accent": "#16a34a" }, "dark": { "accent": "#4ade80" } }
+    }
+  }
+}
+```
+
+`setModifier("brand", "forest")` picks a context while the app runs: `token()` reads its tokens right after the call,
+and classes naming tokens, `nsh/base` and Rust components follow with the next frame. A modifier or context the theme
+does not have throws a `TypeError` naming it. `modifier("brand")` is the context the modifier has now, and
+`modifiers()` lists every modifier with its contexts and default; both are reactive. A context sets only tokens the
+theme has, each as its kind, and two or more contexts make a modifier. NSH writes the modifiers' types into
+`.nsh/types/nsh/modifiers.d.ts`, so `setModifier("brand", "jungle")` is a type error.
+Rust: `set_modifier`, `modifier` and `modifiers` ([Theme documents](../docs/rust.md#theme-documents-and-typed-keys)).
+
 ## appInfo
 
 ```ts

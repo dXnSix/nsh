@@ -63,6 +63,10 @@ pub struct Tokens {
     /// What declares them, when they were read by declared tokens
     /// ([`Tokens::declarations`]): not a token, so not compared.
     declarations: Option<Arc<super::theme::Declarations>>,
+    /// The theme's modifiers, with the context each has now
+    /// ([`Tokens::modifiers`]): compared, so a context picked is a change
+    /// even where it changes no value.
+    modifiers: Option<Arc<super::ThemeModifiers>>,
 }
 
 impl PartialEq for Tokens {
@@ -74,6 +78,7 @@ impl PartialEq for Tokens {
             && self.shadows == other.shadows
             && self.gradients == other.gradients
             && self.roles == other.roles
+            && self.modifiers == other.modifiers
     }
 }
 
@@ -480,6 +485,20 @@ impl ThemeTokens {
         Some(out)
     }
 
+    /// The tokens drawn with once the theme's modifier `name` takes the
+    /// context `context` (`nsh`'s `setModifier`): the tokens its contexts set
+    /// over `current`, under the embedding app's. `Err` says the theme has no
+    /// modifiers, no such modifier or no such context of it.
+    pub fn modifier(&self, current: &Tokens, name: &str, context: &str) -> Result<Tokens, String> {
+        let Some(modifiers) = current.modifiers() else {
+            return Err("the theme has no modifiers".into());
+        };
+        let picked = modifiers.select(name, context)?;
+        let mut out = self.under_host(picked.tokens()).over(current);
+        out.set_modifiers(Some(Arc::new(picked)));
+        Ok(out)
+    }
+
     /// The tokens a [`super::ThemeScope`] draws with: the values theme
     /// file `json` sets, over `current` (the tokens around the scope,
     /// which a `var()` it does not set names). A scope sets values and adds
@@ -773,9 +792,32 @@ impl Tokens {
         self.declarations.clone()
     }
 
+    /// The theme's modifiers, with the context each has now, when these
+    /// tokens were read from a theme file that has them
+    /// ([`super::ThemeModifiers`]).
+    pub fn modifiers(&self) -> Option<&super::ThemeModifiers> {
+        self.modifiers.as_deref()
+    }
+
+    /// Says what modifiers the theme has (`None`: none).
+    pub(crate) fn set_modifiers(&mut self, modifiers: Option<Arc<super::ThemeModifiers>>) {
+        self.modifiers = modifiers;
+    }
+
     /// Says what declares these tokens (`None`: nothing).
     pub(crate) fn set_declarations(&mut self, declarations: Option<Arc<super::Declarations>>) {
         self.declarations = declarations;
+    }
+
+    /// Each token's name, of whatever kind (in no order).
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.colors
+            .keys()
+            .chain(self.numbers.keys())
+            .chain(self.fonts.keys())
+            .chain(self.shadows.keys())
+            .chain(self.gradients.keys())
+            .map(|name| &**name)
     }
 
     /// Whether it has no token.
@@ -866,7 +908,7 @@ impl Tokens {
     }
 
     /// `self` with the tokens of `base` it does not have; what declares
-    /// `self`, if anything, declares the result.
+    /// `self` and its modifiers, if it has them, are the result's.
     pub fn over(&self, base: &Tokens) -> Tokens {
         // A name of `self` is the kind `self` has it, whatever `base` has.
         let mut out = base.clone();
@@ -911,6 +953,9 @@ impl Tokens {
         }
         if self.declarations.is_some() {
             out.declarations = self.declarations.clone();
+        }
+        if self.modifiers.is_some() {
+            out.modifiers = self.modifiers.clone();
         }
         out
     }

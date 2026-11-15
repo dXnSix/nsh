@@ -5666,6 +5666,10 @@ impl<M: TextEngine> Core<M> {
                 self.update_ui_theme(&json);
                 return Ok(());
             }
+            Prop::UiModifier(name, context) => {
+                self.set_modifier(&name, &context);
+                return Ok(());
+            }
             Prop::UiThemeReset(names) => {
                 let names = names.map(|names| self.theme_file_names(names));
                 self.reset_tokens(names.as_deref());

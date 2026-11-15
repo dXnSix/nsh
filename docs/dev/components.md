@@ -952,6 +952,26 @@ token's path (segments in snake case for modules, a keyword raw, upper snake cas
 without a path at the top, named after its name), each documented with the token's doc; two tokens of one key, a kind
 there is not or a document it cannot read fail the build.
 
+**Modifiers** (`element/theme_modifiers.rs`): a theme file's `"modifiers"` (a document's or the app's), each
+`{ "default", "contexts" }`, a context a partial `cssVars`. `ThemeModifiers::read(json, value, base, read)` reads each
+context as a change of the tokens is (`overrides_declared` by the declarations, else the set's `overrides` or
+`theme_file::overrides`), keeps only names `base` has, each of its kind, and lists the rest
+(`LeftOut::within`, `modifiers.brand.contexts.forest: …`); a modifier of fewer than two contexts or a `default` that
+names none is left out. Their order is the file's (`file_order`, a serde visitor over the text: the parsed value keeps
+no key order). `ThemeModifiers` keeps the own values of every name a context sets (`base`) and each modifier's
+contexts with the one picked; `tokens()` gives each such name from the last modifier whose picked context sets it,
+else the own value, and `apply(tokens)` lays that over the tokens and has them carry the modifiers
+(`Tokens::modifiers`, compared, kept by `over` from the upper layer). A document's modifiers are read in
+`add_document` and kept beside its defaults (`Declarations::defaults()` applies them); `TokenProvider::read_left_out`
+merges them with the app's file's (`merged`, after them; a name both have is left out) and takes the file's values as
+the own ones (`rebased`). `Core::set_modifier` (`Action::SetModifier` from Rust's `set_modifier` / `ModuleCx`,
+`Prop::UiModifier` from TS's `setModifier`, `env.rs`; the web's op 415) selects the context in the app's tokens and in
+the file tokens a reset goes back to; `ThemeTokens::modifier` makes the same tokens for JS at once, under the host's.
+`modifier(name)` / `modifiers()` read the tokens' (`env.rs`; the web's ops 416 and 417). The toolchain writes
+`.nsh/types/nsh/modifiers.d.ts` (`types::modifiers_declaration`: `interface ThemeModifiers`, each modifier a union of
+its contexts), reading a shadcn-style file's modifiers with `theme_file::with_modifiers`; `theme_keys!` makes an enum of
+each modifier's contexts in `modifiers` (`NAME`, `ALL`, `DEFAULT`, `name()`, `set()`, `current()`).
+
 `nsh_base::Theme` is a view of the tokens with a field per shadcn token, each read through its role (`Theme::of`), so
 under a document that maps `popover` onto `surface-overlay`, `theme().popover` is that token. `nsh_base::theme()` keeps
 the theme of the tokens last read in a thread-local, made again when the tokens change, or the appearance where its

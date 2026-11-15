@@ -700,6 +700,20 @@ UI 集在注册表中列出其组件绘制所用的角色（不论是否被主�
 `tokens().declarations()` 给出是什么声明了这些令牌：每个名称的种类（`kind_of`）、路径（`path_of`）、说明和所有者，以及某路径上的
 令牌（`name_at`）。
 
+**修饰符。** 主题的其他模式（品牌、密度、对比度）是它的 `"modifiers"`，写在文档或应用的主题文件中：每个都有 `default` 和
+`contexts`，每个上下文是它改变的那部分 `cssVars`（[`setModifier`](../modules/nsh.md#setmodifier-modifier-modifiers)）。令牌是各值加上每个
+修饰符所选上下文的值，按顺序：先是文档的修饰符，再是应用文件的修饰符，文件的值是上下文之下的值。`set_modifier("brand", "forest")`
+与应用的其他操作按顺序选择上下文，`modifier("brand")` 是现在所选的上下文（响应式），`modifiers()` 列出它们，与
+`tokens().modifiers()` 相同（`ThemeModifiers`：`axes()`、`selected()`、`select()`、`tokens()`）。`theme_keys!` 在 `keys::modifiers` 中为每个
+修饰符生成一个由其上下文组成的枚举，由编译器检查名称：
+
+```rust
+use keys::modifiers::Brand;
+
+Brand::Forest.set(); // set_modifier("brand", "forest")
+let forest = Brand::current() == Some(Brand::Forest); // 响应式
+```
+
 **工具链。** `nsh build` 和 `nsh dev` 从应用的 crate 和主题文件了解文档：类名使用其令牌（`bg-surface-raised`、`rounded-card`），
 `.nsh/types/nsh/tokens.d.ts` 按种类为 `token()` 提供类型，并带有说明（[主题 token](./tailwind.md#主题-token)）。
 

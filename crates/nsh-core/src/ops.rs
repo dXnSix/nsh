@@ -3266,6 +3266,9 @@ pub enum Prop {
     /// The app's design tokens of these names (`None`: every one) go back
     /// to its theme's, on the root (`nsh`'s `resetTheme`).
     UiThemeReset(Option<Vec<Box<str>>>),
+    /// A theme modifier (its name) takes another context (the context's
+    /// name), on the root (`nsh`'s `setModifier`).
+    UiModifier(Box<str>, Box<str>),
     /// An image option.
     #[prop(nested)]
     Image(ImageProp),

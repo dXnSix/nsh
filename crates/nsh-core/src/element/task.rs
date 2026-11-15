@@ -221,6 +221,9 @@ pub(crate) enum Action {
     /// Sets some of the app's design tokens, over its others
     /// ([`super::update_tokens`]).
     UpdateTokens(super::Tokens),
+    /// Picks the context of a theme modifier: its name, the context's
+    /// ([`super::set_modifier`]).
+    SetModifier(Box<str>, Box<str>),
     /// Puts the app's design tokens of these names back to its theme's
     /// ([`super::reset_tokens`]).
     ResetTokens(Vec<Box<str>>),

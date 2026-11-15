@@ -107,6 +107,11 @@ export function createEnvironment(reactive, invoke, dom) {
     // `updateTheme` and `resetTheme` (`env.rs`), the same way.
     updateTheme(theme) { invoke(409, [theme]); tokens.update(value => value + 1); },
     resetTheme(names) { invoke(410, [names]); tokens.update(value => value + 1); },
+    // `setModifier`, `modifier` and `modifiers` (`env.rs`): the engine picks
+    // the context and keeps the modifiers with the tokens.
+    setModifier(name, context) { invoke(415, [name, context]); tokens.update(value => value + 1); },
+    modifier(name) { tokens(); return invoke(416, [name]); },
+    modifiers() { tokens(); return JSON.parse(invoke(417, [])); },
   };
   return {
     api, insets, host: () => fields.host(), titleBar: () => fields.titleBar(),

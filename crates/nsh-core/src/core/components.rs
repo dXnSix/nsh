@@ -1042,6 +1042,28 @@ impl<M: TextEngine> Core<M> {
         names
     }
 
+    /// Gives the theme's modifier `name` the context `context`: the tokens
+    /// its contexts set take their values (`ThemeModifiers::tokens`), in the
+    /// app's tokens and in its theme's, which a reset goes back to. A name or
+    /// context the theme has not is logged.
+    pub(crate) fn set_modifier(&mut self, name: &str, context: &str) {
+        let pick = |tokens: &Tokens| -> Result<Option<Tokens>, String> {
+            let Some(modifiers) = tokens.modifiers() else {
+                return Ok(None);
+            };
+            Ok(Some(modifiers.select(name, context)?.apply(tokens)))
+        };
+        match pick(&self.components.app_tokens) {
+            Ok(Some(tokens)) => self.components.app_tokens = Arc::new(tokens),
+            Ok(None) => return log::warn!("setModifier: the theme has no modifiers"),
+            Err(e) => return log::warn!("setModifier: {e}"),
+        }
+        if let Ok(Some(tokens)) = pick(&self.components.file_tokens) {
+            self.components.file_tokens = Arc::new(tokens);
+        }
+        self.tokens_changed();
+    }
+
     /// Puts the app's tokens `names` (`None`: every one) back to its
     /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
     pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
@@ -6178,6 +6200,7 @@ impl<M: TextEngine> Core<M> {
             Action::Tokens(tokens) => self.set_tokens(tokens),
             Action::UpdateTokens(tokens) => self.update_tokens(tokens),
             Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
+            Action::SetModifier(name, context) => self.set_modifier(&name, &context),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
             Action::MainThread(task) => self.components.main_thread.push(task),

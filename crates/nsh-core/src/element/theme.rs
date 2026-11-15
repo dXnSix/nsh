@@ -192,8 +192,11 @@ pub struct Declared {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Declarations {
     names: FxHashMap<Box<str>, Declared>,
-    /// The defaults of every document, with the roles they map.
+    /// The defaults of every document, with the roles they map, under no
+    /// modifier's context.
     defaults: Tokens,
+    /// The documents' modifiers, in the order the documents were added.
+    modifiers: Option<super::ThemeModifiers>,
 }
 
 impl Declarations {
@@ -232,10 +235,14 @@ impl Declarations {
         self.names.is_empty()
     }
 
-    /// The default values of every document, with the roles they map: the
-    /// tokens the app is drawn with when its theme file sets none.
-    pub fn defaults(&self) -> &Tokens {
-        &self.defaults
+    /// The default values of every document, with the roles they map and
+    /// each of their modifiers' default contexts: the tokens the app is
+    /// drawn with when its theme file sets none.
+    pub fn defaults(&self) -> Tokens {
+        match &self.modifiers {
+            Some(modifiers) => modifiers.clone().apply(&self.defaults),
+            None => self.defaults.clone(),
+        }
     }
 
     /// The tokens of theme file `json` (`None`: the defaults) read by these
@@ -273,12 +280,28 @@ impl Declarations {
             let what: Vec<String> = left_out.iter().map(ToString::to_string).collect();
             return Err(format!("{owner}'s theme document: {}", what.join("; ")));
         }
+        // Its modifiers, each context read by its own declarations.
+        let (modifiers, said) = super::ThemeModifiers::read(json, &value, &defaults, |context| {
+            super::theme_file::overrides_declared(context, &defaults, &own)
+        });
+        if !said.is_empty() {
+            let what: Vec<String> = said.iter().map(ToString::to_string).collect();
+            return Err(format!("{owner}'s theme document: {}", what.join("; ")));
+        }
+        let modifiers = match (self.modifiers.take(), modifiers) {
+            (Some(ours), Some(theirs)) => Some(
+                ours.merged(theirs)
+                    .map_err(|e| format!("{owner}'s theme document: {e}"))?,
+            ),
+            (ours, theirs) => ours.or(theirs),
+        };
         let plays: Vec<(String, String)> = defaults
             .roles()
             .map(|(role, token)| (role.to_owned(), token.to_owned()))
             .collect();
         self.extend(owner, declared, &plays)?;
         self.defaults = defaults.over(&self.defaults);
+        self.modifiers = modifiers;
         Ok(())
     }
 
@@ -484,13 +507,18 @@ impl TokenProvider {
                     .and_then(|json| serde_json::from_str::<crate::JsonValue>(json).ok())
                     .is_some_and(|value| super::theme_file::declares_tokens(&value));
                 if !declares {
-                    return read(json).map(said);
+                    let (tokens, mut left_out) = read(json).map(said)?;
+                    let tokens = match json {
+                        Some(json) => self.with_modifiers(json, tokens, None, None, &mut left_out),
+                        None => tokens,
+                    };
+                    return Ok((tokens, left_out));
                 }
                 Arc::new(Declarations::default())
             }
         };
         let Some(json) = json else {
-            return Ok((with_declarations(set.defaults.clone(), &set), Vec::new()));
+            return Ok((with_declarations(set.defaults(), &set), Vec::new()));
         };
         let value: crate::JsonValue =
             serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
@@ -498,7 +526,59 @@ impl TokenProvider {
         let set = Arc::new(set);
         let (tokens, read_out) = super::theme_file::parse_declared(json, &set.defaults, &set)?;
         left_out.extend(read_out);
-        Ok((with_declarations(tokens, &set), left_out))
+        let tokens = with_declarations(tokens, &set);
+        let documents = set.modifiers.clone();
+        let tokens = self.with_modifiers(json, tokens, Some(&set), documents, &mut left_out);
+        Ok((tokens, left_out))
+    }
+
+    /// `tokens`, read from theme file `json` under no context, with the
+    /// documents' modifiers (`documents`) and the file's own, after them,
+    /// each one's picked context over them, carrying them
+    /// ([`super::ThemeModifiers`]); a file's context is read as a change of
+    /// the tokens is, by `set` when they are declared. What of the
+    /// modifiers was left out joins `left_out`.
+    fn with_modifiers(
+        &self,
+        json: &str,
+        tokens: Tokens,
+        set: Option<&Arc<Declarations>>,
+        documents: Option<super::ThemeModifiers>,
+        left_out: &mut Vec<super::theme_file::LeftOut>,
+    ) -> Tokens {
+        let Ok(value) = serde_json::from_str::<crate::JsonValue>(json) else {
+            return match documents {
+                Some(documents) => documents.rebased(&tokens).apply(&tokens),
+                None => tokens,
+            };
+        };
+        let read = |context: &str| match (set, self) {
+            (Some(set), _) => super::theme_file::overrides_declared(context, &tokens, set),
+            (
+                None,
+                TokenProvider::Source {
+                    overrides: Some(overrides),
+                    ..
+                },
+            ) => overrides(context, &tokens).map(said),
+            _ => super::theme_file::overrides(context, &tokens).map(said),
+        };
+        let (file, said) = super::ThemeModifiers::read(json, &value, &tokens, read);
+        left_out.extend(said);
+        let modifiers = match (documents, file) {
+            (Some(documents), Some(file)) => match documents.clone().merged(file) {
+                Ok(both) => Some(both),
+                Err(e) => {
+                    left_out.push(super::theme_file::LeftOut::said(format!("modifiers: {e}")));
+                    Some(documents)
+                }
+            },
+            (documents, file) => documents.or(file),
+        };
+        match modifiers {
+            Some(modifiers) => modifiers.rebased(&tokens).apply(&tokens),
+            None => tokens,
+        }
     }
 
     /// The tokens theme file `json` sets, and only those (`var()` against

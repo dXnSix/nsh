@@ -305,7 +305,11 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     // SAFETY: a value the environment owns.
     let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
     // Roles mapped onto other tokens: what read a role reads another one.
-    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names || !old.same_roles(&tokens);
+    // A context picked is read by `modifier()`, of every token.
+    let whole = names >= TOKEN_SIGNALS
+        || 2 * changed.len() > names
+        || !old.same_roles(&tokens)
+        || old.modifiers() != tokens.modifiers();
     if whole && !scoped {
         return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
     }
@@ -513,6 +517,130 @@ unsafe extern "C" fn reset_theme(
     }
     reactive::finish_value(cx, UNDEFINED)
 }
+
+/// `setModifier(name, context)`: the theme's modifier `name` takes the
+/// context `context`, the tokens its contexts set following at once.
+unsafe extern "C" fn set_modifier(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    const EXPECTED: &str = "setModifier: expected a modifier's name and a context's (strings)";
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let context = crate::dom::string_arg(cx, arg(argc, argv, 1));
+    let (Some(name), Some(context)) = (name, context) else {
+        return type_error(cx, EXPECTED);
+    };
+    let e = env(cx);
+    let current = e.tokens.borrow().clone();
+    let tokens = match e.theme.borrow().modifier(&current, &name, &context) {
+        Ok(tokens) => tokens,
+        Err(what) => return type_error(cx, &format!("setModifier: {what}")),
+    };
+    let op = nsh_core::Op::SetProp {
+        id: nsh_core::ROOT_ID,
+        prop: nsh_core::Prop::UiModifier(name.into(), context.into()),
+    };
+    if let Err(err) = crate::dom::push_op(cx, op) {
+        return err;
+    }
+    set_tokens(cx, Arc::new(tokens));
+    reactive::finish_value(cx, UNDEFINED)
+}
+
+/// The tokens of the scope around what reads them, else the surface's,
+/// read tracked as `token()` reads them all.
+fn tracked_tokens(cx: *mut JsContext) -> Result<Arc<Tokens>, JsValue> {
+    let e = env(cx);
+    let scoped = scope_tokens(cx)?;
+    if scoped.is_none() {
+        reactive::track(cx, e.tokens_signal.get());
+    }
+    Ok(scoped.unwrap_or_else(|| e.tokens.borrow().clone()))
+}
+
+/// `modifier(name)`: the context the theme's modifier `name` has now.
+unsafe extern "C" fn modifier(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    let name = crate::dom::string_arg(cx, arg(argc, argv, 0));
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let selected = name.and_then(|name| {
+        tokens
+            .modifiers()
+            .and_then(|m| m.selected(&name))
+            .map(str::to_owned)
+    });
+    match selected {
+        Some(context) => string(cx, &context),
+        None => UNDEFINED,
+    }
+}
+
+/// `modifiers()`: the theme's modifiers, each with its contexts and
+/// default.
+unsafe extern "C" fn modifiers(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: c_int,
+    _argv: *mut JsValue,
+) -> JsValue {
+    let tokens = match tracked_tokens(cx) {
+        Ok(tokens) => tokens,
+        Err(exception) => return exception,
+    };
+    let list: Vec<serde_json::Value> = tokens
+        .modifiers()
+        .map(|m| m.axes())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|axis| {
+            serde_json::json!({
+                "name": &*axis.name,
+                "contexts": axis.contexts.iter().map(|c| &**c).collect::<Vec<_>>(),
+                "default": &*axis.default,
+            })
+        })
+        .collect();
+    crate::host::json_to_js(cx, &serde_json::Value::Array(list))
+}
+
+/// `setModifier` of `nsh`.
+pub(crate) const SET_MODIFIER_EXPORT: crate::modules::Item = (
+    "setModifier",
+    Export::Function(set_modifier, 2),
+    Ts::function(
+        "Gives the theme's modifier `name` (`\"brand\"`) the context `context`\n(`\"forest\"`): the tokens its contexts set take that context's values,\n`token()` reads them at once, and classes naming tokens, `nsh/base` and\nRust components follow with the next frame. A modifier or context the\ntheme has not throws a `TypeError` naming it.",
+        &["<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void"],
+    ),
+);
+
+/// `modifier` of `nsh`.
+pub(crate) const MODIFIER_EXPORT: crate::modules::Item = (
+    "modifier",
+    Export::Function(modifier, 1),
+    Ts::function(
+        "The context the theme's modifier `name` has now, reactive; `undefined`\nwhen the theme has no such modifier.",
+        &["<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined"],
+    ),
+);
+
+/// `modifiers` of `nsh`.
+pub(crate) const MODIFIERS_EXPORT: crate::modules::Item = (
+    "modifiers",
+    Export::Function(modifiers, 0),
+    Ts::function(
+        "The theme's modifiers in its file's order, reactive: each one's name, its\ncontexts and the context it has when nothing else is picked.",
+        &["(): ModifierAxis[]"],
+    ),
+);
 
 /// Throws a `TypeError` of `message`.
 fn type_error(cx: *mut JsContext, message: &str) -> JsValue {

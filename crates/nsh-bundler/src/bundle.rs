@@ -440,9 +440,12 @@ pub fn theme_tokens(dir: &std::path::Path) -> Result<nsh_core::element::Tokens, 
     let config: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| BundleError::other(format!("nsh.json: {e}")))?;
     match theme_json(dir, &config)? {
-        Some(json) => Ok(nsh_base::Theme::from_json(&json)
-            .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?
-            .into_tokens()),
+        Some(json) => {
+            let tokens = nsh_base::Theme::from_json(&json)
+                .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?
+                .into_tokens();
+            Ok(nsh_core::element::theme_file::with_modifiers(&json, tokens).0)
+        }
         None => Ok(nsh_base::Theme::default().into_tokens()),
     }
 }
@@ -512,7 +515,12 @@ fn tailwind_setup(
         let (read, ignored) = match declared(ui_sets, Some(&json))? {
             Some(declared) => declared.read(Some(&json)),
             None => nsh_base::Theme::from_json_lenient(&json)
-                .map(|(theme, ignored)| (theme.into_tokens(), ignored))
+                .map(|(theme, mut ignored)| {
+                    let (tokens, said) =
+                        nsh_core::element::theme_file::with_modifiers(&json, theme.into_tokens());
+                    ignored.extend(said);
+                    (tokens, ignored)
+                })
                 .map_err(|e| e.0),
         }
         .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
@@ -2393,6 +2401,25 @@ mod declared_theme {
             "{declaration}"
         );
         assert!(!declaration.contains("primary"), "{declaration}");
+    }
+
+    #[test]
+    fn modifiers_d_ts_types_each_modifier_by_its_contexts() {
+        let dir = app(r##"{ "cssVars": { "light": { "accent": "#111111" } },
+                  "modifiers": { "brand": { "default": "ocean", "contexts": {
+                      "ocean": {}, "forest": { "light": { "accent": "#00ff00" } } } } } }"##);
+        let tokens = super::theme_tokens_of(&dir, &[]).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let declaration = crate::types::modifiers_declaration(&tokens);
+        assert!(
+            declaration.contains("    \"brand\": \"ocean\" | \"forest\";"),
+            "{declaration}"
+        );
+        // A theme without modifiers: an empty interface.
+        assert!(
+            crate::types::modifiers_declaration(&Tokens::default())
+                .contains("interface ThemeModifiers {\n  }")
+        );
     }
 
     #[test]

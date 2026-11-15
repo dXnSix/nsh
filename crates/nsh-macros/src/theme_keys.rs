@@ -1,8 +1,9 @@
 //! `theme_keys!("design/theme.json")`: a typed key (`TokenKey<V>`) for each
 //! token a theme document's `"tokens"` section declares, in modules by the
 //! token's path (`colors.backgrounds.primary` is
-//! `colors::backgrounds::PRIMARY`), its doc the token's. Read at compile
-//! time: a changed document builds the crate again.
+//! `colors::backgrounds::PRIMARY`), its doc the token's, and an enum of each
+//! theme modifier's contexts in `modifiers` (`modifiers::Brand::Forest`).
+//! Read at compile time: a changed document builds the crate again.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -81,12 +82,14 @@ pub(crate) fn expand(lit: LitStr) -> syn::Result<TokenStream2> {
     }
     let nsh_core = crate::root::nsh_core();
     let items = root.items(&nsh_core, span)?;
+    let modifiers = modifier_enums(&value, &nsh_core, span)?;
     let path = path.to_string_lossy().into_owned();
     Ok(quote! {
         // The document is read here, so a change of it builds the crate
         // again.
         const _: &str = ::core::include_str!(#path);
         #items
+        #modifiers
     })
 }
 
@@ -143,6 +146,141 @@ impl Group {
             });
         }
         Ok(out)
+    }
+}
+
+/// `pub mod modifiers` with an enum of each theme modifier's contexts
+/// (`brand`: `Brand { Ocean, Forest }`), or nothing when the document has
+/// none.
+fn modifier_enums(
+    value: &serde_json::Value,
+    nsh_core: &TokenStream2,
+    span: Span,
+) -> syn::Result<TokenStream2> {
+    let Some(modifiers) = value
+        .get("modifiers")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Ok(TokenStream2::new());
+    };
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    let mut out = TokenStream2::new();
+    for (name, modifier) in modifiers {
+        let ty = type_name(name);
+        if let Some(other) = seen.insert(ty.clone(), name.clone()) {
+            return Err(syn::Error::new(
+                span,
+                format!("the modifiers `{other}` and `{name}` are both the type `{ty}`"),
+            ));
+        }
+        let contexts: Vec<&String> = modifier
+            .get("contexts")
+            .and_then(serde_json::Value::as_object)
+            .map(|c| c.keys().collect())
+            .unwrap_or_default();
+        if contexts.len() < 2 {
+            return Err(syn::Error::new(
+                span,
+                format!("`modifiers.{name}`: expected two or more contexts"),
+            ));
+        }
+        let default = modifier.get("default").and_then(serde_json::Value::as_str);
+        let Some(default) = default.filter(|d| contexts.iter().any(|c| c == d)) else {
+            return Err(syn::Error::new(
+                span,
+                format!("`modifiers.{name}`: expected `default`, one of its contexts"),
+            ));
+        };
+        let mut variants = Vec::new();
+        for context in &contexts {
+            let variant = type_name(context);
+            if variants
+                .iter()
+                .any(|(v, _): &(String, &String)| *v == variant)
+            {
+                return Err(syn::Error::new(
+                    span,
+                    format!("`modifiers.{name}`: two contexts are both the variant `{variant}`"),
+                ));
+            }
+            variants.push((variant, *context));
+        }
+        let ident = format_ident!("{ty}", span = span);
+        let idents: Vec<_> = variants
+            .iter()
+            .map(|(v, _)| format_ident!("{v}", span = span))
+            .collect();
+        let names: Vec<&str> = variants.iter().map(|(_, c)| c.as_str()).collect();
+        let default = format_ident!("{}", type_name(default), span = span);
+        let doc = format!(" The contexts of the theme modifier `{name}`.");
+        let docs: Vec<String> = names
+            .iter()
+            .map(|c| format!(" The context `{c}`."))
+            .collect();
+        out.extend(quote! {
+            #[doc = #doc]
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+            pub enum #ident {
+                #( #[doc = #docs] #idents, )*
+            }
+
+            impl #ident {
+                /// The modifier's name.
+                pub const NAME: &'static str = #name;
+                /// Its contexts, in the document's order.
+                pub const ALL: &'static [Self] = &[#(Self::#idents),*];
+                /// The context it has when nothing else is picked.
+                pub const DEFAULT: Self = Self::#default;
+
+                /// The context's name.
+                pub const fn name(self) -> &'static str {
+                    match self {
+                        #( Self::#idents => #names, )*
+                    }
+                }
+
+                /// Gives the modifier this context
+                /// (`nsh_core::element::set_modifier`).
+                pub fn set(self) {
+                    #nsh_core::element::set_modifier(Self::NAME, self.name())
+                }
+
+                /// The context the modifier has now where it is read,
+                /// reactive (`nsh_core::element::modifier`).
+                pub fn current() -> ::core::option::Option<Self> {
+                    let context = #nsh_core::element::modifier(Self::NAME)?;
+                    Self::ALL.iter().copied().find(|c| c.name() == &*context)
+                }
+            }
+        });
+    }
+    Ok(quote! {
+        /// The theme's modifiers, each an enum of its contexts.
+        pub mod modifiers {
+            #out
+        }
+    })
+}
+
+/// A name as a type's or a variant's (`brand` `Brand`, `high-contrast`
+/// `HighContrast`), `_` in front of a digit.
+fn type_name(name: &str) -> String {
+    let name: String = words(name)
+        .iter()
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => {
+                    first.to_ascii_uppercase().to_string() + &chars.as_str().to_lowercase()
+                }
+                None => String::new(),
+            }
+        })
+        .collect();
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("_{name}")
+    } else {
+        name
     }
 }
 
@@ -295,5 +433,8 @@ mod tests {
         assert_eq!(constant_name("text-xl"), "TEXT_XL");
         assert_eq!(constant_name("500"), "_500");
         assert_eq!(constant_name("lineHeight"), "LINE_HEIGHT");
+        assert_eq!(type_name("brand"), "Brand");
+        assert_eq!(type_name("high-contrast"), "HighContrast");
+        assert_eq!(type_name("2x"), "_2x");
     }
 }

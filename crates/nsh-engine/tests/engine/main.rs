@@ -75,6 +75,7 @@ mod system;
 mod test_ui;
 mod theme;
 mod theme_document;
+mod theme_modifiers;
 mod theme_overrides;
 mod theme_root;
 mod theme_scope;
