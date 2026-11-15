@@ -512,7 +512,7 @@ fn apply_css_vars(
         if name.starts_with("font-weight-") {
             let Some(dark_weight) = length(value) else {
                 let said = no_kind(value, "number", &dark_vars, base);
-                ignored.push(format!("`{name}`: {said}"));
+                ignored.push(LeftOut::about(name, format_args!(": {said}")));
                 continue;
             };
             // Per appearance, as the other numbers (below).
@@ -529,7 +529,7 @@ fn apply_css_vars(
         if name.starts_with("font-") {
             if written_as_color(value) || length(value).is_some() {
                 let said = no_kind(value, "font family", &dark_vars, base);
-                ignored.push(format!("`{name}`: {said}"));
+                ignored.push(LeftOut::about(name, format_args!(": {said}")));
             } else if let Some(family) = font_family(value) {
                 tokens.set_font(name, family);
             }
@@ -587,7 +587,7 @@ fn apply_css_vars(
                     given.dedup_by(|a, b| a.1 == b.1);
                     for (vars, v) in given.into_iter().filter(|(_, v)| written_as_color(v)) {
                         let said = no_kind(v, "color", vars, base);
-                        ignored.push(format!("`{name}`: {said}"));
+                        ignored.push(LeftOut::about(name, format_args!(": {said}")));
                     }
                 }
             },
