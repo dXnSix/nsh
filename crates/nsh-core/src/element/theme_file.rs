@@ -12,7 +12,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{AdaptiveColor, AdaptiveShadow, Tokens};
+use super::{AdaptiveColor, AdaptiveShadow, Tokens, tokens::Kind};
 use crate::{Color, JsonValue, color::Hsla};
 
 /// Points per `rem`, as Tailwind's theme has them.
@@ -506,10 +506,15 @@ fn apply_css_vars(
             }
         }
         // A weight (`font-weight-strong`: `650`) is a number, as
-        // Tailwind's `--font-weight-*`; every other `font-*` a family.
-        if name.starts_with("font-weight-")
-            && let Some(dark_weight) = length(value)
-        {
+        // Tailwind's `--font-weight-*`; every other `font-*` a family. A
+        // weight that is no number, and a color or a number under a
+        // family's name, is of no kind the name holds: left out.
+        if name.starts_with("font-weight-") {
+            let Some(dark_weight) = length(value) else {
+                let said = no_kind(value, "number", &dark_vars, base);
+                ignored.push(format!("`{name}`: {said}"));
+                continue;
+            };
             // Per appearance, as the other numbers (below).
             let light_weight = light_vars
                 .get(name)
@@ -522,7 +527,10 @@ fn apply_css_vars(
             continue;
         }
         if name.starts_with("font-") {
-            if let Some(family) = font_family(value) {
+            if written_as_color(value) || length(value).is_some() {
+                let said = no_kind(value, "font family", &dark_vars, base);
+                ignored.push(format!("`{name}`: {said}"));
+            } else if let Some(family) = font_family(value) {
                 tokens.set_font(name, family);
             }
             continue;
@@ -569,17 +577,63 @@ fn apply_css_vars(
                     }
                 }
                 None => {
-                    let mut given: Vec<&String> = [light_vars.get(name), dark_vars.get(name)]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                    given.dedup();
-                    for v in given.into_iter().filter(|v| written_as_color(v)) {
-                        ignored.push(LeftOut::about(name, format_args!(": {v} is no color")));
+                    let mut given: Vec<(&FxHashMap<String, String>, &String)> = [
+                        (&light_vars, light_vars.get(name)),
+                        (&dark_vars, dark_vars.get(name)),
+                    ]
+                    .into_iter()
+                    .filter_map(|(vars, v)| Some((vars, v?)))
+                    .collect();
+                    given.dedup_by(|a, b| a.1 == b.1);
+                    for (vars, v) in given.into_iter().filter(|(_, v)| written_as_color(v)) {
+                        let said = no_kind(v, "color", vars, base);
+                        ignored.push(format!("`{name}`: {said}"));
                     }
                 }
             },
         }
+    }
+}
+
+/// `value`, which a theme file gives a token that cannot take it, said as
+/// what it is: `{value} is no {kind}`, or, when a `var()` in it names a
+/// token of another kind than a color (the file's in `vars`, of one
+/// appearance, else `base`'s), what it names, as `var()` copies colors
+/// only.
+fn no_kind(value: &str, kind: &str, vars: &FxHashMap<String, String>, base: &Tokens) -> String {
+    let mut rest = value;
+    while let Some(start) = rest.find("var(") {
+        let inner = &rest[start + 4..];
+        let end = inner.find([',', ')']).unwrap_or(inner.len());
+        if let Some(var) = inner[..end].trim().strip_prefix("--")
+            && let Some(named) = named_kind(var, vars, base).filter(|k| *k != Kind::Color)
+        {
+            return format!(
+                "{value} names the {} `{var}`, and var() copies only colors",
+                named.name()
+            );
+        }
+        rest = &inner[end..];
+    }
+    format!("{value} is no {kind}")
+}
+
+/// The kind of token `name` as theme file `vars` (of one appearance) give
+/// it, else as `base` has it. `None`: the file's value is of no kind.
+fn named_kind(name: &str, vars: &FxHashMap<String, String>, base: &Tokens) -> Option<Kind> {
+    let Some(value) = vars.get(name) else {
+        return base.kind(name);
+    };
+    if name.starts_with("shadow-") && crate::css::box_shadows(value).is_some() {
+        Some(Kind::Shadow)
+    } else if Kind::Number.names(name) && length(value).is_some() {
+        Some(Kind::Number)
+    } else if Kind::Font.names(name) && !written_as_color(value) && font_family(value).is_some() {
+        Some(Kind::Font)
+    } else if written_as_color(value) {
+        Some(Kind::Color)
+    } else {
+        None
     }
 }
 
@@ -951,5 +1005,98 @@ mod declared_once {
             overrides_declared("nope", &Tokens::default(), &set()).unwrap_err()[..9],
             *"not JSON:"
         );
+    }
+}
+
+/// A `font-*` name holds a font family only when its value is one: a
+/// color or a number under it, or a weight that is no number, is left out
+/// and listed, as any value of no kind a token has.
+#[cfg(test)]
+mod font_values {
+    use super::*;
+
+    #[test]
+    fn a_color_or_a_number_under_a_font_name_is_no_family() {
+        let (tokens, mut ignored) = parse(
+            r##"{ "cssVars": { "theme": {
+                "font-color": "#ffffff", "font-tint": "oklch(0.7 0.1 200)",
+                "font-size": "16px", "font-scale": "1.2",
+                "font-sans": "Inter, sans-serif", "font-serif": "serif"
+            } } }"##,
+            &Tokens::default(),
+        )
+        .unwrap();
+        ignored.sort();
+        assert_eq!(
+            ignored,
+            [
+                "`font-color`: #ffffff is no font family",
+                "`font-scale`: 1.2 is no font family",
+                "`font-size`: 16px is no font family",
+                "`font-tint`: oklch(0.7 0.1 200) is no font family",
+            ]
+        );
+        for name in ["font-color", "font-tint", "font-size", "font-scale"] {
+            assert_eq!(tokens.get(name), None, "{name}");
+        }
+        assert_eq!(tokens.font("font-sans").map(|f| &**f), Some("Inter"));
+        // A generic family is the system's font: no token, nothing listed.
+        assert_eq!(tokens.font("font-serif"), None);
+    }
+
+    #[test]
+    fn a_weight_that_is_no_number_is_no_family() {
+        let (tokens, ignored) = parse(
+            r#"{ "cssVars": { "theme": { "font-weight-strong": "bold", "font-weight-body": "450" } } }"#,
+            &Tokens::default(),
+        )
+        .unwrap();
+        assert_eq!(ignored, ["`font-weight-strong`: bold is no number"]);
+        assert_eq!(tokens.get("font-weight-strong"), None);
+        assert_eq!(tokens.number("font-weight-body"), Some(450.0));
+    }
+}
+
+/// `var()` copies colors only: a value that names a number or a font
+/// family with it is left out, and the sentence says what it names.
+#[cfg(test)]
+mod var_of_no_color {
+    use super::*;
+
+    #[test]
+    fn a_var_naming_another_kind_says_what_it_names() {
+        let mut base = Tokens::default();
+        base.set_number("radius", 10.0);
+        base.set_font("font-inter", "Inter");
+        let (tokens, mut ignored) = parse(
+            r##"{ "cssVars": { "theme": {
+                "radius-card": "var(--radius)", "gap": "4px", "gap-lg": "var(--gap)",
+                "font-sans": "var(--font-inter)", "font-weight-body": "var(--gap)",
+                "brand": "#ff0000", "ring": "var(--brand)", "ink": "var(--nothing)"
+            } } }"##,
+            &base,
+        )
+        .unwrap();
+        ignored.sort();
+        assert_eq!(
+            ignored,
+            [
+                "`font-sans`: var(--font-inter) names the font family `font-inter`, and var() copies only colors",
+                "`font-weight-body`: var(--gap) names the number `gap`, and var() copies only colors",
+                "`gap-lg`: var(--gap) names the number `gap`, and var() copies only colors",
+                "`ink`: var(--nothing) is no color",
+                "`radius-card`: var(--radius) names the number `radius`, and var() copies only colors",
+            ]
+        );
+        for name in [
+            "radius-card",
+            "gap-lg",
+            "font-sans",
+            "font-weight-body",
+            "ink",
+        ] {
+            assert_eq!(tokens.get(name), None, "{name}");
+        }
+        assert_eq!(tokens.color("ring"), tokens.color("brand"));
     }
 }
