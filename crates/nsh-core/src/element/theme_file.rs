@@ -644,10 +644,14 @@ fn apply_css_vars(
             }
         }
         // A weight (`font-weight-strong`: `650`) is a number, as
-        // Tailwind's `--font-weight-*`; every other `font-*` a family.
-        if name.starts_with("font-weight-")
-            && let Some(dark_weight) = length(value)
-        {
+        // Tailwind's `--font-weight-*`; every other `font-*` a family. A
+        // weight that is no number, and a color or a number under a
+        // family's name, is of no kind the name holds: left out.
+        if name.starts_with("font-weight-") {
+            let Some(dark_weight) = length(value) else {
+                ignored.push(LeftOut::about(name, format_args!(": {value} is no number")));
+                continue;
+            };
             // Per appearance, as the other numbers (below).
             let light_weight = light_vars
                 .get(name)
@@ -660,7 +664,12 @@ fn apply_css_vars(
             continue;
         }
         if name.starts_with("font-") {
-            if let Some(family) = font_family(value) {
+            if written_as_color(value) || length(value).is_some() {
+                ignored.push(LeftOut::about(
+                    name,
+                    format_args!(": {value} is no font family"),
+                ));
+            } else if let Some(family) = font_family(value) {
                 tokens.set_font(name, family);
             }
             continue;
@@ -1287,5 +1296,54 @@ mod file_roles {
             tokens.role(POPOVER),
             Some(AdaptiveColor::rgb(0x111111, 0x111111))
         );
+    }
+}
+
+/// A `font-*` name holds a font family only when its value is one: a
+/// color or a number under it, or a weight that is no number, is left out
+/// and listed, as any value of no kind a token has.
+#[cfg(test)]
+mod font_values {
+    use super::*;
+
+    #[test]
+    fn a_color_or_a_number_under_a_font_name_is_no_family() {
+        let (tokens, mut ignored) = parse(
+            r##"{ "cssVars": { "theme": {
+                "font-color": "#ffffff", "font-tint": "oklch(0.7 0.1 200)",
+                "font-size": "16px", "font-scale": "1.2",
+                "font-sans": "Inter, sans-serif", "font-serif": "serif"
+            } } }"##,
+            &Tokens::default(),
+        )
+        .unwrap();
+        ignored.sort();
+        assert_eq!(
+            ignored,
+            [
+                "`font-color`: #ffffff is no font family",
+                "`font-scale`: 1.2 is no font family",
+                "`font-size`: 16px is no font family",
+                "`font-tint`: oklch(0.7 0.1 200) is no font family",
+            ]
+        );
+        for name in ["font-color", "font-tint", "font-size", "font-scale"] {
+            assert_eq!(tokens.get(name), None, "{name}");
+        }
+        assert_eq!(tokens.font("font-sans").map(|f| &**f), Some("Inter"));
+        // A generic family is the system's font: no token, nothing listed.
+        assert_eq!(tokens.font("font-serif"), None);
+    }
+
+    #[test]
+    fn a_weight_that_is_no_number_is_no_family() {
+        let (tokens, ignored) = parse(
+            r#"{ "cssVars": { "theme": { "font-weight-strong": "bold", "font-weight-body": "450" } } }"#,
+            &Tokens::default(),
+        )
+        .unwrap();
+        assert_eq!(ignored, ["`font-weight-strong`: bold is no number"]);
+        assert_eq!(tokens.get("font-weight-strong"), None);
+        assert_eq!(tokens.number("font-weight-body"), Some(450.0));
     }
 }

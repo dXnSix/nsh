@@ -826,7 +826,8 @@ A theme file is shadcn's registry `cssVars`, as shadcn and tweakcn export them: 
 where `dark` leaves them out). Values are CSS: colors (hex, `rgb()`, `hsl()`, `oklch()`, `oklab()`, names,
 `color-mix()`, `var(--x[, fallback])` of the same appearance's tokens, the file's or the default's), lengths (`rem`
 is 16 pt, `px`) and font family lists for `font-*` names (the first family that is not generic, `system-ui` /
-`sans-serif` / ... meaning the system's); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
+`sans-serif` / ... meaning the system's; a color or a number there, and a `font-weight-*` value that is no number,
+is left out and reported); a `shadow-*` value that reads as `box-shadow` layers is a shadow token
 (`Tokens::shadow`, per appearance), a `background-image-*` value that reads as CSS gradients a gradient token
 (`Tokens::gradient`, per appearance, a `var()` in a stop read as the theme's color in each; its class is `bg-<n>`
 through the arbitrary `bg-[…]`, after a utility or a color of that name, `ClassTokens::substitute`; written back
