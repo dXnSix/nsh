@@ -177,15 +177,18 @@ fn apply_css_vars(tokens: &mut Tokens, base: &Tokens, vars: &JsonValue, ignored:
         let value = dark_vars.get(name).or_else(|| light_vars.get(name));
         let Some(value) = value else { continue };
         // A weight (`font-weight-strong`: `650`) is a number, as
-        // Tailwind's `--font-weight-*`; every other `font-*` a family.
-        if name.starts_with("font-weight-")
-            && let Some(weight) = length(value)
-        {
+        // Tailwind's `--font-weight-*`; every other `font-*` a family. A
+        // weight that is no number, and a color or a number under a
+        // family's name, is of no kind the name holds: left out.
+        if name.starts_with("font-weight-") {
+            let Some(weight) = length(value) else {
+                let said = no_kind(value, "number", &dark_vars, base);
+                ignored.push(format!("`{name}`: {said}"));
+                continue;
+            };
             tokens.set_number(name, weight);
             continue;
         }
-        // A color or a number under a family's name is of no kind the name
-        // holds: left out.
         if name.starts_with("font-") {
             if written_as_color(value) || length(value).is_some() {
                 let said = no_kind(value, "font family", &dark_vars, base);
@@ -475,8 +478,8 @@ mod reads {
 }
 
 /// A `font-*` name holds a font family only when its value is one: a
-/// color or a number under it is left out and listed, as any value of no
-/// kind a token has.
+/// color or a number under it, or a weight that is no number, is left out
+/// and listed, as any value of no kind a token has.
 #[cfg(test)]
 mod font_values {
     use super::*;
@@ -509,6 +512,18 @@ mod font_values {
         // A generic family is the system's font: no token, nothing listed.
         assert_eq!(tokens.font("font-serif"), None);
     }
+
+    #[test]
+    fn a_weight_that_is_no_number_is_no_family() {
+        let (tokens, ignored) = parse(
+            r#"{ "cssVars": { "theme": { "font-weight-strong": "bold", "font-weight-body": "450" } } }"#,
+            &Tokens::default(),
+        )
+        .unwrap();
+        assert_eq!(ignored, ["`font-weight-strong`: bold is no number"]);
+        assert_eq!(tokens.get("font-weight-strong"), None);
+        assert_eq!(tokens.number("font-weight-body"), Some(450.0));
+    }
 }
 
 /// `var()` copies colors only: a value that names a number or a font
@@ -525,7 +540,7 @@ mod var_of_no_color {
         let (tokens, mut ignored) = parse(
             r##"{ "cssVars": { "theme": {
                 "radius-card": "var(--radius)", "gap": "4px", "gap-lg": "var(--gap)",
-                "font-sans": "var(--font-inter)",
+                "font-sans": "var(--font-inter)", "font-weight-body": "var(--gap)",
                 "brand": "#ff0000", "ring": "var(--brand)", "ink": "var(--nothing)"
             } } }"##,
             &base,
@@ -536,12 +551,19 @@ mod var_of_no_color {
             ignored,
             [
                 "`font-sans`: var(--font-inter) names the font family `font-inter`, and var() copies only colors",
+                "`font-weight-body`: var(--gap) names the number `gap`, and var() copies only colors",
                 "`gap-lg`: var(--gap) names the number `gap`, and var() copies only colors",
                 "`ink`: var(--nothing) is no color",
                 "`radius-card`: var(--radius) names the number `radius`, and var() copies only colors",
             ]
         );
-        for name in ["radius-card", "gap-lg", "font-sans", "ink"] {
+        for name in [
+            "radius-card",
+            "gap-lg",
+            "font-sans",
+            "font-weight-body",
+            "ink",
+        ] {
             assert_eq!(tokens.get(name), None, "{name}");
         }
         assert_eq!(tokens.color("ring"), tokens.color("brand"));

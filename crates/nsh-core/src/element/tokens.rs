@@ -567,9 +567,11 @@ impl Kind {
     /// ([`super::theme_file`]).
     pub(crate) fn names(self, name: &str) -> bool {
         let font = name.starts_with("font-");
+        let weight = name.starts_with("font-weight-");
         match self {
-            Kind::Font => font,
-            Kind::Color | Kind::Number => !font,
+            Kind::Font => font && !weight,
+            Kind::Color => !font,
+            Kind::Number => !font || weight,
         }
     }
 
