@@ -627,8 +627,11 @@ impl Tokens {
     }
 
     /// Gives token `to` what token `from` is, of whatever kind, unless
-    /// there is a `to` of that kind already; `from` stays.
+    /// there is a `to` already; `from` stays.
     pub(crate) fn copy_as(&mut self, from: &str, to: &str) {
+        if self.kind(to).is_some() {
+            return;
+        }
         fn copy<V: Clone>(map: &mut FxHashMap<Box<str>, V>, from: &str, to: &str) {
             if !map.contains_key(to)
                 && let Some(value) = map.get(from).cloned()
@@ -1076,5 +1079,15 @@ mod one_kind {
         assert!(ignored.is_empty(), "{ignored:?}");
         assert!(matches!(tokens.get("radius"), Some(Token::Color(_))));
         assert_eq!(tokens.number("radius"), None);
+    }
+
+    #[test]
+    fn a_copy_leaves_a_name_of_another_kind_as_it_is() {
+        let mut t = Tokens::default();
+        t.set_color("popover", rgb(0x111111).into());
+        t.set_number("surface", 4.0);
+        t.copy_as("popover", "surface");
+        assert_eq!(t.get("surface"), Some(Token::Number(4.0)));
+        assert_eq!(t.color("surface"), None);
     }
 }
