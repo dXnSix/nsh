@@ -397,8 +397,8 @@ fn theme_tokens() {
     assert_eq!(g.stops.last().unwrap().color, Color::from(accent.light));
     let (s, _) = styled_with("dark:bg-accent", dark, (390.0, 844.0), 0);
     assert_eq!(s.view.background_color, Color::from(accent.dark));
-    let s = styled("text-(length:--font-size) rounded-(--radius-lg)");
-    assert_eq!(s.text.font_size, Some(px(ui.number("font-size").unwrap())));
+    let s = styled("text-(length:--body-size) rounded-(--radius-lg)");
+    assert_eq!(s.text.font_size, Some(px(ui.number("body-size").unwrap())));
     assert_eq!(s.view.border_radius, px(ui.number("radius-lg").unwrap()));
     // Later utilities still win, in both appearances.
     let (s, _) = styled_with("bg-primary bg-red-500", dark, (390.0, 844.0), 0);
@@ -2598,8 +2598,8 @@ mod shadow_tokens {
             shadows(&sized, "shadow-(--shadow-sm)", false),
             [layer(9.0, 0xff00_00ff)]
         );
-        // A name no token has stays unknown, and a shadow token named
-        // without the namespace is no class.
+        // A name no token has stays unknown, and a shadow named without
+        // the namespace is no token (its name says no shadow): no class.
         assert!(!parse(&theme, "shadow-nothing").unknown().is_empty());
         let mut bare = Tokens::default();
         bare.set_shadow("card", raised());

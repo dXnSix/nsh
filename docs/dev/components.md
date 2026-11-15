@@ -871,8 +871,10 @@ whether it is only a name no type declares, which `ThemeTokens::checked` / `upda
 (`setTheme` leaves the name out, #1190). Nothing reads a sentence back; the public readers and `TokenProvider::read`
 list the sentences (`theme_file::sentences`), `read_left_out` / `overrides_left_out` the `LeftOut`s.
 `ThemeSet::try_add` also refuses a token named as no value of its kind is read (a font not `font-*`, a shadow not
-`shadow-*`, another kind `font-*` but a weight's `font-weight-*`) and a name or a role a type gives twice. An app with
-a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_theme_types`).
+`shadow-*`, another kind `font-*` but a weight's `font-weight-*`: `tokens::Kind::names`) and a name or a role a type
+gives twice. `Tokens`' setters keep to the same rule (they leave such a name out and log it) and keep a name to one
+kind (a setter clears it from the others, `over` lets the upper layer's kind win), so the tokens `theme_file::write`
+writes read back as the same tokens. An app with a registered type has a theme of its own (`Tokens::is_themed`, `Registry::has_theme_types`).
 `theme_file::write(tokens)` writes tokens back as a theme file (a value both appearances share in `theme`, the others
 in `light` and `dark`; roles none of it), which the descriptions carry as a type's defaults.
 
