@@ -103,7 +103,7 @@ jobs:
     if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "macos"]'), needs.plan.outputs.only)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -130,7 +130,7 @@ jobs:
     if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "ios"]'), needs.plan.outputs.only)
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -161,7 +161,7 @@ jobs:
     if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "android"]'), needs.plan.outputs.only)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # The emulator runs with hardware acceleration.
       - name: Enable KVM
         run: |
@@ -248,7 +248,7 @@ jobs:
     if: needs.plan.outputs.run == 'true' && contains(fromJSON('["all", "web"]'), needs.plan.outputs.only)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # QuickJS's WebAssembly build needs LLVM (clang, llvm-ar). The web's
       # list runs no app with a Rust crate (`examples.sh`), so nothing here
       # is built against GTK.
@@ -276,7 +276,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install clang, GTK 4, WebKitGTK and GStreamer
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev libgtk-4-dev libwebkitgtk-6.0-dev xvfb xauth at-spi2-core python3 libxtst6 libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good
       - name: Setup Rust
@@ -350,7 +350,7 @@ jobs:
       GDK_BACKEND: x11
       WEBKIT_DISABLE_DMABUF_RENDERER: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up temporary directories outside the checkout
         run: |
           mkdir -p "$RUNNER_TEMP/tmp"
@@ -401,7 +401,7 @@ jobs:
       # bindings (STATUS_STACK_BUFFER_OVERRUN).
       RUST_MIN_STACK: "268435456"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -452,7 +452,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -493,7 +493,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up the environment
         run: |
           mkdir -p "$RUNNER_TEMP/tmp"
@@ -534,7 +534,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -565,7 +565,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up temporary files
         run: |
           mkdir -p "$RUNNER_TEMP/nsh-test-tmp"
@@ -598,7 +598,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up temporary files
         run: |
           mkdir -p "$RUNNER_TEMP/nsh-test-tmp"

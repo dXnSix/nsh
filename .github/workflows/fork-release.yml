@@ -65,7 +65,7 @@ jobs:
     name: Check the tag
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
@@ -116,7 +116,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.optional == true }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # A release run builds the tag, never the branch it was started on.
           ref: ${{ env.TAG }}
