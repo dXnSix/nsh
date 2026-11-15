@@ -311,7 +311,9 @@ fn named_kind(name: &str, vars: &FxHashMap<String, String>, base: &Tokens) -> Op
     let Some(value) = vars.get(name) else {
         return base.kind(name);
     };
-    if Kind::Number.names(name) && length(value).is_some() {
+    if name.starts_with("shadow-") && crate::css::box_shadows(value).is_some() {
+        Some(Kind::Shadow)
+    } else if Kind::Number.names(name) && length(value).is_some() {
         Some(Kind::Number)
     } else if Kind::Font.names(name) && !written_as_color(value) && font_family(value).is_some() {
         Some(Kind::Font)
