@@ -343,9 +343,8 @@ pub mod parts {
         Link, Menu, MenuButton, MenuItem, MenuSeparator, NumberInput, OtpInput, Pagination,
         Popover, Progress, Radio, RadioGroup, ResizablePanel, ResizablePanelGroup, Scrollbar,
         Select, Sheet, Slider, SplitView, Submenu, Switch, Tab, Table, TableBody, TableCaption,
-        TableCell, TableFooter, TableHead, TableHeader, TableRow, Tabs, TextView, TimeField,
-        Toast, ToastStack, Toggle, ToggleGroup, Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip,
-        Tree,
+        TableCell, TableFooter, TableHead, TableHeader, TableRow, Tabs, TextView, TimeField, Toast,
+        ToastStack, Toggle, ToggleGroup, Toolbar, ToolbarGroup, ToolbarSeparator, Tooltip, Tree,
     };
     #[cfg(feature = "editor")]
     use crate::{DiffView, Editor};
