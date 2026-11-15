@@ -8,6 +8,9 @@ license.workspace = true
 homepage.workspace = true
 readme.workspace = true
 repository.workspace = true
+# Its build script tells the crates that depend on it whether `inspect` is on
+# (`DEP_NSH_CORE_INSPECT`, `build.rs`).
+links = "nsh-core"
 
 [lints]
 workspace = true

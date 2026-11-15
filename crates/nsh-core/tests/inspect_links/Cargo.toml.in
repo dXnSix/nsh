@@ -1,0 +1,16 @@
+# A crate that depends on nsh-core and reads, in its build script, whether
+# nsh-core's `inspect` is on (the test `tests/inspect_links.rs` writes it out
+# as Cargo.toml with nsh-core's path).
+[package]
+name = "inspect-links"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[features]
+inspect = ["nsh-core/inspect"]
+
+[dependencies]
+nsh-core = { path = "@CORE@", default-features = false }
+
+[workspace]
