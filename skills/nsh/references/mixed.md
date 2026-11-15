@@ -321,6 +321,32 @@ pub trait Startable {
 A default body makes the member optional in TS; an object without it runs the default. What TS throws is the `Err`
 of a `Result<T, String>` (or `E: From<Exception>`).
 
+### Signatures written in TypeScript
+
+When the Rust types are looser than the TS should be (a `JsHandle` that is the service a class names),
+`#[ts("…")]` on a member or module function declares its TS signature as written, generic ones too:
+
+```rust
+    /// The service `token` names; throws without one.
+    // TS: getRequiredService<T>(token: { readonly prototype: T }): T
+    #[ts("<T>(token: { readonly prototype: T }): T")]
+    pub fn get_required_service(&self, token: JsHandle) -> Result<JsHandle, String> {
+        self.find(&token).ok_or_else(|| "no such service".to_owned())
+    }
+```
+
+| Rule | Why |
+| --- | --- |
+| `<T>` first, then `(name: Type, …)`, then `: Result` (none for `void`) | TypeScript's own order |
+| The parameters are the Rust ones JS passes, by their TS names, in order | Checked at compile time; a trailing optional one may be left out |
+| A result exactly when the Rust function returns a value | An `async` one's `: T` becomes `Promise<T>` |
+| No `<T>` on `new`, getters (`(): T`) or setters | TypeScript has none there |
+| Repeat `#[ts]` for several signatures | Like overloads; `#[overload(fn(..))]` mixes in, in order |
+
+`{ readonly prototype: T }` takes a class with a `private constructor()` (every Rust class without `new`), which no
+`new (…) => T` type takes. The text names what the set declares: the classes it names are registered by the set
+(`registry.class::<C>()`), not by the text.
+
 ### Listening: `Stop`
 
 A function that starts listening is named `on_*` or `on(event, listener)` and returns `Stop`, built with `Stop::new(|| ...)`.

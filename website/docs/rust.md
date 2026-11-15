@@ -382,7 +382,10 @@ returning a value gives `Promise<T>`. Arguments and results are typed from the s
 `(value: number) => void` for a `Callback<f64>`, and `#[args(balance)] listener: Callback<f64>` names the argument,
 `(balance: number) => void`), and any TSX object Rust keeps as it is (`JsHandle`, TS `object`: stored in a field or
 a map, compared by identity and given back to TSX as the same object), and your classes themselves (`Constructor`,
-TS `Function`: `getRequiredService(I18nService)` tells Rust which class TSX named). A trait marked `#[interface]` is a
+TS `Function`: `getRequiredService(I18nService)` tells Rust which class TSX named). Where those types are looser than
+TS should be, `#[ts("<T>(token: { readonly prototype: T }): T")]` on the member or function declares its TypeScript
+signature as written, generic ones too; the compiler checks that it names the Rust parameters, in their order. A trait
+marked `#[interface]` is a
 TypeScript interface that TSX objects implement for Rust: the set declares `export interface Startable` (a method per
 trait method, optional where the trait has a default body, `#[getter]` methods as `readonly` properties), and Rust
 calls such an object through the trait's stand-in `JsStartable`, taken as an argument or made from a kept object

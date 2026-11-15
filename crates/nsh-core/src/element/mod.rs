@@ -76,6 +76,8 @@ pub mod theme;
 pub mod theme_file;
 mod theme_scope;
 pub mod tokens;
+#[cfg(test)]
+mod ts_signatures;
 mod value;
 pub(crate) mod virtual_list;
 pub(crate) mod watch;

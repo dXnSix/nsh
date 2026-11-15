@@ -11,8 +11,8 @@ use syn::{
 };
 
 use crate::{
-    call_cx_param, camel, decl, docs, exported, last_segment, module_cx, param_ts, result_ok,
-    strip_args, sync_returns, system_param,
+    call_cx_param, camel, decl, docs, exported, is_unit, last_segment, module_cx, param_ts,
+    result_ok, strip_args, sync_returns, system_param,
 };
 
 pub(crate) fn class(item: syn::Item, interface: bool) -> syn::Result<TokenStream2> {
@@ -274,6 +274,7 @@ fn class_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
                 !a.path().is_ident("getter")
                     && !a.path().is_ident("setter")
                     && !a.path().is_ident("overload")
+                    && !a.path().is_ident("ts")
             });
             strip_args(&mut f.sig);
         }
@@ -335,9 +336,6 @@ fn member_def(f: &ImplItemFn, class: &str) -> syn::Result<TokenStream2> {
         ));
     }
     let doc = decl(&docs(&f.attrs));
-    // `#[overload(fn(event: Exit, handler: Callback<ExitResult>) -> Instance<Self>)]`:
-    // signatures declared instead, as a module function's.
-    let (overloads, overload_refs) = crate::overloads(f)?;
     // `#[cfg]` of the function applies to its entry too.
     let cfgs: Vec<_> = f
         .attrs
@@ -487,6 +485,28 @@ fn member_def(f: &ImplItemFn, class: &str) -> syn::Result<TokenStream2> {
     if let Some(ty) = &ok_ty {
         refs.push(quote!(#private::ret_classes::<#ty>(__out);));
     }
+    // `#[overload(fn(event: Exit, handler: Callback<ExitResult>) -> Instance<Self>)]`
+    // and `#[ts("<T>(token: Key<T>): T")]`: signatures declared instead, as
+    // a module function's, the latter checked against the parameters JS
+    // passes and the result.
+    let js_params: Vec<(String, bool)> = params
+        .iter()
+        .zip(&names)
+        .zip(&optional)
+        .filter(|((p, _), _)| !matches!(p, Param::System | Param::Cx))
+        .map(|((_, name), optional)| (name.clone(), *optional))
+        .collect();
+    let shape = crate::ts::Shape {
+        kind: match kind {
+            Kind::Constructor => crate::ts::SigKind::Constructor,
+            Kind::Getter => crate::ts::SigKind::Getter,
+            Kind::Setter { .. } => crate::ts::SigKind::Setter,
+            _ => crate::ts::SigKind::Function,
+        },
+        params: &js_params,
+        value: kind != Kind::Constructor && ok_ty.as_ref().is_some_and(|t| !is_unit(t)),
+    };
+    let (overloads, overload_refs) = crate::overloads(f, &shape)?;
     if kind == Kind::Constructor {
         let ok_is_self = matches!(&ok_ty, Some(ty) if matches!(last_segment(ty), Some((id, _)) if id == "Self" || id == class));
         if !ok_is_self {

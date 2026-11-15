@@ -241,6 +241,18 @@ For that, two choices of the first version change:
   (repeatable) on a module function or a member declares those signatures, from their Rust types, instead of
   the one its own types give (the result is a promise when the function's is): what an argument selects
   (`on("exit", ..)`, `readFile(path, "utf8")`).
+- **Signatures written in TypeScript**: `#[ts("<T>(token: { readonly prototype: T }): T")]` (repeatable, in order
+  with any `#[overload]`) on a module function or a member declares that signature as written, generic ones too,
+  where the Rust types are looser than the TS should be (`getRequiredService(token: JsHandle) -> JsHandle`, which TS
+  gets as `getRequiredService<T>(token: { readonly prototype: T }): T`; `{ readonly prototype: T }` is how a class
+  with a `private constructor()` is taken, as no `new (..) => T` takes it). The text is TypeScript's: type
+  parameters, then the parameters, then `: Result` (or nothing for `void`); the result is a promise of it when the
+  function's is. `nsh-macros` (`ts.rs`) checks it against the Rust function at compile time: its parameters are the
+  ones JS passes (not `System` or `CallCx`), with their names in TS and in order; a trailing optional one may be left
+  out, and only an optional one takes `?`; it gives a result exactly when the function returns a value; a
+  constructor, getter or setter has no type parameters (and a getter's is `(): T`). The types themselves are left to
+  TypeScript, and the classes the text names are not registered by it: the set registers them, or a Rust type of the
+  signature names them.
 - **Instances of classes**, by reference: a parameter `&Other` / `&mut Other` borrows another instance for the call
   (TS: `other: Other`), `Instance<Other>` keeps a handle (to store one instance in another), and a result `Other`
   or `Instance<Other>` is a JS object (`Self` from `new` and statics; `Option<Instance<Other>>` for none). An

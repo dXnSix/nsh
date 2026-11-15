@@ -1643,9 +1643,12 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
         let _ = write!(out, "{declaration}\n\n");
     }
     let module_of = |name: &str| modules.iter().find(|m| m.name == name);
-    // A function's signatures: its own, or its overloads.
+    // A function's signatures: its own, or its overloads (type
+    // parameters, parameters, result).
     let signatures = |f: &FunctionSpec| {
-        let one = |params: &[(&str, String, bool)], returns: &Option<String>| {
+        let one = |generics: &'static str,
+                   params: &[(&str, String, bool)],
+                   returns: &Option<String>| {
             let params = params
                 .iter()
                 .map(|(n, ts, optional)| format!("{n}{}: {ts}", if *optional { "?" } else { "" }))
@@ -1657,14 +1660,14 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
             } else {
                 value
             };
-            (params, returns)
+            (generics, params, returns)
         };
         if f.overloads.is_empty() {
-            vec![one(&f.params, &f.returns)]
+            vec![one("", &f.params, &f.returns)]
         } else {
             f.overloads
                 .iter()
-                .map(|(params, returns)| one(params, returns))
+                .map(|o| one(o.generics, &o.params, &o.returns))
                 .collect()
         }
     };
@@ -1672,13 +1675,13 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
     let module_object = |out: &mut String, m: &ModuleSpec| {
         out.push_str("{\n");
         for f in &m.functions {
-            for (params, returns) in signatures(f) {
+            for (generics, params, returns) in signatures(f) {
                 doc(out, "  ", f.doc);
                 if f.getter {
                     let _ = writeln!(out, "  readonly {}: {returns};", f.name);
                     continue;
                 }
-                let _ = writeln!(out, "  {}({params}): {returns};", f.name);
+                let _ = writeln!(out, "  {}{generics}({params}): {returns};", f.name);
             }
         }
         for constant in &m.constants {
@@ -1797,11 +1800,11 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
                 .iter()
                 .filter(|f| !f.getter && !omit.contains(&f.name))
             {
-                for (params, returns) in signatures(f) {
+                for (generics, params, returns) in signatures(f) {
                     doc(&mut out, "", f.doc);
                     let _ = writeln!(
                         out,
-                        "export declare function {}({params}): {returns};",
+                        "export declare function {}{generics}({params}): {returns};",
                         f.name
                     );
                 }
@@ -1809,12 +1812,16 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
                 if let Some(members) = registry.function_members(f.name) {
                     let _ = writeln!(out, "export declare namespace {} {{", f.name);
                     for member in &members.functions {
-                        for (params, returns) in signatures(member) {
+                        for (generics, params, returns) in signatures(member) {
                             doc(&mut out, "  ", member.doc);
                             let _ = if member.getter {
                                 writeln!(out, "  const {}: {returns};", member.name)
                             } else {
-                                writeln!(out, "  function {}({params}): {returns};", member.name)
+                                writeln!(
+                                    out,
+                                    "  function {}{generics}({params}): {returns};",
+                                    member.name
+                                )
                             };
                         }
                     }
@@ -1883,39 +1890,59 @@ fn class_declaration(out: &mut String, c: &ClassSpec) {
             let _ = writeln!(out, "{indent}/** {doc} */");
         }
     };
-    doc(out, "", c.doc);
-    if c.def.interface {
-        // No value: what its objects have.
-        let _ = writeln!(out, "export interface {} {{", c.name);
-        for m in &c.members {
-            let params = m
-                .params
+    // A member's signatures: its own, or those declared instead
+    // (`#[overload]`, `#[ts]`): type parameters, parameters and result (a
+    // promise of it for an `async` member).
+    let signatures = |m: &super::MemberSpec| {
+        let one = |generics: &'static str,
+                   params: &[(&str, String, bool)],
+                   returns: &Option<String>| {
+            let params = params
                 .iter()
                 .map(|(n, ts, optional)| format!("{n}{}: {ts}", if *optional { "?" } else { "" }))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let value = m.returns.clone().unwrap_or_else(|| "void".to_owned());
+            let value = returns.clone().unwrap_or_else(|| "void".to_owned());
             let returns = if m.is_async {
                 format!("Promise<{value}>")
             } else {
                 value
             };
-            doc(out, "  ", m.doc);
-            let has_setter = |name| {
-                c.members
-                    .iter()
-                    .any(|s| s.kind == MemberKind::Setter && s.name == name)
-            };
-            let _ = match m.kind {
-                MemberKind::Method => writeln!(out, "  {}({params}): {returns};", m.name),
-                MemberKind::Getter if has_setter(m.name) => {
-                    writeln!(out, "  {}: {returns};", m.name)
-                }
-                MemberKind::Getter => writeln!(out, "  readonly {}: {returns};", m.name),
-                // A setter's property is its getter's; constructors and
-                // statics belong to a class value it has none of.
-                _ => Ok(()),
-            };
+            (generics, params, returns)
+        };
+        if m.overloads.is_empty() {
+            vec![one("", &m.params, &m.returns)]
+        } else {
+            m.overloads
+                .iter()
+                .map(|o| one(o.generics, &o.params, &o.returns))
+                .collect()
+        }
+    };
+    doc(out, "", c.doc);
+    if c.def.interface {
+        // No value: what its objects have.
+        let _ = writeln!(out, "export interface {} {{", c.name);
+        let has_setter = |name| {
+            c.members
+                .iter()
+                .any(|s| s.kind == MemberKind::Setter && s.name == name)
+        };
+        for m in &c.members {
+            for (generics, params, returns) in signatures(m) {
+                let line = match m.kind {
+                    MemberKind::Method => format!("  {}{generics}({params}): {returns};", m.name),
+                    MemberKind::Getter if has_setter(m.name) => {
+                        format!("  {}: {returns};", m.name)
+                    }
+                    MemberKind::Getter => format!("  readonly {}: {returns};", m.name),
+                    // A setter's property is its getter's; constructors and
+                    // statics belong to a class value it has none of.
+                    _ => continue,
+                };
+                doc(out, "  ", m.doc);
+                let _ = writeln!(out, "{line}");
+            }
         }
         out.push_str("}\n\n");
         return;
@@ -1924,43 +1951,21 @@ fn class_declaration(out: &mut String, c: &ClassSpec) {
     if !c.members.iter().any(|m| m.kind == MemberKind::Constructor) {
         out.push_str("  /** Made by the class's members only. */\n  private constructor();\n");
     }
-    let one = |m: &super::MemberSpec, params: &[(&str, String, bool)], returns: &Option<String>| {
-        let params = params
-            .iter()
-            .map(|(n, ts, optional)| format!("{n}{}: {ts}", if *optional { "?" } else { "" }))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let value = returns.clone().unwrap_or_else(|| "void".to_owned());
-        let returns = if m.is_async {
-            format!("Promise<{value}>")
-        } else {
-            value
-        };
-        (params, returns)
-    };
     for m in &c.members {
-        if !m.overloads.is_empty() {
-            for (params, returns) in &m.overloads {
-                doc(out, "  ", m.doc);
-                let (params, returns) = one(m, params, returns);
-                let _ = match m.kind {
-                    MemberKind::Static => {
-                        writeln!(out, "  static {}({params}): {returns};", m.name)
-                    }
-                    _ => writeln!(out, "  {}({params}): {returns};", m.name),
-                };
-            }
-            continue;
+        for (generics, params, returns) in signatures(m) {
+            doc(out, "  ", m.doc);
+            let _ = match m.kind {
+                MemberKind::Constructor => writeln!(out, "  constructor({params});"),
+                MemberKind::Method => {
+                    writeln!(out, "  {}{generics}({params}): {returns};", m.name)
+                }
+                MemberKind::Getter => writeln!(out, "  get {}(): {returns};", m.name),
+                MemberKind::Setter => writeln!(out, "  set {}({params});", m.name),
+                MemberKind::Static => {
+                    writeln!(out, "  static {}{generics}({params}): {returns};", m.name)
+                }
+            };
         }
-        doc(out, "  ", m.doc);
-        let (params, returns) = one(m, &m.params, &m.returns);
-        let _ = match m.kind {
-            MemberKind::Constructor => writeln!(out, "  constructor({params});"),
-            MemberKind::Method => writeln!(out, "  {}({params}): {returns};", m.name),
-            MemberKind::Getter => writeln!(out, "  get {}(): {returns};", m.name),
-            MemberKind::Setter => writeln!(out, "  set {}({params});", m.name),
-            MemberKind::Static => writeln!(out, "  static {}({params}): {returns};", m.name),
-        };
     }
     out.push_str(
         "  /** Frees the Rust value now (else when the object is collected); the object throws after. */\n  dispose(): void;\n  [Symbol.dispose](): void;\n}\n\n",

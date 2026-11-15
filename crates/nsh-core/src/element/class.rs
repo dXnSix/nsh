@@ -105,9 +105,10 @@ pub struct Member {
     pub refs: ClassRefs,
     /// How it runs.
     pub call: MemberCall,
-    /// The signatures TypeScript sees instead of the one its types give
-    /// (`#[overload(fn(..) -> ..)]`), as a module function's: what an
-    /// argument selects (`on("exit", ..)`).
+    /// The signatures TypeScript sees instead of the one its types give,
+    /// as a module function's: what an argument selects
+    /// (`#[overload(fn(..) -> ..)]`: `on("exit", ..)`), or TypeScript's
+    /// own text (`#[ts("<T>(token: Key<T>): T")]`).
     pub overloads: &'static [super::Overload],
 }
 
@@ -693,14 +694,7 @@ impl ClassSpec {
                 overloads: m
                     .overloads
                     .iter()
-                    .map(|o| {
-                        let params = o
-                            .params
-                            .iter()
-                            .map(|(n, ts, optional)| (*n, ts(&mut types), *optional))
-                            .collect();
-                        (params, o.returns.map(|ts| ts(&mut types)))
-                    })
+                    .map(|o| super::OverloadSpec::of(o, &mut types))
                     .collect(),
             })
             .collect();
