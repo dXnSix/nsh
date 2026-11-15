@@ -564,6 +564,7 @@ fn member_def(f: &ImplItemFn, class: &str) -> syn::Result<TokenStream2> {
         },
         params: &js_params,
         value: kind != Kind::Constructor && ok_ty.as_ref().is_some_and(|t| !is_unit(t)),
+        answers: crate::ts::Answers::Rust,
     };
     let (overloads, overload_refs) = crate::overloads(f, &shape)?;
     if kind == Kind::Constructor {

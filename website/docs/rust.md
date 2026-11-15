@@ -395,7 +395,8 @@ trait method, optional where the trait has a default body, `#[getter]` methods a
 calls such an object through the trait's stand-in `JsStartable`, taken as an argument or made from a kept object
 (`JsStartable::new(handle)`); register it with `registry.interface::<JsStartable>()`. A method that is not `async`
 runs the TSX method at once inside a call from TSX (outside one, a method returning `()` runs in TSX's next turn),
-an `async fn` awaits it, and what TSX throws is the `Err` of a method returning a `Result`. A function that starts listening is named `on(event, listener)` and returns `Stop`
+an `async fn` awaits it (a value as well as a Promise: `#[ts("(): boolean")]` on it declares
+`isInitialized(): boolean`), and what TSX throws is the `Err` of a method returning a `Result`. A function that starts listening is named `on(event, listener)` and returns `Stop`
 (`Stop::new(|| …)`), which TSX gets as a function that stops it (`() => void`); it runs once, when TSX calls it or
 when what called `on` goes (a component, or the module's run under hot reload). An event's handler gets one object: a variant's value is its field `value`, which
 `#[args(price)]` on the variant names (`onSelect({ price })`), and `#[args(open, reason)]` names the fields of a

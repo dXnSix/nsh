@@ -464,6 +464,13 @@ export interface Startable {
   timer), one returning `()` is posted for JS's next turn, in order with the other posts (`Callback::post`), and one
   returning a value fails (the `Err` of a `Result`): JS is not running there. An `async fn` is posted and awaited
   (`call_async`), a promise the JS method returns settled. A getter is read as a method of its kind is called.
+- **Their TS signatures.** NSH declares a member from its Rust types, an `async fn`'s result as a `Promise`. An
+  awaited member also settles with a plain value JS returns, so `#[ts("(): boolean")]` on the trait's method (as
+  on a class's member, checked against its parameters and its result) declares what JS returns as written, with no
+  `Promise` added: `async fn is_initialized(&self) -> Result<bool, String>` with `#[ts("(): boolean")]` is TS
+  `isInitialized(): boolean`, which a task can await. Where Rust wants nothing, any result is let go
+  (`#[ts("(context: Context): Promise<void>")]`); a method that is not `async` takes what JS returns at once, so
+  a `Promise` result is refused there.
 - **Failures.** What JS throws or rejects with is the `Err` of a member returning `Result<T, E>` (`E:
   From<Exception>`: `String` takes the message, `Exception` the stack too), and so is a value that does not convert
   (``Greeter.greet: expected a string, got 3``) or a member that is no function. A member returning a plain value

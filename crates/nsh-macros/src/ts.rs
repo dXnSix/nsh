@@ -39,13 +39,26 @@ pub(crate) enum SigKind {
     Setter,
 }
 
+/// Who answers a call of what a signature declares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answers {
+    /// Rust (a member or function): TS gets its result, a promise of it
+    /// when the function is `async`.
+    Rust,
+    /// JS (an `#[interface]` member): the signature is what JS returns,
+    /// declared as written. `awaited`: Rust awaits it (an `async fn`), so a
+    /// promise is taken too; otherwise Rust takes the value at once.
+    Js { awaited: bool },
+}
+
 /// The Rust side of a signature: what it is, the parameters JS passes
-/// (their names in TS, and whether each is optional: a trailing `Option`)
-/// and whether it has a result (not `()`).
+/// (their names in TS, and whether each is optional: a trailing `Option`),
+/// whether it has a result (not `()`) and who answers it.
 pub(crate) struct Shape<'a> {
     pub(crate) kind: SigKind,
     pub(crate) params: &'a [(String, bool)],
     pub(crate) value: bool,
+    pub(crate) answers: Answers,
 }
 
 /// A character of the text outside strings and comments, and the depth of
@@ -381,9 +394,20 @@ pub(crate) fn check(sig: &Signature, shape: &Shape<'_>) -> Result<(), String> {
         (_, None) if shape.value => Err(format!(
             "{what} returns a value: give its type after the parameters (`: Type`)"
         )),
-        (_, Some(ts)) if !shape.value => Err(format!(
+        // What JS returns where Rust wants nothing is let go.
+        (_, Some(ts)) if !shape.value && shape.answers == Answers::Rust => Err(format!(
             "{what} returns nothing, so its result is `void`, not `{ts}`: leave it out"
         )),
+        (_, Some(ts))
+            if shape.answers == (Answers::Js { awaited: false })
+                && shape.value
+                && (ts.starts_with("Promise<") || ts.starts_with("PromiseLike<")) =>
+        {
+            Err(format!(
+                "`{ts}`: Rust takes what this method returns at once, not what a promise \
+                 settles to; make it an `async fn` to await one"
+            ))
+        }
         _ => Ok(()),
     }
 }
@@ -590,6 +614,7 @@ mod ts_tests {
                 kind,
                 params: &rust,
                 value,
+                answers: Answers::Rust,
             },
         )
     }
@@ -688,6 +713,38 @@ mod ts_tests {
             checked("(x: T)", Function, &[], false)
                 .unwrap_err()
                 .contains("JS passes the function 0 (none)")
+        );
+    }
+
+    #[test]
+    fn an_interface_member_declares_what_js_returns() {
+        let js = |text: &str, value: bool, awaited: bool| {
+            check(
+                &signature(text).unwrap(),
+                &Shape {
+                    kind: SigKind::Function,
+                    params: &[],
+                    value,
+                    answers: Answers::Js { awaited },
+                },
+            )
+        };
+        // Awaited: a plain value or a promise of it.
+        assert_eq!(js("(): boolean", true, true), Ok(()));
+        assert_eq!(js("(): Promise<boolean>", true, true), Ok(()));
+        // What JS returns where Rust wants nothing is let go.
+        assert_eq!(js("(): Promise<void>", false, true), Ok(()));
+        assert_eq!(js("(): Promise<void>", false, false), Ok(()));
+        // Taken at once: no promise.
+        assert!(
+            js("(): Promise<boolean>", true, false)
+                .unwrap_err()
+                .contains("make it an `async fn`")
+        );
+        assert!(
+            js("()", true, true)
+                .unwrap_err()
+                .contains("returns a value")
         );
     }
 }

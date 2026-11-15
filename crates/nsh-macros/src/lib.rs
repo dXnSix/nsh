@@ -2358,7 +2358,10 @@ pub fn class(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// An `async fn` is posted and awaited, a promise JS returns settled.
 /// `#[getter]` on a method without parameters reads the property of its
 /// name (TS `readonly name: T`). A method with a default body is optional
-/// in TS (`name?()`): an object without it runs the default. Doc comments
+/// in TS (`name?()`): an object without it runs the default.
+/// `#[ts("(): boolean")]` on a method declares what JS returns as written
+/// (no `Promise` added: an awaited member settles with a plain value
+/// too), checked against its parameters and result. Doc comments
 /// document the interface and its members. Register it with
 /// `registry.interface::<JsAppContract>()` (a signature naming the
 /// stand-in declares it too).
@@ -2769,6 +2772,7 @@ fn module_impl(mut item: ItemImpl, options: ModuleOptions) -> syn::Result<TokenS
             },
             params: &js_params,
             value: sync_ret.is_some_and(|t| !is_unit(t)),
+            answers: ts::Answers::Rust,
         };
         let (overloads, overload_refs) = overloads(f, &shape)?;
         // `#[cfg]` of the function applies to its entry too.

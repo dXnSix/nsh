@@ -321,6 +321,15 @@ pub trait Startable {
 A default body makes the member optional in TS; an object without it runs the default. What TS throws is the `Err`
 of a `Result<T, String>` (or `E: From<Exception>`).
 
+An `async fn` is declared `Promise<T>`, but an awaited member settles with a plain value too. To let a task ask a
+TS service something TS answers at once, declare what JS returns with `#[ts]` (as written, no `Promise` added):
+
+```rust
+    /// Whether it has started (TS: `isInitialized(): boolean`).
+    #[ts("(): boolean")]
+    async fn is_initialized(&self) -> Result<bool, String>;
+```
+
 ### Signatures written in TypeScript
 
 When the Rust types are looser than the TS should be (a `JsHandle` that is the service a class names),
