@@ -178,9 +178,14 @@ impl TsTypes {
 
     /// Class `def`'s type: its name (the class is declared with the set's
     /// classes, which include every class a registered signature names:
-    /// [`super::Registry::class`]).
+    /// [`super::Registry::class`]). A generic class's takes `any` for each
+    /// type parameter (`ServiceToken<any>`): Rust's types name none.
     pub fn class(&mut self, def: &'static super::ClassDef) -> String {
-        def.name.to_owned()
+        if def.generics.is_empty() {
+            return def.name.to_owned();
+        }
+        let any = vec!["any"; def.generics.len()].join(", ");
+        format!("{}<{any}>", def.name)
     }
 
     /// Adds `other`'s types.

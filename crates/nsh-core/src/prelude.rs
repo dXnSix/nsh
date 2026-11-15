@@ -204,6 +204,7 @@ pub use crate::element::{
     TokenKind,
     Tokens,
     TouchClaim,
+    TsAlias,
     Typography,
     Video,
     VideoInfo,

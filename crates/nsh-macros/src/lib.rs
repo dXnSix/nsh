@@ -48,6 +48,7 @@ mod native_components;
 mod native_module;
 mod root;
 mod theme_keys;
+mod ts;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -2208,7 +2209,9 @@ fn module_cx(ty: &Type) -> bool {
 /// amount)]` on the parameter names the function's arguments in TS); a
 /// function returns
 /// nothing, a [`JsValue`], an instance, or a `Result` of one (an `Err`
-/// throws or rejects with its message). A UI set registers the module
+/// throws or rejects with its message). `#[ts("<T>(values: T[]): T")]` on
+/// a function declares its TypeScript signature as written, as on a
+/// class's member. A UI set registers the module
 /// (`Registry::module::<Alert>()`); a component exported under the same
 /// name gets the functions too (`Chart.clear(...)` for a `Chart` component).
 /// `#[module(flat)]` exports the functions one by one instead of as an
@@ -2296,27 +2299,29 @@ fn no_block_doc(item: &ItemImpl, what: &str) -> syn::Result<()> {
 /// returns a promise and runs as a task of the core, with the free
 /// functions (`dialog(..)`, `timer(..)`, ...); its parameters are owned
 /// (`Instance<Other>`, not `&Other`). Doc comments document the class and
-/// its members. On the struct, the fields whose types name `Callback` or
-/// `Instance` report the callbacks they keep to JS's collector.
-/// `#[class(interface)]` on the struct: its objects come from members
+/// its members. `#[ts("<T>(token: { readonly prototype: T }): T")]` on a
+/// member (repeatable) declares its TypeScript signature as written,
+/// generic ones too, instead of the one its types give; it is checked
+/// against the parameters JS passes and the result (a promise of it for
+/// an `async` member). On the struct, the fields whose types name
+/// `Callback` or `Instance` report the callbacks they keep to JS's
+/// collector. `#[class(interface)]` on the struct: its objects come from members
 /// only, so the module exports no value of it and TypeScript declares an
-/// `interface` (no constructor or statics).
+/// `interface` (no constructor or statics). `#[class(generic = "T")]` on
+/// the struct: TypeScript declares the class generic over those type
+/// parameters (`ServiceToken<T>`, constraints and defaults as TypeScript
+/// writes them), kept in its type by a private member so a
+/// `ServiceToken<A>` is no `ServiceToken<B>`; the Rust types name it with
+/// `any` for each (`ServiceToken<any>`), and its `#[ts("…")]` signatures
+/// name its parameters.
 #[proc_macro_attribute]
 pub fn class(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let interface = match syn::parse::<Option<Ident>>(attr) {
-        Ok(None) => false,
-        Ok(Some(flag)) if flag == "interface" => true,
-        _ => {
-            return syn::Error::new(
-                Span::call_site(),
-                "`#[class]` takes nothing, or `interface` on the struct",
-            )
-            .into_compile_error()
-            .into();
-        }
+    let options = match class::options(attr.into()) {
+        Ok(options) => options,
+        Err(e) => return e.into_compile_error().into(),
     };
     let item = parse_macro_input!(item as syn::Item);
-    class::class(item, interface)
+    class::class(item, options)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -2335,7 +2340,10 @@ pub fn class(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// An `async fn` is posted and awaited, a promise JS returns settled.
 /// `#[getter]` on a method without parameters reads the property of its
 /// name (TS `readonly name: T`). A method with a default body is optional
-/// in TS (`name?()`): an object without it runs the default. Doc comments
+/// in TS (`name?()`): an object without it runs the default.
+/// `#[ts("(): boolean")]` on a method declares what JS returns as written
+/// (no `Promise` added: an awaited member settles with a plain value
+/// too), checked against its parameters and result. Doc comments
 /// document the interface and its members. Register it with
 /// `registry.interface::<JsAppContract>()` (a signature naming the
 /// stand-in declares it too).
@@ -2732,7 +2740,23 @@ fn module_impl(mut item: ItemImpl, options: ModuleOptions) -> syn::Result<TokenS
                 }
             }
         };
-        let (overloads, overload_refs) = overloads(f)?;
+        // What a `#[ts("…")]` signature is checked against.
+        let js_params: Vec<(String, bool)> = names
+            .iter()
+            .cloned()
+            .zip(optional.iter().copied())
+            .collect();
+        let shape = ts::Shape {
+            kind: if getter {
+                ts::SigKind::Getter
+            } else {
+                ts::SigKind::Function
+            },
+            params: &js_params,
+            value: sync_ret.is_some_and(|t| !is_unit(t)),
+            answers: ts::Answers::Rust,
+        };
+        let (overloads, overload_refs) = overloads(f, &shape)?;
         // `#[cfg]` of the function applies to its entry too.
         let cfgs = f.attrs.iter().filter(|a| a.path().is_ident("cfg"));
         entries.push(quote! {
@@ -2753,12 +2777,15 @@ fn module_impl(mut item: ItemImpl, options: ModuleOptions) -> syn::Result<TokenS
             }
         });
     }
-    // `#[getter]`, `#[args]` and the overloads' attributes are the macro's.
+    // `#[getter]`, `#[args]` and the signatures' attributes are the macro's.
     for member in &mut item.items {
         if let ImplItem::Fn(f) = member {
             strip_args(&mut f.sig);
-            f.attrs
-                .retain(|a| !a.path().is_ident("getter") && !a.path().is_ident("overload"));
+            f.attrs.retain(|a| {
+                !a.path().is_ident("getter")
+                    && !a.path().is_ident("overload")
+                    && !a.path().is_ident("ts")
+            });
         }
     }
     Ok(quote! {
@@ -2775,16 +2802,29 @@ fn module_impl(mut item: ItemImpl, options: ModuleOptions) -> syn::Result<TokenS
     })
 }
 
-/// The `#[overload(fn(path: String, encoding: Encoding) -> String)]`
-/// signatures of module function `f`, and the classes they name: Rust
-/// types whose TypeScript types make the declaration (a trailing `Option`
-/// is optional; the result is a promise when the function's is).
-fn overloads(f: &ImplItemFn) -> syn::Result<(Vec<TokenStream2>, Vec<TokenStream2>)> {
+/// The signatures TypeScript sees of module function or member `f`
+/// (of `shape`) instead of the one its types give, in their order, and the
+/// classes they name: `#[overload(fn(path: String, encoding: Encoding) ->
+/// String)]`, Rust types whose TypeScript types make the declaration (a
+/// trailing `Option` is optional), and `#[ts("<T>(token: Key<T>): T")]`,
+/// TypeScript text checked against `f`'s parameters ([`ts::check`]). The
+/// result is a promise when the function's is.
+fn overloads(
+    f: &ImplItemFn,
+    shape: &ts::Shape<'_>,
+) -> syn::Result<(Vec<TokenStream2>, Vec<TokenStream2>)> {
     let nsh_core = root::nsh_core();
     let private = quote!(#nsh_core::element::__private);
     let mut overloads = Vec::new();
     let mut refs = Vec::new();
-    for attr in f.attrs.iter().filter(|a| a.path().is_ident("overload")) {
+    for attr in &f.attrs {
+        if attr.path().is_ident("ts") {
+            overloads.push(ts::overload(attr, shape)?);
+            continue;
+        }
+        if !attr.path().is_ident("overload") {
+            continue;
+        }
         let sig: syn::TypeBareFn = attr.parse_args()?;
         let mut params = Vec::new();
         for arg in &sig.inputs {
@@ -2824,7 +2864,11 @@ fn overloads(f: &ImplItemFn) -> syn::Result<(Vec<TokenStream2>, Vec<TokenStream2
             }
         };
         overloads.push(quote! {
-            #nsh_core::element::Overload { params: &[#(#specs),*], returns: #returns }
+            #nsh_core::element::Overload {
+                generics: "",
+                params: &[#(#specs),*],
+                returns: #returns,
+            }
         });
     }
     Ok((overloads, refs))
