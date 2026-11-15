@@ -872,6 +872,9 @@ pub struct Registry {
     /// ([`Registry::interface`]): declarations only, JS has no value of
     /// them.
     interfaces: Arc<FxHashMap<&'static str, &'static super::InterfaceDef>>,
+    /// The TypeScript type aliases its declarations export, by name
+    /// ([`Registry::ts_alias`]).
+    aliases: Arc<FxHashMap<&'static str, super::TsAlias>>,
     /// Values and types of `nsh/_core` exported as they are.
     reexports: Arc<(Vec<&'static str>, Vec<&'static str>)>,
     /// Values `nsh-js` makes for the set (declared by hand, not generated
@@ -953,9 +956,10 @@ impl Registry {
         }
         if self.classes.keys().any(|(_, name)| *name == spec.export)
             || self.interfaces.contains_key(spec.export.as_str())
+            || self.aliases.contains_key(spec.export.as_str())
         {
             panic!(
-                "component `{}` is exported as `{}` like a class or an interface{}: rename one",
+                "component `{}` is exported as `{}` like a class, an interface or a type alias{}: rename one",
                 spec.name,
                 spec.export,
                 of_set(self.ui_set.or(self.namespace)),
@@ -993,9 +997,10 @@ impl Registry {
         let type_name = std::any::type_name::<M>();
         if self.classes.keys().any(|(_, name)| *name == M::NAME)
             || self.interfaces.contains_key(M::NAME)
+            || self.aliases.contains_key(M::NAME)
         {
             panic!(
-                "module `{type_name}` is named `{}` like a class or an interface{}: rename one",
+                "module `{type_name}` is named `{}` like a class, an interface or a type alias{}: rename one",
                 M::NAME,
                 of_set(self.ui_set.or(self.namespace))
             );
@@ -1066,9 +1071,10 @@ impl Registry {
         if self.modules.contains_key(def.name)
             || self.types.values().any(|t| t.spec.export == def.name)
             || self.interfaces.contains_key(def.name)
+            || self.aliases.contains_key(def.name)
         {
             panic!(
-                "class `{type_name}` is named `{}` like a module, a component or an interface{}: rename one",
+                "class `{type_name}` is named `{}` like a module, a component, an interface or a type alias{}: rename one",
                 def.name,
                 of_set(set)
             );
@@ -1119,9 +1125,10 @@ impl Registry {
         if self.modules.contains_key(def.name)
             || self.types.values().any(|t| t.spec.export == def.name)
             || self.classes.keys().any(|(_, name)| *name == def.name)
+            || self.aliases.contains_key(def.name)
         {
             panic!(
-                "interface `{}` is named `{}` like a class, a module or a component{}: rename one",
+                "interface `{}` is named `{}` like a class, a module, a component or a type alias{}: rename one",
                 (def.type_name)(),
                 def.name,
                 of_set(set)
@@ -1138,6 +1145,58 @@ impl Registry {
         let mut defs: Vec<_> = self.interfaces.values().copied().collect();
         defs.sort_by_key(|d| d.name);
         defs
+    }
+
+    /// Exports TypeScript type alias `alias` in the set's declarations
+    /// (`export type ServiceKey<T> = …;`), for the signatures it writes in
+    /// TypeScript (`#[ts("…")]`) to share. A declaration only: JS has no
+    /// value of it, and the classes its text names are the set's to
+    /// register. Registering it again does nothing.
+    ///
+    /// # Panics
+    ///
+    /// When its name is no identifier (with its type parameters between
+    /// `<` and `>` after it) or it names no type, or the set has another
+    /// type alias, a class, an interface, a module or a component of that
+    /// name.
+    #[track_caller]
+    pub fn ts_alias(&mut self, alias: super::TsAlias) -> &mut Self {
+        if let Some(mistake) = alias.mistake() {
+            panic!("{mistake}");
+        }
+        let name = alias.base_name();
+        let set = self.ui_set.or(self.namespace);
+        if let Some(old) = self.aliases.get(name) {
+            if *old == alias {
+                return self;
+            }
+            panic!(
+                "type aliases `{}` and `{}` are both named `{name}`{}: rename one",
+                old.name,
+                alias.name,
+                of_set(set)
+            );
+        }
+        if self.modules.contains_key(name)
+            || self.types.values().any(|t| t.spec.export == name)
+            || self.classes.keys().any(|(_, class)| *class == name)
+            || self.interfaces.contains_key(name)
+        {
+            panic!(
+                "type alias `{}` is named `{name}` like a class, an interface, a module or a component{}: rename one",
+                alias.name,
+                of_set(set)
+            );
+        }
+        Arc::make_mut(&mut self.aliases).insert(name, alias);
+        self
+    }
+
+    /// The registered type aliases ([`Registry::ts_alias`]), by name.
+    pub fn ts_aliases(&self) -> Vec<super::TsAlias> {
+        let mut aliases: Vec<_> = self.aliases.values().copied().collect();
+        aliases.sort_by_key(|a| a.base_name());
+        aliases
     }
 
     /// Exports `values` and `types` of the runtime as they are (accessors
@@ -1555,6 +1614,9 @@ impl Registry {
                 out.push(format!("{}.{}", i.name, m.name));
             }
         }
+        for a in self.ts_aliases().iter().filter(|a| a.doc.is_empty()) {
+            out.push(a.base_name().to_owned());
+        }
         out
     }
 
@@ -1624,8 +1686,11 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
             let _ = writeln!(out, "{indent}/** {doc} */");
         }
     };
-    // The named types, once each.
+    // The named types, once each: the set's type aliases first.
     let mut types = TsTypes::default();
+    for alias in registry.ts_aliases() {
+        types.declare(alias.base_name(), |_| alias.declaration());
+    }
     for spec in &specs {
         types.merge(&spec.types);
     }

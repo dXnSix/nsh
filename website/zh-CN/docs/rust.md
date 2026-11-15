@@ -353,7 +353,8 @@ Rust 中；TSX 传入 props、接收事件。类型不对的 prop（`u32` 类型
 宽松时，在成员或函数上写 `#[ts("<T>(token: { readonly prototype: T }): T")]`，按原文声明它的 TypeScript 签名（也可以是泛型的）；
 编译器会检查它按顺序列出了 Rust 的参数。在类的结构体上写 `#[class(generic = "T")]`，类就声明为泛型
 （`class ServiceToken<T>`），于是 `ServiceToken<I18nService>` 不能当作 `ServiceToken<Clock>`；Rust 自己的类型把它写作
-`ServiceToken<any>`。标了 `#[interface]` 的
+`ServiceToken<any>`。签名共用的类型也属于 UI 集：`registry.ts_alias(TsAlias { name: "ServiceKey<T>", ts: "{ readonly
+prototype: T } | ServiceToken<T>", doc: "…" })` 导出 `type ServiceKey<T>`。标了 `#[interface]` 的
 trait 是 TSX 对象为 Rust 实现的 TypeScript 接口：UI 集声明 `export interface Startable`（每个 trait 方法一个方法，trait 有默认实现的
 是可选成员，`#[getter]` 方法是 `readonly` 属性），Rust 通过 trait 的替身 `JsStartable` 调用这样的对象，它可以作为参数传入，也可以由
 保留的对象构造（`JsStartable::new(handle)`）；用 `registry.interface::<JsStartable>()` 注册。不是 `async` 的方法在 TSX 的调用中立即

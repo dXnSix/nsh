@@ -76,6 +76,7 @@ pub mod theme;
 pub mod theme_file;
 mod theme_scope;
 pub mod tokens;
+mod ts_alias;
 #[cfg(test)]
 mod ts_signatures;
 mod value;
@@ -210,6 +211,7 @@ pub use self::{
         AnyRole, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleSpec, RoleValue,
         ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, role,
     },
+    ts_alias::TsAlias,
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
     watch::OrderWatch,

@@ -262,6 +262,11 @@ For that, two choices of the first version change:
   them (`#[ts("<T>(name: string): ServiceToken<T>")]` on a static); a Rust type naming the class (`Instance<ServiceToken>`,
   a result `ServiceToken`) is `ServiceToken<any>`. A `#[class(interface)]` is not generic (an `interface` has no
   private member).
+- **Type aliases the signatures share**: `registry.ts_alias(TsAlias { name: "ServiceKey<T>", ts: "{ readonly
+  prototype: T } | ServiceToken<T>", doc: "…" })` exports `export type ServiceKey<T> = …;` with the set's named types,
+  so `#[ts("<T>(token: ServiceKey<T>): T")]` signatures need not repeat the union. A declaration only (TS imports it
+  with `import type`); its name is the set's like a class's (a class, interface, module or component of that name
+  panics, as two of those do), and `Registry::undocumented` lists one without a doc.
 - **Instances of classes**, by reference: a parameter `&Other` / `&mut Other` borrows another instance for the call
   (TS: `other: Other`), `Instance<Other>` keeps a handle (to store one instance in another), and a result `Other`
   or `Instance<Other>` is a JS object (`Self` from `new` and statics; `Option<Instance<Other>>` for none). An
@@ -525,7 +530,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   `interface.rs`) writes the stand-in and its `element::Interface` (`Interface::DEF`, an `InterfaceDef`: name, doc,
   members, each an `InterfaceMember`).
 - **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle`, `Posts`,
-  `Registry::class::<C>()`, `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
+  `Registry::class::<C>()`, `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
   `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
   `to_js`); the typed calls (`call.rs`: `RustOp`, `RustCall`, `JsEvent`, `AnyValue`, `ToJs`); the core runs
   them in order with the ops (`Core::run_rust`).

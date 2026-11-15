@@ -371,6 +371,21 @@ The private `#types` member keeps `T` in the type, so a `ServiceToken<A>` is no 
 defaults are TypeScript's (`generic = "T extends object = object"`); `in` / `out` are refused. A Rust type naming the
 class (`Instance<ServiceToken>`) is `ServiceToken<any>`: give those members a `#[ts]` signature.
 
+A type the signatures share is exported by the set:
+
+```rust
+registry.ts_alias(TsAlias {
+    name: "ServiceKey<T>",
+    ts: "{ readonly prototype: T } | ServiceToken<T>",
+    doc: "What names a service of type `T`: its class, or a token.",
+});
+// TS: export type ServiceKey<T> = { readonly prototype: T } | ServiceToken<T>;
+// so: #[ts("<T>(token: ServiceKey<T>): T")]
+```
+
+TS imports it with `import type { ServiceKey } from "app/native"`. Its name is the set's, like a class's: one already
+taken panics at registration.
+
 ### Listening: `Stop`
 
 A function that starts listening is named `on_*` or `on(event, listener)` and returns `Stop`, built with `Stop::new(|| ...)`.
