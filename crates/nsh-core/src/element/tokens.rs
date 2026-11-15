@@ -428,6 +428,20 @@ impl Tokens {
         self.fonts.get(name).cloned().map(Token::Font)
     }
 
+    /// The kind of token `name` (a color first, as [`Tokens::get`] takes
+    /// it).
+    pub(crate) fn kind(&self, name: &str) -> Option<Kind> {
+        if self.colors.contains_key(name) {
+            Some(Kind::Color)
+        } else if self.numbers.contains_key(name) {
+            Some(Kind::Number)
+        } else if self.fonts.contains_key(name) {
+            Some(Kind::Font)
+        } else {
+            None
+        }
+    }
+
     /// These tokens with `role` mapped onto the token named `token` (in
     /// place of the one it was mapped onto): [`Tokens::role`] reads it
     /// through the mapping.
@@ -574,6 +588,38 @@ impl Tokens {
             };
         }
         out
+    }
+}
+
+/// The kind of a token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Color,
+    Number,
+    Font,
+}
+
+impl Kind {
+    /// Whether a theme file reads a token named `name` as this kind: the
+    /// name says its kind, as a CSS variable's does
+    /// ([`super::theme_file`]).
+    pub(crate) fn names(self, name: &str) -> bool {
+        let font = name.starts_with("font-");
+        let weight = name.starts_with("font-weight-");
+        match self {
+            Kind::Font => font && !weight,
+            Kind::Color => !font,
+            Kind::Number => !font || weight,
+        }
+    }
+
+    /// The kind as a sentence names it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Kind::Color => "color",
+            Kind::Number => "number",
+            Kind::Font => "font family",
+        }
     }
 }
 
