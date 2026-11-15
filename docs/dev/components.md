@@ -832,7 +832,8 @@ is left out and reported); a `shadow-*` value that reads as `box-shadow` layers 
 (`Tokens::gradient`, per appearance, a `var()` in a stop read as the theme's color in each; its class is `bg-<n>`
 through the arbitrary `bg-[…]`, after a utility or a color of that name, `ClassTokens::substitute`; written back
 by `Gradient::css`, which `css::gradient` reads as the same gradient), and values of no kind a token has (a letter spacing in `em`) are left out. A
-value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color) is left out and reported, and so
+value written as a color that is none (`#zz`, `lab()`, a `var()` that names no color; one naming a number, a font family,
+a shadow or a gradient says what it names, as `var()` copies colors only) is left out and reported, and so
 is one that is no color in one appearance where the other's is a color (that color is both's): `nsh build` warns of
 them, the core logs them, `setTheme` refuses the file for them. An
 app sets its own in `nsh.json`: `"theme": "brand.json"` (relative to `nsh.json`) or the same JSON inline, over the
