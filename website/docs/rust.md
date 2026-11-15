@@ -772,7 +772,9 @@ declare, a role mapped onto a token of another kind than the role reads.
 
 **The theme file.** `nsh.json`'s `"theme"` sets the documents' tokens by name, each read as its declared kind (a color
 as a CSS color, a radius as a length). A role's name sets the token the role is mapped onto: `"primary"` below sets
-the design system's `action`. `var(--surface-raised)` names a token the file sets, else the documents' default. A
+the design system's `action`. `var(--surface-raised)` names a token the file sets, else the documents' default; it
+copies a color or a number (`"radius-card": "var(--radius)"`, `var(--radius, 8px)` with a fallback) in each
+appearance, once, when the file is read. A
 name that nothing declares, or a value of another kind, is a build warning and is left out when the app runs. A key
 that is a role's name, in a section that also sets the token the role is mapped onto, gives way to that token; so
 does the second of two roles' names that set one token to two values. An embedding app's theme overrides and TSX's

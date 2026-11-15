@@ -990,6 +990,12 @@ fn apply_css_vars(
                 _ => {}
             }
         }
+        let number = |v: &str,
+                      vars: &FxHashMap<String, String>,
+                      dark: bool,
+                      parse: fn(&str) -> Option<f32>| {
+            number_value(v, vars, base, dark, parse, &mut FxHashSet::default())
+        };
         // An easing (`ease-snappy`: `cubic-bezier(0.2, 0, 0, 1)`), as
         // Tailwind's `--ease-*`: one in both appearances.
         if name.starts_with("ease-") {
@@ -1014,7 +1020,7 @@ fn apply_css_vars(
         // A duration (`duration-fast`: `150ms`), per appearance, kept as a
         // number of milliseconds; `duration-*` and `delay-*` read it.
         if name.starts_with("duration-") {
-            let Some(dark_ms) = duration(value) else {
+            let Some(dark_ms) = number(value, &dark_vars, true, duration) else {
                 ignored.push(LeftOut::about(
                     name,
                     format_args!(": {value} is no duration (`150ms`, `0.2s`)"),
@@ -1023,7 +1029,7 @@ fn apply_css_vars(
             };
             let light_ms = light_vars
                 .get(name)
-                .and_then(|v| duration(v))
+                .and_then(|v| number(v, &light_vars, false, duration))
                 .unwrap_or(dark_ms);
             tokens.set_number(name, light_ms);
             if dark_ms != light_ms {
@@ -1036,7 +1042,7 @@ fn apply_css_vars(
         // weight that is no number, and a color or a number under a
         // family's name, is of no kind the name holds: left out.
         if name.starts_with("font-weight-") {
-            let Some(dark_weight) = length(value) else {
+            let Some(dark_weight) = number(value, &dark_vars, true, length) else {
                 let said = no_kind(value, "number", &dark_vars, base);
                 ignored.push(LeftOut::about(name, format_args!(": {said}")));
                 continue;
@@ -1044,7 +1050,7 @@ fn apply_css_vars(
             // Per appearance, as the other numbers (below).
             let light_weight = light_vars
                 .get(name)
-                .and_then(|v| length(v))
+                .and_then(|v| number(v, &light_vars, false, length))
                 .unwrap_or(dark_weight);
             tokens.set_number(name, light_weight);
             if dark_weight != light_weight {
@@ -1092,15 +1098,19 @@ fn apply_css_vars(
                 // The dark appearance's value (`dark`'s, else the light
                 // one's), and the light one's: given in one appearance
                 // only, a number is both's, as a color is.
-                if let Some(dark_n) = length(value) {
+                let number = |v: &str, vars: &FxHashMap<String, String>, dark: bool| {
+                    number_value(v, vars, base, dark, length, &mut FxHashSet::default())
+                };
+                if let Some(dark_n) = number(value, &dark_vars, true) {
                     let light_n = light_vars
                         .get(name)
-                        .and_then(|v| length(v))
+                        .and_then(|v| number(v, &light_vars, false))
                         .unwrap_or(dark_n);
                     tokens.set_number(name, light_n);
                     if dark_n != light_n {
                         tokens.set_dark_number(name, dark_n);
                     }
+                    continue;
                 }
                 let mut given: Vec<(&FxHashMap<String, String>, &String)> = [
                     (&light_vars, light_vars.get(name)),
@@ -1119,6 +1129,38 @@ fn apply_css_vars(
     }
 }
 
+/// A number value `value` of one appearance (`vars`, `dark`) read by
+/// `parse` (a length, a duration), or, when it is a whole `var(--x)` or
+/// `var(--x, fallback)`, the number `x` is: the file's own (its chain of
+/// `var()`s followed), else `base`'s, else the fallback. `var()` copies a
+/// number as it copies a color: once, when the file is read.
+fn number_value(
+    value: &str,
+    vars: &FxHashMap<String, String>,
+    base: &Tokens,
+    dark: bool,
+    parse: fn(&str) -> Option<f32>,
+    seen: &mut FxHashSet<String>,
+) -> Option<f32> {
+    let value = value.trim();
+    let Some(inner) = value.strip_prefix("var(").and_then(|v| v.strip_suffix(')')) else {
+        return parse(value);
+    };
+    let (var, fallback) = match inner.split_once(',') {
+        Some((var, fallback)) => (var.trim(), Some(fallback.trim())),
+        None => (inner.trim(), None),
+    };
+    let named = var.strip_prefix("--")?;
+    let copied = match vars.get(named) {
+        Some(own) if seen.insert(named.to_owned()) => {
+            number_value(own, vars, base, dark, parse, seen)
+        }
+        Some(_) => None,
+        None => base.number_in(named, dark),
+    };
+    copied.or_else(|| number_value(fallback?, vars, base, dark, parse, seen))
+}
+
 /// `value`, which a theme file gives a token that cannot take it, said as
 /// what it is: `{value} is no {kind}`, or, when a `var()` in it names a
 /// token of another kind than a color (the file's in `vars`, of one
@@ -1132,10 +1174,14 @@ fn no_kind(value: &str, kind: &str, vars: &FxHashMap<String, String>, base: &Tok
         if let Some(var) = inner[..end].trim().strip_prefix("--")
             && let Some(named) = named_kind(var, vars, base).filter(|k| *k != Kind::Color)
         {
-            return format!(
-                "{value} names the {} `{var}`, and var() copies only colors",
-                named.name()
-            );
+            return match named {
+                // Copied, but not what this token holds.
+                Kind::Number => format!("{value} names the number `{var}`, which is no {kind}"),
+                _ => format!(
+                    "{value} names the {} `{var}`, and var() copies only colors and numbers",
+                    named.name()
+                ),
+            };
         }
         rest = &inner[end..];
     }
@@ -1732,9 +1778,9 @@ mod font_values {
     }
 }
 
-/// `var()` copies colors only: a value that names a number, a font family,
-/// a shadow or a gradient with it is left out, and the sentence says what
-/// it names.
+/// `var()` copies colors and numbers: a value that names a font family, a
+/// shadow or a gradient with it is left out, and the sentence says what it
+/// names; a number copied where a font family goes is said too.
 #[cfg(test)]
 mod var_of_no_color {
     use super::*;
@@ -1757,22 +1803,44 @@ mod var_of_no_color {
         assert_eq!(
             ignored,
             [
-                "`font-sans`: var(--font-inter) names the font family `font-inter`, and var() copies only colors",
-                "`font-weight-body`: var(--gap) names the number `gap`, and var() copies only colors",
-                "`gap-lg`: var(--gap) names the number `gap`, and var() copies only colors",
+                "`font-sans`: var(--font-inter) names the font family `font-inter`, and var() copies only colors and numbers",
                 "`ink`: var(--nothing) is no color",
-                "`radius-card`: var(--radius) names the number `radius`, and var() copies only colors",
             ]
         );
-        for name in [
-            "radius-card",
-            "gap-lg",
-            "font-sans",
-            "font-weight-body",
-            "ink",
-        ] {
+        for name in ["font-sans", "ink"] {
             assert_eq!(tokens.get(name), None, "{name}");
         }
+        // Numbers are copied, from the tokens below (`radius`) or the file's own.
+        assert_eq!(tokens.number("radius-card"), Some(10.0));
+        assert_eq!(tokens.number("gap-lg"), Some(4.0));
+        assert_eq!(tokens.number("font-weight-body"), Some(4.0));
         assert_eq!(tokens.color("ring"), tokens.color("brand"));
+    }
+
+    /// A number `var()` is copied in each appearance, through a chain, with
+    /// its fallback when it names nothing, and as a duration where a
+    /// duration goes; a cycle is no number.
+    #[test]
+    fn a_var_copies_a_number_in_each_appearance() {
+        let (tokens, ignored) = parse(
+            r##"{ "cssVars": {
+                "theme": { "radius-card": "var(--radius-lg)", "radius-chip": "var(--missing, 6px)",
+                           "duration-slow": "var(--duration-base)", "loop-a": "var(--loop-b)", "loop-b": "var(--loop-a)" },
+                "light": { "radius": "8px", "radius-lg": "var(--radius)", "duration-base": "200ms" },
+                "dark": { "radius": "12px", "duration-base": "0.3s" } } }"##,
+            &Tokens::default(),
+        )
+        .unwrap();
+        assert_eq!(tokens.number_in("radius-card", false), Some(8.0));
+        assert_eq!(tokens.number_in("radius-card", true), Some(12.0));
+        assert_eq!(tokens.number("radius-chip"), Some(6.0));
+        assert_eq!(tokens.number_in("duration-slow", false), Some(200.0));
+        assert_eq!(tokens.number_in("duration-slow", true), Some(300.0));
+        assert_eq!(tokens.get("loop-a"), None);
+        assert_eq!(tokens.get("loop-b"), None);
+        assert!(
+            ignored.iter().any(|s| s.starts_with("`loop-a`")),
+            "{ignored:?}"
+        );
     }
 }
