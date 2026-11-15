@@ -9,14 +9,14 @@ use nsh_core::{
     Op,
     element::{
         CallbackHandle, ClassDef, ClassInstance, Exception, JsCall, JsHost, JsIn, JsKind,
-        JsPrimitive, JsRaw, Posts, PropError, RustCall, RustOp, System, TaskStart,
+        JsPrimitive, JsRaw, JsTarget, Posts, PropError, RustCall, RustOp, System, TaskStart,
     },
     js::host::HostInput,
 };
 
 use super::{
     compat, protocol,
-    values::{Value, invoke},
+    values::{EXCEPTION, Value, invoke},
 };
 
 struct Frame {
@@ -209,6 +209,25 @@ impl Bindings {
             return;
         };
         let callback = Value(id(callback));
+        // An object's member (an interface's): the method, or the property.
+        let member = match call.target() {
+            JsTarget::Call => None,
+            JsTarget::Method(name) | JsTarget::Get(name) => match callback.get(name) {
+                Ok(member) => Some((name, member)),
+                Err(error) => {
+                    call.reply(Err(Exception::from(error.0)));
+                    return;
+                }
+            },
+        };
+        if let Some((_, member)) = &member
+            && call.optional()
+            && self.kind(raw(member.0)) == JsKind::Undefined
+        {
+            // No such member: Rust runs its default.
+            call.reply_missing();
+            return;
+        }
         let args = match call
             .args(self)
             .and_then(|args| Value::array(args.into_iter().map(|v| Value(id(v.into_raw())))))
@@ -219,12 +238,21 @@ impl Bindings {
                 return;
             }
         };
-        let result = if call.settles() && self.kind(raw(callback.0)) != JsKind::Function {
+        let result = match member {
+            Some((_, property)) if matches!(call.target(), JsTarget::Get(_)) => Ok(property),
+            Some((name, method)) if self.kind(raw(method.0)) != JsKind::Function => {
+                Err(PropError(format!(
+                    "`{name}` is not a function, got {}",
+                    self.describe(raw(method.0))
+                )))
+            }
+            Some((_, method)) => method.call(&callback, &args),
             // A value in place of a function (`Callback::settling`) answers
             // itself, a promise what it settles to.
-            Ok(callback)
-        } else {
-            callback.call(&Value(0), &args)
+            None if call.settles() && self.kind(raw(callback.0)) != JsKind::Function => {
+                Ok(callback)
+            }
+            None => callback.call(&Value(0), &args),
         };
         match result {
             Err(error) => call.reply(Err(Exception::from(error.0))),
@@ -308,6 +336,11 @@ struct BrowserCallback {
     value: RefCell<Option<Value>>,
 }
 impl CallbackHandle for BrowserCallback {
+    fn in_call(&self) -> bool {
+        self.host
+            .upgrade()
+            .is_some_and(|host| !host.stopped.get() && !host.frames.borrow().is_empty())
+    }
     fn call_now(&self, call: JsCall) {
         if let Some(host) = self.host.upgrade() {
             host.run_call(call);
@@ -428,6 +461,15 @@ impl JsHost for Bindings {
     fn retain(&self, value: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
         Some(self.keep_callback(value))
     }
+    fn object(&self, value: JsRaw) -> Option<Rc<dyn CallbackHandle>> {
+        // One handle per object (`keep_callback`): the handle is its
+        // identity.
+        matches!(
+            self.kind(value),
+            JsKind::Object | JsKind::Function | JsKind::Array
+        )
+        .then(|| self.keep_callback(value) as Rc<dyn CallbackHandle>)
+    }
     fn free(&self, value: JsRaw) {
         drop(Value(id(value)));
     }
@@ -522,6 +564,18 @@ impl JsHost for Bindings {
         let class = self.class_id(instance.def());
         let index = self.keep_instance(instance);
         Value::checked(invoke(28, index, class, 0, 0.0)).map(owned)
+    }
+    fn class_of(&self, value: JsRaw) -> Option<&'static ClassDef> {
+        // -1: no class's (and an exception, `EXCEPTION`, is none either).
+        let class = invoke(52, id(value), 0, 0, 0.0);
+        if !(0.0..f64::from(EXCEPTION)).contains(&class) {
+            return None;
+        }
+        self.classes.borrow().get(class as usize).copied()
+    }
+    fn class_constructor(&self, def: &'static ClassDef) -> Result<JsRaw, PropError> {
+        let class = self.class_id(def);
+        Value::checked(invoke(53, class, 0, 0, 0.0)).map(owned)
     }
     fn arg(&self, index: usize) -> JsRaw {
         let args = self.frames.borrow().last().map(|f| f.args.clone());

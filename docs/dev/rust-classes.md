@@ -246,7 +246,17 @@ For that, two choices of the first version change:
   or `Instance<Other>` is a JS object (`Self` from `new` and statics; `Option<Instance<Other>>` for none). An
   instance of another app's or set's class is refused with a `TypeError`. `async` members and module functions keep
   what they take: `Instance<Other>`, not `&Other`.
+- **Classes themselves**: a parameter `Constructor` takes a Rust class's constructor, the value TS names the class
+  by (`getRequiredService(I18nService)`), and tells Rust which `#[class]` it is (`def()`, `is::<I18nService>()`;
+  `Eq` and `Hash` by the class, so it keys a table of services). Only constructors NSH made for Rust classes are
+  taken, of any set the VM serves: a class TS declares, a TS subclass of a Rust class, any other function or value
+  throws a `TypeError` (``Services.nameOf: `service`: expected a Rust class, got a function``). A result
+  `Constructor` (`Constructor::of::<C>()`) gives JS the class's constructor, made on first use as an import makes
+  it. TS: `Function`, since TypeScript assigns a class declared with `private constructor()` to no `new (...) => …`
+  type. A `JsHandle` tells the same of the object it keeps (`handle.constructor()`), for a token that is a Rust
+  class or anything else.
 - **JS functions** (callbacks), below.
+- **JS objects** Rust keeps (`JsHandle`), below, and **objects implementing a Rust trait** (`#[interface]`), below.
 - **Not in the first version:** events emitted by an instance (`EventTarget`) and iterators. Constructors honor
   `new.target` as the web classes' do, so a TS class may extend a Rust one.
 
@@ -316,7 +326,7 @@ impl Downloader {
 - **Keeping it:** a `Callback` can be stored (in an instance's field, a `Vec`, a global) and called any number of
   times; dropping the last clone releases the JS function. A callback an instance keeps is reported to QuickJS's
   collector through the class's mark hook, as the web classes report the JS values they hold. `#[class]` traces
-  every field whose type implements the `unsafe trait Trace` (`Callback`, `Instance`, and `Option`, `Box`,
+  every field whose type implements the `unsafe trait Trace` (`Callback`, `JsHandle`, `Instance`, and `Option`, `Box`,
   `RefCell`, `Vec`, `VecDeque`, map values and pairs of them; chosen by type, so aliases count and other types are
   skipped) and reports them while the object is the instance's only owner and the callback has no other clone,
   so a callback that captures the object owning the instance does not keep both alive forever. Callbacks held
@@ -339,6 +349,111 @@ impl Downloader {
   first; calling it unregisters the cleanup, so a long-lived owner does not collect stopped listeners. The
   Node-shaped standard modules keep Node's `on` returning the instance (`child.on(..)` chains).
 
+## JS objects
+
+A parameter `JsHandle` takes any JS object, array or function (TS `object`) and keeps it: Rust stores it as long as
+it likes (a field, a map, a task) and gives it back to JS as the very same object (`===`). It is how Rust keeps what
+TS made, a service or a token, without converting it.
+
+```rust
+#[class]
+impl Services {
+    /// Keeps `service` under `token`.
+    pub fn add(&mut self, token: JsHandle, service: JsHandle) {
+        self.by_token.insert(token, service);
+    }
+
+    /// What `token` was given, or `null`.
+    pub fn get(&self, token: JsHandle) -> Option<JsHandle> {
+        self.by_token.get(&token).cloned()
+    }
+}
+```
+
+- **Identity.** Two handles are equal (`Eq`, `Hash`) when they keep the same object, so a handle is a map key: the
+  same object converted twice gives equal handles, two objects with the same fields do not.
+- **Wherever a value crosses.** It is a `JsValue`, so `Option<JsHandle>` (`object | null`), `Vec<JsHandle>`, a
+  callback's result (`Callback<(), JsHandle>`, a factory TS passes) and a field of a `#[derive(JsObject)]` struct
+  take it too. `null`, `undefined` and primitives are refused with a `TypeError` (``Keeper.keep: `object`: expected
+  an object, got 3``).
+- **Kept as a callback is.** The object sits in the table of the values Rust keeps, where callbacks' functions are
+  (`nsh-js` `classes.rs`; the web runtime's handles), and is released when the last clone drops. A handle a
+  `#[class]` field holds alone is reported to the collector through the class's `Trace`, so an object that reaches
+  the instance's own JS object (a service holding its registry) is collected with it; one held elsewhere (a static,
+  a task, an `Rc` two instances share) is a root until dropped.
+- **Its VM's, on the engine thread.** It is not `Send`. A host of another VM (two engines on one thread) refuses it
+  (`the object belongs to a VM that is gone, or another`), and once its VM goes it is dead: giving it back to JS
+  fails, its equality still holds.
+
+## Interfaces
+
+`#[interface]` on a Rust trait makes it a TS interface that TS objects implement for Rust to call: the set's
+declarations get an `export interface` of the trait's name, and Rust gets the trait's stand-in, `Js<Trait>`, a
+struct over a `JsHandle` that implements the trait by calling the JS object's members. Rust code holding a
+`JsStartable` uses it as any implementation of `Startable`.
+
+```rust
+/// A service the app writes in TS.
+#[interface]
+pub trait Startable {
+    /// Starts as `name`; resolves once started.
+    async fn start(&self, name: String) -> Result<(), String>;
+    /// Whether it started.
+    fn is_started(&self) -> bool;
+    /// How long it may take, in ms (the registry's by default).
+    #[getter]
+    fn timeout(&self) -> Option<f64> {
+        None
+    }
+}
+
+#[native_module("app/native")]
+fn native(registry: &mut Registry) {
+    registry.interface::<JsStartable>();
+}
+```
+
+```ts
+// .nsh/types/app/native.d.ts, generated
+/** A service the app writes in TS. */
+export interface Startable {
+  /** Starts as `name`; resolves once started. */
+  start(name: string): Promise<void>;
+  /** Whether it started. */
+  isStarted(): boolean;
+  /** How long it may take, in ms (the registry's by default). */
+  readonly timeout?: number | null;
+}
+```
+
+- **Members.** A method takes `&self` and owned values Rust passes to JS (what a class's member returns: strings,
+  numbers, `JsHandle`, `Instance<T>`, `#[derive(JsObject)]` structs; up to eight), and returns what JS gives back (a
+  `JsValue` type, `Instance<T>`, `()`) or a `Result` of it; its TS name is camel case, as a class member's.
+  `#[getter]` on a method without parameters reads the property of its name (`readonly timeout`). A member with a
+  default body is optional in TS (`stop?()`, `readonly timeout?`): an object without it (`undefined`) runs the
+  default, with the same arguments. An interface has no generics, associated items or supertraits: its stand-in
+  implements this trait alone.
+- **When a member runs.** A method that is not `async` calls the JS method on the spot inside a synchronous call from
+  JS, as a callback's `call` does (a class's method calling the service it was given). Outside one (a task, a
+  timer), one returning `()` is posted for JS's next turn, in order with the other posts (`Callback::post`), and one
+  returning a value fails (the `Err` of a `Result`): JS is not running there. An `async fn` is posted and awaited
+  (`call_async`), a promise the JS method returns settled. A getter is read as a method of its kind is called.
+- **Failures.** What JS throws or rejects with is the `Err` of a member returning `Result<T, E>` (`E:
+  From<Exception>`: `String` takes the message, `Exception` the stack too), and so is a value that does not convert
+  (``Greeter.greet: expected a string, got 3``) or a member that is no function. A member returning a plain value
+  panics with it, which the JS call around it throws as an `Error`: a member Rust calls from a task returns a
+  `Result`.
+- **As a value.** The stand-in is a `JsValue` (TS: the interface). A parameter `JsStartable` takes a JS object whose
+  required methods are functions and refuses any other value with a `TypeError` (``Runner.run: `service`: expected a
+  Startable, got an object whose `start` is undefined``); a result gives back the same object.
+  `JsStartable::new(handle)` (or `From<JsHandle>`) makes one from a kept object, unchecked. It is traced as its
+  `JsHandle` is, and equal to another of the same object.
+- **Declared.** `Registry::interface::<JsStartable>()` declares the interface and registers the classes its members
+  name; a signature naming the stand-in declares it too. An interface, a class, a module and a component of one set
+  share no name. JS has no value of it: TS imports it as a type (`import type { Startable } from "app/native"`).
+- **Its defaults.** `#[interface]` moves a default body to a hidden method of the trait (`__nsh_default_<name>`),
+  which the method's own default calls: a Rust implementor sees no change, and the stand-in runs it for an object
+  without the member.
 
 ## How calls cross
 
@@ -385,9 +500,12 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   the command line warns of an app's when it writes `.nsh/types`, and nsh's own sets are tested to have none.
   It implements `element::Class` (`Class::DEF`, a `ClassDef`: name, doc, members, each a `Member` with its
   `MemberCall`), as `#[module]` implements `Module`; on the struct it implements `Trace` (the callbacks the fields
-  keep) and `Ret` (a value of the struct is a new instance).
-- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Callback<A, R>`, `Posts`,
-  `Registry::class::<C>()`; the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
+  keep) and `Ret` (a value of the struct is a new instance). `#[interface]` on a trait (`nsh-macros`
+  `interface.rs`) writes the stand-in and its `element::Interface` (`Interface::DEF`, an `InterfaceDef`: name, doc,
+  members, each an `InterfaceMember`).
+- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle`, `Posts`,
+  `Registry::class::<C>()`, `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
+  `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
   `to_js`); the typed calls (`call.rs`: `RustOp`, `RustCall`, `JsEvent`, `AnyValue`, `ToJs`); the core runs
   them in order with the ops (`Core::run_rust`).
 - **`nsh-js`:** `classes.rs` makes each class's constructor and prototype from its `ClassDef` when a bundle imports

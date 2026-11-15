@@ -17,6 +17,8 @@ mod classes;
 mod clock;
 mod components;
 mod console;
+#[cfg(test)]
+mod constructors;
 mod declarations;
 mod desktop;
 mod dev_source;
@@ -27,6 +29,10 @@ mod host;
 mod host_channel;
 mod hot;
 mod i18n;
+#[cfg(test)]
+mod interfaces;
+#[cfg(test)]
+mod js_handles;
 mod keymap;
 mod list;
 mod modules;

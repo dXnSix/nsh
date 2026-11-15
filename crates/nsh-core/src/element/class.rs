@@ -422,6 +422,10 @@ impl<T: JsValue> Arg for T {
     fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
         T::from_js(value)
     }
+
+    fn classes(out: &mut Vec<&'static ClassDef>) {
+        T::classes(out);
+    }
 }
 
 /// The instance a JS object of `C` holds (another class's, or another
@@ -484,6 +488,10 @@ impl<T: JsValue> Ret for T {
 
     fn into_js<'a>(self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
         self.to_js(host)
+    }
+
+    fn classes(out: &mut Vec<&'static ClassDef>) {
+        T::classes(out);
     }
 }
 
@@ -549,6 +557,84 @@ impl<C: Class> Ret for Option<Instance<C>> {
     fn classes(out: &mut Vec<&'static ClassDef>) {
         out.push(C::DEF);
     }
+}
+
+/// A Rust class's constructor, which JS passes as a value to name the class
+/// (`getRequiredService(I18nService)`): which `#[class]` it is. Only the
+/// constructors NSH made for Rust classes are taken; any other value (a
+/// class TS declares, a subclass TS made of a Rust class, a function, an
+/// object) is refused with a `TypeError`. Given back to JS, it is the
+/// class's constructor. TS: `Function` (a class TS knows only through
+/// `private constructor()` is no `new (...) => …` to TypeScript).
+#[derive(Clone, Copy)]
+pub struct Constructor {
+    def: &'static ClassDef,
+}
+
+impl Constructor {
+    /// The constructor of class `C`.
+    pub fn of<C: Class>() -> Self {
+        Self { def: C::DEF }
+    }
+
+    /// Its class.
+    pub fn def(&self) -> &'static ClassDef {
+        self.def
+    }
+
+    /// Whether it is the constructor of class `C`.
+    pub fn is<C: Class>(&self) -> bool {
+        (self.def.type_id)() == TypeId::of::<C>()
+    }
+
+    /// The constructor of the class `def` defines.
+    pub(super) fn from_def(def: &'static ClassDef) -> Self {
+        Self { def }
+    }
+}
+
+impl PartialEq for Constructor {
+    fn eq(&self, other: &Self) -> bool {
+        (self.def.type_id)() == (other.def.type_id)()
+    }
+}
+
+impl Eq for Constructor {}
+
+impl std::hash::Hash for Constructor {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.def.type_id)().hash(state);
+    }
+}
+
+impl fmt::Debug for Constructor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Constructor({})", self.def.name)
+    }
+}
+
+impl JsValue for Constructor {
+    fn ts_type(_types: &mut TsTypes) -> String {
+        "Function".into()
+    }
+
+    fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
+        value
+            .host()
+            .class_of(value.raw())
+            .map(Self::from_def)
+            .ok_or_else(|| not_a_constructor(value))
+    }
+
+    fn to_js<'a>(&self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
+        Ok(JsOwned::new(host, host.class_constructor(self.def)?))
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn not_a_constructor(value: JsIn<'_>) -> PropError {
+    value.expected("a Rust class")
 }
 
 // --- Specs ------------------------------------------------------------------------
@@ -1245,5 +1331,81 @@ export declare const Tools: ToolsModule;
                 .class::<Tally>();
         });
         assert!(component_first.is_err(), "a class after a component");
+    }
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use std::collections::HashSet;
+
+    use crate::{
+        element::{JsIn, Registry, declarations, json_host::JsonHost},
+        prelude::*,
+    };
+
+    /// Finds services by their class.
+    #[class]
+    struct Finder;
+
+    #[class]
+    impl Finder {
+        /// The name of `service`'s class.
+        pub(crate) fn name_of(service: Constructor) -> String {
+            service.def().name.to_owned()
+        }
+
+        /// The class itself.
+        pub(crate) fn itself() -> Constructor {
+            Constructor::of::<Finder>()
+        }
+
+        /// The class, if `service` names one.
+        pub(crate) fn maybe(service: Option<Constructor>) -> Option<Constructor> {
+            service
+        }
+    }
+
+    #[test]
+    fn constructors_are_declared_as_functions() {
+        let mut registry = Registry::ui_set("test/ui");
+        registry.class::<Finder>();
+        assert_eq!(
+            declarations(&registry, &[]),
+            r#"/** Finds services by their class. */
+export declare class Finder {
+  /** Made by the class's members only. */
+  private constructor();
+  /** The name of `service`'s class. */
+  static nameOf(service: Function): string;
+  /** The class itself. */
+  static itself(): Function;
+  /** The class, if `service` names one. */
+  static maybe(service?: Function | null): Function | null;
+  /** Frees the Rust value now (else when the object is collected); the object throws after. */
+  dispose(): void;
+  [Symbol.dispose](): void;
+}
+
+"#
+        );
+    }
+
+    #[test]
+    fn a_constructor_is_its_class() {
+        let finder = Constructor::of::<Finder>();
+        assert!(finder.is::<Finder>());
+        assert_eq!(finder.def().name, "Finder");
+        assert_eq!(finder, Constructor::of::<Finder>());
+        assert_eq!(format!("{finder:?}"), "Constructor(Finder)");
+        let set: HashSet<_> = [finder, Constructor::of::<Finder>()].into();
+        assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn hosts_without_classes_refuse_constructors() {
+        let host = JsonHost::default();
+        let value = host.value(serde_json::json!({}));
+        let error = Constructor::from_js(JsIn::new(&host, value)).unwrap_err();
+        assert_eq!(error.0, "expected a Rust class, got {}");
     }
 }
