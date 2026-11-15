@@ -227,6 +227,7 @@ pub use crate::element::{
     hsla,
     image,
     input_accessory_view,
+    interface,
     methods,
     module,
     native,

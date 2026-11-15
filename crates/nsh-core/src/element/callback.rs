@@ -7,6 +7,7 @@
 //! instance's JS object is collected.
 
 use std::{
+    any::Any,
     cell::RefCell,
     collections::{BTreeMap, HashMap, VecDeque},
     fmt,
@@ -45,10 +46,49 @@ pub trait CallbackHandle: std::any::Any {
     fn identity(&self) -> Option<(usize, usize)> {
         None
     }
+    /// Whether a call made now runs on the spot ([`CallbackHandle::call_now`]):
+    /// inside a synchronous call from JS, while the VM lives and does not
+    /// collect garbage.
+    fn in_call(&self) -> bool {
+        false
+    }
 }
 
-type ArgsFn = Box<dyn for<'a> FnOnce(&'a dyn JsHost) -> Result<Vec<JsOwned<'a>>, PropError>>;
-type ReplyFn = Box<dyn for<'a> FnOnce(Result<JsIn<'a>, Exception>)>;
+/// What receives a call's result.
+pub(crate) type ReplyFn = Box<dyn for<'a> FnOnce(Result<JsIn<'a>, Exception>)>;
+
+/// What a call does with the value its handle keeps.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsTarget {
+    /// Calls it: a function ([`Callback`]).
+    Call,
+    /// Calls its method of this name, the value as `this` (an interface's
+    /// method).
+    Method(&'static str),
+    /// Reads its property of this name (an interface's `#[getter]`).
+    Get(&'static str),
+}
+
+/// The arguments of a call: made into JS values when it runs, or handed
+/// back to Rust when the member it calls is missing.
+trait PendingArgs {
+    fn into_js<'a>(self: Box<Self>, host: &'a dyn JsHost) -> Result<Vec<JsOwned<'a>>, PropError>;
+    fn into_any(self: Box<Self>) -> Box<dyn Any>;
+}
+
+impl<A: CallbackArgs + 'static> PendingArgs for A {
+    fn into_js<'a>(self: Box<Self>, host: &'a dyn JsHost) -> Result<Vec<JsOwned<'a>>, PropError> {
+        (*self).into_js_args(host)
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+/// What runs when the member a call names is missing: its arguments back.
+type MissingFn = Box<dyn FnOnce(Box<dyn Any>)>;
 
 /// What a JS function threw ([`Callback::call_async_traced`]): its message
 /// and, for an `Error`, the stack where it was made (`    at f
@@ -84,13 +124,24 @@ impl fmt::Display for Exception {
     }
 }
 
-/// A call of a JS function: its arguments, made when it runs, and what
-/// receives its result.
+/// Its message: what an interface's method returning `Result<T, String>`
+/// gets for what JS threw.
+impl From<Exception> for String {
+    fn from(exception: Exception) -> Self {
+        exception.message
+    }
+}
+
+/// A call of a JS function (or of a JS object's member): its arguments,
+/// made when it runs, and what receives its result.
 #[doc(hidden)]
 pub struct JsCall {
     callback: Rc<dyn CallbackHandle>,
-    args: Option<ArgsFn>,
+    target: JsTarget,
+    args: Option<Box<dyn PendingArgs>>,
     reply: Option<ReplyFn>,
+    /// The member may be missing: this gets the arguments back.
+    missing: Option<MissingFn>,
     /// The reply waits for a promise the function returns.
     settles: bool,
     /// The reply wants what was thrown whole ([`Exception::thrown`]).
@@ -107,24 +158,87 @@ impl JsCall {
     ) -> Self {
         Self {
             callback,
-            args: Some(Box::new(move |host| args.into_js_args(host))),
+            target: JsTarget::Call,
+            args: Some(Box::new(args)),
             reply,
+            missing: None,
             settles,
             traced,
         }
     }
 
-    /// The function to call.
+    /// A call of member `target` of the object `callback` keeps: `missing`
+    /// runs instead (with `args`) when the object has none (`undefined`).
+    pub(crate) fn member<A: CallbackArgs + 'static>(
+        callback: Rc<dyn CallbackHandle>,
+        target: JsTarget,
+        args: A,
+        reply: Option<ReplyFn>,
+        missing: Option<Box<dyn FnOnce(A)>>,
+        settles: bool,
+    ) -> Self {
+        let missing = missing.map(|missing| {
+            Box::new(move |args: Box<dyn Any>| {
+                if let Ok(args) = args.downcast::<A>() {
+                    missing(*args);
+                }
+            }) as MissingFn
+        });
+        Self {
+            callback,
+            target,
+            args: Some(Box::new(args)),
+            reply,
+            missing,
+            settles,
+            traced: false,
+        }
+    }
+
+    /// The function to call, or the object whose member to call.
     pub fn callback(&self) -> &Rc<dyn CallbackHandle> {
         &self.callback
+    }
+
+    /// What the call does with the value: calls it, or its member.
+    pub fn target(&self) -> JsTarget {
+        self.target
+    }
+
+    /// Whether the member may be missing: one that is `undefined` hands
+    /// the call back to Rust ([`JsCall::reply_missing`]) rather than
+    /// failing.
+    pub fn optional(&self) -> bool {
+        self.missing.is_some()
     }
 
     /// The arguments, as values of `host`.
     pub fn args<'a>(&mut self, host: &'a dyn JsHost) -> Result<Vec<JsOwned<'a>>, PropError> {
         match self.args.take() {
-            Some(args) => args(host),
+            Some(args) => args.into_js(host),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Hands the call back to Rust: the object has no such member (a
+    /// missing optional one's default runs). A call whose member may not be
+    /// missing fails instead.
+    pub fn reply_missing(mut self) {
+        let Some(missing) = self.missing.take() else {
+            let name = match self.target {
+                JsTarget::Method(name) | JsTarget::Get(name) => name,
+                JsTarget::Call => "the function",
+            };
+            self.reply(Err(format!("`{name}` is missing").into()));
+            return;
+        };
+        // The default answers in place of the reply.
+        self.reply = None;
+        let args = match self.args.take() {
+            Some(args) => args.into_any(),
+            None => Box::new(()),
+        };
+        missing(args);
     }
 
     /// Whether the result is wanted (`call`, `call_async`).
@@ -394,16 +508,29 @@ macro_rules! callback_tuple {
 callback_tuple!(
     (A a "a" 0, B b "b" 1),
     (A a "a" 0, B b "b" 1, C c "c" 2),
-    (A a "a" 0, B b "b" 1, C c "c" 2, D d "d" 3)
+    (A a "a" 0, B b "b" 1, C c "c" 2, D d "d" 3),
+    (A a "a" 0, B b "b" 1, C c "c" 2, D d "d" 3, E e "e" 4),
+    (A a "a" 0, B b "b" 1, C c "c" 2, D d "d" 3, E e "e" 4, F f "f" 5),
+    (A a "a" 0, B b "b" 1, C c "c" 2, D d "d" 3, E e "e" 4, F f "f" 5, G g "g" 6),
+    (A a "a" 0, B b "b" 1, C c "c" 2, D d "d" 3, E e "e" 4, F f "f" 5, G g "g" 6, H h "h" 7)
 );
 
-/// What a [`Callback`] returns: a [`JsValue`] type, or `()` (its result
-/// ignored).
+/// What a [`Callback`] returns: a [`JsValue`] type, an instance of a class
+/// (`Instance<C>`, `Option<Instance<C>>`), or `()` (its result ignored).
 pub trait CallbackRet: Sized {
     /// Its TypeScript type.
     fn ts_type(types: &mut TsTypes) -> String;
     /// The value the function returned.
     fn from_js(value: JsIn<'_>) -> Result<Self, PropError>;
+    /// Adds the classes the type names.
+    #[doc(hidden)]
+    fn classes(_out: &mut Vec<&'static ClassDef>) {}
+    /// The value of `()`, which needs no JS value (`None` for any other
+    /// type): what a posted interface method gives.
+    #[doc(hidden)]
+    fn unit() -> Option<Self> {
+        None
+    }
 }
 
 impl<T: JsValue> CallbackRet for T {
@@ -414,6 +541,10 @@ impl<T: JsValue> CallbackRet for T {
     fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
         T::from_js(value)
     }
+
+    fn classes(out: &mut Vec<&'static ClassDef>) {
+        T::classes(out);
+    }
 }
 
 impl CallbackRet for () {
@@ -423,6 +554,40 @@ impl CallbackRet for () {
 
     fn from_js(_value: JsIn<'_>) -> Result<Self, PropError> {
         Ok(())
+    }
+
+    fn unit() -> Option<Self> {
+        Some(())
+    }
+}
+
+/// The instance a JS object of `C` holds.
+impl<C: Class> CallbackRet for Instance<C> {
+    fn ts_type(types: &mut TsTypes) -> String {
+        <Instance<C> as Arg>::ts_type(types)
+    }
+
+    fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
+        <Instance<C> as Arg>::from_js(value)
+    }
+
+    fn classes(out: &mut Vec<&'static ClassDef>) {
+        out.push(C::DEF);
+    }
+}
+
+/// `null` or `undefined` is `None`.
+impl<C: Class> CallbackRet for Option<Instance<C>> {
+    fn ts_type(types: &mut TsTypes) -> String {
+        <Option<Instance<C>> as Arg>::ts_type(types)
+    }
+
+    fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
+        <Option<Instance<C>> as Arg>::from_js(value)
+    }
+
+    fn classes(out: &mut Vec<&'static ClassDef>) {
+        out.push(C::DEF);
     }
 }
 

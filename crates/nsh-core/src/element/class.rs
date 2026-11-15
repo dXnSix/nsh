@@ -422,6 +422,10 @@ impl<T: JsValue> Arg for T {
     fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
         T::from_js(value)
     }
+
+    fn classes(out: &mut Vec<&'static ClassDef>) {
+        T::classes(out);
+    }
 }
 
 /// The instance a JS object of `C` holds (another class's, or another
@@ -484,6 +488,10 @@ impl<T: JsValue> Ret for T {
 
     fn into_js<'a>(self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
         self.to_js(host)
+    }
+
+    fn classes(out: &mut Vec<&'static ClassDef>) {
+        T::classes(out);
     }
 }
 

@@ -868,6 +868,10 @@ pub struct Registry {
     /// By the specifier of their set and their name: the sets merged for
     /// the core may have classes of the same name.
     classes: Arc<FxHashMap<(Option<&'static str>, &'static str), ClassType>>,
+    /// The interfaces TS objects implement for Rust, by name
+    /// ([`Registry::interface`]): declarations only, JS has no value of
+    /// them.
+    interfaces: Arc<FxHashMap<&'static str, &'static super::InterfaceDef>>,
     /// Values and types of `nsh/_core` exported as they are.
     reexports: Arc<(Vec<&'static str>, Vec<&'static str>)>,
     /// Values `nsh-js` makes for the set (declared by hand, not generated
@@ -947,9 +951,11 @@ impl Registry {
             let set = self.ui_set.or(self.namespace);
             panic!("{}", same_name(spec.name, old.id, id, set));
         }
-        if self.classes.keys().any(|(_, name)| *name == spec.export) {
+        if self.classes.keys().any(|(_, name)| *name == spec.export)
+            || self.interfaces.contains_key(spec.export.as_str())
+        {
             panic!(
-                "component `{}` is exported as `{}` like a class{}: rename one",
+                "component `{}` is exported as `{}` like a class or an interface{}: rename one",
                 spec.name,
                 spec.export,
                 of_set(self.ui_set.or(self.namespace)),
@@ -985,9 +991,11 @@ impl Registry {
     #[track_caller]
     pub fn module<M: Module>(&mut self) -> &mut Self {
         let type_name = std::any::type_name::<M>();
-        if self.classes.keys().any(|(_, name)| *name == M::NAME) {
+        if self.classes.keys().any(|(_, name)| *name == M::NAME)
+            || self.interfaces.contains_key(M::NAME)
+        {
             panic!(
-                "module `{type_name}` is named `{}` like a class{}: rename one",
+                "module `{type_name}` is named `{}` like a class or an interface{}: rename one",
                 M::NAME,
                 of_set(self.ui_set.or(self.namespace))
             );
@@ -1057,9 +1065,10 @@ impl Registry {
         }
         if self.modules.contains_key(def.name)
             || self.types.values().any(|t| t.spec.export == def.name)
+            || self.interfaces.contains_key(def.name)
         {
             panic!(
-                "class `{type_name}` is named `{}` like a module or a component{}: rename one",
+                "class `{type_name}` is named `{}` like a module, a component or an interface{}: rename one",
                 def.name,
                 of_set(set)
             );
@@ -1077,6 +1086,58 @@ impl Registry {
             (m.refs)(&mut refs);
         }
         self.classes_named(refs)
+    }
+
+    /// Registers interface `I` (`#[interface]` on a trait; `I` is its
+    /// stand-in, `Js<Trait>`): the set's declarations get a TS `export
+    /// interface` of the trait's name, which TS objects implement for Rust
+    /// to call, and the classes its members name are registered with it. A
+    /// signature naming the stand-in declares the interface too; this
+    /// declares one no signature names (a trait TS services implement).
+    /// Registering it again does nothing.
+    ///
+    /// # Panics
+    ///
+    /// When the set has a class, module, component or another interface of
+    /// that name.
+    #[track_caller]
+    pub fn interface<I: super::Interface>(&mut self) -> &mut Self {
+        let def = I::DEF;
+        let set = self.ui_set.or(self.namespace);
+        if let Some(old) = self.interfaces.get(def.name) {
+            if (old.type_id)() == (def.type_id)() {
+                return self;
+            }
+            panic!(
+                "interfaces `{}` and `{}` are both named `{}`{}: rename one",
+                (old.type_name)(),
+                (def.type_name)(),
+                def.name,
+                of_set(set)
+            );
+        }
+        if self.modules.contains_key(def.name)
+            || self.types.values().any(|t| t.spec.export == def.name)
+            || self.classes.keys().any(|(_, name)| *name == def.name)
+        {
+            panic!(
+                "interface `{}` is named `{}` like a class, a module or a component{}: rename one",
+                (def.type_name)(),
+                def.name,
+                of_set(set)
+            );
+        }
+        Arc::make_mut(&mut self.interfaces).insert(def.name, def);
+        let mut refs = Vec::new();
+        <I as super::JsValue>::classes(&mut refs);
+        self.classes_named(refs)
+    }
+
+    /// The registered interfaces ([`Registry::interface`]), by name.
+    pub fn interface_defs(&self) -> Vec<&'static super::InterfaceDef> {
+        let mut defs: Vec<_> = self.interfaces.values().copied().collect();
+        defs.sort_by_key(|d| d.name);
+        defs
     }
 
     /// Exports `values` and `types` of the runtime as they are (accessors
@@ -1486,6 +1547,14 @@ impl Registry {
                 }
             }
         }
+        for i in self.interface_defs() {
+            if i.doc.is_empty() {
+                out.push(i.name.to_owned());
+            }
+            for m in i.members.iter().filter(|m| m.doc.is_empty()) {
+                out.push(format!("{}.{}", i.name, m.name));
+            }
+        }
         out
     }
 
@@ -1565,6 +1634,10 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
     }
     for c in &classes {
         types.merge(&c.types);
+    }
+    // The interfaces TS implements: types only, with the named types theirs.
+    for i in registry.interface_defs() {
+        super::__private::interface_ts(i, &mut types);
     }
     for declaration in types.declarations() {
         let _ = write!(out, "{declaration}\n\n");

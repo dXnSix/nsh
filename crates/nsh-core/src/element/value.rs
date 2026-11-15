@@ -232,6 +232,11 @@ pub trait JsValue: Sized {
 
     /// The value as a JS value of `host`.
     fn to_js<'a>(&self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError>;
+
+    /// Adds the classes the type names (an interface's members'), which
+    /// a signature using it registers with it.
+    #[doc(hidden)]
+    fn classes(_out: &mut Vec<&'static super::ClassDef>) {}
 }
 
 impl JsValue for bool {
@@ -809,6 +814,10 @@ impl<T: JsValue> JsValue for Option<T> {
             None => Ok(JsOwned::new(host, host.null())),
         }
     }
+
+    fn classes(out: &mut Vec<&'static super::ClassDef>) {
+        T::classes(out);
+    }
 }
 
 /// Bytes are a `Uint8Array` (a `Buffer` is one too), not an array of
@@ -918,6 +927,10 @@ impl<T: JsValue> JsValue for Vec<T> {
         }
         let raws = items.into_iter().map(JsOwned::into_raw).collect();
         Ok(JsOwned::new(host, host.new_array(raws)?))
+    }
+
+    fn classes(out: &mut Vec<&'static super::ClassDef>) {
+        T::classes(out);
     }
 }
 

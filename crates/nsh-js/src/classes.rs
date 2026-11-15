@@ -39,8 +39,8 @@ use nsh_core::{
     JsonValue,
     element::{
         CallbackHandle, ClassDef, ClassInstance, Exception, JsCall, JsClass, JsHost, JsIn, JsKind,
-        JsRaw, Member, MemberCall, MemberKind, Posts, PropError, RustCall, RustOp, SyncCall,
-        Thrown, Tracer,
+        JsRaw, JsTarget, Member, MemberCall, MemberKind, Posts, PropError, RustCall, RustOp,
+        SyncCall, Thrown, Tracer,
     },
 };
 use rquickjs::qjs;
@@ -1466,6 +1466,14 @@ impl CallbackHandle for JsCallback {
         (self.object != 0).then_some((Rc::as_ptr(&self.functions) as usize, self.object))
     }
 
+    fn in_call(&self) -> bool {
+        !web::finalizing()
+            && self.value().is_some_and(|(cx, _)| {
+                // SAFETY: reading the context's opaque pointer.
+                !crate::state::state(cx).is_null() && classes(cx).depth.get() > 0
+            })
+    }
+
     fn call_now(&self, call: JsCall) {
         let Some((cx, _)) = self.value() else {
             // The function or the VM is gone: the call is dropped (its
@@ -1651,11 +1659,31 @@ pub(crate) fn run_call(cx: Ctx, mut call: JsCall) {
         .downcast_ref::<JsCallback>()
         .and_then(JsCallback::value)
         .filter(|(c, _)| *c == cx);
-    let Some((_, function)) = function else {
+    let Some((_, value)) = function else {
         call.reply(Err("the function belongs to another VM".to_owned().into()));
         return;
     };
-    let function = V::dup(cx, function);
+    let value = V::dup(cx, value);
+    // An object's member (an interface's): the method, or the property.
+    let member = match call.target() {
+        JsTarget::Call => None,
+        JsTarget::Method(name) | JsTarget::Get(name) => match js::get(cx, value.raw(), name) {
+            Ok(member) => Some((name, member)),
+            Err(Throw) => {
+                // A getter threw: as the call would have.
+                failed(cx, call);
+                return;
+            }
+        },
+    };
+    if let Some((_, member)) = &member
+        && call.optional()
+        && js::is_undefined(member.raw())
+    {
+        // No such member: Rust runs its default.
+        call.reply_missing();
+        return;
+    }
     let host = host_outside_calls(cx);
     let args = match call.args(&host) {
         Ok(args) => args
@@ -1671,12 +1699,20 @@ pub(crate) fn run_call(cx: Ctx, mut call: JsCall) {
         }
     };
     let raws: Vec<Raw> = args.iter().map(V::raw).collect();
-    let called = if call.settles() && !js::is_function(cx, function.raw()) {
+    let called = match member {
+        Some((_, property)) if matches!(call.target(), JsTarget::Get(_)) => Ok(property),
+        Some((name, method)) if !js::is_function(cx, method.raw()) => Err(js::type_error(
+            cx,
+            &format!(
+                "`{name}` is not a function, got {}",
+                host.describe(to_raw(method.raw()))
+            ),
+        )),
+        Some((_, method)) => js::call(cx, method.raw(), value.raw(), &raws),
         // A value in place of a function (`Callback::settling`) answers
         // itself, a promise what it settles to.
-        Ok(V::dup(cx, function.raw()))
-    } else {
-        js::call(cx, function.raw(), UNDEFINED, &raws)
+        None if call.settles() && !js::is_function(cx, value.raw()) => Ok(V::dup(cx, value.raw())),
+        None => js::call(cx, value.raw(), UNDEFINED, &raws),
     };
     match called {
         Ok(result) => {
@@ -1721,21 +1757,26 @@ pub(crate) fn run_call(cx: Ctx, mut call: JsCall) {
                 let _ = js::take_exception(cx);
             }
         }
-        Err(Throw) => {
-            let e = js::take_exception(cx);
-            // SAFETY: a check of a live value.
-            if unsafe { qjs::JS_IsUncatchableError(e.raw()) } {
-                // Kept for the call around it to rethrow.
-                let message = message_of(cx, e.raw());
-                classes(cx).uncatchable.borrow_mut().get_or_insert(e);
-                call.reply(Err(message.into()));
-            } else if call.wants_reply() {
-                let traced = call.traced();
-                call.reply(Err(thrown_of(cx, e.raw(), traced)));
-            } else {
-                js::report(cx, e);
-            }
-        }
+        Err(Throw) => failed(cx, call),
+    }
+}
+
+/// `call` failed with the pending exception: its reply gets it, or it is
+/// reported as uncaught; an uncatchable one (an interrupt) is kept for the
+/// synchronous call around it to rethrow.
+fn failed(cx: Ctx, call: JsCall) {
+    let e = js::take_exception(cx);
+    // SAFETY: a check of a live value.
+    if unsafe { qjs::JS_IsUncatchableError(e.raw()) } {
+        // Kept for the call around it to rethrow.
+        let message = message_of(cx, e.raw());
+        classes(cx).uncatchable.borrow_mut().get_or_insert(e);
+        call.reply(Err(message.into()));
+    } else if call.wants_reply() {
+        let traced = call.traced();
+        call.reply(Err(thrown_of(cx, e.raw(), traced)));
+    } else {
+        js::report(cx, e);
     }
 }
 

@@ -30,6 +30,8 @@ mod host_channel;
 mod hot;
 mod i18n;
 #[cfg(test)]
+mod interfaces;
+#[cfg(test)]
 mod js_handles;
 mod keymap;
 mod list;

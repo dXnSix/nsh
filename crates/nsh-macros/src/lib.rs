@@ -16,6 +16,8 @@
 //!   object (`AlertDialog.show(...)`).
 //! - `#[class]` on a struct and on its `impl` block: a JS class backed by
 //!   the Rust value (`new Tally(3)`, `tally.add(2)`).
+//! - `#[interface]` on a trait: a TS interface JS objects implement, and the
+//!   trait's stand-in (`Js<Trait>`) calling such an object's members.
 //!
 //! - `asset!("logo@2x.png")` / `assets!()`: the files a crate ships in its
 //!   `assets/` directory, read at compile time.
@@ -38,6 +40,7 @@
 mod assets;
 mod class;
 mod host_props;
+mod interface;
 mod js_ops;
 mod native_components;
 mod native_module;
@@ -2332,6 +2335,37 @@ pub fn class(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let item = parse_macro_input!(item as syn::Item);
     class::class(item, interface)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `#[interface]` on a trait: a TS `export interface` of the trait's name,
+/// which TS objects implement for Rust to call, and the trait's stand-in
+/// `Js<Trait>`: a struct over a `JsHandle` (`JsAppContract::new(handle)`,
+/// or taken as a parameter: TS the interface) implementing the trait by
+/// calling the JS object's members. Each method takes `&self` and owned
+/// values Rust passes to JS (the types a class's member returns), and
+/// returns what JS gives back (a value, `()`, an `Instance`) or a `Result`
+/// of it, whose `Err` (`E: From<Exception>`, `String` among them) is what
+/// JS threw; a plain value panics with it. A method that is not `async`
+/// calls JS on the spot inside a synchronous call from JS; outside one, a
+/// method returning `()` is posted for JS's next turn and the others fail.
+/// An `async fn` is posted and awaited, a promise JS returns settled.
+/// `#[getter]` on a method without parameters reads the property of its
+/// name (TS `readonly name: T`). A method with a default body is optional
+/// in TS (`name?()`): an object without it runs the default. Doc comments
+/// document the interface and its members. Register it with
+/// `registry.interface::<JsAppContract>()` (a signature naming the
+/// stand-in declares it too).
+#[proc_macro_attribute]
+pub fn interface(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(Span::call_site(), "`#[interface]` takes nothing")
+            .into_compile_error()
+            .into();
+    }
+    let item = parse_macro_input!(item as syn::ItemTrait);
+    interface::interface(item)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
