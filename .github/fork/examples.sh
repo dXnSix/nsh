@@ -78,11 +78,14 @@ case "$target" in
   # but three tests (undo and redo, a choice of one in a submenu, a row's
   # menu changes the list): since that sync a press on an item of a menu
   # that has just opened lands on the item next to it on the emulator (Copy
-  # for Undo Save, Duplicate for Delete); they pass on iOS.
+  # for Undo Save, Duplicate for Delete); they pass on iOS. Device runs all
+  # but its size classes (upstream's #2081): it opens the gallery at
+  # 500 × 700, and an emulator keeps its device's size.
   android)
-    gallery=(device error-boundary gestures links list-search mention
+    gallery=(error-boundary gestures links list-search mention
       navigation network photos press shaders storage timers)
     filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "device the locale and reduced motion" "device the safe area"
       "text-view the Text View demo"
       "menus submenus three levels" "menus settings are checkable" "menus a choice of one closes"
       "menus a row's context menu" "menus the placement and alignment" "menus a long menu scrolls"
@@ -111,11 +114,13 @@ case "$target" in
   # has chosen its item before the test's press on it, which finds no menu.
   # Menus runs all but one test: "off iOS the system's menu card…"
   # (upstream's #1736) opens the gallery as macOS, which `--target ios`
-  # refuses.
+  # refuses. Device runs all but its size classes (upstream's #2081): it
+  # opens the gallery at 500 × 700, and a simulator keeps its device's size.
   ios)
-    gallery=(animations device error-boundary gestures links list-search
+    gallery=(animations error-boundary gestures links list-search
       mention navigation network photos press shaders storage text-view timers)
     filtered=("environment appearance" "form the Input demo" "form a disabled field"
+      "device the locale and reduced motion" "device the safe area"
       "menus submenus three levels" "menus undo and redo" "menus settings are checkable"
       "menus a choice of one closes" "menus a choice of one in a submenu"
       "menus a row's context menu" "menus a row's menu changes"
