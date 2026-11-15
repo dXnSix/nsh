@@ -140,10 +140,11 @@ pub fn observe(observer: impl Fn(Observation) + Send + Sync + 'static) -> bool {
     OBSERVER.set(Box::new(observer)).is_ok()
 }
 
-/// Whether an observer is registered: a host's dev session then keeps an
-/// observing model.
+/// Whether an observer is registered, here or as nsh-core's driver
+/// observer (`nsh_core::inspect::observe_driver`): a host's dev session then
+/// keeps an observing model.
 pub fn observer_wanted() -> bool {
-    OBSERVER.get().is_some()
+    OBSERVER.get().is_some() || nsh_core::inspect::driver_wanted()
 }
 
 /// Hands `observation` to the registered observer, on a thread of its own
@@ -151,18 +152,54 @@ pub fn observer_wanted() -> bool {
 /// nothing without one. The observer may call the [`Native`] there: those
 /// calls block on the host's main thread, so making them on it (where the
 /// dev session starts) would never return.
+///
+/// Without an observer registered here, a driver observer registered with
+/// nsh-core (`nsh_core::inspect::observe_driver`) gets an [`Agent`] on the
+/// observation instead, as its [`nsh_core::inspect::DevDriver`]: a tool that
+/// links neither this crate nor nsh-dev takes steps through it.
 pub fn hand_over(observation: Observation) {
-    if OBSERVER.get().is_some() {
-        let started = std::thread::Builder::new()
-            .name("nsh-observer".into())
-            .spawn(move || {
-                if let Some(observer) = OBSERVER.get() {
-                    observer(observation);
-                }
-            });
-        if let Err(e) = started {
-            log::error!("cannot start the dev tool's observer: {e}");
+    if !observer_wanted() {
+        return;
+    }
+    let started = std::thread::Builder::new()
+        .name("nsh-observer".into())
+        .spawn(move || {
+            if let Some(observer) = OBSERVER.get() {
+                observer(observation);
+            } else {
+                nsh_core::inspect::hand_driver(Arc::new(ObservedDriver::new(observation)));
+            }
+        });
+    if let Err(e) = started {
+        log::error!("cannot start the dev tool's observer: {e}");
+    }
+}
+
+/// The test agent on an observation, as nsh-core's driver of a dev tool:
+/// steps and outcomes as the dev protocol's JSON.
+pub struct ObservedDriver {
+    agent: Agent,
+}
+
+impl ObservedDriver {
+    /// The driver of `observation`'s model and native driver.
+    pub fn new(observation: Observation) -> Self {
+        let scene: Arc<dyn Scene> = observation.model;
+        Self {
+            agent: Agent::new(scene, observation.native),
         }
+    }
+}
+
+impl nsh_core::inspect::DevDriver for ObservedDriver {
+    fn step(&self, step: serde_json::Value) -> serde_json::Value {
+        let outcome = match serde_json::from_value::<TestStep>(step) {
+            Ok(step) => self.agent.take(step),
+            Err(e) => StepOutcome::Failed {
+                message: format!("not a test step: {e}"),
+            },
+        };
+        serde_json::to_value(outcome).unwrap_or(serde_json::Value::Null)
     }
 }
 
@@ -3227,6 +3264,30 @@ mod observe_tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(*GOT.lock().unwrap(), [(true, "nsh-observer".to_owned())]);
+    }
+
+    /// nsh-core's driver of a dev tool takes the dev protocol's steps as
+    /// JSON and answers with their outcomes, a wrong step included.
+    #[test]
+    fn an_observed_driver_takes_steps_as_json() {
+        use nsh_core::inspect::DevDriver as _;
+        let driver = ObservedDriver::new(Observation {
+            model: Model::observing(),
+            native: Box::new(Quiet),
+        });
+        let counted = driver.step(serde_json::json!({ "step": "count", "selector": "text:Hello" }));
+        assert_eq!(
+            counted,
+            serde_json::json!({ "outcome": "done", "value": 0 })
+        );
+        let wrong = driver.step(serde_json::json!({ "step": "fly" }));
+        assert_eq!(wrong["outcome"], "failed");
+        assert!(
+            wrong["message"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("not a test step")),
+            "{wrong}"
+        );
     }
 
     /// A real test session makes a model of its own, not an observing

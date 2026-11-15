@@ -284,3 +284,80 @@ pub(crate) struct DevState {
     /// Questions the script answers, waiting for the engine.
     pub(crate) script: Vec<Request>,
 }
+
+/// What a dev tool inside the app takes steps on it through in a normal dev
+/// session (observe mode): the platform's test agent, handed over by
+/// `nsh_testing::agent` when the app registered [`observe_driver`]. A step is
+/// the dev protocol's (`{"step":"press","selector":"view:12"}`, nsh-dev's
+/// `TestStep`) and its answer the step's outcome (`{"outcome":"done",
+/// "value":…}`, `StepOutcome`), both JSON, so the tool needs neither
+/// nsh-testing nor nsh-dev.
+pub trait DevDriver: Send + Sync {
+    /// Takes `step`; blocks until it is done and the app is quiet. Its
+    /// native calls block on the host's main thread: never call it on that
+    /// thread or the engine's.
+    fn step(&self, step: serde_json::Value) -> serde_json::Value;
+}
+
+/// What [`observe_driver`] registered.
+type DriverObserver = Box<dyn Fn(Arc<dyn DevDriver>) + Send + Sync>;
+
+static DRIVER_OBSERVER: std::sync::OnceLock<DriverObserver> = std::sync::OnceLock::new();
+
+/// Registers `observer` to get the [`DevDriver`] of every dev session a
+/// host starts (process-wide; the first call wins). An app's crate calls it
+/// before its host starts. Returns whether this call registered it.
+pub fn observe_driver(observer: impl Fn(Arc<dyn DevDriver>) + Send + Sync + 'static) -> bool {
+    DRIVER_OBSERVER.set(Box::new(observer)).is_ok()
+}
+
+/// Whether [`observe_driver`] registered an observer.
+pub fn driver_wanted() -> bool {
+    DRIVER_OBSERVER.get().is_some()
+}
+
+/// Hands `driver` to the registered observer, on the calling thread; does
+/// nothing without one (nsh-testing calls it on a thread of its own).
+pub fn hand_driver(driver: Arc<dyn DevDriver>) {
+    if let Some(observer) = DRIVER_OBSERVER.get() {
+        observer(driver);
+    }
+}
+
+#[cfg(test)]
+mod driver_tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    struct Echo;
+
+    impl DevDriver for Echo {
+        fn step(&self, step: serde_json::Value) -> serde_json::Value {
+            step
+        }
+    }
+
+    /// The first registration gets every driver handed over, on the
+    /// calling thread; a later one is refused.
+    #[test]
+    fn a_registered_driver_observer_gets_the_driver() {
+        static GOT: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
+        hand_driver(Arc::new(Echo));
+        assert!(!driver_wanted());
+        assert!(observe_driver(|driver| {
+            GOT.lock()
+                .unwrap()
+                .push(driver.step(serde_json::json!({ "step": "texts" })));
+        }));
+        assert!(!observe_driver(|_| panic!(
+            "the second observer never runs"
+        )));
+        assert!(driver_wanted());
+        hand_driver(Arc::new(Echo));
+        assert_eq!(
+            *GOT.lock().unwrap(),
+            [serde_json::json!({ "step": "texts" })]
+        );
+    }
+}
