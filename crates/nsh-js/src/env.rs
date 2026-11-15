@@ -97,13 +97,18 @@ pub(crate) struct Env {
     /// The design tokens the app is drawn with ([`set_tokens`]).
     tokens: RefCell<Arc<Tokens>>,
     /// A signal of their version (owned), which every `token()` reads:
-    /// set when most of the tokens read changed (a new theme), and for the
-    /// names past [`TOKEN_SIGNALS`].
+    /// set when most of the tokens read changed (a new theme).
     tokens_signal: Cell<JsValue>,
     /// A signal of the tokens' shape (owned): set when their names, their
     /// kinds or the modifiers' contexts change, which `tokens.names`,
     /// `entries`, `kind` and `modifier()` read.
     shape_signal: Cell<JsValue>,
+    /// A signal (owned) that what reads a name past [`TOKEN_SIGNALS`] reads
+    /// in place of a signal of its own (a name no theme has, of the many an
+    /// app made up): set on every change of the tokens.
+    overflow_signal: Cell<JsValue>,
+    /// Whether a name was read past [`TOKEN_SIGNALS`] ([`Env::overflow_signal`]).
+    overflowed: Cell<bool>,
     tokens_version: Cell<u32>,
     /// A signal per token `token()` read (owned), set when that token's
     /// value changes and few do: what read a token follows that token,
@@ -152,6 +157,8 @@ impl Default for Env {
             tokens: RefCell::new(Arc::default()),
             tokens_signal: Cell::new(UNDEFINED),
             shape_signal: Cell::new(UNDEFINED),
+            overflow_signal: Cell::new(UNDEFINED),
+            overflowed: Cell::new(false),
             tokens_version: Cell::new(0),
             token_signals: RefCell::default(),
             theme: RefCell::new(ThemeTokens::default()),
@@ -226,6 +233,7 @@ impl Env {
             qjs::JS_FreeValue(raw, self.scopes_signal.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.tokens_signal.replace(UNDEFINED));
             qjs::JS_FreeValue(raw, self.shape_signal.replace(UNDEFINED));
+            qjs::JS_FreeValue(raw, self.overflow_signal.replace(UNDEFINED));
             for (_, signal) in self.token_signals.get_mut().drain() {
                 qjs::JS_FreeValue(raw, signal);
             }
@@ -269,12 +277,14 @@ pub(crate) fn init(cx: *mut JsContext) {
     e.insets.set(insets);
     e.tokens_signal.set(reactive::new_signal(cx, number(0.0)));
     e.shape_signal.set(reactive::new_signal(cx, number(0.0)));
+    e.overflow_signal.set(reactive::new_signal(cx, number(0.0)));
 }
 
-/// How many tokens get a signal of their own ([`Env::token_signals`]):
-/// the names `token()` reads are a theme's, a few dozen. Once an app has
-/// read more (names it makes up without end), every change of the tokens
-/// sets the signal of all of them.
+/// How many names no theme has get a signal of their own
+/// ([`Env::token_signals`]): a theme's names always do (a design tool's
+/// collection has thousands); past this many made-up names (an app's
+/// without end), what reads another one follows every change of the tokens
+/// ([`Env::overflow_signal`]).
 const TOKEN_SIGNALS: usize = 1024;
 
 /// Takes in the design tokens the app is drawn with: what read a token
@@ -313,7 +323,7 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
     let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
     // Roles mapped onto other tokens: what read a role reads another one.
     // A context picked is read by `modifier()`, of every token.
-    let whole = names >= TOKEN_SIGNALS || 2 * changed.len() > names || !old.same_roles(&tokens);
+    let whole = 2 * changed.len() > names || !old.same_roles(&tokens);
     // The names, their kinds or the modifiers' contexts changed: what lists
     // them reads them again.
     let shape = !old.same_names(&tokens) || old.modifiers() != tokens.modifiers();
@@ -330,6 +340,9 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
             for signal in changed {
                 reactive::set_signal(cx, signal, number(version as f32));
             }
+            if e.overflowed.get() {
+                reactive::set_signal(cx, e.overflow_signal.get(), number(version as f32));
+            }
         }
         if scoped {
             reactive::set_signal(cx, scopes, number(version as f32));
@@ -338,17 +351,21 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
 }
 
 /// The signal of token `name` (borrowed), made the first time the name is
-/// read; none past [`TOKEN_SIGNALS`] names.
-fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> Option<JsValue> {
+/// read: a theme's name always has one, a name no theme has none past
+/// [`TOKEN_SIGNALS`] names, which reads [`Env::overflow_signal`] then.
+fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> JsValue {
     if let Some(signal) = e.token_signals.borrow().get(name) {
-        return Some(*signal);
+        return *signal;
     }
-    if e.token_signals.borrow().len() >= TOKEN_SIGNALS {
-        return None;
+    if e.token_signals.borrow().len() >= TOKEN_SIGNALS
+        && e.tokens.borrow().kind_name(name).is_none()
+    {
+        e.overflowed.set(true);
+        return e.overflow_signal.get();
     }
     let signal = reactive::new_signal(cx, number(e.tokens_version.get() as f32));
     e.token_signals.borrow_mut().insert(name.into(), signal);
-    Some(signal)
+    signal
 }
 
 /// Sets how the app's theme file makes the tokens it is drawn with
@@ -640,8 +657,8 @@ unsafe extern "C" fn tokens_get(
     };
     if scoped.is_none() {
         reactive::track(cx, e.tokens_signal.get());
-        if let Some(signal) = name.as_deref().and_then(|n| token_signal(cx, e, n)) {
-            reactive::track(cx, signal);
+        if let Some(name) = name.as_deref() {
+            reactive::track(cx, token_signal(cx, e, name));
         }
     }
     let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
@@ -860,9 +877,7 @@ fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
     if tracked {
         reactive::track(cx, e.tokens_signal.get());
         for name in [name.as_deref(), mapped.as_deref()].into_iter().flatten() {
-            if let Some(signal) = token_signal(cx, e, name) {
-                reactive::track(cx, signal);
-            }
+            reactive::track(cx, token_signal(cx, e, name));
         }
     }
     // The appearance of the scope around what reads it, else the surface's.
