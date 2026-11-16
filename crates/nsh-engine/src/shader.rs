@@ -1778,7 +1778,10 @@ mod tests {
                 renderer.queue.submit([encoder.finish()]);
                 buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
                 let _ = renderer.device.poll(wgpu::PollType::wait_indefinitely());
-                let data = buffer.slice(..).get_mapped_range();
+                let data = buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("the buffer is mapped");
                 return (0..height as usize)
                     .map(|y| {
                         (0..width as usize)
