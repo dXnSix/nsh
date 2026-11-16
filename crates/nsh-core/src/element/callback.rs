@@ -322,6 +322,31 @@ impl<A, R> Callback<A, R> {
     pub(crate) fn handle(&self) -> &Rc<dyn CallbackHandle> {
         &self.handle
     }
+
+    /// Whether a call made now runs on the spot. `true` inside a
+    /// synchronous call from JS of the function's own VM (a `#[class]`
+    /// method, a function or a constructor JS called, also nested: JS that
+    /// a [`Callback::call`] runs calling back into Rust), where
+    /// [`Callback::call`] runs the function and a non-`async` member of an
+    /// interface's stand-in (`Js<Trait>`) calls its JS method.
+    ///
+    /// `false` everywhere else: after that call returned (a task, an
+    /// `async` member's body, a timer), in a finalizer (a value QuickJS
+    /// frees, by its count or its collector), once the VM is gone, and
+    /// while only another VM on the thread is in a call. There `call` panics (outside a call) or
+    /// fails (in a finalizer, once JS stopped); a non-`async` interface
+    /// member returning `()` is posted for the next JS turn, one returning
+    /// `Result` fails and one returning a plain value panics. Use
+    /// [`Callback::post`], [`Callback::call_async`] or an `async` member
+    /// there.
+    ///
+    /// `true` does not promise that the call succeeds: the function may
+    /// throw, using an instance the call borrows throws, a member may be
+    /// missing. Asking runs no JS, so it is safe anywhere on the engine
+    /// thread, in `Drop` and in a finalizer too.
+    pub fn can_call_now(&self) -> bool {
+        self.handle.in_call()
+    }
 }
 
 impl<R: CallbackRet + 'static> Callback<(), R> {
@@ -356,6 +381,7 @@ impl<A: CallbackArgs + 'static, R: CallbackRet + 'static> Callback<A, R> {
     ///
     /// Outside a synchronous call from JS (in a task): use
     /// [`Callback::post`] or [`Callback::call_async`] there.
+    /// [`Callback::can_call_now`] asks first.
     pub fn call(&self, args: A) -> Result<R, String> {
         self.call_now(args, false).map_err(|e| e.message)
     }
@@ -365,7 +391,7 @@ impl<A: CallbackArgs + 'static, R: CallbackRet + 'static> Callback<A, R> {
     ///
     /// # Panics
     ///
-    /// As [`Callback::call`].
+    /// As [`Callback::call`]: [`Callback::can_call_now`] asks first.
     pub fn call_traced(&self, args: A) -> Result<R, Exception> {
         self.call_now(args, true)
     }

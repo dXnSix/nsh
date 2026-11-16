@@ -11,6 +11,8 @@
 
 mod animated;
 mod bytecode;
+#[cfg(test)]
+mod can_call_now;
 mod canvas;
 mod chunks;
 mod classes;

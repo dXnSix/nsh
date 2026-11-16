@@ -26,7 +26,8 @@ use super::{
 /// a [`super::Callback`] is, so an object that reaches the instance's own
 /// JS object (a listener holding its owner) is collected with it; kept
 /// elsewhere (a static, a task, an `Rc` two instances share), it is a root
-/// until dropped.
+/// until dropped. [`JsHandle::can_call_now`] says whether a call on the
+/// object (an interface's member) runs on the spot now.
 #[derive(Clone)]
 pub struct JsHandle {
     handle: Rc<dyn CallbackHandle>,
@@ -56,6 +57,15 @@ impl JsHandle {
     /// [`Constructor`] parameter would have taken.
     pub fn constructor(&self) -> Option<Constructor> {
         self.class.map(Constructor::from_def)
+    }
+
+    /// Whether a call made now on the object runs on the spot (a
+    /// non-`async` member of an interface's stand-in, asked as
+    /// `stand_in.object().can_call_now()`): what
+    /// [`super::Callback::can_call_now`] answers for a function, for the
+    /// object's VM.
+    pub fn can_call_now(&self) -> bool {
+        self.handle.in_call()
     }
 
     /// The value it keeps, as the host holds it.

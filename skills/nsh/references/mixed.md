@@ -288,6 +288,8 @@ take `Instance<Other>`.
 | `cb.call_async(args).await` | In a task | `Result<R, String>` |
 
 `call` in a task panics, and TSX sees: ``Error: `Callback::call` runs the function inside a synchronous call from JS; elsewhere (in a task) use `post` or `call_async` ``.
+Code that runs in both places asks first with `cb.can_call_now()` (`true`: `call` runs on the spot); a `JsHandle` or
+an interface's stand-in (`service.object().can_call_now()`) answers the same.
 During `call` the instance stays borrowed: a callback reaching the same instance throws.
 
 ### Interfaces: TS objects Rust calls
@@ -496,7 +498,7 @@ Details are in [tooling.md](tooling.md#signed-packages).
 | --- | --- | --- |
 | TSX shows an old value from Rust | Getter read in JSX, untracked | Mirror it in a signal; update it from a listener or a return value |
 | `no reactive runtime` | `signal`, `theme()` or `dialog` in a synchronous function | Make it `async` or take `cx`; or do it in TSX |
-| `` `Callback::call` runs the function inside a synchronous call `` | `call` in a task | `post` or `call_async` |
+| `` `Callback::call` runs the function inside a synchronous call `` | `call` in a task | `post` or `call_async`; ask first with `can_call_now()` |
 | An unhandled rejection in the log | An op returning `Result<(), E>`, or an `async` call, nobody awaits | `await` it or `.catch` it |
 | `` `x/native` has no export `Y` `` | Not registered in `#[native_module]` | `.register`, `.module` or `.class` |
 | `` `T: Module` is not satisfied `` | `#[module]` on the struct but the `impl` failed, or the reverse | Read the first error; it is usually in the `impl` |
