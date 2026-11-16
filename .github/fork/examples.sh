@@ -80,11 +80,16 @@ case "$target" in
   # that has just opened lands on the item next to it on the emulator (Copy
   # for Undo Save, Duplicate for Delete); they pass on iOS. Device runs all
   # but its size classes (upstream's #2081): it opens the gallery at
-  # 500 × 700, and an emulator keeps its device's size.
+  # 500 × 700, and an emulator keeps its device's size. Gestures runs its
+  # PanResponder ball only: since the sync with upstream `a4f08d746` the
+  # page's vertical scroll view keeps the photo's diagonal drag once it
+  # passes the touch slop (upstream's #2106, ScrollBox.claim), so the pan
+  # ends at 13 pt; it passes with ScrollBox.java as before #2106.
   android)
-    gallery=(error-boundary gestures links list-search mention
+    gallery=(error-boundary links list-search mention
       navigation network photos press shaders storage timers)
-    filtered=("environment appearance" "form the Input demo" "form a disabled field"
+    filtered=("gestures the ball follows the finger"
+      "environment appearance" "form the Input demo" "form a disabled field"
       "device the locale and reduced motion" "device the safe area"
       "text-view the Text View demo"
       "menus submenus three levels" "menus settings are checkable" "menus a choice of one closes"
