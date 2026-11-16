@@ -7,13 +7,14 @@
 //! A member runs where Rust calls it: a method that is not `async` calls
 //! the JS method on the spot inside a synchronous call from JS (as a
 //! [`super::Callback`]'s `call` does), and outside one (in a task) posts a
-//! method returning `()` for the next JS turn and fails for the others; an
-//! `async` method is posted and awaited (`call_async`: a promise it returns
-//! settles it). What JS throws (or rejects with) is the error of a method
-//! returning `Result<T, E>` (`E: From<Exception>`); a method returning a
-//! plain value panics with it, which the JS call around it throws. A member
-//! with a default body in the trait is optional in TS: an object without it
-//! (`undefined`) runs the default.
+//! method returning `()` for the next JS turn and fails for the others
+//! (`stand_in.object().can_call_now()`, [`JsHandle::can_call_now`], says
+//! which applies); an `async` method is posted and awaited (`call_async`:
+//! a promise it returns settles it). What JS throws (or rejects with) is
+//! the error of a method returning `Result<T, E>` (`E: From<Exception>`);
+//! a method returning a plain value panics with it, which the JS call
+//! around it throws. A member with a default body in the trait is optional
+//! in TS: an object without it (`undefined`) runs the default.
 
 use std::{any::TypeId, cell::RefCell, fmt, rc::Rc};
 

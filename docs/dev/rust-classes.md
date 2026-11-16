@@ -322,6 +322,14 @@ impl Downloader {
   `Array.prototype.sort` does. Its exception is the `Err` (its message). The instance stays borrowed meanwhile:
   the callback reaching the same instance again throws, as any re-entrant call does. `call` outside a call from
   JS (in a task) panics with a message saying to use `post` or `call_async` there.
+- **Asking first** (`can_call_now() -> bool`): whether a call made now runs on the spot. `true` inside a
+  synchronous call from JS of the function's own VM, nested ones included (JS that a `call` runs calling Rust
+  again) and calls from a posted turn; `false` after that call returned (a task, an `async` member's body, a timer),
+  in a finalizer (a value the collector or a refcount free drops), once the VM is gone, and while only another VM on
+  the thread is in a call. Where it is `false`, `call` panics (outside a call) or fails (in a finalizer, once JS
+  stopped): use `post` or `call_async`. `true` does not promise success (the function may throw, a re-entrant use
+  of the instance throws). Asking runs no JS, so it is safe anywhere, a `Drop` too. A `JsHandle` and an
+  interface's stand-in (`stand_in.object().can_call_now()`) answer the same for their object.
 - **Calling it later** (`post(args)`, `call_async(args).await -> Result<R, String>`): from anywhere on the engine
   thread (an async member's task, a timer, a stored callback), the call is queued for JS and runs in the engine's
   next JS turn, in order with the other posts: `post` forgets the result, `call_async` waits for it (and settles a
@@ -410,6 +418,8 @@ impl Services {
 - **Its VM's, on the engine thread.** It is not `Send`. A host of another VM (two engines on one thread) refuses it
   (`the object belongs to a VM that is gone, or another`), and once its VM goes it is dead: giving it back to JS
   fails, its equality still holds.
+- **Whether it can be called now.** `can_call_now()` answers for the object what a callback's does (see "Asking
+  first" under Callbacks): whether an interface member called on it now runs on the spot.
 
 ## Interfaces
 
@@ -462,7 +472,8 @@ export interface Startable {
 - **When a member runs.** A method that is not `async` calls the JS method on the spot inside a synchronous call from
   JS, as a callback's `call` does (a class's method calling the service it was given). Outside one (a task, a
   timer), one returning `()` is posted for JS's next turn, in order with the other posts (`Callback::post`), and one
-  returning a value fails (the `Err` of a `Result`): JS is not running there. An `async fn` is posted and awaited
+  returning a value fails (the `Err` of a `Result`): JS is not running there. `stand_in.object().can_call_now()`
+  says which applies (see "Asking first" under Callbacks). An `async fn` is posted and awaited
   (`call_async`), a promise the JS method returns settled. A getter is read as a method of its kind is called.
 - **Their TS signatures.** NSH declares a member from its Rust types, an `async fn`'s result as a `Promise`. An
   awaited member also settles with a plain value JS returns, so `#[ts("(): boolean")]` on the trait's method (as
@@ -536,7 +547,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   keep) and `Ret` (a value of the struct is a new instance). `#[interface]` on a trait (`nsh-macros`
   `interface.rs`) writes the stand-in and its `element::Interface` (`Interface::DEF`, an `InterfaceDef`: name, doc,
   members, each an `InterfaceMember`).
-- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle`, `Posts`,
+- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()`), `Posts`,
   `Registry::class::<C>()`, `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
   `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
   `to_js`); the typed calls (`call.rs`: `RustOp`, `RustCall`, `JsEvent`, `AnyValue`, `ToJs`); the core runs
