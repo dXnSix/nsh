@@ -186,16 +186,6 @@ const MANY: &str = r##"import { mount, signal, Text, token, updateTheme, View } 
 let runs = 0;
 let made_up = 0;
 const status = signal("start");
-setTimeout(() => {
-  updateTheme({ cssVars: { light: { "c-0": "#abcdef" } } });
-  status.set("step 1");
-}, 100);
-setTimeout(() => {
-  // A name made up past the signals' limit, which the theme gains.
-  updateTheme({ cssVars: { light: { "made-1099": "#123123" } } });
-  status.set("step 2");
-}, 200);
-setTimeout(() => status.set("done"), 300);
 
 const theme = Array.from({ length: 1200 }, (_, i) => i);
 const madeUp = Array.from({ length: 1100 }, (_, i) => i);
@@ -208,6 +198,26 @@ mount(() => (
     <Text>{status()}</Text>
   </View>
 ));
+
+// Each step starts 100 ms after the one before it ran, counted from the
+// mount: on a slow machine a mount this large outlasts fixed delays, which
+// then come due together and leave a step no batch of its own.
+const steps = [
+  () => {
+    updateTheme({ cssVars: { light: { "c-0": "#abcdef" } } });
+    status.set("step 1");
+  },
+  () => {
+    // A name made up past the signals' limit, which the theme gains.
+    updateTheme({ cssVars: { light: { "made-1099": "#123123" } } });
+    status.set("step 2");
+  },
+  () => status.set("done"),
+];
+const next = (i: number) => {
+  if (i < steps.length) setTimeout(() => (steps[i](), next(i + 1)), 100);
+};
+next(0);
 "##;
 
 /// A theme of more than 1 024 names gives each name read a signal of its
