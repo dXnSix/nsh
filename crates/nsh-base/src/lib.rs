@@ -44,6 +44,7 @@ mod keys;
 mod link;
 mod link_hint;
 mod listbox;
+mod mdast_tree;
 mod menu;
 mod menu_button;
 mod navigation;
@@ -246,7 +247,7 @@ pub use crate::{
         TextSelectionFormat, TextSelectionOptions, TextView, TextViewApi, TextViewClasses,
         TextViewCodeAction, TextViewCodeActionEvent, TextViewElement, TextViewEvent,
         TextViewLinkPressEvent, TextViewLinks, TextViewMath, TextViewPart, TextViewParts,
-        TextViewProps, TextViewSelectionEvent, TextViewStyles, text_view,
+        TextViewProps, TextViewSelectionEvent, TextViewStyles, TextViewTaskPressEvent, text_view,
     },
     theme::{DEFAULT_THEME, Theme, ThemeError, role, theme, theme_overrides, tokens_of},
     time_field::{

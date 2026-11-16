@@ -69,6 +69,9 @@ go elsewhere under these rules rather than into them.
   `on_will_change` may veto (NSH has no veto: the main thread never waits for JS). Lifecycle pairs are `onOpen` /
   `onClose` (`DialogTrigger::on_open`, `Dialog::on_close`). A user's attempt is named after the act (`onCancel`,
   `onBackPress`: `Dialog::on_cancel`, `DialogChangeReason::*Press`), never `on<Noun>Request`.
+  `RichEditor.onCompositionChange({ composing })` uses `Input`'s composition name for the view's boolean state
+  transitions. The editor owns the transient marked text; apps observe the start/end state through the session's
+  existing `composing` value, with the event emitted after the state settles.
 - **Press, not click**: `onPress`, `onPressDown`, `onPressUp`, `onLongPress` (below, Button). `gpui-base` itself says
   *press* for pointer-independent activation (`DialogChangeReason::TriggerPress`, `close_on_backdrop_press`).
 - **States**: `disabled` blocks interaction, `readonly` allows selecting but not editing, `selected` is membership /
@@ -172,7 +175,8 @@ go elsewhere under these rules rather than into them.
   a terminal, never the TV idiom (`Idiom::desktop_on`, `Environment::desktop()`); everything else is mobile, Mac
   Catalyst included (it runs the iOS backend: `ios={{…}}` applies), and TVs. `desktop={{…}}` props, `platform.select({ desktop, mobile })`,
   `platform.desktop`, `platform.idiom === "desktop"` (`Idiom::reported_on`; a terminal reports `"terminal"`), Rust's
-  `is_desktop()` and `nsh-base`'s per-device presentation all follow it; nothing apps see defines desktop otherwise. `"mac"` stays UIKit's Mac idiom under
+  `is_desktop()` and `nsh-base`'s per-device presentation (a menu's also by an iPad's horizontal size class:
+  `components.md` "Popups") all follow it; nothing apps see defines desktop otherwise. `"mac"` stays UIKit's Mac idiom under
   Catalyst (mobile), `platform.catalyst` is Catalyst in either idiom (`Os::is_catalyst`). The one narrower check is
   `nsh/desktop`'s `isAvailable` (`Os::is_desktop`): where its window and menu APIs work, the desktop OSes (decided by
   the user, 2026-10-29).
@@ -387,6 +391,7 @@ them yet (`compatibility.md`). The frozen RN-shaped modules keep their names. A 
 | `PixelRatio.getPixelSizeForLayoutSize`, `roundToNearestPixel` | (dropped) | | `Math.round(x * pixelRatio()) / pixelRatio()` |
 | `I18nManager` (`isRTL`, `allowRTL`, `forceRTL`, `doLeftAndRightSwapInRTL`, `getConstants`) | (dropped) | Where names come from | Decided by the user: the layout direction follows the locale, a view's `direction` style overrides it (Rust: `.direction(LayoutDirection::..)`; Rust's `rtl()`, `force_rtl` and `allow_rtl` are dropped too); translations come from rust-i18n: `nsh/i18n`'s `t`, `setLocale`, `availableLocales` (Rust `t!`, `set_locale`, `available_locales`) |
 | `OS` (type) | unchanged | | `platform.os`'s type |
+| Apple's `NSUserActivity` (`becomeCurrent`, `NSUserActivityTypes`); no counterpart in Electron, Tauri, Flutter or React Native | nsh.json `"handoff": true`; Swift `NshAppView.handoff`, C `nsh_app_set_handoff`, Rust `SurfaceOptions::handoff` (iOS) and `AppOptions::handoff` (macOS) | Where names come from | 2026-11-16 (#1203): the address `UrlScheme.setUrl` sets goes to the system. Apple's user-facing word, one plain word: not `userActivity` (the mechanism) or `continuity` (the umbrella of several features); a top-level key of a platform's integration, as `singleInstance` |
 | **`nsh`: accessibility** | | | |
 | `AccessibilityInfo.isScreenReaderEnabled()`, `isReduceMotionEnabled()`, `addEventListener` | (dropped) | Listening | `screenReaderEnabled()`, `reduceMotion()` |
 | `AccessibilityInfo.announceForAccessibility(message)` | `announce(message)` | Environment | A function of the module |
@@ -552,6 +557,7 @@ and `Input`'s React Native names follow the rules as well.
 | `Tab::on_click(&ClickEvent, ..)` | `onPress()` | `tabs.rs` `Tab::on_click`; `Button`'s `onPress` | Press, not click (above), as `Button`'s; every press reports, the selected tab's included, as `Tab::on_click` does |
 | `Tab::set_position(position, size)` | (left out) | | As `Radio::set_position`: NSH's accessibility state has no position in a set yet |
 | `Tab::id`, `Tabs::new(id)` | (left out) | | Identity is the element's (`testID` for tests), as `Radio::id` |
+| `Tab` `accessibilityDescription` (new) | `accessibilityDescription?: string`; Rust `.accessibility_description(..)` | GPUI `aria_description`; every element's `accessibilityDescription`; `MenuItem`'s | gpui-component's tabs take no description; a component hands on only the props it declares, so the tab declares the element's own prop, with its name, and sets it on the tab's view, as `MenuItem` does |
 | `accessibility_label` on a `Tabs` (`gpui-shell`, any element) | `accessibilityLabel: string`; Rust `.accessibility_label(..)` | `RadioGroup`'s `accessibilityLabel`; WAI-ARIA APG tabs (`aria-label` on the tab list) | The list's name ("Sections", "Views"), which screen readers say as they enter it. On iOS the list is a semantic group container, as a labelled `RadioGroup` is, so its tabs stay elements of their own |
 | A tab outside the keyboard focus, with a TODO for "compound keyboard navigation with roving focus, arrow keys, Home/End, and Enter/Space activation" (`tabs.rs` `Tab`'s doc comment) | `Tabs` is one Tab stop (the selected tab, else the first enabled); Left / Up and Right / Down move to the previous / next enabled tab, around the ends, Home / End to the first / last, and the tab reached reports `onPress` (automatic activation); Space / Return press the focused tab | WAI-ARIA APG tabs; `roving.rs` | `gpui-base` has none; `nsh-base` owns the behavior since NSH has no styled layer. Automatic activation, as the pattern recommends where a section shows at once: the app's content is its own reactive view, nothing to load. No `orientation` (`gpui-base` has none, and the axis is the app's `class`), so both pairs of arrows move. A tab outside a `Tabs` stays a stop of its own |
 | (no right-to-left layout in GPUI: Left is always the previous item) | in a right-to-left layout Left and Right trade places in `Tabs`, `RadioGroup`, `ToggleGroup` and a horizontal `Toolbar` (Left the next item, Right the previous); Up / Down, Home / End keep theirs | WAI-ARIA APG (in right-to-left languages Left and Right trade meanings); React Aria's `useLocale().direction`; `roving.rs`, `keys.rs` (`bind_while_directed`) | An addition: the row runs from the right there (taffy's `direction`), so the keys follow what the user sees. The direction is the surface's (the root's), read as it changes; a view's own `direction` inside does not change the keys |

@@ -146,15 +146,26 @@ fn listed_fonts(
     size: CGFloat,
     weight: u16,
 ) -> Option<(CFRetained<CTFont>, Vec<CFRetained<CTFont>>)> {
-    let mut fonts = nsh_core::font_families(list).filter_map(|family| match family {
-        FamilyName::Named(name) => family_font(name, size, weight),
-        generic => Some(generic_font(generic, size, weight)),
+    let mut first = None;
+    let mut fallbacks = Vec::new();
+    nsh_core::for_each_font_family(list, |family| {
+        let font = match family {
+            FamilyName::Named(name) => family_font(name, size, weight),
+            generic => Some(generic_font(generic, size, weight)),
+        };
+        if let Some(font) = font {
+            if first.is_none() {
+                first = Some(font);
+            } else {
+                fallbacks.push(font);
+            }
+        }
     });
-    let Some(first) = fonts.next() else {
+    let Some(first) = first else {
         log::warn!("font family `{list}` is not available; using the system font");
         return None;
     };
-    Some((first, fonts.collect()))
+    Some((first, fallbacks))
 }
 
 /// `font` with `fallbacks` as its cascade list
@@ -456,8 +467,9 @@ impl CoreTextEngine {
                 Points(x as f32),
             )
         };
-        let top = a.ascent(font, align).0 as CGFloat;
-        let (up, down) = a.extent(font, align);
+        // By its own baseline where it has one (the first baseline of the text in it).
+        let top = alignments.ascent(a, font).0 as CGFloat;
+        let (up, down) = alignments.extent(a, font);
         let (up, down) = (up.0 as CGFloat, down.0 as CGFloat);
         // A fixed `lineHeight`: CoreText centers a line's own extent in
         // it, so a placeholder reaching past the font on one side only
@@ -3096,6 +3108,40 @@ mod tests {
                     .is_none()
             );
         }
+
+        // Canvas / measure_text parses CSS font shorthands with missing primary
+        // families ("SF Mono, Menlo, PingFang SC") into the exact same resolved
+        // primary face and cascade list as drawn text rows.
+        let engine = super::CoreTextEngine::default();
+        let stack = "No Such Family, SF Mono, Menlo, PingFang SC";
+        let css = format!("13px {}", nsh_core::css_font_families(stack));
+        let canvas_font = nsh_core::canvas::CanvasFont::parse(&css).expect("valid CSS font");
+        let sample = "Mixed 中英文 test 测试 editor 光标 123456";
+        let mut drawn = AttributedText {
+            no_wrap: true,
+            max_lines: 1,
+            ..Default::default()
+        };
+        drawn.push(
+            sample,
+            ResolvedTextStyle {
+                font_size: Points(13.0),
+                font_family: Some(nsh_core::FontFamily::new(stack)),
+                ..ResolvedTextStyle::default()
+            },
+        );
+        let rendered = engine.measure(&engine.prepare(&drawn), None).width.0;
+        let summed: f32 = sample
+            .chars()
+            .map(|c| {
+                nsh_core::canvas::measure_line(&engine, &canvas_font, &c.to_string().repeat(64)).0
+                    / 64.0
+            })
+            .sum();
+        assert!(
+            (summed - rendered).abs() < 0.5,
+            "summed={summed:.2}, rendered={rendered:.2}"
+        );
     }
 
     /// Showing words of a long paragraph or recoloring them draws again
@@ -3318,6 +3364,12 @@ mod tests {
     /// The baseline of the first line, the attachment's top and the line's
     /// extent above and below the baseline.
     fn place(align: VerticalAlign) -> (f32, f32, f32, f32) {
+        place_by(align, None)
+    }
+
+    /// [`place`], the attachment with a baseline of its own `baseline`
+    /// below its top (the first baseline of the text in it).
+    fn place_by(align: VerticalAlign, baseline: Option<f32>) -> (f32, f32, f32, f32) {
         let engine = CoreTextEngine::default();
         let style = ResolvedTextStyle {
             font_size: Points(14.0),
@@ -3326,6 +3378,7 @@ mod tests {
         let mut t = AttributedText::default();
         t.push("Ax", style);
         let mut alignments = nsh_core::AttachmentAlignments::default();
+        alignments.set_baseline(t.len_utf16(), baseline.map(Points));
         alignments.push(&mut t, Size::new(Points(10.0), Points(30.0)), align, style);
         let prepared = engine.prepare_aligned(&t, &alignments);
         let size = engine.measure(&prepared, None);
@@ -3334,6 +3387,20 @@ mod tests {
         let top = engine.attachments(&layout)[0].expect("shown").y.0;
         let baseline = line.y.0 + line.ascender.0;
         (baseline, top, line.ascender.0, line.descender.0)
+    }
+
+    /// An attachment with a baseline of its own (the first baseline of
+    /// the text in it: a chip's label) stands on the line's by it, as an
+    /// `inline-flex` box in CSS: what is under it goes into the line's descent. The other
+    /// alignments place its box.
+    #[test]
+    fn an_attachment_stands_on_the_line_by_its_own_baseline() {
+        let near = |a: f32, b: f32| (a - b).abs() < 0.5;
+        let (baseline, top, up, down) = place_by(VerticalAlign::Baseline, Some(22.0));
+        assert!(near(top, baseline - 22.0), "{top} {baseline}");
+        assert!(near(up, 22.0) && near(down, 8.0), "{up} {down}");
+        let boxed = place(VerticalAlign::TextTop);
+        assert_eq!(place_by(VerticalAlign::TextTop, Some(22.0)), boxed);
     }
 
     #[test]

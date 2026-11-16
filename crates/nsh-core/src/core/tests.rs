@@ -18307,6 +18307,9 @@ mod touch {
                 location: point(px(x - 10.0), px(5.0)),
                 changed: true,
                 pointer_type: crate::PointerType::Touch,
+                pressure: 0.5,
+                tilt_x: 0.0,
+                tilt_y: 0.0,
             }],
         }))
     }
@@ -26219,6 +26222,109 @@ mod rust_windows {
         assert_eq!(table.bindings().len(), 3);
     }
 
+    /// Counts the Escapes it is bound to.
+    #[component]
+    fn EscapeCount() -> impl IntoElement {
+        let count = signal(0);
+        on_key("escape", move |_| count.update(|n| *n += 1));
+        text(move || format!("escape {}", count.get()))
+    }
+
+    /// A component JS places in a window of the app's own (TS `<Window>`)
+    /// has no `WindowRef` around it in Rust, yet its shortcuts are that
+    /// window's, as an `Editor`'s arrows in a `Window` are; the same
+    /// component in the main window keeps the main window's.
+    #[test]
+    fn a_component_js_places_in_a_window_binds_its_keys_there() {
+        use super::views::texts;
+        use crate::{
+            element::Registry,
+            keymap::{KeyMatch, Keystroke},
+        };
+        let mut c = core();
+        c.set_environment(crate::element::Environment {
+            os: crate::platform::Os::MacOs,
+            ..Default::default()
+        });
+        c.set_viewport(size(px(800.0), px(600.0)));
+        let mut registry = Registry::new();
+        registry.register::<EscapeCount>();
+        c.set_components(registry);
+        let mut open = OpenWindow::default();
+        open.options.id = "panel".into();
+        open.options.default_size = Some(size(px(300.0), px(100.0)));
+        let component = || crate::Prop::Component(std::any::type_name::<EscapeCount>().into());
+        apply(
+            &mut c,
+            vec![
+                Op::Create {
+                    id: 2,
+                    tag: Tag::Modal,
+                },
+                Op::Command {
+                    id: 2,
+                    command: Command::Desktop(Box::new(DesktopCommand::OpenWindow(Box::new(open)))),
+                },
+                Op::Create {
+                    id: 4,
+                    tag: Tag::View,
+                },
+                Op::SetProp {
+                    id: 4,
+                    prop: component(),
+                },
+                Op::Insert {
+                    parent: 2,
+                    child: 4,
+                    before: None,
+                },
+                Op::Create {
+                    id: 6,
+                    tag: Tag::View,
+                },
+                Op::SetProp {
+                    id: 6,
+                    prop: component(),
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 6,
+                    before: None,
+                },
+                Op::Insert {
+                    parent: ROOT_ID,
+                    child: 2,
+                    before: None,
+                },
+            ],
+        );
+        let mut table = None;
+        for _ in 0..3 {
+            if let Some(b) = c.commit() {
+                table = b
+                    .items
+                    .iter()
+                    .rev()
+                    .find_map(|i| match i {
+                        MountItem::Keymap(k) => Some(k.clone()),
+                        _ => None,
+                    })
+                    .or(table);
+            }
+        }
+        let table = table.expect("a table");
+        let escape = Keystroke::parse_with("escape", true).unwrap();
+        let fired = |window: NodeId| match table.find_in(window, escape, false, false) {
+            KeyMatch::Fire(id) => id,
+            other => panic!("Escape in window {window}: {other:?}"),
+        };
+        let (in_panel, in_main) = (fired(2), fired(ROOT_ID));
+        assert_ne!(in_panel, in_main, "each window has its own");
+        let key = |id: u32| EventPayload::Value(crate::PayloadValue::Number(id as f64));
+        assert!(c.component_event(ROOT_ID, EventKind::KeyCommand, &key(in_panel)));
+        assert_eq!(texts(&c.commit().unwrap()), ["escape 1"]);
+    }
+
     /// A popover anchored to a button and a dialog, both in a window's
     /// content, below a tall view of the main window.
     #[component]
@@ -29884,6 +29990,9 @@ fn touch_down(path: Vec<NodeId>) -> EventPayload {
             location: point(px(5.0), px(6.0)),
             changed: true,
             pointer_type: crate::PointerType::Touch,
+            pressure: 0.5,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
         }],
         modifiers: Default::default(),
         activated: None,
@@ -30684,6 +30793,60 @@ fn tooltip_shown(c: &Core<FakeEngine>, id: NodeId) -> bool {
         .ok()
         .and_then(|k| c.overlay(k))
         .is_some_and(|s| s.host.is_some())
+}
+
+#[test]
+fn modal_focus_restoration_does_not_show_a_tooltip_until_new_user_input() {
+    use StyleValue::Number;
+
+    use crate::{platform::InputModality, tailwind::state::FOCUSED};
+    let mut c = core();
+    add(&mut c, 2, Tag::View, ROOT_ID, &[("height", Number(40.0))]);
+    add(&mut c, 8, Tag::View, ROOT_ID, &[("height", Number(40.0))]);
+    give_tooltip(&mut c, 2, 4, "Choose gateway");
+    c.commit();
+    c.set_input_modality(InputModality::Pointer);
+    c.set_states(2, FOCUSED);
+    c.commit();
+    add(&mut c, 20, Tag::Modal, ROOT_ID, &[]);
+    add(&mut c, 22, Tag::View, 20, &[("height", Number(40.0))]);
+    c.commit();
+    c.set_states(22, FOCUSED);
+    c.set_states(2, 0);
+    c.commit();
+    // Escape closes the modal; restoring focus must not become a tooltip activation.
+    c.set_input_modality(InputModality::Keyboard);
+    apply(
+        &mut c,
+        vec![Op::Remove {
+            parent: ROOT_ID,
+            child: 20,
+        }],
+    );
+    c.commit();
+    c.set_states(2, FOCUSED);
+    c.set_states(22, 0);
+    c.commit();
+    assert!(
+        c.focus_visible,
+        "restored keyboard focus still has its ring"
+    );
+    assert!(
+        !tooltip_shown(&c, 2),
+        "restoring focus reopened the tooltip"
+    );
+    c.set_input_modality(InputModality::Keyboard);
+    c.set_states(8, FOCUSED);
+    c.set_states(2, 0);
+    c.commit();
+    c.set_input_modality(InputModality::Keyboard);
+    c.set_states(2, FOCUSED);
+    c.set_states(8, 0);
+    c.commit();
+    assert!(
+        tooltip_shown(&c, 2),
+        "fresh keyboard navigation still opens the tooltip"
+    );
 }
 
 #[test]
@@ -34458,6 +34621,127 @@ fn a_culled_view_reports_its_layout_and_is_made_for_a_command() {
 }
 
 #[test]
+fn a_visible_scroll_mounts_only_its_nondefault_behavior_once() {
+    use crate::ops::ScrollProp;
+
+    for configured in [false, true] {
+        let mut c = core();
+        let mut ops = vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Scroll,
+            },
+            style_op(2, &[("height", StyleValue::Number(100.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ];
+        if configured {
+            ops.push(Op::SetProp {
+                id: 2,
+                prop: Prop::Scroll(ScrollProp::MinZoom(0.5)),
+            });
+        }
+        apply(&mut c, ops);
+        for remount in [false, true] {
+            if remount {
+                c.remount();
+            }
+            let batch = c.commit().unwrap();
+            assert_eq!(created_in(&batch).contains(&2), !remount);
+            let behaviors: Vec<_> = batch
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    MountItem::ScrollBehavior { id: 2, behavior } => Some(behavior.as_ref()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(behaviors.len(), usize::from(configured));
+            if configured {
+                assert_eq!(behaviors[0].min_zoom, 0.5);
+            }
+            assert!(c.commit().is_none());
+        }
+    }
+}
+
+#[test]
+fn a_culled_scroll_mounts_its_behavior_when_it_enters_the_viewport() {
+    use crate::ops::ScrollProp;
+
+    let mut c = core();
+    let mut ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::Scroll,
+        },
+        style_op(2, &[("height", StyleValue::Number(100.0))]),
+        Op::Insert {
+            parent: ROOT_ID,
+            child: 2,
+            before: None,
+        },
+    ];
+    ops.extend(child_view(4, 2, 2000.0, &[]));
+    ops.extend([
+        Op::Create {
+            id: 6,
+            tag: Tag::Scroll,
+        },
+        style_op(6, &[("height", StyleValue::Number(100.0))]),
+        Op::SetProp {
+            id: 6,
+            prop: Prop::Scroll(ScrollProp::MinZoom(0.5)),
+        },
+        Op::SetProp {
+            id: 6,
+            prop: Prop::Scroll(ScrollProp::MaxZoom(5.0)),
+        },
+        Op::SetProp {
+            id: 6,
+            prop: Prop::Scroll(ScrollProp::Paging(true)),
+        },
+        Op::Insert {
+            parent: 2,
+            child: 6,
+            before: None,
+        },
+    ]);
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    assert!(!created_in(&batch).contains(&6));
+    assert!(
+        !batch
+            .items
+            .iter()
+            .any(|item| matches!(item, MountItem::ScrollBehavior { .. }))
+    );
+    c.set_scroll_offset(2, point(Points::ZERO, Points(2000.0)), 0);
+    for remount in [false, true] {
+        if remount {
+            c.remount();
+        }
+        let batch = c.commit().unwrap();
+        assert_eq!(created_in(&batch).contains(&6), !remount);
+        let behaviors: Vec<_> = batch
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                MountItem::ScrollBehavior { id: 6, behavior } => Some(behavior.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(behaviors.len(), 1, "remount={remount}");
+        assert_eq!((behaviors[0].min_zoom, behaviors[0].max_zoom), (0.5, 5.0));
+        assert!(behaviors[0].paging);
+        assert!(c.commit().is_none());
+    }
+}
+
+#[test]
 fn a_culled_scroll_view_made_for_a_scroll_gets_its_content_size_first() {
     // A scroll view below the viewport of the one it is in is culled; a
     // scroll to it (a `contentOffset` as it comes in a pager) makes it.
@@ -36812,6 +37096,88 @@ fn a_follower_spans_its_target_along_its_parents_row() {
     assert_eq!(frame_of(&batch, 8), Some(rect(60.0, 28.0, 70.0, 2.0)));
     let placed = animated_frames(&batch).iter().filter(|f| f.0 == 8).count();
     assert_eq!(placed, 1, "one frame, the followed one: {:?}", batch.items);
+}
+
+#[test]
+fn a_follower_made_after_layout_is_placed_on_its_target() {
+    // A turn that makes more than `PACE_AFTER` views makes the rest after
+    // the layout that gave them their frames (`pace.rs`). A follower made so
+    // has no frame of its own for `place_follower` until a layout walks it,
+    // and its target is not made when the followers are first placed.
+    use StyleValue::{Number, Str};
+    let mut c = core();
+    let mut ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::Scroll,
+        },
+        style_op(2, &[("height", Number(400.0))]),
+        Op::Insert {
+            parent: ROOT_ID,
+            child: 2,
+            before: None,
+        },
+    ];
+    // Views enough to spend the turn's budget before the row.
+    for i in 0..80 {
+        ops.extend(child_view(100 + 2 * i, 2, 1.0, &[]));
+    }
+    type ViewSpec<'a> = (crate::NodeId, crate::NodeId, Vec<(&'a str, StyleValue<'a>)>);
+    let views: [ViewSpec<'_>; 5] = [
+        (20, 2, vec![]),
+        (
+            22,
+            20,
+            vec![
+                ("flexDirection", Str("row")),
+                ("paddingLeft", Number(10.0)),
+                ("height", Number(30.0)),
+            ],
+        ),
+        (
+            28,
+            22,
+            vec![
+                ("position", Str("absolute")),
+                ("bottom", Number(0.0)),
+                ("height", Number(2.0)),
+            ],
+        ),
+        (
+            24,
+            22,
+            vec![("width", Number(50.0)), ("height", Number(30.0))],
+        ),
+        (
+            26,
+            22,
+            vec![("width", Number(70.0)), ("height", Number(30.0))],
+        ),
+    ];
+    for (id, parent, style) in views {
+        ops.push(Op::Create { id, tag: Tag::View });
+        ops.push(style_op(id, &style));
+        ops.push(Op::Insert {
+            parent,
+            child: id,
+            before: None,
+        });
+    }
+    ops.push(Op::SetProp {
+        id: 28,
+        prop: Prop::Follow(Some(crate::element::FollowTarget::of_node(26))),
+    });
+    apply(&mut c, ops);
+    let mut batch = c.commit().unwrap();
+    // The views that wait show, and are made in the commits that follow.
+    for _ in 0..4 {
+        if created_in(&batch).contains(&28) && created_in(&batch).contains(&26) {
+            break;
+        }
+        batch = c.commit().unwrap();
+    }
+    // After the padding (10) and the first tab (50), as long as the second.
+    assert_eq!(frame_of(&batch, 28), Some(rect(60.0, 28.0, 70.0, 2.0)));
 }
 
 #[test]
@@ -46128,6 +46494,202 @@ impl TextEngine for BaselineEngine {
     }
 }
 
+/// A view inside a text that holds text of its own tells the engine how
+/// far below its top the baseline of that text is (its padding, then the
+/// text's first baseline), so the engine stands it on the line by that, as
+/// CSS stands an `inline-flex` box; for the other alignments, and without
+/// text in it, it stays a box placed by its edges, as an image.
+#[test]
+fn a_view_in_a_text_stands_on_the_line_by_its_own_first_baseline() {
+    let mut c = Core::new(BaselineEngine, size_pt(320.0, 480.0));
+    let insert = |parent, child| Op::Insert {
+        parent,
+        child,
+        before: None,
+    };
+    let ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::Text,
+        },
+        Op::CreateText {
+            id: 3,
+            text: "ab".into(),
+        },
+        // The chip: a padded row holding its label.
+        Op::Create {
+            id: 4,
+            tag: Tag::View,
+        },
+        style_op(
+            4,
+            &[
+                ("paddingTop", StyleValue::Number(3.0)),
+                ("paddingBottom", StyleValue::Number(5.0)),
+            ],
+        ),
+        Op::Create {
+            id: 6,
+            tag: Tag::Text,
+        },
+        style_op(6, &[("fontSize", StyleValue::Number(16.0))]),
+        Op::CreateText {
+            id: 7,
+            text: "NVDA".into(),
+        },
+        // A box with no text: a swatch.
+        Op::Create {
+            id: 8,
+            tag: Tag::View,
+        },
+        style_op(
+            8,
+            &[
+                ("width", StyleValue::Number(10.0)),
+                ("height", StyleValue::Number(10.0)),
+            ],
+        ),
+        insert(6, 7),
+        insert(4, 6),
+        insert(2, 3),
+        insert(2, 4),
+        insert(2, 8),
+        insert(ROOT_ID, 2),
+    ];
+    for op in ops {
+        c.apply(op).unwrap();
+    }
+    c.commit().unwrap();
+    let baseline = |c: &mut Core<BaselineEngine>, i: usize| {
+        let layout = c.nodes[c.key(2).unwrap() as usize].layout.unwrap();
+        let cx = c.text_cx(layout);
+        let a = cx.text.attachments[i];
+        (cx.alignments.baseline(a.index), a.height)
+    };
+    // The label's baseline is 15.2 below its top (16 x 0.95), under the
+    // chip's padding; the label is 20 tall (16 x 1.25), the chip 28.
+    assert_eq!(
+        baseline(&mut c, 0),
+        (Some(Points(3.0 + 15.2)), Points(28.0))
+    );
+    // The swatch stands on its bottom edge.
+    assert_eq!(baseline(&mut c, 1), (None, Points(10.0)));
+    // A style replaces the one before it: the padding goes with each.
+    let set = |c: &mut Core<BaselineEngine>, align: &'static str| {
+        c.apply(style_op(
+            4,
+            &[
+                ("paddingTop", StyleValue::Number(3.0)),
+                ("paddingBottom", StyleValue::Number(5.0)),
+                ("verticalAlign", StyleValue::Str(align)),
+            ],
+        ))
+        .unwrap();
+        c.commit().unwrap();
+    };
+    // Another alignment places the box by its edges.
+    set(&mut c, "middle");
+    assert_eq!(baseline(&mut c, 0).0, None);
+    set(&mut c, "baseline");
+    assert_eq!(baseline(&mut c, 0).0, Some(Points(3.0 + 15.2)));
+}
+
+/// Only text that takes part in a view's flow gives it its baseline: a
+/// `display: none` text before the label has no box, so the label's
+/// baseline stays the view's, and it is the shown text's once shown; an
+/// absolutely positioned text, out of the flow, never gives it.
+#[test]
+fn a_hidden_or_positioned_text_gives_a_view_in_a_text_no_baseline() {
+    let mut c = Core::new(BaselineEngine, size_pt(320.0, 480.0));
+    let insert = |parent, child| Op::Insert {
+        parent,
+        child,
+        before: None,
+    };
+    let text = |id: NodeId, size: f32, extra: &[(&'static str, StyleValue)]| {
+        let mut style = vec![("fontSize", StyleValue::Number(size))];
+        style.extend_from_slice(extra);
+        [Op::Create { id, tag: Tag::Text }, style_op(id, &style)]
+    };
+    let mut ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::Text,
+        },
+        Op::CreateText {
+            id: 3,
+            text: "ab".into(),
+        },
+        Op::Create {
+            id: 4,
+            tag: Tag::View,
+        },
+        style_op(
+            4,
+            &[
+                ("paddingTop", StyleValue::Number(3.0)),
+                ("paddingBottom", StyleValue::Number(5.0)),
+            ],
+        ),
+    ];
+    // A text out of the flow first, then a hidden one, then the label.
+    ops.extend(text(10, 40.0, &[("position", StyleValue::Str("absolute"))]));
+    ops.extend(text(8, 80.0, &[("display", StyleValue::Str("none"))]));
+    ops.extend(text(6, 16.0, &[]));
+    ops.extend([
+        Op::CreateText {
+            id: 11,
+            text: "Away".into(),
+        },
+        Op::CreateText {
+            id: 9,
+            text: "Big".into(),
+        },
+        Op::CreateText {
+            id: 7,
+            text: "NVDA".into(),
+        },
+        insert(10, 11),
+        insert(8, 9),
+        insert(6, 7),
+        insert(4, 10),
+        insert(4, 8),
+        insert(4, 6),
+        insert(2, 3),
+        insert(2, 4),
+        insert(ROOT_ID, 2),
+    ]);
+    for op in ops {
+        c.apply(op).unwrap();
+    }
+    c.commit().unwrap();
+    let baseline = |c: &mut Core<BaselineEngine>| {
+        let layout = c.nodes[c.key(2).unwrap() as usize].layout.unwrap();
+        let cx = c.text_cx(layout);
+        let a = cx.text.attachments[0];
+        cx.alignments.baseline(a.index)
+    };
+    let display = |c: &mut Core<BaselineEngine>, value: &'static str| {
+        c.apply(style_op(
+            8,
+            &[
+                ("fontSize", StyleValue::Number(80.0)),
+                ("display", StyleValue::Str(value)),
+            ],
+        ))
+        .unwrap();
+        c.commit().unwrap();
+    };
+    // The label's: 15.2 below its top (16 x 0.95), under the padding.
+    assert_eq!(baseline(&mut c), Some(Points(3.0 + 15.2)));
+    // Shown, the big text comes first: its baseline is 76 down.
+    display(&mut c, "flex");
+    assert_eq!(baseline(&mut c), Some(Points(3.0 + 76.0)));
+    // Hidden again, the label's is back.
+    display(&mut c, "none");
+    assert_eq!(baseline(&mut c), Some(Points(3.0 + 15.2)));
+}
+
 #[test]
 fn a_row_aligned_by_baseline_lines_its_texts_up_by_their_first_baselines() {
     let mut c = Core::new(BaselineEngine, size_pt(320.0, 480.0));
@@ -48387,44 +48949,121 @@ mod positional_regressions {
 }
 
 #[test]
-fn padding_on_a_span_is_warned_once() {
+fn span_padding_widens_its_box_in_the_line() {
+    // <Text>a <Text bg paddingHorizontal=4>b</Text> c</Text>
     let mut c = core();
-    let span = |id, padding: f32| {
-        [
-            Op::Create { id, tag: Tag::Text },
-            style_op(id, &[("paddingLeft", StyleValue::Number(padding))]),
-        ]
+    let span_style = |padding: f32| {
+        style_op(
+            4,
+            &[
+                ("backgroundColor", StyleValue::Str("#ff0000")),
+                ("paddingHorizontal", StyleValue::Number(padding)),
+            ],
+        )
     };
-    let mut ops = vec![Op::Create {
-        id: 2,
-        tag: Tag::Text,
-    }];
-    ops.extend(span(3, 0.0));
-    ops.extend([
-        Op::Insert {
-            parent: 2,
-            child: 3,
-            before: None,
-        },
-        Op::Insert {
-            parent: ROOT_ID,
-            child: 2,
-            before: None,
-        },
-    ]);
-    apply(&mut c, ops);
-    let _ = c.commit();
-    assert!(!c.span_padding_warned);
-    // Styled before it is inserted into its text, then made a span.
-    let mut ops: Vec<Op> = span(4, 4.0).into();
-    ops.push(Op::Insert {
-        parent: 2,
-        child: 4,
-        before: None,
-    });
-    apply(&mut c, ops);
-    let _ = c.commit();
-    assert!(c.span_padding_warned);
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Text,
+            },
+            Op::CreateText {
+                id: 3,
+                text: "a ".into(),
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::Text,
+            },
+            span_style(4.0),
+            Op::CreateText {
+                id: 5,
+                text: "b".into(),
+            },
+            Op::CreateText {
+                id: 6,
+                text: " c".into(),
+            },
+            Op::Insert {
+                parent: 4,
+                child: 5,
+                before: None,
+            },
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Insert {
+                parent: 2,
+                child: 4,
+                before: None,
+            },
+            Op::Insert {
+                parent: 2,
+                child: 6,
+                before: None,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let text = text_item(&batch).unwrap();
+    // An empty attachment at each end of the span takes its padding in the
+    // line, in the span's background.
+    assert_eq!(text.text, "a \u{FFFC}b\u{FFFC} c");
+    let pads: Vec<_> = text
+        .attachments
+        .iter()
+        .map(|a| (a.index, a.width, a.height))
+        .collect();
+    assert_eq!(
+        pads,
+        [(2, Points(4.0), Points(0.0)), (4, Points(4.0), Points(0.0))]
+    );
+    for i in 2..5 {
+        assert_eq!(text.background_at(i).map(|b| b.node), Some(4));
+    }
+    assert_eq!(text.background_at(5), None);
+    // Copies and reads without them.
+    assert_eq!(text.copied_text(0..text.len_utf16()), "a b c");
+    assert_eq!(text.visible_text(), "a b c");
+
+    // Another padding lays the text out again.
+    apply(&mut c, vec![span_style(6.0)]);
+    let text = text_item(&c.commit().unwrap()).unwrap();
+    assert_eq!(text.attachments[0].width, Points(6.0));
+
+    // No padding, no attachments.
+    apply(&mut c, vec![span_style(0.0)]);
+    let text = text_item(&c.commit().unwrap()).unwrap();
+    assert_eq!(text.text, "a b c");
+    assert!(text.attachments.is_empty());
+}
+
+#[test]
+fn node_record_sizes() {
+    // #1345: the per-node records the core keeps for every node.
+    let node = std::mem::size_of::<super::Node>();
+    eprintln!("Node {node} B");
+    assert!(node <= 600, "Node grew to {node} bytes");
+}
+
+#[test]
+fn style_constants_match_default() {
+    assert_eq!(
+        crate::style::ViewStyle::DEFAULT,
+        crate::style::ViewStyle::default()
+    );
+    assert_eq!(
+        crate::style::TextStyle::DEFAULT,
+        crate::style::TextStyle::default()
+    );
 }
 
 /// Theme modifiers: a theme file's precomputed contexts, each modifier's
