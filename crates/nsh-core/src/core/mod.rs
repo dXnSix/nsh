@@ -3296,6 +3296,10 @@ impl<M: TextEngine> Core<M> {
         for (id, answer) in std::mem::take(&mut self.components.transition_times) {
             answer.borrow_mut().deliver(self.transition_time(id));
         }
+        // And their texts, with this commit's.
+        for (id, answer) in std::mem::take(&mut self.components.text_contents) {
+            answer.borrow_mut().deliver(self.text_content(id));
+        }
         // Dev tools' questions, with this commit's layout.
         #[cfg(feature = "inspect")]
         self.answer_inspections();
