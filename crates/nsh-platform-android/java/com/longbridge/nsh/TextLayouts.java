@@ -159,9 +159,10 @@ final class TextLayouts {
 
     /**
      * The families of a `fontFamily` list, trimmed and unquoted, in order: a
-     * quoted name runs to its closing quote, commas and all (`'ACME, Inc'`),
-     * as `nsh_core::font_families` reads it. A quoted name is always a
-     * family's name, never a generic family (`"serif"`), as in CSS.
+     * quoted name runs to its closing quote, commas and `\` escapes included
+     * (`'ACME, Inc'`, `"A\"B"`), as `nsh_core::font_families` reads it. A
+     * quoted name is always a family's name, never a generic family
+     * (`"serif"`), as in CSS.
      */
     private static List<Family> families(String list) {
         List<Family> out = new ArrayList<>();
@@ -175,12 +176,30 @@ final class TextLayouts {
             int comma;
             boolean quoted = c == '"' || c == '\'';
             if (quoted) {
-                // To the closing quote (or the end, unclosed); what follows it
-                // up to the next comma is not part of the name.
-                int end = list.indexOf(c, i + 1);
-                if (end < 0) end = n;
-                name = list.substring(i + 1, end).trim();
-                comma = list.indexOf(',', Math.min(end + 1, n));
+                // To the unescaped closing quote (or the end, unclosed); what
+                // follows it up to the next comma is not part of the name.
+                StringBuilder decoded = new StringBuilder();
+                int p = i + 1;
+                while (p < n) {
+                    char ch = list.charAt(p);
+                    if (ch == '\\') {
+                        p++;
+                        if (p < n) {
+                            decoded.append(list.charAt(p));
+                            p++;
+                        } else {
+                            decoded.append('\\');
+                        }
+                    } else if (ch == c) {
+                        p++;
+                        break;
+                    } else {
+                        decoded.append(ch);
+                        p++;
+                    }
+                }
+                name = decoded.toString().trim();
+                comma = list.indexOf(',', p);
             } else {
                 comma = list.indexOf(',', i);
                 name = list.substring(i, comma < 0 ? n : comma).trim();
@@ -466,13 +485,16 @@ final class TextLayouts {
             }
         }
         if (background != null) s.setSpan(background, backgroundStart, backgroundEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        // Attachments (offset, width, height in dp, vertical alignment):
+        // Attachments (offset, width, height in dp, vertical alignment, how
+        // far below its top its own baseline is in dp or a negative number):
         // placeholders of their size, placed in their line.
-        for (int i = 0; i + 3 < attachments.length; i += 4) {
+        for (int i = 0; i + 4 < attachments.length; i += 5) {
             int at = (int) attachments[i];
             if (at < 0 || at >= text.length()) continue;
+            float baseline = attachments[i + 4];
             s.setSpan(new Attachment(Math.round(attachments[i + 1] * density), Math.round(attachments[i + 2] * density),
-                    (int) attachments[i + 3]), at, at + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    (int) attachments[i + 3], baseline < 0 ? -1 : Math.round(baseline * density)), at, at + 1,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         // `encode` packs the writing direction and the layout direction in.
         int writing = (align >> 4) & 3;
@@ -943,7 +965,7 @@ final class TextLayouts {
 
     /**
      * An attachment's placeholder: its size, placed in its line by its
-     * `verticalAlign` (as `TextAttachment::ascent` in nsh-core places it, with
+     * `verticalAlign` (as `AttachmentAlignments::ascent` in nsh-core places it, with
      * the run's font metrics); the line grows to hold it. Draws nothing.
      */
     static final class Attachment extends android.text.style.ReplacementSpan {
@@ -955,11 +977,16 @@ final class TextLayouts {
         /** The ascent and descent of the font around it (px, as {@link Paint.FontMetricsInt}), set by {@link #getSize}. */
         int fontAscent, fontDescent;
 
-        Attachment(int width, int height, int align) {
+        /**
+         * `baseline`: how far below its top its own baseline is (px), which
+         * stands on the line's (the first baseline of the text in it); negative: it has none, and
+         * stands on its bottom edge.
+         */
+        Attachment(int width, int height, int align, int baseline) {
             this.width = width;
             this.height = height;
             this.align = align;
-            this.ascent = height;
+            this.ascent = baseline < 0 ? height : Math.min(baseline, height);
         }
 
         @Override

@@ -421,15 +421,19 @@ fn arrow(surface: &Rc<Surface>, vk: u16) -> bool {
 }
 
 /// The control Return and Space press: the view with this module's focus
-/// when it hears a press ([`PRESS`]) and shows in its window, while no
-/// field is edited. With the box it covers in the window's points.
+/// when it hears a press ([`PRESS`]), is not disabled and shows in its
+/// window, while no field is edited. With the box it covers in the
+/// window's points.
 fn control(surface: &Surface) -> Option<(NshView, Edges)> {
     if crate::text_input::focused(surface).is_some() {
         return None;
     }
     let view = focused(surface)?;
-    let events = view.state().events;
-    if !PRESS.into_iter().any(|kind| events.contains(kind)) {
+    let (events, disabled) = {
+        let s = view.state();
+        (s.events, s.props.accessibility.state.disabled)
+    };
+    if disabled || !PRESS.into_iter().any(|kind| events.contains(kind)) {
         return None;
     }
     let own = view.to_root().and_then(|m| edges(&view, &m))?;
@@ -608,6 +612,15 @@ mod tests {
             assert!(!on_control(&surface));
             assert!(crate::keymap::key(&surface, &down(VK_RETURN, false)));
             assert!(!press_key(&surface, &down(VK_RETURN, false)));
+            // So does a disabled control.
+            {
+                let mut s = view.state_mut();
+                s.events.set(EventKind::Press, true);
+                s.props.accessibility.state.disabled = true;
+            }
+            assert!(!on_control(&surface));
+            assert!(!press_key(&surface, &down(VK_RETURN, false)));
+            view.state_mut().props.accessibility.state.disabled = false;
             // So does a control out of sight: nothing would press it.
             {
                 let mut s = view.state_mut();

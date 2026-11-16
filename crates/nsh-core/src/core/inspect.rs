@@ -269,7 +269,7 @@ impl<M: TextEngine> Core<M> {
             id,
             inline_style: node.inline_style.declarations().to_vec(),
             view_style: node.view_style.clone(),
-            text_style: node.text_style,
+            text_style: *node.text_style,
             layout,
             states: node.states,
             events: node.events,
