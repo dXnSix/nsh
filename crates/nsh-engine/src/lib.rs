@@ -27,7 +27,8 @@ mod script;
 #[cfg_attr(not(feature = "shader"), path = "shader_off.rs")]
 pub mod shader;
 mod shader_frame;
-#[cfg(all(feature = "shader", target_vendor = "apple"))]
+#[cfg(all(feature = "shader", any(target_vendor = "apple", windows)))]
+#[cfg_attr(windows, path = "shader_surfaces_windows.rs")]
 mod shader_surfaces;
 #[cfg(not(target_arch = "wasm32"))]
 mod storage;
@@ -3743,6 +3744,7 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         speech: env.speech,
         notifications: env.notifications,
         audio: env.audio,
+        tab_bar: env.tab_bar,
         cell: env.cell,
         web_input: env.web_input,
         web_evaluate: env.web_evaluate,

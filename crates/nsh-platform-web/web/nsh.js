@@ -20,7 +20,11 @@
 // instance of its own), `assetBase` (where `asset:/<path>` is served) or
 // `assets` (a map from `<path>` to its URL, as `nsh package --target web`
 // writes it; relative URLs, these and the others, resolve against the
-// page's `document.baseURI` as the player is made: `player.baseURL`),
+// page's `document.baseURI` as the player is made, or `baseURL`:
+// `player.baseURL`), `baseURL` (the site's base, which the app's relative
+// URLs and addresses resolve against instead of the page's: a page served
+// at its app's routes names it so, as a strict `base-uri` refuses a
+// `<base href>`),
 // `readAsset(uri)` (the bytes of an asset the engine needs at
 // once, a font: a `Uint8Array` or null), `data` (the URLs of the files the
 // runtime fetches when it first needs them, by name, as `nsh package
@@ -573,19 +577,37 @@ const decoder = new TextDecoder();
  */
 const CLASSES = { sheets: {}, rules: new Map(), texts: new Map() };
 
+/** A style sheet of the runtime's own, after the page's and the earlier
+ * ones, holding `text`: a constructed sheet the document adopts, which a
+ * strict `style-src` allows (it refuses `<style>` elements), or in a
+ * browser without them a `<style>` element (`id`). */
+function runtimeSheet(id, text = "") {
+  if (typeof CSSStyleSheet === "function" && "replaceSync" in CSSStyleSheet.prototype && "adoptedStyleSheets" in document) {
+    const sheet = new CSSStyleSheet();
+    if (text) sheet.replaceSync(text);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    return sheet;
+  }
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = text;
+  document.head.append(style);
+  return style.sheet;
+}
+
 /** The sheet of the generated classes (`nsh-classes`), after the runtime's
  * own rules, or of the views' own rules (`nsh-own`): changing a rule makes
  * the browser go over its whole sheet again, so those that change are
  * apart. */
 function classSheet(id) {
-  if (!CLASSES.sheets[id]) {
-    const style = document.createElement("style");
-    style.id = id;
-    document.head.append(style);
-    CLASSES.sheets[id] = style.sheet;
-  }
+  if (!CLASSES.sheets[id]) CLASSES.sheets[id] = runtimeSheet(id);
   return CLASSES.sheets[id];
 }
+
+/** The document's sheet of the runtime's own rules ([`KEYFRAMES`]), made
+ * by the first player of any copy of the runtime on the page. */
+const RUNTIME_SHEET = Symbol.for("nsh.runtimeSheet");
+
 
 /** Adds (or, for a view's own rule, replaces) class `name` with `text`.
  * The class is doubled: it wins over the runtime's rules of a class and a
@@ -728,8 +750,8 @@ const glueImports = new Map();
  * every player after the first imports it under a URL of its own: another
  * instance of the module. The first keeps the URL the page preloads.
  */
-function importGlue(url) {
-  const href = new URL(String(url), document.baseURI);
+function importGlue(url, base) {
+  const href = new URL(String(url), base);
   const imported = glueImports.get(href.href) ?? 0;
   glueImports.set(href.href, imported + 1);
   if (imported > 0) href.searchParams.set("player", String(imported));
@@ -953,7 +975,7 @@ function frameViewport(frame, colorScheme) {
     frame.style.setProperty(name, value, "important");
   }
   try { frame.showPopover(); } catch (error) {
-    if (saved === null) frame.removeAttribute("style"); else frame.setAttribute("style", saved);
+    if (saved === null) frame.removeAttribute("style"); else frame.style.cssText = saved;
     if (popover === null) frame.removeAttribute("popover"); else frame.setAttribute("popover", popover);
     placeholder?.remove(); outer?.release(); throw error;
   }
@@ -963,7 +985,7 @@ function frameViewport(frame, colorScheme) {
     if (frame._nshViewport !== state || --state.users) return;
     observer.disconnect();
     frame.hidePopover();
-    if (saved === null) frame.removeAttribute("style"); else frame.setAttribute("style", saved);
+    if (saved === null) frame.removeAttribute("style"); else frame.style.cssText = saved;
     if (popover === null) frame.removeAttribute("popover"); else frame.setAttribute("popover", popover);
     unlock();
     placeholder?.remove(); outer?.release(); delete frame._nshViewport;
@@ -1007,17 +1029,17 @@ class Player {
     // app's relative URLs resolve against it once, so they still load
     // after the address moves to another directory (`history.pushState`
     // to `/sports/football`).
-    this.baseURL = document.baseURI;
+    // The site's base when the page names it (`baseURL`): the page's
+    // address is one of the app's routes, below it.
+    this.siteBase = options.baseURL == null ? null : new URL(String(options.baseURL), document.baseURI).href;
+    this.baseURL = this.siteBase ?? document.baseURI;
     this.assetBase = new URL(options.assetBase || "./", this.baseURL).href;
     const resolve = (urls) => urls && Object.fromEntries(Object.entries(urls).map(([key, url]) => [key, new URL(url, this.baseURL).href]));
     this.assets = resolve(options.assets);
     this.data = resolve(options.data);
     this.container = container;
-    if (!document.getElementById("nsh-style")) {
-      const style = document.createElement("style");
-      style.id = "nsh-style";
-      style.textContent = KEYFRAMES;
-      document.head.append(style);
+    if (!document[RUNTIME_SHEET]) {
+      Object.defineProperty(document, RUNTIME_SHEET, { value: runtimeSheet("nsh-style", KEYFRAMES) });
     }
     this.root = document.createElement("div");
     this.root.className = window.top === window ? "nsh-root" : "nsh-root nsh-embedded";
@@ -1086,7 +1108,7 @@ class Player {
     // the CLI ran `wasm-bindgen --target web` on the runtime, and its glue
     // provides the module's other imports. It loads while the module
     // compiles; a failed compile does not leave its rejection unhandled.
-    const glueLoad = this.options.glue ? importGlue(this.options.glue) : null;
+    const glueLoad = this.options.glue ? importGlue(this.options.glue, this.baseURL) : null;
     glueLoad?.catch(() => {});
     const imports = {
       env: {
@@ -2871,6 +2893,10 @@ class Player {
       pagePosition: { x: pageX, y: pageY },
       modifiers: { control: !!e.ctrlKey, alt: !!e.altKey, shift: !!e.shiftKey, platform: !!e.metaKey },
       pressedButton: held ? held[1] : null,
+      pointerType: e.pointerType === "pen" ? "pen" : "mouse",
+      pressure: e.pressure ?? (held ? 0.5 : 0),
+      tiltX: e.tiltX || 0,
+      tiltY: e.tiltY || 0,
     };
   }
 
@@ -2909,7 +2935,7 @@ class Player {
     let el = this.view(id);
     if (!el) return;
     el = this.retag(el, elementTag(props));
-    if (props.href != null) el.setAttribute("href", props.href);
+    if (props.href != null) el.setAttribute("href", this.siteBase ? this.linkHref(props.href) : props.href);
     else el.removeAttribute("href");
     el._props = props;
     // A stop that takes the focus as it appears: looked at after the batch.
@@ -2944,7 +2970,10 @@ class Player {
   retag(el, tag) {
     if (el.localName === tag || (el._kind !== "view" && el._kind !== "text")) return el;
     const next = document.createElement(tag);
-    for (const { name, value } of el.attributes) next.setAttribute(name, value);
+    // Inline styles (a frame's) through the CSSOM: a strict `style-src`
+    // refuses a `style` attribute set as text.
+    for (const { name, value } of el.attributes) if (name !== "style") next.setAttribute(name, value);
+    if (el.style.cssText) next.style.cssText = el.style.cssText;
     for (const key of Object.keys(el)) next[key] = el[key];
     next.append(...el.childNodes);
     el.replaceWith(next);
@@ -5906,19 +5935,35 @@ class Player {
     return 0;
   }
 
+  /** A link's `href` under the site's base, as a `<base href>` would have
+   * it (the page's own address is one of the app's routes). */
+  linkHref(href) {
+    try {
+      return new URL(String(href), this.siteBase).href;
+    } catch {
+      return String(href);
+    }
+  }
+
+  /** What the app's relative addresses and links resolve against: the
+   * site's base (`baseURL`), else the page's current base, as
+   * `history.replaceState` resolves them. */
+  addressBase() {
+    return this.siteBase ?? document.baseURI;
+  }
+
   /** `UrlScheme.setUrl` / `set_app_url`: the current entry's address, once
    * the entries of the pages pushed or popped with it exist
    * (`syncHistory`); with `push` (`history: "push"`) an entry of its own
    * after it, unless the turn pushed a page's (which takes the address) or
    * it is the address shown. In one turn the last address wins, and a push
-   * wins over a replace. Resolved as `replaceState` resolves it (against
-   * `<base href>`); one of another origin is dropped (TS's `setUrl` throws
-   * for it first, in `runtime.js`). */
+   * wins over a replace. Resolved against `addressBase()`; one of another
+   * origin is dropped (TS's `setUrl` throws for it first, in `runtime.js`). */
   setPageUrl(url, push = false) {
     if (!this.history) return;
     let resolved;
     try {
-      resolved = new URL(url, document.baseURI);
+      resolved = new URL(url, this.addressBase());
     } catch {
       console.warn(`[nsh] the app's address is not a URL: ${url}`);
       return;
@@ -6015,8 +6060,7 @@ class Player {
       this.pageUrl = null;
       this.pageUrlPush = false;
       try {
-        // Resolved as `replaceState` does, against `<base href>` when the
-        // page has one.
+        // Absolute: `setPageUrl` resolved it.
         if (push) this.pushEntry(depth, url);
         else history.replaceState(history.state, "", url);
         this.shownUrl = url;
@@ -6579,7 +6623,9 @@ class Player {
       frame.removeAttribute("srcdoc");
       if (scroll) frame.removeAttribute("scrolling");
       else frame.setAttribute("scrolling", "no");
-      if (url) frame.src = url;
+      // A relative URL is the site's (`linkHref`), which no `<base href>`
+      // names when the page gives it to the player.
+      if (url) frame.src = this.siteBase ? this.linkHref(url) : url;
       else frame.removeAttribute("src");
     }
     // After the batch: its events may come after its props.
@@ -9351,6 +9397,7 @@ class Player {
         y: p.y - top,
         changed: id === changedId,
         pointerType: p.pointerType,
+        pressure: p.pressure, tiltX: p.tiltX, tiltY: p.tiltY,
       });
     }
     if (!points.length) return;
@@ -9410,6 +9457,7 @@ class Player {
     const p = {
       x, y, layer, startX: x, startY: y, t: performance.now(), vx: 0, vy: 0,
       pointerType: e.pointerType,
+      pressure: e.pressure, tiltX: e.tiltX || 0, tiltY: e.tiltY || 0,
       touchPath: chain.filter((v) => v._events.has("onTouch")).map((v) => v._id),
       ...(isField ? { press: null } : link ? { press: link } : this.pickPress(chain)),
       // What presses report: the modifier keys at the press and its clicks.
@@ -9557,6 +9605,9 @@ class Player {
     p.x = x;
     p.y = y;
     p.t = now;
+    p.pressure = e.pressure;
+    p.tiltX = e.tiltX || 0;
+    p.tiltY = e.tiltY || 0;
     this.track(p, now);
     const tx = x - p.startX;
     const ty = y - p.startY;
@@ -9711,6 +9762,7 @@ class Player {
       return;
     }
     if (cancelled && p.scrolls?.length) this.touchScroll(p, this.point(e, p.layer));
+    p.pressure = 0;
     if (p.touchPath.length) this.touchEvent(cancelled ? 3 : 2, e.pointerId);
     this.pointers.delete(e.pointerId);
     if (this.twoFinger) {

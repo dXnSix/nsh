@@ -2579,6 +2579,19 @@ final class Mounter {
                 Picker.show(context, request);
                 break;
             }
+            case 57: {
+                Picker.Request request = new Picker.Request();
+                request.id = b.getInt();
+                request.limit = b.getInt() != 0 ? Integer.MAX_VALUE : 1;
+                request.folders = b.getInt() != 0;
+                String extensions = (String) objects[b.getInt()];
+                request.extensions = extensions.isEmpty() ? new String[0] : extensions.split(",");
+                request.files = true;
+                request.paths = this;
+                request.view = host;
+                Picker.show(context, request);
+                break;
+            }
             case 45: {
                 Picker.Request request = new Picker.Request();
                 request.id = b.getInt();
