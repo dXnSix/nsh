@@ -95,9 +95,10 @@ jobs:
         # Release job copies them into the other archives (see above).
         include:
           # The iOS runtimes and SDK need Xcode; the macOS runtime is built
-          # for this machine (Apple silicon).
+          # for this machine (Apple silicon). Xcode's iOS 26+ SDK opts apps
+          # into the system's Liquid Glass appearance (deployment stays 15).
           - name: macos-arm64
-            os: macos-15
+            os: macos-26
           # Ubuntu 24.04 has GTK 4.14 and Pango 1.52+, what the Linux runtime
           # needs; its binaries need glibc 2.39 and GTK 4.14 or newer where
           # they run.
@@ -120,6 +121,21 @@ jobs:
         with:
           # A release run builds the tag, never the branch it was started on.
           ref: ${{ env.TAG }}
+
+      - name: Check the Apple SDKs
+        if: matrix.name == 'macos-arm64'
+        run: |
+          xcodebuild -version
+          # Catalyst uses the macOS SDK's iOSSupport. Check all three before
+          # spending time building, even if the runner's default Xcode changes.
+          for sdk in iphoneos iphonesimulator macosx; do
+            version=$(xcrun --sdk "$sdk" --show-sdk-version)
+            echo "$sdk SDK: $version ($(xcrun --sdk "$sdk" --show-sdk-path))"
+            if (( ${version%%.*} < 26 )); then
+              echo "::error::$sdk SDK 26 or newer is required for the iOS distribution"
+              exit 1
+            fi
+          done
 
       # Temporary directories (tests, tools) outside the checkout.
       - name: Set up the environment
@@ -247,6 +263,10 @@ jobs:
           NSH_DIST_NO_ANDROID: ${{ !matrix.shared && '1' || '' }}
           NSH_DIST_NO_WEB: ${{ !matrix.shared && '1' || '' }}
         run: cargo xtask dist -v
+
+      - name: Check the iOS runtime build versions
+        if: matrix.name == 'macos-arm64'
+        run: python3 .github/ci/ios-build-versions.py dist/nsh/runtime/ios
 
       # The packaged CLI makes and bundles a new app.
       - name: Smoke test
