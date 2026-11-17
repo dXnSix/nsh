@@ -31,7 +31,14 @@ signed packages, hardening and VM limits are the native hosts' (`sandbox.md`).
 Without `browser-core` the module runs a Rust app only (`nsh_start_rust`, `rust_app!`).
 
 Browser bindings live in `src/browser/` and `web/browser/`. Rust registry descriptions generate component,
-class and module faces; the same core reactive graph and virtualized list machinery drive both hosts.
+class and module faces; the same core reactive graph and virtualized list machinery drive both hosts. A class's
+members are called through op 202 (class and member ids); the methods a set's class extensions add
+(`#[class_extension]`) come with each set's description (op 200, `extensions`: the extension's id, its class's id,
+each method's id, name, length and whether it returns a promise), `modules.js` defines them on the class's prototype
+once both are described (an extension a set describes before its class waits for it, across `refresh()`), and their
+calls go to Rust through op 210 (extension and method ids), run as a class's own member is
+(`Modules::extension_member`). The player refuses two sets adding one name to one class
+(`Registry::class_extensions_in`), as a native host does.
 JS values cross through generation-checked arena handles. Weak tracing connects Rust-owned callbacks and
 payloads to their JS peers; externally held Rust values remain strong. DOM child edges are traced separately,
 so detached trees with callback cycles can be collected. Explicit owner disposal remains deterministic.

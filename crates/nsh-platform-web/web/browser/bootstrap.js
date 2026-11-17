@@ -3268,6 +3268,24 @@
 			});
 		};
 		const exports = /* @__PURE__ */ new Map();
+		let waiting = [];
+		const extend = (ext) => {
+			const Constructor = classes.get(ext.class);
+			if (!Constructor) return false;
+			for (const member of ext.members) {
+				const fn = function(...args) {
+					return call(210, [ext.id, member.id], this, args, member.promise);
+				};
+				Object.defineProperty(fn, "name", { value: member.name });
+				Object.defineProperty(fn, "length", { value: member.length ?? 0 });
+				Object.defineProperty(Constructor.prototype, member.name, {
+					value: fn,
+					writable: true,
+					configurable: true
+				});
+			}
+			return true;
+		};
 		const apply = (metadata) => {
 			for (const set of metadata) for (const spec of set.classes) {
 				if (classes.has(spec.id)) continue;
@@ -3310,6 +3328,8 @@
 					writable: true
 				});
 			}
+			for (const set of metadata) waiting.push(...set.extensions ?? []);
+			waiting = waiting.filter((ext) => !extend(ext));
 			for (const set of metadata) {
 				const namespace = exports.get(set.specifier) ?? Object.create(null);
 				exports.set(set.specifier, namespace);
@@ -3371,6 +3391,7 @@
 				values.classPeers.clear();
 				classes.clear();
 				exports.clear();
+				waiting = [];
 				for (const waiter of waiters) waiter.reject(/* @__PURE__ */ new Error("the app was disposed"));
 			}
 		};

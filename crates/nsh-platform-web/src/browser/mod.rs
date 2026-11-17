@@ -649,7 +649,7 @@ impl Runtime {
                     )
                     .map_err(|e| nsh_core::element::PropError(e.message().into()))
             }
-            201 | 202 => {
+            201 | 202 | 210 => {
                 let index = args.index(0)?.as_number().unwrap_or(f64::NAN) as usize;
                 let result = if op == 201 {
                     self.modules.function(
@@ -658,8 +658,18 @@ impl Runtime {
                         args.index(2)?,
                         args.index(3)?.as_number().unwrap_or(0.0) as u32,
                     )
-                } else {
+                } else if op == 202 {
                     self.modules.member(
+                        index,
+                        args.index(1)?.as_number().unwrap_or(f64::NAN) as usize,
+                        args.index(2)?,
+                        args.index(3)?,
+                        args.index(4)?.as_number().unwrap_or(0.0) as u32,
+                    )
+                } else {
+                    // A method a class extension adds: the extension's id,
+                    // then the method's, as a class's member (202).
+                    self.modules.extension_member(
                         index,
                         args.index(1)?.as_number().unwrap_or(f64::NAN) as usize,
                         args.index(2)?,
@@ -752,7 +762,7 @@ pub(crate) extern "C" fn nsh_browser_initialize() {
                 nsh_core::runtime::registries()
                     .iter()
                     .cloned()
-                    .chain([fixtures::registry()]),
+                    .chain([fixtures::registry(), fixtures::extension_registry()]),
             );
     });
 }

@@ -545,7 +545,7 @@ const builder = new AppBuilder().addStorage().addI18n((o) => { o.locale = "hr"; 
   `this` (a static) or named `new`, `#[getter]` / `#[setter]`, `this` of another type, `dispose` and
   `constructor`, `ModuleCx`, generics, a trait `impl` and a doc comment on the block are compile errors.
 - **When they reach JS.** `Registry::class_extension::<E>()` (`ClassExtension`, `ClassExtensionDef`) puts the
-  methods on `C`'s prototype wherever a host serves the set: `C`'s own set, another set, or a submodule of one. They
+  methods on `C`'s prototype wherever a host serves the set, native (nsh-js) or the web player: `C`'s own set, another set, or a submodule of one. They
   are there however JS gets the class (an import from any set that exports it, an instance a member returns), as
   the class's own methods are: functions named and sized like them, writable, configurable, not enumerable. A host
   serving no set that registers the extension has no such methods. Registering an extension does not export `C`:
@@ -631,6 +631,10 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   extension's methods on its class's prototype after the class's own, through `call_extension` (a C closure whose
   opaque is the `ClassExtensionDef`, its magic the method's index), which runs the member as `call` runs a
   class's.
+- **The web player** (`nsh-platform-web`): `Modules::describe` (op 200) gives each set's class extensions with its
+  classes, `web/browser/modules.js` defines their methods on the class's prototype once both are described (an
+  extension waits for a class a later gate brings), and a call goes to Rust as op 210, which runs the member as a
+  class's own (op 202) is ([web.md](web.md)).
 - **Declarations:** `nsh_core::element::declarations` writes `export declare class` for each, with the types the members
   use, next to the set's components and modules, and the methods of the set's extensions of the class
   (`class_declaration`); the declarations test checks that what exists is declared.

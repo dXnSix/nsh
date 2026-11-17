@@ -58,6 +58,41 @@ pub(super) fn registry() -> nsh_core::element::Registry {
     registry
 }
 
+/// Methods another set adds to `CallbackBox` (`class-extensions.test.mjs`).
+pub(crate) struct BoxExtras;
+
+#[class_extension(CallbackBox)]
+impl BoxExtras {
+    /// The box itself, to chain on.
+    pub(crate) fn chain(this: Instance<CallbackBox>) -> Instance<CallbackBox> {
+        this
+    }
+    /// What `f` makes of what the box's own function returns, called on
+    /// the spot.
+    pub(crate) fn call_with(this: Instance<CallbackBox>, f: Callback<i32, i32>) -> i32 {
+        let own = this.with(|b| b.callback.clone());
+        let value = own.call(()).unwrap_or(-1);
+        f.call(value).unwrap_or(-1)
+    }
+    /// Refuses with `why`.
+    pub(crate) fn refuse(this: Instance<CallbackBox>, why: String) -> Result<(), String> {
+        let _ = this;
+        Err(why)
+    }
+    /// A task of the core.
+    pub(crate) async fn later(this: Instance<CallbackBox>) -> i32 {
+        let _ = this;
+        7
+    }
+}
+
+/// The set registering `BoxExtras`, beside the class's.
+pub(super) fn extension_registry() -> nsh_core::element::Registry {
+    let mut registry = nsh_core::element::Registry::ui_set("test/browser-extension");
+    registry.class_extension::<BoxExtras>();
+    registry
+}
+
 /// Exercise the Rust-to-browser event conversion with the actual value bridge.
 #[unsafe(no_mangle)]
 pub(crate) extern "C" fn nsh_browser_test_mouse_events() -> u32 {
