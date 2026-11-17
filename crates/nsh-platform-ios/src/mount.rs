@@ -774,6 +774,9 @@ pub(crate) struct Mounter {
     /// The tint of this surface's alerts and action sheets, from its
     /// tokens ([`crate::system::alert_tint`]).
     alert_tint: Option<nsh_core::element::AdaptiveColor>,
+    /// The surface's share sheet, which a new share replaces
+    /// ([`crate::share`]).
+    share: crate::share::Current,
     /// `SplitView`s' splits, by their native component's node
     /// ([`crate::split`]).
     splits: rustc_hash::FxHashMap<NodeId, crate::split::SplitHost>,
@@ -845,6 +848,7 @@ impl Mounter {
             nav_shaders: rustc_hash::FxHashMap::default(),
             leaving_screens: rustc_hash::FxHashMap::default(),
             alert_tint: None,
+            share: Default::default(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             bottom_bar_dirty: false,
@@ -2001,6 +2005,17 @@ impl Mounter {
                 native,
             ) if id == nsh_core::ROOT_ID => {
                 crate::picker::pick_files(request, asked, native.view(), &self.control);
+            }
+            (Command::Share { id: request, sheet }, native) if id == nsh_core::ROOT_ID => {
+                let anchor = sheet.anchor.and_then(|anchor| self.ui_view(anchor));
+                crate::share::show(
+                    request,
+                    &sheet,
+                    native.view(),
+                    anchor.as_deref(),
+                    &self.share,
+                    &self.control,
+                );
             }
             (
                 Command::RenderCanvas {
@@ -5113,7 +5128,7 @@ impl Mounter {
                 ) || pan.state() == UIGestureRecognizerState::Ended && scroll.isDragging())
             {
                 let t = pan.translationInView(view.superview().as_deref());
-                if s.gesture_start[1] + t.y as f32 > touched.offset {
+                if t.y as f32 > touched.offset {
                     return CGPoint::new(offset.x, -scroll.adjustedContentInset().top);
                 }
             }
@@ -5174,12 +5189,15 @@ impl Mounter {
                 self.animator.set(n, start[0] + t.x as f32);
             }
             if let Some(n) = values.pan_y {
-                let y = self
-                    .slot(id)
-                    .and_then(|s| s.pan_scroll.as_ref())
-                    .map_or(start[1] + t.y as f32, |scroll| {
-                        (start[1] + t.y as f32 - scroll.offset).max(0.0)
-                    });
+                let y = self.slot(id).and_then(|s| s.pan_scroll.as_ref()).map_or(
+                    start[1] + t.y as f32,
+                    |scroll| {
+                        // From where the value was (a sheet resting at a
+                        // detent stands below 0): only the downward
+                        // distance the scroll left over moves it.
+                        start[1] + (t.y as f32 - scroll.offset).max(0.0)
+                    },
+                );
                 let begins = y != start[1]
                     && self
                         .slot_mut(id)

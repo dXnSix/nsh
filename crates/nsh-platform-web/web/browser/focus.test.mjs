@@ -56,6 +56,8 @@ function fakeWasm(answer, autoAnswer) {
       return autoAnswer() ?? -1;
     },
     nsh_focus_past: () => -1,
+    // A scrolled key's move (upstream #2192): nothing to follow here.
+    nsh_key_scroll: () => -1,
     // Centered vertically, as little as shows it horizontally (no margin
     // here: the module's adds the core's).
     nsh_focus_reveal(start, len, viewport, vertical) {

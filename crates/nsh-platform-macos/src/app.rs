@@ -616,6 +616,8 @@ fn initial_environment() -> Environment {
         idiom: Idiom::Desktop,
         screen_color: true,
         canvas_render: true,
+        // `NSSharingServicePicker` (`crate::share`).
+        share: true,
         file_requests: true,
         speech: true,
         notifications: true,
