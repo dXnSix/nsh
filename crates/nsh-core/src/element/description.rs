@@ -20,7 +20,7 @@ use super::Registry;
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 5;
+pub const FORMAT: u32 = 6;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -115,6 +115,59 @@ pub struct SetDescription {
     pub theme_documents: Vec<String>,
     /// The roles its components draw with ([`Registry::roles`]).
     pub roles: Vec<RoleDescription>,
+    /// The class extensions it registers ([`Registry::class_extension`]):
+    /// the methods `.nsh/types` adds to its classes' other declarations.
+    pub class_extensions: Vec<ClassExtensionDescription>,
+    /// The Rust type of each class it exports, by the class's JS name:
+    /// what tells an extension's class from another of the same name.
+    pub class_types: Vec<ClassTypeDescription>,
+}
+
+/// A class a set exports, by its JS name and its Rust type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassTypeDescription {
+    /// Its JS name.
+    pub name: String,
+    /// Its Rust type (`app::AppBuilder`).
+    pub rust_type: String,
+}
+
+/// A class extension a set registers ([`Registry::class_extension`]), as
+/// data: what `.nsh/types` declares of it where another set declares its
+/// class (`export interface <class><generics> { <members> }`, which
+/// TypeScript merges with the class).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassExtensionDescription {
+    /// The JS name of the class it adds methods to.
+    pub class: String,
+    /// That class's Rust type ([`ClassTypeDescription::rust_type`]).
+    pub class_type: String,
+    /// The class's type parameters as its declaration writes them
+    /// (`<T>`), or nothing.
+    pub generics: String,
+    /// The methods it adds, as lines of a class body with their doc
+    /// comments.
+    pub members: String,
+    /// Its Rust type, telling two extensions apart.
+    pub extension: String,
+}
+
+impl ClassExtensionDescription {
+    /// The class extensions `registry` registers, by their class's name,
+    /// then their type's ([`Registry::class_extensions`]).
+    pub fn of(registry: &Registry) -> Vec<ClassExtensionDescription> {
+        registry
+            .class_extensions()
+            .into_iter()
+            .map(|def| ClassExtensionDescription {
+                class: def.class.name.to_owned(),
+                class_type: (def.class.type_name)().to_owned(),
+                generics: super::component::class_generics(def.class),
+                members: super::component::extension_lines(def),
+                extension: (def.type_name)().to_owned(),
+            })
+            .collect()
+    }
 }
 
 /// A role a set lists ([`Registry::roles`]), as data: what the toolchain
@@ -243,6 +296,15 @@ impl SetDescription {
                     doc: spec.doc_text(),
                 })
                 .collect(),
+            class_extensions: ClassExtensionDescription::of(registry),
+            class_types: registry
+                .class_specs()
+                .iter()
+                .map(|c| ClassTypeDescription {
+                    name: c.name.to_owned(),
+                    rust_type: (c.def.type_name)().to_owned(),
+                })
+                .collect(),
         })
     }
 
@@ -277,6 +339,17 @@ impl SetDescription {
                 "name": r.name,
                 "kind": r.kind,
                 "doc": r.doc,
+            })).collect::<Vec<_>>(),
+            "classExtensions": self.class_extensions.iter().map(|e| json!({
+                "class": e.class,
+                "classType": e.class_type,
+                "generics": e.generics,
+                "members": e.members,
+                "extension": e.extension,
+            })).collect::<Vec<_>>(),
+            "classTypes": self.class_types.iter().map(|c| json!({
+                "name": c.name,
+                "type": c.rust_type,
             })).collect::<Vec<_>>(),
         })
     }
@@ -343,6 +416,33 @@ impl SetDescription {
                         name: string(r, "name", &at)?,
                         kind,
                         doc: string(r, "doc", &at)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            class_extensions: array(set, "classExtensions", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, e)| {
+                    let at = format!("{at}.classExtensions[{i}]");
+                    let e = object(e, &at)?;
+                    Ok(ClassExtensionDescription {
+                        class: string(e, "class", &at)?,
+                        class_type: string(e, "classType", &at)?,
+                        generics: string(e, "generics", &at)?,
+                        members: string(e, "members", &at)?,
+                        extension: string(e, "extension", &at)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            class_types: array(set, "classTypes", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let at = format!("{at}.classTypes[{i}]");
+                    let c = object(c, &at)?;
+                    Ok(ClassTypeDescription {
+                        name: string(c, "name", &at)?,
+                        rust_type: string(c, "type", &at)?,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?,

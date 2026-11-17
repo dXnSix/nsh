@@ -2154,42 +2154,8 @@ fn class_declaration(out: &mut String, c: &ClassSpec, added: &[&MemberSpec]) {
             let _ = writeln!(out, "{indent}/** {doc} */");
         }
     };
-    // A member's signatures: its own, or those declared instead
-    // (`#[overload]`, `#[ts]`): type parameters, parameters and result (a
-    // promise of it for an `async` member).
-    let signatures = |m: &super::MemberSpec| {
-        let one = |generics: &'static str,
-                   params: &[(&str, String, bool)],
-                   returns: &Option<String>| {
-            let params = params
-                .iter()
-                .map(|(n, ts, optional)| format!("{n}{}: {ts}", if *optional { "?" } else { "" }))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let value = returns.clone().unwrap_or_else(|| "void".to_owned());
-            let returns = if m.is_async {
-                format!("Promise<{value}>")
-            } else {
-                value
-            };
-            (generics, params, returns)
-        };
-        if m.overloads.is_empty() {
-            vec![one("", &m.params, &m.returns)]
-        } else {
-            m.overloads
-                .iter()
-                .map(|o| one(o.generics, &o.params, &o.returns))
-                .collect()
-        }
-    };
-    // `<T, U = never>` of a generic class.
-    let generics = if c.def.generics.is_empty() {
-        String::new()
-    } else {
-        let params: Vec<&str> = c.def.generics.iter().map(|(_, text)| *text).collect();
-        format!("<{}>", params.join(", "))
-    };
+    let signatures = member_signatures;
+    let generics = class_generics(c.def);
     doc(out, "", c.doc);
     if c.def.interface {
         // No value: what its objects have.
@@ -2252,6 +2218,66 @@ fn class_declaration(out: &mut String, c: &ClassSpec, added: &[&MemberSpec]) {
     out.push_str(
         "  /** Frees the Rust value now (else when the object is collected); the object throws after. */\n  dispose(): void;\n  [Symbol.dispose](): void;\n}\n\n",
     );
+}
+
+/// A member's signatures: its own, or those declared instead
+/// (`#[overload]`, `#[ts]`): type parameters, parameters and result (a
+/// promise of it for an `async` member).
+fn member_signatures(m: &MemberSpec) -> Vec<(&'static str, String, String)> {
+    let one =
+        |generics: &'static str, params: &[(&str, String, bool)], returns: &Option<String>| {
+            let params = params
+                .iter()
+                .map(|(n, ts, optional)| format!("{n}{}: {ts}", if *optional { "?" } else { "" }))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let value = returns.clone().unwrap_or_else(|| "void".to_owned());
+            let returns = if m.is_async {
+                format!("Promise<{value}>")
+            } else {
+                value
+            };
+            (generics, params, returns)
+        };
+    if m.overloads.is_empty() {
+        vec![one("", &m.params, &m.returns)]
+    } else {
+        m.overloads
+            .iter()
+            .map(|o| one(o.generics, &o.params, &o.returns))
+            .collect()
+    }
+}
+
+/// `<T, U = never>` of a generic class, as its declaration writes it
+/// (empty for most classes).
+pub(crate) fn class_generics(def: &ClassDef) -> String {
+    if def.generics.is_empty() {
+        String::new()
+    } else {
+        let params: Vec<&str> = def.generics.iter().map(|(_, text)| *text).collect();
+        format!("<{}>", params.join(", "))
+    }
+}
+
+/// The lines of the methods class extension `def` adds, as its class's
+/// body has them (each with its doc comment): what `.nsh/types` adds to
+/// the class's other declarations
+/// ([`super::description::ClassExtensionDescription`]).
+pub(crate) fn extension_lines(def: &ClassExtensionDef) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    // Their named types are the extending set's ([`declarations`]).
+    let mut types = TsTypes::default();
+    for m in def.member_specs(&mut types) {
+        for (generics, params, returns) in member_signatures(&m) {
+            if !m.doc.is_empty() {
+                let _ = writeln!(out, "  /** {} */", m.doc);
+            }
+            let _ = writeln!(out, "  {}{generics}({params}): {returns};", m.name);
+        }
+    }
+    out
 }
 
 /// `press` -> `onPress`.

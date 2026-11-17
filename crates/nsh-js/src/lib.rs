@@ -16,6 +16,8 @@ mod can_call_now;
 mod canvas;
 mod chunks;
 #[cfg(test)]
+mod class_extension_types;
+#[cfg(test)]
 mod class_extensions;
 mod classes;
 mod clock;

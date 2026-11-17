@@ -6,7 +6,14 @@
   are removed). None of it is checked in, and nothing in it depends on the app's code: `nsh_js::type_definitions(ui_sets)`
   (the UI sets as data: `nsh_core::element::description::SetDescription`, each with its generated declarations)
   makes the declarations of everything NSH serves (`nsh-js` `declarations.rs`), and `nsh_bundler::type_definitions()`
-  the asset imports. The files: `nsh/index.d.ts` (`nsh`), one per module (`nsh/base.d.ts`, `nsh/mobile.d.ts`,
+  the asset imports. A class's file also declares the methods the sets' class extensions add to it
+  (`#[class_extension]`, each set's `class_extensions`): `export interface <Class><its type parameters> { … }`, which
+  TypeScript merges with the class, in every file that exports that class (matched by its Rust type, `classTypes`, so
+  another class of the same name gets nothing) except where the set registering the extension declares the class
+  itself (its declaration lists them). The types the methods name are those of a set registering the extension:
+  imported as any name another file declares, or written `import("./<that set>").Name` where the name would resolve
+  to another type (one the class's file declares, or another set's declared first, as when two service crates each
+  name an `Options`). No extension, no interface. The files: `nsh/index.d.ts` (`nsh`), one per module (`nsh/base.d.ts`, `nsh/mobile.d.ts`,
   an app's set's `app/native.d.ts`, ...), `nsh/types.d.ts` (the styles, the elements' props and events, the refs (`ViewRef` and each element's own over it), the JSX namespace; `nsh` exports them),
   `nsh/jsx-runtime.d.ts` (where `jsxImportSource` finds `JSX`: no intrinsic elements, so every tag is checked as the
   component it names and generic ones are inferred: `native-pipeline.md`), `nsh/globals.d.ts` (console, timers,
@@ -990,7 +997,10 @@ program that describes them, builds the hosts and runners with them, and does ev
     types, the values nsh-js makes for it, the files it ships, the exports TS sees without a doc comment, which
     `nsh` warns of as it writes `.nsh/types`, and the theme documents it registers, `theme_documents`, as written,
     which the bundler and `nsh` read with `description::declarations`; and the roles it lists, `roles` (`Registry::roles`: name, kind and doc of every role
-    its components draw with, mapped or not), which `description::roles` merges with the core's own);
+    its components draw with, mapped or not), which `description::roles` merges with the core's own; and its class
+    extensions, `classExtensions` (`ClassExtensionDescription`: the class's name, Rust type and type parameters, the
+    method lines and the extension's Rust type), which `.nsh/types` adds to the class's other declarations, with the
+    Rust type of each class it exports, `classTypes`);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);
   - the hosts and runners, passing the sets after `nsh/base`'s (`vec![nsh_base::registry(), set_app_charts(),

@@ -562,8 +562,13 @@ const builder = new AppBuilder().addStorage().addI18n((o) => { o.locale = "hr"; 
   attribute names `C` by its own name, the one JS knows: an alias (`use app::AppBuilder as Builder`) is a compile
   error.
 - **Declared.** A set that registers both `C` and the extension lists the methods in `C`'s declaration, after its
-  own members and before `dispose()`; the named types they use are the set's. `Registry::undocumented` lists an
-  undocumented method as `C.<method>`.
+  own members and before `dispose()`; the named types they use are the set's. `.nsh/types` adds them to every other
+  file that declares `C` (the same Rust class, not another of its name) among the sets an app's hosts serve, as
+  `export interface C<its type parameters> { … }`, which TypeScript merges with the class; the types the methods
+  name are the extending set's, imported as usual, or written `import("./app-i18n/native").Options` where the name
+  would resolve to another type ([tooling.md](tooling.md)). Without a set registering the extension, nothing is
+  added. `Registry::undocumented`
+  lists an undocumented method as `C.<method>`.
 
 ## How calls cross
 
@@ -637,7 +642,10 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   class's own (op 202) is ([web.md](web.md)).
 - **Declarations:** `nsh_core::element::declarations` writes `export declare class` for each, with the types the members
   use, next to the set's components and modules, and the methods of the set's extensions of the class
-  (`class_declaration`); the declarations test checks that what exists is declared.
+  (`class_declaration`); the declarations test checks that what exists is declared. `.nsh/types`
+  (`nsh_js::type_definitions`) adds the methods of the other served sets' extensions to each file that exports the
+  class, as an interface TypeScript merges with it (`ClassExtensionDescription`, the set description's
+  `classExtensions`).
 - **The CLI** needs no change: classes are part of the app's set like its modules.
 
 ## Costs
