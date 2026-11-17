@@ -38,9 +38,9 @@ use std::{
 use nsh_core::{
     JsonValue,
     element::{
-        CallbackHandle, ClassDef, ClassInstance, Exception, JsCall, JsClass, JsHost, JsIn, JsKind,
-        JsRaw, JsTarget, Member, MemberCall, MemberKind, Posts, PropError, RustCall, RustOp,
-        SyncCall, Thrown, Tracer,
+        CallbackHandle, ClassDef, ClassExtensionDef, ClassInstance, Exception, JsCall, JsClass,
+        JsHost, JsIn, JsKind, JsRaw, JsTarget, Member, MemberCall, MemberKind, Posts, PropError,
+        RustCall, RustOp, SyncCall, Thrown, Tracer,
     },
 };
 use rquickjs::qjs;
@@ -349,6 +349,13 @@ fn make(cx: Ctx, def: &'static ClassDef) -> R<(V, V)> {
             }
         }
     }
+    // The methods the served sets' extensions add (`#[class_extension]`).
+    for ext in extensions_of(cx, def) {
+        for (index, member) in ext.members.iter().enumerate() {
+            let f = extension_method(cx, ext, index)?;
+            define_method(cx, proto.raw(), member.name, f)?;
+        }
+    }
     for (name, get, set) in accessors {
         let cname = CString::new(name).unwrap_or_default();
         let (get, set) = (get.unwrap_or_default(), set.unwrap_or_default());
@@ -393,6 +400,49 @@ fn make(cx: Ctx, def: &'static ClassDef) -> R<(V, V)> {
     Ok((proto, ctor))
 }
 
+/// The extensions of class `def` that the context's sets register.
+fn extensions_of(cx: Ctx, def: &ClassDef) -> Vec<&'static ClassExtensionDef> {
+    // SAFETY: a projection of the state's field, by shared reference.
+    let modules = unsafe { &(*crate::state::state(cx)).modules };
+    let id = (def.type_id)();
+    modules
+        .extensions
+        .iter()
+        .copied()
+        .filter(|e| (e.class.type_id)() == id)
+        .collect()
+}
+
+/// The function of method `index` of extension `ext`, calling
+/// [`call_extension`] with `ext` (static: no finalizer) and the index.
+fn extension_method(cx: Ctx, ext: &'static ClassExtensionDef, index: usize) -> R<V> {
+    let member = &ext.members[index];
+    let name = CString::new(member.name).unwrap_or_default();
+    // QuickJS keeps a closure's magic in 16 unsigned bits.
+    let Ok(magic) = u16::try_from(index) else {
+        return Err(js::range_error(
+            cx,
+            &format!(
+                "{}: a class extension has at most {} methods",
+                ext.class.name,
+                u16::MAX
+            ),
+        ));
+    };
+    // SAFETY: the opaque points to static data.
+    V::checked(cx, unsafe {
+        qjs::JS_NewCClosure(
+            cx,
+            Some(call_extension),
+            name.as_ptr(),
+            None,
+            member.params.len() as c_int,
+            c_int::from(magic),
+            ext as *const ClassExtensionDef as *mut c_void,
+        )
+    })
+}
+
 // --- Calls -------------------------------------------------------------------------
 
 /// The arguments of a native call.
@@ -433,6 +483,23 @@ unsafe extern "C" fn call(
     // definition, the magic the member's index.
     let def = unsafe { &*(opaque as *const ClassDef) };
     let member = &def.members[magic as usize];
+    let host = CallHost::new(cx, this, UNDEFINED, args(argc, argv));
+    host.run(member)
+}
+
+/// A method a class extension adds: run as the class's own methods are.
+unsafe extern "C" fn call_extension(
+    cx: Ctx,
+    this: Raw,
+    argc: c_int,
+    argv: *mut Raw,
+    magic: c_int,
+    opaque: *mut c_void,
+) -> Raw {
+    // SAFETY: the opaque of an extension's methods is its static
+    // definition, the magic the method's index.
+    let ext = unsafe { &*(opaque as *const ClassExtensionDef) };
+    let member = &ext.members[magic as usize];
     let host = CallHost::new(cx, this, UNDEFINED, args(argc, argv));
     host.run(member)
 }

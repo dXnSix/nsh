@@ -323,7 +323,7 @@ fn class_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
             kind_of(f)?,
             Kind::Constructor | Kind::Static | Kind::AsyncStatic
         );
-        members.push(member_def(f, &class_name)?);
+        members.push(member_def(f, &class_name, &quote!(Self))?);
     }
     // The getters', setters' and callbacks' attributes are the macro's.
     for member in &mut item.items {
@@ -359,7 +359,15 @@ fn class_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
     })
 }
 
-fn member_def(f: &ImplItemFn, class: &str) -> syn::Result<TokenStream2> {
+/// The entry of member `f` of class `class` (its JS name): `this` is the
+/// type its `this` is an instance of (`Self` in a class's own block, the
+/// class in an extension's: `crate::class_extension`), the function is
+/// called on `Self`.
+pub(crate) fn member_def(
+    f: &ImplItemFn,
+    class: &str,
+    this: &TokenStream2,
+) -> syn::Result<TokenStream2> {
     let nsh_core = crate::root::nsh_core();
     let ui = quote!(#nsh_core::element);
     let private = quote!(#ui::__private);
@@ -577,9 +585,9 @@ fn member_def(f: &ImplItemFn, class: &str) -> syn::Result<TokenStream2> {
         }
     }
     let call = if is_async {
-        async_call(f, kind, &params, &names, &what, fallible)
+        async_call(f, kind, &params, &names, &what, fallible, this)
     } else {
-        sync_call(f, kind, &params, &names, &what, fallible, starts)
+        sync_call(f, kind, &params, &names, &what, fallible, starts, this)
     };
     Ok(quote! {
         #(#cfgs)*
@@ -600,6 +608,7 @@ fn member_def(f: &ImplItemFn, class: &str) -> syn::Result<TokenStream2> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_call(
     f: &ImplItemFn,
     kind: Kind,
@@ -608,6 +617,7 @@ fn sync_call(
     what: &str,
     fallible: bool,
     starts: bool,
+    this_ty: &TokenStream2,
 ) -> TokenStream2 {
     let nsh_core = crate::root::nsh_core();
     let ui = quote!(#nsh_core::element);
@@ -676,22 +686,22 @@ fn sync_call(
             };
             (
                 quote! {
-                    let __this = #private::this::<Self>(host, #what)?;
+                    let __this = #private::this::<#this_ty>(host, #what)?;
                     #[allow(unused_mut)]
-                    let mut __value = #private::#borrow_fn::<Self>(&__this)?;
+                    let mut __value = #private::#borrow_fn::<#this_ty>(&__this)?;
                 },
                 Some(by),
             )
         }
         Kind::Getter => (
             quote! {
-                let __this = #private::this::<Self>(host, #what)?;
-                let __value = #private::borrow::<Self>(&__this)?;
+                let __this = #private::this::<#this_ty>(host, #what)?;
+                let __value = #private::borrow::<#this_ty>(&__this)?;
             },
             Some(quote!(&*__value)),
         ),
         Kind::ThisMethod => (
-            quote!(let __this = #private::this::<Self>(host, #what)?;),
+            quote!(let __this = #private::this::<#this_ty>(host, #what)?;),
             Some(quote!(__this)),
         ),
         _ => (quote!(), None),
@@ -733,6 +743,7 @@ fn async_call(
     names: &[String],
     what: &str,
     fallible: bool,
+    this_ty: &TokenStream2,
 ) -> TokenStream2 {
     let nsh_core = crate::root::nsh_core();
     let ui = quote!(#nsh_core::element);
@@ -764,7 +775,7 @@ fn async_call(
     // keeps them.
     let this = if kind == Kind::AsyncMethod {
         args.insert(0, quote!(__this));
-        quote!(let __this = #private::this::<Self>(host, #what)?;)
+        quote!(let __this = #private::this::<#this_ty>(host, #what)?;)
     } else {
         quote!(let _ = host;)
     };

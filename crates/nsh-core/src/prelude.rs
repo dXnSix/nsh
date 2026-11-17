@@ -225,6 +225,7 @@ pub use crate::element::{
     bounds,
     canvas,
     class,
+    class_extension,
     deg,
     hsl,
     hsla,

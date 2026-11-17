@@ -18,6 +18,9 @@
 //!   the Rust value (`new Tally(3)`, `tally.add(2)`).
 //! - `#[interface]` on a trait: a TS interface JS objects implement, and the
 //!   trait's stand-in (`Js<Trait>`) calling such an object's members.
+//! - `#[class_extension(C)]` on an `impl` block of a type of the crate:
+//!   instance methods it adds to class `C` of another crate
+//!   (`builder.addI18n(..)`).
 //!
 //! - `asset!("logo@2x.png")` / `assets!()`: the files a crate ships in its
 //!   `assets/` directory, read at compile time.
@@ -41,6 +44,7 @@
 
 mod assets;
 mod class;
+mod class_extension;
 mod host_props;
 mod interface;
 mod js_ops;
@@ -2322,6 +2326,60 @@ pub fn class(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let item = parse_macro_input!(item as syn::Item);
     class::class(item, options)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// `#[class_extension(C)]` on an `impl` block of a type of this crate (the
+/// holder: a unit struct is enough, never a JS value): its functions with a
+/// visibility become instance methods of class `C`, a `#[class]` of another
+/// crate or set (`builder.addI18n(..)` on another crate's `AppBuilder`);
+/// those without one are helpers, Rust's only. It implements
+/// `ClassExtension`, which a UI set registers
+/// (`registry.class_extension::<I18nBuilder>()`).
+///
+/// ```ignore
+/// pub struct I18nBuilder;
+///
+/// #[class_extension(AppBuilder)]
+/// impl I18nBuilder {
+///     /// Registers the i18n service, configured by `configure`.
+///     pub fn add_i18n(
+///         this: Instance<AppBuilder>,
+///         #[args(options)] configure: Option<Callback<Instance<I18nOptions>>>,
+///     ) -> Result<Instance<AppBuilder>, String> {
+///         // ...
+///         Ok(this)
+///     }
+/// }
+/// ```
+///
+/// The attribute names `C` by its own name (a path to it, not an alias:
+/// messages name the class as JS knows it). Each method takes
+/// `this: Instance<C>` first (`C` named as the attribute names it): borrow the value with `this.with(..)` / `this.with_mut(..)`,
+/// return `this` to chain. It may be synchronous, `async fn` (a promise,
+/// run as a task of the core) or return `Later<T>`. Its other parameters
+/// and its result are a `#[class]` method's (values, instances,
+/// `Callback`s with `#[args(..)]`, trailing `Option`s optional in TS,
+/// `System`, `CallCx` and `&Other` / `&mut Other` in a synchronous method;
+/// `T`, `Result<T, E>`, `Later<T>`), as are `#[ts("…")]`,
+/// `#[overload(..)]`, `#[cfg]`, the camelCase JS name and the doc comments
+/// TS shows. The methods reach JS once a UI set the host serves registers
+/// the extension, on the class's prototype wherever JS gets the class,
+/// and are declared with the class (the set's declarations, `.nsh/types`).
+///
+/// Refused at compile time: a receiver (`self`, `&self`: the holder is not
+/// the class), a function without `this: Instance<C>` (a static) or named
+/// `new`, `#[getter]` / `#[setter]`, `this` of another type
+/// (`Instance<Self>` included), `dispose` and `constructor` (every class's
+/// own), a `ModuleCx` parameter, generics or a trait `impl`, a doc comment
+/// on the block, an attribute that is not one type path, and a class named
+/// by an alias (`use app::AppBuilder as Builder`). Registering
+/// refuses a method named like an instance member of `C` and two
+/// extensions adding one name to one class (`Registry::class_extension`).
+#[proc_macro_attribute]
+pub fn class_extension(attr: TokenStream, item: TokenStream) -> TokenStream {
+    class_extension::class_extension(attr.into(), item.into())
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

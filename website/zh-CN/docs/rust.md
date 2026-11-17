@@ -360,7 +360,9 @@ trait 是 TSX 对象为 Rust 实现的 TypeScript 接口：UI 集声明 `export 
 保留的对象构造（`JsStartable::new(handle)`）；用 `registry.interface::<JsStartable>()` 注册。不是 `async` 的方法在 TSX 的调用中立即
 运行 TSX 的方法（在调用之外，返回 `()` 的方法在 TSX 的下一轮运行），`async fn` 等待它的结果（普通值和 Promise 都可以：在它上面写 `#[ts("(): boolean")]`
 声明为 `isInitialized(): boolean`），TSX 抛出的异常是返回 `Result` 的方法
-的 `Err`。开始监听的函数命名为
+的 `Err`。另一个 crate 可以给你的类添加方法：在它自己的某个类型的 `impl` 块上写 `#[class_extension(AppBuilder)]`，每个以
+`this: Instance<AppBuilder>` 开头的函数就是 TSX 中 `AppBuilder` 的方法（`builder.addI18n((o) => …)`）；应用使用的某个 UI 集用
+`registry.class_extension::<I18nBuilder>()` 注册它之后，每个实例上都有这些方法，类的声明也会列出它们。开始监听的函数命名为
 `on(event, listener)`，返回 `Stop`（`Stop::new(|| …)`），TSX 得到的是停止监听的函数（`() => void`）；它只运行一次，在 TSX 调用它时，
 或在调用 `on` 的一方（组件，或热重载下模块的这次运行）消失时。事件处理函数
 接收一个对象：变体的值是它的字段 `value`，在变体上写 `#[args(price)]` 可以给它命名（`onSelect({ price })`），

@@ -1267,7 +1267,8 @@ what changed.
 ## The JS face and the declarations
 
 `nsh-js` `components.rs` makes each component's and module's JS from its spec (`ComponentSpec`, `ModuleSpec`) when a
-bundle first imports the module, and `classes.rs` each class's from its `ClassDef`. `nsh_core::element::declarations(registry,
+bundle first imports the module, and `classes.rs` each class's from its `ClassDef` and the methods the served sets'
+class extensions add to it (`ClassExtensionDef`, [rust-classes.md](rust-classes.md#class-extensions)). `nsh_core::element::declarations(registry,
 omit)` writes their declarations (into the registry's module file, `nsh/base.d.ts`, `app/native.d.ts`; `nsh-js` `declarations.rs` adds
 the re-exports and native values it makes): the named types the props, events, methods and functions use (`export
 type Foreground = ...` for a `PropEnum`, `export interface AlertDialogAction` for a `JsObject`, each once, with its doc

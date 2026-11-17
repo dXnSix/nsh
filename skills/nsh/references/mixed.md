@@ -332,6 +332,39 @@ TS service something TS answers at once, declare what JS returns with `#[ts]` (a
     async fn is_initialized(&self) -> Result<bool, String>;
 ```
 
+### Class extensions: methods on another crate's class
+
+A crate adds instance methods to a `#[class]` of another crate (a service crate adding `addI18n` to the host
+crate's `AppBuilder`) with `#[class_extension(C)]` on an `impl` block of a type of its own:
+
+```rust
+/// Methods the i18n crate adds to the app builder.
+pub struct I18nBuilder;
+
+#[class_extension(AppBuilder)]
+impl I18nBuilder {
+    /// Registers the i18n service, configured by `configure`.
+    pub fn add_i18n(
+        this: Instance<AppBuilder>,
+        #[args(options)] configure: Option<Callback<Instance<I18nOptions>>>,
+    ) -> Result<Instance<AppBuilder>, String> {
+        // borrow with this.with(..) / this.with_mut(..), call `configure` on the spot
+        Ok(this)
+    }
+}
+// registry.class_extension::<I18nBuilder>();  TSX: builder.addStorage().addI18n((o) => { o.locale = "hr"; })
+```
+
+- Each method takes `this: Instance<C>` first and returns `this` to chain; the rest is a class method's (`async fn`,
+  `Later<T>`, `Callback`, trailing `Option`s, `#[args]`, `#[ts]`, doc comments).
+- Instance methods only: no `&self`, statics, `new`, `#[getter]` / `#[setter]`, `dispose` or `constructor` (compile
+  errors).
+- The methods are on every instance of `C` once a UI set the app serves registers the extension, whichever set TSX
+  imports `C` from. The extension's set does not export `C`.
+- A name `C` has already (method, getter, setter), or one another extension of `C` adds, panics at the first run:
+  rename one.
+- The class's declaration lists the methods.
+
 ### Signatures written in TypeScript
 
 When the Rust types are looser than the TS should be (a `JsHandle` that is the service a class names),
@@ -440,6 +473,7 @@ TS gets only `Puts ... copied.` and `copy(text: string): Promise<number>`.
 
 - Every host and runner links them all, and `.nsh/types` declares each specifier.
 - Share code with Cargo path dependencies. Only listed crates export to TSX.
+- A crate's set adds methods to another crate's class with `#[class_extension(C)]` (see "Class extensions").
 - A crate listed twice, two crates with one package name (`-` and `_` count as one), or two with one specifier all fail with both paths named.
 - With a `"root"`, it is a component of the first crate listed.
 

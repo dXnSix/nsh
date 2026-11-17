@@ -156,7 +156,15 @@ impl Host {
 
     /// Creates a runtime set up by `options` and installs `console`, timers
     /// and the op bridge.
+    ///
+    /// # Panics
+    ///
+    /// When two of `options.ui_sets` add one name to one class
+    /// ([`Registry::class_extensions_in`](nsh_core::element::Registry::class_extensions_in)).
     pub fn with_options(options: HostOptions) -> Result<Host, JsError> {
+        // Refused before the VM exists: a panic unwinding past a live
+        // runtime would abort freeing it.
+        let _ = nsh_core::element::Registry::class_extensions_in(&options.ui_sets);
         let limits = options.limits;
         // The allocator enforces the heap limit (`set_memory_limit` does
         // nothing with one) and tells when it was reached.
