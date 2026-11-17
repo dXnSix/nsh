@@ -23,7 +23,10 @@ use std::{
 
 use nsh_core::{
     decl,
-    element::{ComponentSpec, DECLARATIONS, ModuleSpec, Registry, description::SetDescription},
+    element::{
+        ClassExtensionDef, ComponentSpec, DECLARATIONS, ModuleSpec, Registry,
+        description::SetDescription,
+    },
     host_channel::ModuleFake,
 };
 use rquickjs::{Ctx, JsLifetime, Module, qjs};
@@ -736,6 +739,9 @@ pub(crate) struct ModuleTable {
     /// The values of [`Made::Shared`] exports made so far, by (module,
     /// export).
     shared: RefCell<HashMap<(&'static str, String), crate::web::js::V>>,
+    /// The class extensions the registries register: the methods the
+    /// classes' prototypes get (`classes.rs`'s `make`).
+    pub(crate) extensions: Vec<&'static ClassExtensionDef>,
 }
 
 /// The code of a chunk.
@@ -766,6 +772,15 @@ impl ModuleTable {
     pub(crate) fn new(ui_sets: &[Registry]) -> ModuleTable {
         let mut registries: Vec<Registry> = nsh_core::runtime::registries().to_vec();
         let host = registries.len();
+        // Every set's, a set without a specifier's too; two adding one name
+        // to one class panic, as the core's merged registry does.
+        let extensions = Registry::class_extensions_in(
+            &registries
+                .iter()
+                .chain(ui_sets)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         registries.extend(
             ui_sets
                 .iter()
@@ -780,6 +795,7 @@ impl ModuleTable {
             chunks: RefCell::default(),
             objects: RefCell::default(),
             shared: RefCell::default(),
+            extensions,
         }
     }
 
@@ -902,6 +918,8 @@ impl ModuleTable {
             chunks: RefCell::default(),
             objects: RefCell::default(),
             shared: RefCell::default(),
+            // The compiler runs no class.
+            extensions: Vec::new(),
         }
     }
 

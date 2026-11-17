@@ -396,7 +396,11 @@ calls such an object through the trait's stand-in `JsStartable`, taken as an arg
 (`JsStartable::new(handle)`); register it with `registry.interface::<JsStartable>()`. A method that is not `async`
 runs the TSX method at once inside a call from TSX (outside one, a method returning `()` runs in TSX's next turn),
 an `async fn` awaits it (a value as well as a Promise: `#[ts("(): boolean")]` on it declares
-`isInitialized(): boolean`), and what TSX throws is the `Err` of a method returning a `Result`. A function that starts listening is named `on(event, listener)` and returns `Stop`
+`isInitialized(): boolean`), and what TSX throws is the `Err` of a method returning a `Result`. Another crate adds
+methods to your class with `#[class_extension(AppBuilder)]` on an `impl` block of a type of its own: each function
+taking `this: Instance<AppBuilder>` is a method of `AppBuilder` in TSX (`builder.addI18n((o) => …)`), on every
+instance once a UI set the app serves registers it with `registry.class_extension::<I18nBuilder>()`, and the class's
+declaration lists it. A function that starts listening is named `on(event, listener)` and returns `Stop`
 (`Stop::new(|| …)`), which TSX gets as a function that stops it (`() => void`); it runs once, when TSX calls it or
 when what called `on` goes (a component, or the module's run under hot reload). An event's handler gets one object: a variant's value is its field `value`, which
 `#[args(price)]` on the variant names (`onSelect({ price })`), and `#[args(open, reason)]` names the fields of a

@@ -499,6 +499,77 @@ export interface Startable {
   which the method's own default calls: a Rust implementor sees no change, and the stand-in runs it for an object
   without the member.
 
+## Class extensions
+
+A crate adds instance methods to a `#[class]` of another crate with `#[class_extension(C)]` on an `impl` block of a
+type of its own (the holder), and its UI set registers them. A service crate adds `builder.addI18n(..)` to the app
+builder its host crate exports, as a Rust extension trait adds `.add_i18n(..)`:
+
+```rust
+/// Methods the i18n crate adds to the app builder.
+pub struct I18nBuilder;
+
+#[class_extension(AppBuilder)]
+impl I18nBuilder {
+    /// Registers the i18n service, configured by `configure`.
+    pub fn add_i18n(
+        this: Instance<AppBuilder>,
+        #[args(options)] configure: Option<Callback<Instance<I18nOptions>>>,
+    ) -> Result<Instance<AppBuilder>, String> {
+        let options = Instance::new(I18nOptions::default());
+        if let Some(configure) = configure {
+            configure.call(options.clone())?;
+        }
+        this.with_mut(|b| b.add_service(I18n::new(options)));
+        Ok(this)
+    }
+}
+
+#[native_module("app-i18n/native")]
+fn native(registry: &mut Registry) {
+    registry.class_extension::<I18nBuilder>();
+}
+```
+
+```ts
+const builder = new AppBuilder().addStorage().addI18n((o) => { o.locale = "hr"; });
+```
+
+- **The holder.** The block's type (a unit struct is enough) carries the methods; it is never a JS value and needs
+  no `#[class]`. Its functions stay callable from Rust (`I18nBuilder::add_i18n(builder, None)`).
+- **The methods.** The block's functions with a visibility are methods of `C`, those without one helpers. Each takes
+  `this: Instance<C>` first: it borrows the value with `this.with(..)` / `this.with_mut(..)` and returns `this` to
+  chain (`===` the object it was called on). The rest is a `#[class]` method's: parameters and results, `async fn`
+  and `Later<T>` (promises), `#[args(..)]`, `#[ts("…")]`, `#[overload(..)]`, `#[cfg]`, camelCase names and doc
+  comments. An extension adds instance methods only: a receiver (the holder is not the class), a function without
+  `this` (a static) or named `new`, `#[getter]` / `#[setter]`, `this` of another type, `dispose` and
+  `constructor`, `ModuleCx`, generics, a trait `impl` and a doc comment on the block are compile errors.
+- **When they reach JS.** `Registry::class_extension::<E>()` (`ClassExtension`, `ClassExtensionDef`) puts the
+  methods on `C`'s prototype wherever a host serves the set, native (nsh-js) or the web player: `C`'s own set, another set, or a submodule of one. They
+  are there however JS gets the class (an import from any set that exports it, an instance a member returns), as
+  the class's own methods are: functions named and sized like them, writable, configurable, not enumerable. A host
+  serving no set that registers the extension has no such methods. Registering an extension does not export `C`:
+  it adds to the class wherever the class is exported. The classes and named types its methods name are
+  registered with it.
+- **Refused.** A method named like an instance member of `C` (a method, getter or setter; a static lives on the
+  constructor and is no clash) panics where the set registers the extension (``class extension
+  `app_i18n::I18nBuilder` adds `addStorage` to class `AppBuilder` (`app::AppBuilder`), which has a member of that
+  name: rename one``), and so does a second extension adding a name another extension of `C` in the set adds
+  (``class extensions `app_i18n::I18nBuilder` and `app_l10n::L10nBuilder` both add `addI18n` to class `AppBuilder`
+  (`app::AppBuilder`) in `app/native`: rename one``). Two sets adding one name to one class panic where a host takes
+  its sets (`Registry::class_extensions_in`, which `Registry::merged` and `nsh-js`'s `Host::with_options` call), "by
+  two UI sets", as two components of one name are. One extension registered by two sets is one extension. The
+  attribute names `C` by its own name, the one JS knows: an alias (`use app::AppBuilder as Builder`) is a compile
+  error.
+- **Declared.** A set that registers both `C` and the extension lists the methods in `C`'s declaration, after its
+  own members and before `dispose()`; the named types they use are the set's. `.nsh/types` adds them to every other
+  file that declares `C` (the same Rust class, not another of its name) among the sets an app's hosts serve, as
+  `export interface C<its type parameters> { … }`, which TypeScript merges with the class; the types the methods
+  name are the extending set's, imported as usual, or written `import("./app-i18n/native").Options` where the name
+  would resolve to another type ([tooling.md](tooling.md)). Without a set registering the extension, nothing is
+  added. `Registry::undocumented`
+  lists an undocumented method as `C.<method>`.
+
 ## How calls cross
 
 Nothing crosses between JS and the core as JSON for a Rust component, module or class (`nsh_core::element::call`):
@@ -546,9 +617,13 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   `MemberCall`), as `#[module]` implements `Module`; on the struct it implements `Trace` (the callbacks the fields
   keep) and `Ret` (a value of the struct is a new instance). `#[interface]` on a trait (`nsh-macros`
   `interface.rs`) writes the stand-in and its `element::Interface` (`Interface::DEF`, an `InterfaceDef`: name, doc,
-  members, each an `InterfaceMember`).
+  members, each an `InterfaceMember`). `#[class_extension(C)]` on an `impl` block (`class_extension.rs`) makes its
+  methods with `#[class]`'s member code (`class.rs`' `member_def`, `this` an `Instance<C>`) and implements
+  `element::ClassExtension` (`ClassExtension::DEF`, a `ClassExtensionDef`: the class, the holder's type and the
+  methods' `Member`s).
 - **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()`), `Posts`,
-  `Registry::class::<C>()`, `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
+  `Registry::class::<C>()`, `ClassExtension` and `Registry::class_extension::<E>()` / `class_extensions()` /
+  `class_extensions_in(sets)` (`class_extension.rs`, the clash checks in `component.rs`), `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
   `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /
   `to_js`); the typed calls (`call.rs`: `RustOp`, `RustCall`, `JsEvent`, `AnyValue`, `ToJs`); the core runs
   them in order with the ops (`Core::run_rust`).
@@ -557,8 +632,20 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   `JsHost`); calls that become ops convert their values and push the op (`classes::send`), returning the promise
   `components.rs` settles when the core's events bring the result (`components::deliver`); the object is the web
   classes' (`web/mod.rs`), its slot holding the instance, and its mark hook reports the instance's callbacks.
+  `ModuleTable` keeps the served sets' class extensions (`Registry::class_extensions_in`), and `make` defines each
+  extension's methods on its class's prototype after the class's own, through `call_extension` (a C closure whose
+  opaque is the `ClassExtensionDef`, its magic the method's index), which runs the member as `call` runs a
+  class's.
+- **The web player** (`nsh-platform-web`): `Modules::describe` (op 200) gives each set's class extensions with its
+  classes, `web/browser/modules.js` defines their methods on the class's prototype once both are described (an
+  extension waits for a class a later gate brings), and a call goes to Rust as op 210, which runs the member as a
+  class's own (op 202) is ([web.md](web.md)).
 - **Declarations:** `nsh_core::element::declarations` writes `export declare class` for each, with the types the members
-  use, next to the set's components and modules; the declarations test checks that what exists is declared.
+  use, next to the set's components and modules, and the methods of the set's extensions of the class
+  (`class_declaration`); the declarations test checks that what exists is declared. `.nsh/types`
+  (`nsh_js::type_definitions`) adds the methods of the other served sets' extensions to each file that exports the
+  class, as an interface TypeScript merges with it (`ClassExtensionDescription`, the set description's
+  `classExtensions`).
 - **The CLI** needs no change: classes are part of the app's set like its modules.
 
 ## Costs

@@ -14,6 +14,7 @@ use nsh_engine::MountSink;
 mod assets;
 mod canvas;
 mod class_bench;
+mod class_extensions;
 mod clock;
 mod compiled;
 mod component_bench;

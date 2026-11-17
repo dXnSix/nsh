@@ -14,7 +14,8 @@ use super::{
     Children, IntoElement, PropError, Slot, TsType, TsTypes,
     builder::{ComponentElement, ElNode},
     call::{AnyValue, JsResult, MethodCall},
-    class::{Class, ClassDef, ClassSpec, MemberKind, Thrown},
+    class::{Class, ClassDef, ClassSpec, MemberKind, MemberSpec, Thrown},
+    class_extension::{ClassExtension, ClassExtensionDef},
     js::{JsHost, JsIn, JsOwned},
     module::{FunctionSpec, Module, ModuleSpec},
 };
@@ -872,6 +873,9 @@ pub struct Registry {
     /// ([`Registry::interface`]): declarations only, JS has no value of
     /// them.
     interfaces: Arc<FxHashMap<&'static str, &'static super::InterfaceDef>>,
+    /// The methods it adds to classes of other crates or sets
+    /// ([`Registry::class_extension`]), in the order registered.
+    extensions: Arc<Vec<&'static ClassExtensionDef>>,
     /// The TypeScript type aliases its declarations export, by name
     /// ([`Registry::ts_alias`]).
     aliases: Arc<FxHashMap<&'static str, super::TsAlias>>,
@@ -1039,6 +1043,8 @@ impl Registry {
     /// functions or a component's methods name ([`Registry::module`],
     /// [`Registry::register`]): their objects reach JS, so they are
     /// exported and declared. Registering a class again does nothing.
+    /// Other crates' sets may add methods to it
+    /// ([`Registry::class_extension`]).
     ///
     /// # Panics
     ///
@@ -1093,6 +1099,132 @@ impl Registry {
             (m.refs)(&mut refs);
         }
         self.classes_named(refs)
+    }
+
+    /// Registers class extension `E` (`#[class_extension(C)]`: instance
+    /// methods this crate adds to class `C` of another crate or set; the
+    /// rules are [`ClassExtension`]'s). Wherever the host serving this set
+    /// makes `C`'s objects, they have `E`'s methods, from whichever set JS
+    /// imports `C`. `C` itself is not registered, so the set does not
+    /// export it (it adds to the class wherever the class is exported);
+    /// the other classes and named types its methods' signatures name are
+    /// registered, as a class's members' are. The set's declarations list
+    /// the methods in `C`'s when the set registers `C` too. Registering it
+    /// again does nothing.
+    ///
+    /// # Panics
+    ///
+    /// When one of its methods has the JS name of an instance member of
+    /// `C` (a method, getter or setter; a static is no clash), or of a
+    /// method another extension of `C` in this set adds. Two sets adding
+    /// one name to one class are refused where a host takes its sets
+    /// ([`Registry::class_extensions_in`]).
+    #[track_caller]
+    pub fn class_extension<E: ClassExtension>(&mut self) -> &mut Self {
+        self.class_extension_def(E::DEF)
+    }
+
+    /// [`Self::class_extension`] past what depends on the extension's type.
+    #[track_caller]
+    #[inline(never)]
+    fn class_extension_def(&mut self, def: &'static ClassExtensionDef) -> &mut Self {
+        let id = (def.type_id)();
+        if self.extensions.iter().any(|e| (e.type_id)() == id) {
+            return self;
+        }
+        let class = def.class;
+        let set = self.ui_set.or(self.namespace);
+        for method in def.members {
+            let own = class.members.iter().any(|m| {
+                matches!(
+                    m.kind,
+                    MemberKind::Method | MemberKind::Getter | MemberKind::Setter
+                ) && m.name == method.name
+            });
+            if own {
+                panic!(
+                    "class extension `{}` adds `{}` to class `{}` (`{}`), which has a member of that name: rename one",
+                    (def.type_name)(),
+                    method.name,
+                    class.name,
+                    (class.type_name)(),
+                );
+            }
+            if let Some(other) = self
+                .extensions
+                .iter()
+                .find(|e| e.extends(class) && e.members.iter().any(|m| m.name == method.name))
+            {
+                panic!(
+                    "class extensions `{}` and `{}` both add `{}` to class `{}` (`{}`){}: rename one",
+                    (other.type_name)(),
+                    (def.type_name)(),
+                    method.name,
+                    class.name,
+                    (class.type_name)(),
+                    of_set(set),
+                );
+            }
+        }
+        Arc::make_mut(&mut self.extensions).push(def);
+        // What its methods name, but not its class: the extension adds to
+        // the class, it does not export it.
+        let mut refs = Vec::new();
+        for m in def.members {
+            (m.refs)(&mut refs);
+        }
+        refs.retain(|r| (r.type_id)() != (class.type_id)());
+        self.classes_named(refs)
+    }
+
+    /// The class extensions this set registers
+    /// ([`Registry::class_extension`]), by their class's name, then their
+    /// type's; a [`Registry::merged`] registry's are every merged set's.
+    pub fn class_extensions(&self) -> Vec<&'static ClassExtensionDef> {
+        let mut defs: Vec<_> = self.extensions.iter().copied().collect();
+        sort_extensions(&mut defs);
+        defs
+    }
+
+    /// The class extensions of `sets` and their submodules
+    /// ([`Registry::sets`]), each once (one registered by two sets is one
+    /// extension), by their class's name, then their type's: the methods a
+    /// host serving those sets puts on its classes.
+    ///
+    /// # Panics
+    ///
+    /// When two different extensions in those sets add one name to one
+    /// class: a mistake in the code, caught when the host starts.
+    #[track_caller]
+    pub fn class_extensions_in(sets: &[Registry]) -> Vec<&'static ClassExtensionDef> {
+        let mut out: Vec<(&'static ClassExtensionDef, Option<&'static str>)> = Vec::new();
+        for set in sets.iter().flat_map(Registry::sets) {
+            for &def in set.extensions.iter() {
+                if out.iter().any(|(e, _)| (e.type_id)() == (def.type_id)()) {
+                    continue;
+                }
+                for method in def.members {
+                    if let Some((other, other_set)) = out.iter().find(|(e, _)| {
+                        e.extends(def.class) && e.members.iter().any(|m| m.name == method.name)
+                    }) {
+                        panic!(
+                            "class extensions `{}` (in {}) and `{}` (in {}) both add `{}` to class `{}` (`{}`), by two UI sets: rename one",
+                            (other.type_name)(),
+                            set_name(*other_set),
+                            (def.type_name)(),
+                            set_name(set.specifier()),
+                            method.name,
+                            def.class.name,
+                            (def.class.type_name)(),
+                        );
+                    }
+                }
+                out.push((def, set.specifier()));
+            }
+        }
+        let mut defs: Vec<_> = out.into_iter().map(|(def, _)| def).collect();
+        sort_extensions(&mut defs);
+        defs
     }
 
     /// Registers interface `I` (`#[interface]` on a trait; `I` is its
@@ -1213,15 +1345,20 @@ impl Registry {
     /// core's view of the sets a host serves). Not a module of its own.
     /// Components of different sets may share an export (JS imports them
     /// from different modules), not a name. Modules and classes are not
-    /// in it: their calls carry what they run.
+    /// in it: their calls carry what they run. Its
+    /// [`class_extensions`](Registry::class_extensions) are every set's
+    /// ([`Registry::class_extensions_in`]).
     ///
     /// # Panics
     ///
     /// When two sets register the same component or two types of the same
-    /// name.
+    /// name, or two sets' class extensions add one name to one class.
     #[track_caller]
     pub fn merged(sets: &[Registry]) -> Self {
-        let mut out = Self::default();
+        let mut out = Self {
+            extensions: Arc::new(Self::class_extensions_in(sets)),
+            ..Self::default()
+        };
         for set in sets.iter().flat_map(Registry::sets) {
             // The first set that reads themes reads their changes too: both
             // readers come from one set, so they read one format.
@@ -1584,7 +1721,8 @@ impl Registry {
     /// function, a module or class by its struct, the rest by their own
     /// (a setter needs none beside its getter's; a module merged into a
     /// component or a function of its name, or exported flat, by that
-    /// component or function, or its functions).
+    /// component or function, or its functions). A method the set's class
+    /// extensions add is listed under its class (`Builder.addI18n`).
     pub fn undocumented(&self) -> Vec<String> {
         let mut out = Vec::new();
         let specs = self.specs();
@@ -1631,6 +1769,11 @@ impl Registry {
                     MemberKind::Setter if documented_getter(m.name) => {}
                     _ => out.push(format!("{}.{}", c.name, m.name)),
                 }
+            }
+        }
+        for e in self.class_extensions() {
+            for m in e.members.iter().filter(|m| m.doc.is_empty()) {
+                out.push(format!("{}.{}", e.class.name, m.name));
             }
         }
         for i in self.interface_defs() {
@@ -1694,6 +1837,22 @@ fn of_set(set: Option<&str>) -> String {
     set.map(|s| format!(" in `{s}`")).unwrap_or_default()
 }
 
+/// `` `app/native` `` for a registry with a specifier, `the app's set`
+/// for one without (a Rust app's components).
+fn set_name(set: Option<&str>) -> String {
+    set.map_or_else(|| "the app's set".to_owned(), |s| format!("`{s}`"))
+}
+
+/// Class extensions by their class's name, then their type's.
+fn sort_extensions(defs: &mut [&'static ClassExtensionDef]) {
+    defs.sort_by(|a, b| {
+        a.class
+            .name
+            .cmp(b.class.name)
+            .then_with(|| (a.type_name)().cmp((b.type_name)()))
+    });
+}
+
 /// The declarations of what `registry`'s specs export: one component per
 /// spec (by its [`ComponentSpec::export`] name), one object per module
 /// (its type `<Name>Module`; merged into a component of the same name; a
@@ -1727,6 +1886,12 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
     for c in &classes {
         types.merge(&c.types);
     }
+    // The methods the set adds to classes, with the named types theirs.
+    let extensions: Vec<(&'static ClassExtensionDef, Vec<MemberSpec>)> = registry
+        .class_extensions()
+        .into_iter()
+        .map(|e| (e, e.member_specs(&mut types)))
+        .collect();
     // The interfaces TS implements: types only, with the named types theirs.
     for i in registry.interface_defs() {
         super::__private::interface_ts(i, &mut types);
@@ -1969,55 +2134,28 @@ pub fn declarations(registry: &Registry, omit: &[&str]) -> String {
         }
     }
     for c in classes.iter().filter(|c| !omit.contains(&c.name)) {
-        class_declaration(&mut out, c);
+        // The methods the set's extensions of it add.
+        let added: Vec<&MemberSpec> = extensions
+            .iter()
+            .filter(|(e, _)| e.extends(c.def))
+            .flat_map(|(_, members)| members)
+            .collect();
+        class_declaration(&mut out, c, &added);
     }
     out
 }
 
-/// `export declare class Name { ... }`.
-fn class_declaration(out: &mut String, c: &ClassSpec) {
+/// `export declare class Name { ... }`, with the methods its set's
+/// extensions add (`added`) after its own members.
+fn class_declaration(out: &mut String, c: &ClassSpec, added: &[&MemberSpec]) {
     use std::fmt::Write as _;
     let doc = |out: &mut String, indent: &str, doc: &str| {
         if !doc.is_empty() {
             let _ = writeln!(out, "{indent}/** {doc} */");
         }
     };
-    // A member's signatures: its own, or those declared instead
-    // (`#[overload]`, `#[ts]`): type parameters, parameters and result (a
-    // promise of it for an `async` member).
-    let signatures = |m: &super::MemberSpec| {
-        let one = |generics: &'static str,
-                   params: &[(&str, String, bool)],
-                   returns: &Option<String>| {
-            let params = params
-                .iter()
-                .map(|(n, ts, optional)| format!("{n}{}: {ts}", if *optional { "?" } else { "" }))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let value = returns.clone().unwrap_or_else(|| "void".to_owned());
-            let returns = if m.is_async {
-                format!("Promise<{value}>")
-            } else {
-                value
-            };
-            (generics, params, returns)
-        };
-        if m.overloads.is_empty() {
-            vec![one("", &m.params, &m.returns)]
-        } else {
-            m.overloads
-                .iter()
-                .map(|o| one(o.generics, &o.params, &o.returns))
-                .collect()
-        }
-    };
-    // `<T, U = never>` of a generic class.
-    let generics = if c.def.generics.is_empty() {
-        String::new()
-    } else {
-        let params: Vec<&str> = c.def.generics.iter().map(|(_, text)| *text).collect();
-        format!("<{}>", params.join(", "))
-    };
+    let signatures = member_signatures;
+    let generics = class_generics(c.def);
     doc(out, "", c.doc);
     if c.def.interface {
         // No value: what its objects have.
@@ -2027,7 +2165,7 @@ fn class_declaration(out: &mut String, c: &ClassSpec) {
                 .iter()
                 .any(|s| s.kind == MemberKind::Setter && s.name == name)
         };
-        for m in &c.members {
+        for m in c.members.iter().chain(added.iter().copied()) {
             for (generics, params, returns) in signatures(m) {
                 let line = match m.kind {
                     MemberKind::Method => format!("  {}{generics}({params}): {returns};", m.name),
@@ -2061,7 +2199,7 @@ fn class_declaration(out: &mut String, c: &ClassSpec) {
     if !c.members.iter().any(|m| m.kind == MemberKind::Constructor) {
         out.push_str("  /** Made by the class's members only. */\n  private constructor();\n");
     }
-    for m in &c.members {
+    for m in c.members.iter().chain(added.iter().copied()) {
         for (generics, params, returns) in signatures(m) {
             doc(out, "  ", m.doc);
             let _ = match m.kind {
@@ -2080,6 +2218,66 @@ fn class_declaration(out: &mut String, c: &ClassSpec) {
     out.push_str(
         "  /** Frees the Rust value now (else when the object is collected); the object throws after. */\n  dispose(): void;\n  [Symbol.dispose](): void;\n}\n\n",
     );
+}
+
+/// A member's signatures: its own, or those declared instead
+/// (`#[overload]`, `#[ts]`): type parameters, parameters and result (a
+/// promise of it for an `async` member).
+fn member_signatures(m: &MemberSpec) -> Vec<(&'static str, String, String)> {
+    let one =
+        |generics: &'static str, params: &[(&str, String, bool)], returns: &Option<String>| {
+            let params = params
+                .iter()
+                .map(|(n, ts, optional)| format!("{n}{}: {ts}", if *optional { "?" } else { "" }))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let value = returns.clone().unwrap_or_else(|| "void".to_owned());
+            let returns = if m.is_async {
+                format!("Promise<{value}>")
+            } else {
+                value
+            };
+            (generics, params, returns)
+        };
+    if m.overloads.is_empty() {
+        vec![one("", &m.params, &m.returns)]
+    } else {
+        m.overloads
+            .iter()
+            .map(|o| one(o.generics, &o.params, &o.returns))
+            .collect()
+    }
+}
+
+/// `<T, U = never>` of a generic class, as its declaration writes it
+/// (empty for most classes).
+pub(crate) fn class_generics(def: &ClassDef) -> String {
+    if def.generics.is_empty() {
+        String::new()
+    } else {
+        let params: Vec<&str> = def.generics.iter().map(|(_, text)| *text).collect();
+        format!("<{}>", params.join(", "))
+    }
+}
+
+/// The lines of the methods class extension `def` adds, as its class's
+/// body has them (each with its doc comment): what `.nsh/types` adds to
+/// the class's other declarations
+/// ([`super::description::ClassExtensionDescription`]).
+pub(crate) fn extension_lines(def: &ClassExtensionDef) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    // Their named types are the extending set's ([`declarations`]).
+    let mut types = TsTypes::default();
+    for m in def.member_specs(&mut types) {
+        for (generics, params, returns) in member_signatures(&m) {
+            if !m.doc.is_empty() {
+                let _ = writeln!(out, "  /** {} */", m.doc);
+            }
+            let _ = writeln!(out, "  {}{generics}({params}): {returns};", m.name);
+        }
+    }
+    out
 }
 
 /// `press` -> `onPress`.

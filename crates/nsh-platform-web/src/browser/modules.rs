@@ -5,8 +5,8 @@ use std::{cell::RefCell, rc::Rc};
 use nsh_core::{
     Op,
     element::{
-        ConstantValue, ErrorClass, FunctionCall, FunctionSpec, JsHost, MemberCall, MemberKind,
-        PropError, Registry, RustCall, RustOp, Thrown,
+        ConstantValue, ErrorClass, FunctionCall, FunctionSpec, JsHost, Member, MemberCall,
+        MemberKind, PropError, Registry, RustCall, RustOp, Thrown,
     },
 };
 
@@ -35,7 +35,13 @@ impl Modules {
     }
     /// The sets' exports the realm does not have yet: all of them on the
     /// first call, what gates added since on later ones.
+    ///
+    /// # Panics
+    ///
+    /// When two of `registries` add one name to one class
+    /// ([`Registry::class_extensions_in`]), as a native host refuses them.
     pub(super) fn describe(&self, registries: &[Registry]) -> Result<Value, PropError> {
+        let _ = Registry::class_extensions_in(registries);
         let new = |key: String| self.described.borrow_mut().insert(key);
         let mut sets = Vec::new();
         for registry in registries.iter().flat_map(Registry::sets) {
@@ -189,6 +195,35 @@ impl Modules {
                 classes.push(class);
             }
             set.set("classes", &Value::array(classes)?)?;
+            // The methods its class extensions add: `modules.js` puts them
+            // on their class's prototype once both are described.
+            let mut extensions = Vec::new();
+            for ext in registry.class_extensions() {
+                if !new(format!("x\0{specifier}\0{}", (ext.type_name)())) {
+                    continue;
+                }
+                let extension = Value::object()?;
+                extension.set("id", &Value::number(self.bindings.extension_id(ext) as f64))?;
+                extension.set(
+                    "class",
+                    &Value::number(self.bindings.class_id(ext.class) as f64),
+                )?;
+                let mut members = Vec::new();
+                for (index, member) in ext.members.iter().enumerate() {
+                    let item = Value::object()?;
+                    item.set("id", &Value::number(index as f64))?;
+                    item.set("name", &Value::string(member.name)?)?;
+                    item.set("length", &Value::number(member.params.len() as f64))?;
+                    item.set(
+                        "promise",
+                        &Value(if member.call.is_async() { 3 } else { 2 }),
+                    )?;
+                    members.push(item);
+                }
+                extension.set("members", &Value::array(members)?)?;
+                extensions.push(extension);
+            }
+            set.set("extensions", &Value::array(extensions)?)?;
             sets.push(set);
         }
         Value::array(sets)
@@ -245,6 +280,40 @@ impl Modules {
             .members
             .get(member)
             .ok_or_else(|| Thrown::Type("unknown browser class member".into()))?;
+        self.run_member(member, this, args, call)
+    }
+    /// Method `member` of class extension `extension` (op 210), run as a
+    /// class's own member is ([`Self::member`]).
+    pub(super) fn extension_member(
+        &self,
+        extension: usize,
+        member: usize,
+        this: Value,
+        args: Value,
+        call: u32,
+    ) -> Result<Value, Thrown> {
+        let ext = self
+            .bindings
+            .extensions
+            .borrow()
+            .get(extension)
+            .copied()
+            .ok_or_else(|| Thrown::Type("unknown browser class extension".into()))?;
+        let member = ext
+            .members
+            .get(member)
+            .ok_or_else(|| Thrown::Type("unknown browser class extension method".into()))?;
+        self.run_member(member, this, args, call)
+    }
+    /// Runs `member` on `this` and `args`: in the call, or as a task the
+    /// core starts in order with the ops (its promise's reply is `call`).
+    fn run_member(
+        &self,
+        member: &'static Member,
+        this: Value,
+        args: Value,
+        call: u32,
+    ) -> Result<Value, Thrown> {
         self.bindings
             .with_call(this, args, |host| match member.call {
                 MemberCall::Sync(f) => f(host).map(|raw| Value(raw.0[0] as u32)),

@@ -8,8 +8,9 @@ use std::{
 use nsh_core::{
     Op,
     element::{
-        CallbackHandle, ClassDef, ClassInstance, Exception, JsCall, JsHost, JsIn, JsKind,
-        JsPrimitive, JsRaw, JsTarget, Posts, PropError, RustCall, RustOp, System, TaskStart,
+        CallbackHandle, ClassDef, ClassExtensionDef, ClassInstance, Exception, JsCall, JsHost,
+        JsIn, JsKind, JsPrimitive, JsRaw, JsTarget, Posts, PropError, RustCall, RustOp, System,
+        TaskStart,
     },
     js::host::HostInput,
 };
@@ -39,6 +40,9 @@ pub(super) struct Bindings {
     pub(super) posts: RefCell<Posts>,
     pub(super) system: RefCell<System>,
     pub(super) classes: RefCell<Vec<&'static ClassDef>>,
+    /// The class extensions described to the realm, by the id their
+    /// methods' calls carry (op 210).
+    pub(super) extensions: RefCell<Vec<&'static ClassExtensionDef>>,
     instances: RefCell<Vec<Option<Rc<dyn ClassInstance>>>>,
     callbacks: RefCell<HashMap<u32, Weak<BrowserCallback>>>,
     pending: RefCell<HashMap<u32, JsCall>>,
@@ -60,6 +64,7 @@ impl Bindings {
             posts: RefCell::new(Posts::new()),
             system: RefCell::default(),
             classes: RefCell::default(),
+            extensions: RefCell::default(),
             instances: RefCell::default(),
             callbacks: RefCell::default(),
             pending: RefCell::default(),
@@ -101,6 +106,21 @@ impl Bindings {
             None => {
                 let id = classes.len() as u32;
                 classes.push(def);
+                id
+            }
+        }
+    }
+    /// The id of class extension `def` (as [`Self::class_id`]).
+    pub(super) fn extension_id(&self, def: &'static ClassExtensionDef) -> u32 {
+        let mut extensions = self.extensions.borrow_mut();
+        match extensions
+            .iter()
+            .position(|e| (e.type_id)() == (def.type_id)())
+        {
+            Some(i) => i as u32,
+            None => {
+                let id = extensions.len() as u32;
+                extensions.push(def);
                 id
             }
         }

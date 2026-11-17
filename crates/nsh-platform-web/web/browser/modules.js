@@ -75,6 +75,22 @@ export function createModules(invoke, values, live, wake, makeComponent) {
     );
   };
   const exports = new Map();
+  // Class extensions described before their class: their methods go on its
+  // prototype when it is described (a later gate, `refresh`).
+  let waiting = [];
+  const extend = ext => {
+    const Constructor = classes.get(ext.class);
+    if (!Constructor) return false;
+    for (const member of ext.members) {
+      const fn = function (...args) {
+        return call(210, [ext.id, member.id], this, args, member.promise);
+      };
+      Object.defineProperty(fn, "name", { value: member.name });
+      Object.defineProperty(fn, "length", { value: member.length ?? 0 });
+      Object.defineProperty(Constructor.prototype, member.name, { value: fn, writable: true, configurable: true });
+    }
+    return true;
+  };
   // Registers what `describe` (200) gives: everything at start, and after
   // a gate ran while the app runs (`refresh`) only what it added.
   const apply = metadata => {
@@ -112,6 +128,9 @@ export function createModules(invoke, values, live, wake, makeComponent) {
         if (Symbol.dispose) Object.defineProperty(Constructor.prototype, Symbol.dispose, { value: dispose, configurable: true, writable: true });
       }
     }
+    // The methods class extensions add (op 210), once their class is here.
+    for (const set of metadata) waiting.push(...(set.extensions ?? []));
+    waiting = waiting.filter(ext => !extend(ext));
     for (const set of metadata) {
       const namespace = exports.get(set.specifier) ?? Object.create(null);
       exports.set(set.specifier, namespace);
@@ -155,6 +174,7 @@ export function createModules(invoke, values, live, wake, makeComponent) {
       values.classPeers.clear();
       classes.clear();
       exports.clear();
+      waiting = [];
       for (const waiter of waiters) waiter.reject(new Error("the app was disposed"));
     },
   };

@@ -39,6 +39,9 @@ pub(crate) mod builder;
 pub(crate) mod call;
 mod callback;
 pub(crate) mod class;
+mod class_extension;
+#[cfg(test)]
+mod class_extensions;
 mod component;
 pub mod description;
 pub mod desktop;
@@ -111,8 +114,8 @@ macro_rules! decl {
 }
 
 pub use nsh_macros::{
-    Event, JsObject, PropEnum, Props, asset, assets, class, component, interface, methods, module,
-    native_components, native_module, theme_keys,
+    Event, JsObject, PropEnum, Props, asset, assets, class, class_extension, component, interface,
+    methods, module, native_components, native_module, theme_keys,
 };
 
 // The core's parts of `nsh_base`'s navigation and dialogs.
@@ -151,6 +154,7 @@ pub use self::{
         Arg, AsyncCall, Class, ClassDef, ClassInstance, ClassRefs, ClassSpec, Constructor,
         Instance, Member, MemberCall, MemberKind, MemberSpec, Ret, Thrown,
     },
+    class_extension::{ClassExtension, ClassExtensionDef},
     component::{
         Api, BuiltInScrollbar, Component, ComponentError, ComponentSpec, Event, EventSpec,
         HOST_PROPS, Method, MethodSpec, Methods, NoEvent, Param, PropDecode, PropKind, PropSpec,

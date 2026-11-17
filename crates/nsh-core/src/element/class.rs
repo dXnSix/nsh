@@ -678,30 +678,36 @@ pub struct ClassSpec {
     pub def: &'static ClassDef,
 }
 
+/// The specs of `members` (a class's, or an extension's:
+/// [`super::ClassExtensionDef`]), adding the named types they use to
+/// `types`.
+pub(crate) fn member_specs(members: &'static [Member], types: &mut TsTypes) -> Vec<MemberSpec> {
+    members
+        .iter()
+        .map(|m| MemberSpec {
+            name: m.name,
+            doc: m.doc,
+            kind: m.kind,
+            params: m
+                .params
+                .iter()
+                .map(|(n, ts, optional)| (*n, ts(types), *optional))
+                .collect(),
+            returns: m.returns.map(|ts| ts(types)),
+            is_async: m.call.is_async(),
+            overloads: m
+                .overloads
+                .iter()
+                .map(|o| super::OverloadSpec::of(o, types))
+                .collect(),
+        })
+        .collect()
+}
+
 impl ClassSpec {
     pub(crate) fn of(def: &'static ClassDef) -> Self {
         let mut types = TsTypes::default();
-        let members = def
-            .members
-            .iter()
-            .map(|m| MemberSpec {
-                name: m.name,
-                doc: m.doc,
-                kind: m.kind,
-                params: m
-                    .params
-                    .iter()
-                    .map(|(n, ts, optional)| (*n, ts(&mut types), *optional))
-                    .collect(),
-                returns: m.returns.map(|ts| ts(&mut types)),
-                is_async: m.call.is_async(),
-                overloads: m
-                    .overloads
-                    .iter()
-                    .map(|o| super::OverloadSpec::of(o, &mut types))
-                    .collect(),
-            })
-            .collect();
+        let members = member_specs(def.members, &mut types);
         Self {
             name: def.name,
             doc: def.doc,
@@ -975,6 +981,23 @@ pub(crate) mod __private {
 
     impl<T> SkipField for Field<'_, T> {
         fn trace_field(&self, _tracer: &mut Tracer<'_>) {}
+    }
+
+    /// Whether `a` and `b` are the same text, in a constant
+    /// (`#[class_extension(C)]` checks that `C` is the class's own name).
+    pub const fn same_name(a: &str, b: &str) -> bool {
+        let (a, b) = (a.as_bytes(), b.as_bytes());
+        if a.len() != b.len() {
+            return false;
+        }
+        let mut i = 0;
+        while i < a.len() {
+            if a[i] != b[i] {
+                return false;
+            }
+            i += 1;
+        }
+        true
     }
 
     /// The `TypeId` of `T` (what a [`ClassDef`] tells types apart by).

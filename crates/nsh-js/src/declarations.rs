@@ -12,7 +12,10 @@
 
 use std::{collections::BTreeMap, fmt::Write as _};
 
-use nsh_core::element::{Registry, description::SetDescription};
+use nsh_core::element::{
+    Registry,
+    description::{ClassExtensionDescription, ExportKind, SetDescription},
+};
 
 use crate::modules::{Item, MODULES, NativeModule, Ts};
 
@@ -531,6 +534,228 @@ fn bodies(ui_sets: &[SetDescription]) -> Vec<(String, String)> {
     files
 }
 
+/// The file a set's declarations are in: its own, or that of the module
+/// of nsh's that serves it (`moved_to`).
+fn file_of(specifier: &str) -> String {
+    match MODULES.iter().find(|m| m.name == specifier) {
+        Some(NativeModule {
+            moved_to: Some(to), ..
+        }) => path_of(to),
+        _ => path_of(specifier),
+    }
+}
+
+/// A served set, for [`class_extensions`]: its file, the classes it exports
+/// (JS name, Rust type) and its class extensions.
+type Served = (
+    String,
+    Vec<(String, String)>,
+    Vec<ClassExtensionDescription>,
+);
+
+/// Adds the methods class extensions add (`#[class_extension]`) to every
+/// file that exports their class as a class: `export interface
+/// <class><generics> { … }`, which TypeScript merges with the class
+/// declared there. Those of nsh's own registries and of `ui_sets`, each
+/// extension once, matched to the class by its Rust type (two sets may
+/// export different classes of one name); a set registering the class and
+/// the extension lists them in its own declaration of the class already.
+/// Before the imports are computed: the types the methods name are
+/// imported as the file's other names are, from the file of a set that
+/// registers the extension (which declares them); one that would resolve
+/// to another type of the same name (the file's own, or another set's
+/// declared first) is named through that file instead
+/// (`import("./i18n").Options`).
+fn class_extensions(files: &mut [(String, String)], ui_sets: &[SetDescription]) {
+    // Each served set: its file, the classes it exports (JS name, Rust
+    // type), its extensions.
+    let mut sets: Vec<Served> = Vec::new();
+    for registry in nsh_core::runtime::registries()
+        .iter()
+        .flat_map(Registry::sets)
+    {
+        let Some(specifier) = registry.specifier() else {
+            continue;
+        };
+        let classes = registry
+            .class_specs()
+            .iter()
+            .map(|c| (c.name.to_owned(), (c.def.type_name)().to_owned()))
+            .collect();
+        sets.push((
+            file_of(specifier),
+            classes,
+            ClassExtensionDescription::of(registry),
+        ));
+    }
+    for set in ui_sets {
+        let exported: Vec<&str> = set.exports_of(ExportKind::Class).collect();
+        let classes = set
+            .class_types
+            .iter()
+            .filter(|c| exported.contains(&c.name.as_str()))
+            .map(|c| (c.name.clone(), c.rust_type.clone()))
+            .collect();
+        sets.push((
+            file_of(&set.specifier),
+            classes,
+            set.class_extensions.clone(),
+        ));
+    }
+    // Every extension once, with the file of a set registering it.
+    let mut all: Vec<(ClassExtensionDescription, String)> = Vec::new();
+    for (file, _, extensions) in &sets {
+        for e in extensions {
+            if !all.iter().any(|(a, _)| a.extension == e.extension) {
+                all.push((e.clone(), file.clone()));
+            }
+        }
+    }
+    if all.is_empty() {
+        return;
+    }
+    // What each file declares, and who declares each name first (as the
+    // import step will find it).
+    let declared: BTreeMap<String, Vec<String>> = files
+        .iter()
+        .map(|(path, body)| (path.clone(), exported_names(body)))
+        .collect();
+    let mut owner: BTreeMap<&str, &str> = BTreeMap::new();
+    for (path, _) in files.iter() {
+        for name in &declared[path] {
+            owner.entry(name).or_insert(path);
+        }
+    }
+    // The classes each file declares, by (file, JS name): their Rust types.
+    let class_types: BTreeMap<(&str, &str), &str> = sets
+        .iter()
+        .flat_map(|(file, classes, _)| {
+            classes
+                .iter()
+                .map(move |(name, rust_type)| ((file.as_str(), name.as_str()), rust_type.as_str()))
+        })
+        .collect();
+    // By file and class (name, Rust type): the extensions its sets' own
+    // declarations list.
+    let mut places: BTreeMap<(String, String, String), Vec<String>> = BTreeMap::new();
+    for (file, classes, extensions) in &sets {
+        for (name, rust_type) in classes {
+            let listed = places
+                .entry((file.clone(), name.clone(), rust_type.clone()))
+                .or_default();
+            listed.extend(
+                extensions
+                    .iter()
+                    .filter(|e| &e.class_type == rust_type)
+                    .map(|e| e.extension.clone()),
+            );
+        }
+    }
+    let mut additions: Vec<(String, String)> = Vec::new();
+    for ((file, class, rust_type), listed) in places {
+        let added: Vec<&(ClassExtensionDescription, String)> = all
+            .iter()
+            .filter(|(e, _)| {
+                e.class == class && e.class_type == rust_type && !listed.contains(&e.extension)
+            })
+            .collect();
+        let Some((first, _)) = added.first() else {
+            continue;
+        };
+        let local = declared.get(&file).cloned().unwrap_or_default();
+        let mut text = format!("export interface {class}{} {{\n", first.generics);
+        for (e, from) in &added {
+            // The class and its type parameters are the file's own.
+            let (keep, _) = references(&e.generics);
+            let theirs = declared.get(from).cloned().unwrap_or_default();
+            let (used, _) = references(&e.members);
+            // Where a bare name resolves in the file: its own declaration,
+            // else the first file declaring it (the import step's).
+            let resolves = |n: &str| {
+                if local.iter().any(|l| l == n) {
+                    Some(file.as_str())
+                } else {
+                    owner.get(n).copied()
+                }
+            };
+            let elsewhere: Vec<&str> = used
+                .iter()
+                .map(String::as_str)
+                .filter(|n| *n != class && !keep.iter().any(|k| k == n))
+                .filter(|n| theirs.iter().any(|t| t == n) && from != &file)
+                .filter(|n| {
+                    let at = resolves(n);
+                    if at == Some(from.as_str()) {
+                        return false;
+                    }
+                    // The same Rust class declared there too is that class
+                    // (a generic one's declarations are not interchangeable).
+                    let ours = class_types.get(&(from.as_str(), *n));
+                    let there = at.and_then(|at| class_types.get(&(at, *n)));
+                    ours.is_none() || ours != there
+                })
+                .collect();
+            if elsewhere.is_empty() {
+                text.push_str(&e.members);
+            } else {
+                text.push_str(&qualified(&e.members, &elsewhere, &relative(&file, from)));
+            }
+        }
+        text.push_str("}\n");
+        additions.push((file, text));
+    }
+    for (file, text) in additions {
+        let Some((_, body)) = files.iter_mut().find(|(path, _)| *path == file) else {
+            continue;
+        };
+        if !body.is_empty() && !body.ends_with("\n\n") {
+            body.push('\n');
+        }
+        body.push_str(&text);
+    }
+}
+
+/// `lines` (members of a declaration) with each type named in `names`
+/// written `import("<from>").<name>`: the type of that module, whatever the
+/// file around them declares or imports by that name. Doc comments, string
+/// literals, members' and parameters' names are left as they are.
+fn qualified(lines: &str, names: &[&str], from: &str) -> String {
+    let mut out = String::with_capacity(lines.len());
+    for line in lines.split_inclusive('\n') {
+        if line.trim_start().starts_with("/*") {
+            out.push_str(line);
+            continue;
+        }
+        let mut rest = line;
+        while let Some(c) = rest.chars().next() {
+            if c == '"' || c == '`' || c == '\'' {
+                // A string literal type, as it is.
+                let end = rest[1..].find(c).map_or(rest.len(), |e| e + 2);
+                out.push_str(&rest[..end]);
+                rest = &rest[end..];
+            } else if is_ident_start(c) {
+                let end = rest.find(|c: char| !is_ident(c)).unwrap_or(rest.len());
+                let (word, after) = rest.split_at(end);
+                let member = out.ends_with('.')
+                    || after
+                        .trim_start_matches('?')
+                        .trim_start()
+                        .starts_with([':', '(']);
+                if !member && names.contains(&word) {
+                    let _ = write!(out, "import(\"{from}\").{word}");
+                } else {
+                    out.push_str(word);
+                }
+                rest = after;
+            } else {
+                out.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    out
+}
+
 /// Removes comments and string literals (their words are not references).
 fn code_only(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -783,9 +1008,11 @@ const TS_GLOBALS: &[&str] = &[
 /// them), as (path relative to it, contents): one per
 /// module apps import, `nsh/types.d.ts` (the element types `nsh` exports),
 /// `nsh/jsx-runtime.d.ts` (where TypeScript finds the JSX namespace:
-/// `jsxImportSource: "nsh"`) and `nsh/globals.d.ts`.
+/// `jsxImportSource: "nsh"`) and `nsh/globals.d.ts`. A class's file
+/// declares the methods the sets' class extensions add to it.
 pub fn type_definitions(ui_sets: &[SetDescription]) -> Vec<(String, String)> {
-    let files = bodies(ui_sets);
+    let mut files = bodies(ui_sets);
+    class_extensions(&mut files, ui_sets);
     // Who declares each name.
     let mut owner: BTreeMap<String, &str> = BTreeMap::new();
     for (path, body) in &files {
