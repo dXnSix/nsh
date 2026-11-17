@@ -84,6 +84,7 @@ mod press;
 mod scroll_watch;
 mod selectable_view;
 mod shader;
+mod share;
 mod split;
 // Sound (`Sound`, `AudioPlayer`), the Speech framework's recognizer and the
 // notification center, shared with macOS.
@@ -92,6 +93,7 @@ mod surface;
 #[cfg(feature = "dev")]
 mod synth;
 mod system;
+mod system_context_menu;
 mod system_menu_button;
 mod system_segmented_control;
 mod system_tab_bar;

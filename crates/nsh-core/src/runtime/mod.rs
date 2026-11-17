@@ -1,6 +1,6 @@
 //! The runtime's modules written in Rust: `nsh/android`'s `BackHandler`,
 //! `nsh/accessibility`'s commands, `nsh/device`'s `openUrl`, `nsh`'s
-//! `Image` and `WebView` functions, all of `nsh/clipboard`, `nsh/picker`, `nsh`'s
+//! `Image` and `WebView` functions, all of `nsh/clipboard`, `nsh/picker`, `nsh`'s `Share`,
 //! `Speech`, `UrlScheme`, `setFpsEnabled` and `nsh/storage`,
 //! `nsh/desktop`'s `Application`, `nsh/tizen` (Samsung TVs), the
 //! surface-independent `os` metadata,
@@ -31,6 +31,7 @@ mod notifications;
 mod os;
 mod picker;
 mod process;
+mod share;
 mod speech;
 mod storage;
 mod tizen;
@@ -65,6 +66,7 @@ pub fn registries() -> &'static [Registry] {
             .module::<accessibility::Accessibility>()
             .module::<clipboard::Clipboard>()
             .module::<picker::Picker>()
+            .module::<share::Share>()
             .module::<speech::Speech>()
             .class::<audio::Sound>()
             .class::<audio::AudioPlayer>()

@@ -33,6 +33,7 @@ pub use crate::element::{
     Children,
     ClaimRequest,
     ClipboardItem,
+    ColorStop,
     Component,
     ComponentBuilder,
     ComponentElement,
@@ -286,13 +287,7 @@ pub use crate::element::{
     open_url, os, os_version, perf_stats, pick_files, pick_images, pick_paths, pick_save_path,
     pick_screen_color, pixel_ratio, platform_name, prefetch_image, provide_context,
     reads_active_descendants, recognize_speech, reduce_motion, register_font,
-    request_animation_frame, request_notification_permission, reset_tokens, resource,
-    resource_with_value, reveal_path, round_to_nearest_pixel, run_on_main_thread, safe_area,
-    screen_reader, set_app_url, set_app_url_with, set_badge, set_clipboard, set_clipboard_image,
-    set_clipboard_item, set_color_scheme, set_fps_enabled, set_fps_mode, set_interval, set_timeout,
-    set_tokens, shaders_available, show_notification, signal, signal_with, spawn, speech_available,
-    stored, text_metrics, timer, timer_until, tokens, try_apple_keys, try_global, try_os,
-    untracked, update_tokens, use_context, vertical_size_class, wake_count, watch_scroll,
+    request_animation_frame, request_notification_permission, reset_tokens, resource, resource_with_value, reveal_path, round_to_nearest_pixel, run_on_main_thread, safe_area, screen_reader, set_app_url, set_app_url_with, set_badge, set_clipboard, set_clipboard_image, set_clipboard_item, set_color_scheme, set_fps_enabled, set_fps_mode, set_interval, set_timeout, set_tokens, shaders_available, share, share_available, show_notification, signal, signal_with, spawn, speech_available, stored, text_metrics, timer, timer_until, tokens, try_apple_keys, try_global, try_os, untracked, update_tokens, use_context, vertical_size_class, wake_count, watch_scroll,
     web_evaluate_available, web_input_available, web_view_available, when, window,
 };
 #[cfg(not(target_arch = "wasm32"))]
