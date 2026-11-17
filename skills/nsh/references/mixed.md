@@ -233,7 +233,7 @@ All of these rows were compiled and called from TSX. A wrong argument names the 
 
 ### What each kind may do
 
-- **Synchronous** computes and keeps state. It runs outside the reactive runtime, so `signal(..)` panics, and TSX gets `Error: no reactive runtime: signals are used on the engine thread, while components run`. The same goes for `theme()`, `dialog` and the other UI free functions.
+- **Synchronous** computes and keeps state. It runs outside the reactive runtime, so `signal(..)` panics, and TSX gets `Error: no reactive runtime: signals are used on the engine thread, while components run`. The same goes for `theme()`, `dialog` and the other UI free functions. `start_task(async { .. })` starts a task of the core from there (no `cx` needed: it goes in order with what TS sent before the call), and `runtime_entered()` tells code that runs in both places which one it is in.
 - **`cx: &mut ModuleCx`** reaches the platform in order with the changes TS made before the call: `set_clipboard`, `dialog`, `dismiss_keyboard`, `set_status_bar`, `animate_layout`, `announce_for_accessibility`, `set_color_scheme`. It runs in the reactive runtime, so it may `spawn` a task (which runs to its end) and make signals. `cx.run_on_main_thread(f)` runs `f` on the platform's main thread after the call (an `async` function calls `run_on_main_thread(f)`); await the result in a task.
 - **`async`** gets the core's services: `timer`, `fetch`, dialogs. Move blocking work off the thread with `blocking(..)`, and async work with `background(..)`; those two are for native targets. It runs on the engine thread, so a long synchronous stretch inside a task freezes updates.
 
@@ -283,13 +283,15 @@ take `Instance<Other>`.
 
 | Method | Where | Result |
 | --- | --- | --- |
-| `cb.call(args)` | Only inside a synchronous call from JS | `Result<R, String>`, at once. The JS exception is the `Err` |
+| `cb.call(args)` | Inside a synchronous call from JS, and in a task, an op or a component (between JS's turns) | `Result<R, String>`, at once. The JS exception is the `Err` |
 | `cb.post(args)` | Anywhere on the engine thread | Queued for JS's next turn, in order. Result dropped |
 | `cb.call_async(args).await` | In a task | `Result<R, String>` |
 
-`call` in a task panics, and TSX sees: ``Error: `Callback::call` runs the function inside a synchronous call from JS; elsewhere (in a task) use `post` or `call_async` ``.
-Code that runs in both places asks first with `cb.can_call_now()` (`true`: `call` runs on the spot); a `JsHandle` or
-an interface's stand-in (`service.object().can_call_now()`) answers the same.
+In a task `call` runs before the posts that have not run yet. It panics only while another VM's JS runs on the
+thread, and fails in a finalizer: `cb.can_run_now()` asks first. `cb.can_call_now()` says whether a call from JS is
+in progress; a `JsHandle` or an interface's stand-in (`service.object().can_run_now()`) answers the same.
+A kept object's property (`handle.get::<String>("label")`), an interface's `#[getter]` and its methods returning a
+value run on the spot in both places too; its methods returning `()` are posted outside a call from JS.
 During `call` the instance stays borrowed: a callback reaching the same instance throws.
 
 ### Interfaces: TS objects Rust calls
@@ -532,7 +534,8 @@ Details are in [tooling.md](tooling.md#signed-packages).
 | --- | --- | --- |
 | TSX shows an old value from Rust | Getter read in JSX, untracked | Mirror it in a signal; update it from a listener or a return value |
 | `no reactive runtime` | `signal`, `theme()` or `dialog` in a synchronous function | Make it `async` or take `cx`; or do it in TSX |
-| `` `Callback::call` runs the function inside a synchronous call `` | `call` in a task | `post` or `call_async`; ask first with `can_call_now()` |
+| `` `Callback::call` runs the function inside a synchronous call from JS or between JS's turns `` | `call` while another VM's JS runs | `post` or `call_async`; ask first with `can_run_now()` |
+| `no reactive runtime` from `spawn` | `spawn` in a synchronous function | `start_task(..)`, which also starts one there |
 | An unhandled rejection in the log | An op returning `Result<(), E>`, or an `async` call, nobody awaits | `await` it or `.catch` it |
 | `` `x/native` has no export `Y` `` | Not registered in `#[native_module]` | `.register`, `.module` or `.class` |
 | `` `T: Module` is not satisfied `` | `#[module]` on the struct but the `impl` failed, or the reverse | Read the first error; it is usually in the `impl` |

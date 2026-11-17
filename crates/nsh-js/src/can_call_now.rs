@@ -1,7 +1,8 @@
 //! Asking whether a JS value Rust keeps can be called now
 //! (`Callback::can_call_now`, `JsHandle::can_call_now`), headless: yes
 //! inside a synchronous call from JS of its VM, nested or in a posted
-//! turn; no after the call, in a finalizer, once the VM is gone and for a
+//! turn; no after the call (where members returning a value still run,
+//! between JS's turns), in a finalizer, once the VM is gone and for a
 //! value of another VM; and a call does what the answer says.
 
 use std::cell::RefCell;
@@ -234,7 +235,7 @@ fn yes_in_a_call_from_a_posted_turn() {
 }
 
 #[test]
-fn no_after_the_call_returned_and_members_do_what_that_says() {
+fn no_after_the_call_returned_and_members_post_or_run_between_turns() {
     let host = host();
     run(&host, SPEAKER).unwrap();
     run(
@@ -246,15 +247,10 @@ fn no_after_the_call_returned_and_members_do_what_that_says() {
     assert!(!f.can_call_now());
     assert!(!object.can_call_now());
     assert!(!speaker.object().can_call_now());
-    // A member returning `Result` fails; one returning `()` is posted.
-    assert_eq!(
-        speaker.name(),
-        Err(
-            "Speaker.name: called outside a synchronous call from JS (an `async` method is \
-             called from a task)"
-                .to_owned()
-        )
-    );
+    // Between JS's turns: a member returning a value runs on the spot, one
+    // returning `()` is posted.
+    assert!(f.can_run_now() && speaker.object().can_run_now());
+    assert_eq!(speaker.name(), Ok("ann".to_owned()));
     speaker.say("later".to_owned());
     f.post(());
     assert_eq!(

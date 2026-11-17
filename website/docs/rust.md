@@ -378,7 +378,7 @@ message (the call runs with the UI's changes, after the TSX call returned, so th
 nobody awaits or catches is logged as an [unhandled rejection](./dev-server-and-debugging.md#logs)); one
 returning a value gives `Promise<T>`. Arguments and results are typed from the signature: numbers, strings, `Option`, `Vec`, your
 `#[derive(JsObject)]` structs and `#[derive(PropEnum)]` enums, instances of your classes, and TSX functions
-(`Callback<A, R>`, which Rust calls at once inside a call, or later with `post` and `call_async`; TS sees
+(`Callback<A, R>`, which Rust calls at once inside a call or from a task, or later with `post` and `call_async`; TS sees
 `(value: number) => void` for a `Callback<f64>`, and `#[args(balance)] listener: Callback<f64>` names the argument,
 `(balance: number) => void`), and any TSX object Rust keeps as it is (`JsHandle`, TS `object`: stored in a field or
 a map, compared by identity and given back to TSX as the same object), and your classes themselves (`Constructor`,
@@ -395,7 +395,8 @@ trait method, optional where the trait has a default body, `#[getter]` methods a
 calls such an object through the trait's stand-in `JsStartable`, taken as an argument or made from a kept object
 (`JsStartable::new(handle)`); register it with `registry.interface::<JsStartable>()`. A method that is not `async`
 runs the TSX method at once inside a call from TSX (outside one, a method returning `()` runs in TSX's next turn),
-an `async fn` awaits it (a value as well as a Promise: `#[ts("(): boolean")]` on it declares
+a `#[getter]` and a method returning a value run at once there and also from a task or a component, as a
+`Callback`'s `call` does (`handle.get::<T>("name")` reads any property of a kept object the same way), an `async fn` awaits it (a value as well as a Promise: `#[ts("(): boolean")]` on it declares
 `isInitialized(): boolean`), and what TSX throws is the `Err` of a method returning a `Result`. Another crate adds
 methods to your class with `#[class_extension(AppBuilder)]` on an `impl` block of a type of its own: each function
 taking `this: Instance<AppBuilder>` is a method of `AppBuilder` in TSX (`builder.addI18n((o) => …)`), on every

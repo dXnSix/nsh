@@ -57,7 +57,7 @@ pub(super) struct Bindings {
 }
 impl Bindings {
     pub(super) fn new() -> Rc<Self> {
-        Rc::new_cyclic(|own| Self {
+        let bindings = Rc::new_cyclic(|own| Self {
             own: own.clone(),
             frames: RefCell::default(),
             ops: RefCell::default(),
@@ -74,7 +74,11 @@ impl Bindings {
             next_call: Cell::new(1),
             stopped: Cell::new(false),
             reactive: RefCell::default(),
-        })
+        });
+        // Rust starts core tasks inside the realm's calls through it.
+        let tasks: Rc<dyn nsh_core::element::CallTasks> = bindings.clone();
+        nsh_core::element::register_call_tasks(Rc::downgrade(&tasks));
+        bindings
     }
     pub(super) fn with_call<T>(
         &self,
@@ -366,6 +370,20 @@ impl CallbackHandle for BrowserCallback {
             host.run_call(call);
         }
     }
+    /// No call from the realm into Rust runs: Rust runs on its own (the
+    /// engine's turn, a task), where the realm's JS can be called at once.
+    fn between_turns(&self) -> bool {
+        self.host
+            .upgrade()
+            .is_some_and(|host| !host.stopped.get() && host.frames.borrow().is_empty())
+    }
+    fn call_between_turns(&self, call: JsCall) {
+        if self.between_turns()
+            && let Some(host) = self.host.upgrade()
+        {
+            host.run_call(call);
+        }
+    }
     fn post(&self, call: JsCall) {
         if let Some(host) = self.host.upgrade() {
             if host.stopped.get() {
@@ -393,6 +411,19 @@ impl CallbackHandle for BrowserCallback {
             return None;
         }
         Some(owned(value.clone()))
+    }
+}
+/// Starts core tasks from inside a synchronous call from the realm
+/// (`nsh_core::element::start_task`), as `CallCx::start` does.
+impl nsh_core::element::CallTasks for Bindings {
+    fn in_call(&self) -> bool {
+        !self.stopped.get() && !self.frames.borrow().is_empty()
+    }
+    fn start_task(&self, task: TaskStart) {
+        self.ops.borrow_mut().push(Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Task(task),
+        }));
     }
 }
 impl JsHost for Bindings {

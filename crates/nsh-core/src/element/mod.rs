@@ -47,6 +47,7 @@ pub mod description;
 pub mod desktop;
 mod element_ref;
 mod engine_context;
+mod engine_thread;
 pub(crate) mod env;
 mod events;
 pub(crate) mod flow;
@@ -165,6 +166,7 @@ pub use self::{
         FocusTarget, FollowTarget,
     },
     engine_context::{EngineContext, EngineContextGuard, engine_context},
+    engine_thread::{CallTasks, NotStarted, register_call_tasks, runtime_entered, start_task},
     env::Environment,
     events::{
         CaretEvent, Composition, FileDragEvent, FileDropEvent, GestureEvent, HintReason,

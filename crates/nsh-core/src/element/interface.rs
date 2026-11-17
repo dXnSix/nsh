@@ -7,9 +7,12 @@
 //! A member runs where Rust calls it: a method that is not `async` calls
 //! the JS method on the spot inside a synchronous call from JS (as a
 //! [`super::Callback`]'s `call` does), and outside one (in a task) posts a
-//! method returning `()` for the next JS turn and fails for the others
-//! (`stand_in.object().can_call_now()`, [`JsHandle::can_call_now`], says
-//! which applies); an `async` method is posted and awaited (`call_async`:
+//! method returning `()` for the next JS turn, in order with the other
+//! posts, and runs the others (getters too) on the spot between JS's turns
+//! (a task, a factory: [`JsHandle::can_run_now`]), failing only where JS of
+//! the thread runs without a call to Rust (a finalizer, another VM) or the
+//! VM is gone ([`JsHandle::can_call_now`] says whether a call from JS is in
+//! progress); an `async` method is posted and awaited (`call_async`:
 //! a promise it returns settles it). What JS throws (or rejects with) is
 //! the error of a method returning `Result<T, E>` (`E: From<Exception>`);
 //! a method returning a plain value panics with it, which the JS call
@@ -20,7 +23,7 @@ use std::{any::TypeId, cell::RefCell, fmt, rc::Rc};
 
 use super::{
     JsValue, PropError, TsType, TsTypes,
-    callback::{CallbackArgs, CallbackRet, Exception, JsCall, JsTarget},
+    callback::{CallbackArgs, CallbackRet, Exception, JsCall, JsTarget, run_now},
     class::{ClassDef, ClassRefs, MemberKind},
     handle::JsHandle,
     js::{JsIn, JsKind},
@@ -267,7 +270,8 @@ fn what(def: &'static InterfaceDef, index: usize) -> String {
 
 /// A member that is not `async`, called with `args`: now inside a
 /// synchronous call from JS; outside one, a method returning `()` is
-/// posted and the others fail. `default` runs when the object has no such
+/// posted, and the others (getters too) run now between JS's turns, failing
+/// where JS cannot run now. `default` runs when the object has no such
 /// member (an optional one's).
 pub(crate) fn call_sync<A, R, F>(
     object: &JsHandle,
@@ -283,7 +287,14 @@ where
 {
     let member = &def.members[index];
     let handle = object.handle();
-    if handle.in_call() {
+    // Outside a call from JS, a method returning `()` keeps its place among
+    // the posts; the rest run between JS's turns.
+    let posted = if member.kind == MemberKind::Method && !handle.in_call() {
+        R::posted()
+    } else {
+        None
+    };
+    if posted.is_none() && (handle.in_call() || handle.between_turns()) {
         let out: Slot<A, R::Value> = Rc::default();
         let slot = out.clone();
         let how = How {
@@ -294,7 +305,10 @@ where
         let call = member_call(object, def, index, args, how, move |outcome| {
             *slot.borrow_mut() = Some(outcome);
         });
-        handle.call_now(call);
+        if let Err(call) = run_now(handle, call) {
+            // JS started or stopped meanwhile (it cannot): not run.
+            drop(call);
+        }
         let outcome = out.borrow_mut().take();
         return match (outcome, default) {
             (Some(Outcome::Done(result)), _) => R::from_result(result, &what(def, index)),
@@ -308,9 +322,7 @@ where
             ),
         };
     }
-    if member.kind == MemberKind::Method
-        && let Some(done) = R::posted()
-    {
+    if let Some(done) = posted {
         // In the next JS turn, in order with the other posts; what it
         // throws is reported as uncaught, as a posted callback's is.
         let how = How {
@@ -328,8 +340,8 @@ where
     }
     R::from_result(
         Err(Exception::from(format!(
-            "{}: called outside a synchronous call from JS (an `async` method is called from a \
-             task)",
+            "{}: called while JS runs on this thread without a call from it to Rust (a \
+             finalizer, another VM), or once the VM is gone",
             what(def, index)
         ))),
         &what(def, index),

@@ -76,8 +76,8 @@ impl Counter {
         progress.call_async(1.0).await
     }
 
-    /// Calls `f` on the spot from a task (which panics: JS is not
-    /// running there).
+    /// Calls `f` on the spot from a task (between JS's turns, where it
+    /// runs).
     pub(crate) async fn misuse(this: Instance<Self>, f: Callback) -> Result<(), String> {
         let _ = this;
         f.call(())
@@ -219,8 +219,7 @@ impl Tools {
         panic!("op boom");
     }
 
-    /// An op calling `f` on the spot (which panics: JS is not running in
-    /// an op).
+    /// An op calling `f` on the spot (between JS's turns, where it runs).
     pub(crate) fn call_in_op(f: Callback<(), i64>, cx: &mut ModuleCx) -> Result<i64, String> {
         let _ = cx;
         f.call(())
@@ -628,8 +627,7 @@ fn async_members_run_as_tasks_and_resolve_with_their_results() {
         shown(&rx, "done"),
         "done 1|3|no, at 3|boom|true 6|9|true 5|11|Counter is disposed|\
          Counter.addLater: Illegal invocation: not a Counter|0.5,1 at 1|later 1|refused|rejected|\
-         `Callback::call` runs the function inside a synchronous call from JS; elsewhere (in a \
-         task) use `post` or `call_async`"
+         resolved"
     );
 }
 
@@ -664,8 +662,7 @@ fn functions_run_in_the_call_as_ops_or_as_tasks() {
     let (_engine, rx) = start(FUNCTIONS, vec![registry()]);
     assert_eq!(
         shown(&rx, "done"),
-        "done 42|op|answer to name?|7|op,sync|op boom|\
-         `Callback::call` runs the function inside a synchronous call from JS"
+        "done 42|op|answer to name?|7|op,sync|op boom|1"
     );
 }
 

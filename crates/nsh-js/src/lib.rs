@@ -10,6 +10,8 @@
 //! thread.
 
 mod animated;
+#[cfg(test)]
+mod between_turns;
 mod bytecode;
 #[cfg(test)]
 mod can_call_now;
@@ -36,9 +38,9 @@ mod host_channel;
 mod hot;
 mod i18n;
 #[cfg(test)]
-mod interfaces;
-#[cfg(test)]
 mod interface_signatures;
+#[cfg(test)]
+mod interfaces;
 #[cfg(test)]
 mod js_handles;
 mod keymap;
@@ -53,6 +55,8 @@ mod rejections;
 mod resource;
 mod sandbox;
 mod standard;
+#[cfg(test)]
+mod start_task;
 mod state;
 mod timers;
 mod touch;
