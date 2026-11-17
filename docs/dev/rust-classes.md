@@ -331,8 +331,14 @@ impl Downloader {
 - **Calling it now** (`call(args) -> Result<R, String>`): inside a synchronous call from JS (a method, a function,
   the constructor), the JS function runs on the spot and its result comes back, as a JS callback passed to
   `Array.prototype.sort` does. Its exception is the `Err` (its message). The instance stays borrowed meanwhile:
-  the callback reaching the same instance again throws, as any re-entrant call does. `call` outside a call from
-  JS (in a task) panics with a message saying to use `post` or `call_async` there.
+  the callback reaching the same instance again throws, as any re-entrant call does. `call` also runs the function
+  on the spot **between JS's turns**: Rust code on the engine thread while no JS of the thread runs (a task, an
+  `async` member's body, an op, a component, a timer, a factory Rust runs there), as a call into JS of its own
+  within the VM's budget of a call (one that overruns it fails and the VM goes on; running out of memory stops the
+  VM, as in any call). It runs before the calls posted earlier that have not run yet (a task that posts a change
+  and then calls reads the state from before it), and what its JS posts, sends or starts runs in JS's next turn.
+  Where JS of the thread runs without a call to Rust (another VM's) `call` panics, saying to use `post` or
+  `call_async`; in a finalizer and once the VM is gone it fails.
 - **Asking first** (`can_call_now() -> bool`): whether a call made now runs on the spot. `true` inside a
   synchronous call from JS of the function's own VM, nested ones included (JS that a `call` runs calling Rust
   again) and calls from a posted turn; `false` after that call returned (a task, an `async` member's body, a timer),
@@ -341,6 +347,9 @@ impl Downloader {
   stopped): use `post` or `call_async`. `true` does not promise success (the function may throw, a re-entrant use
   of the instance throws). Asking runs no JS, so it is safe anywhere, a `Drop` too. A `JsHandle` and an
   interface's stand-in (`stand_in.object().can_call_now()`) answer the same for their object.
+  `can_run_now() -> bool` answers where `call` runs on the spot at all: inside a call from JS and between JS's
+  turns; `false` in a finalizer, once the VM is gone, and while JS of another VM on the thread runs (a
+  `JsHandle`'s answers the same for `get` and its stand-in's members returning a value).
 - **Calling it later** (`post(args)`, `call_async(args).await -> Result<R, String>`): from anywhere on the engine
   thread (an async member's task, a timer, a stored callback), the call is queued for JS and runs in the engine's
   next JS turn, in order with the other posts: `post` forgets the result, `call_async` waits for it (and settles a
@@ -429,15 +438,15 @@ impl Services {
 - **Its VM's, on the engine thread.** It is not `Send`. A host of another VM (two engines on one thread) refuses it
   (`the object belongs to a VM that is gone, or another`), and once its VM goes it is dead: giving it back to JS
   fails, its equality still holds.
-- **Whether it can be called now.** `can_call_now()` answers for the object what a callback's does (see "Asking
-  first" under Callbacks): whether an interface member called on it now runs on the spot.
+- **Whether it can be called now.** `can_call_now()` and `can_run_now()` answer for the object what a callback's
+  do (see "Asking first" under Callbacks): whether a call from JS is in progress (where every interface member runs
+  on the spot), and whether JS runs on the spot now at all (`get`, getters, members returning a value).
 - **Reading its properties.** `handle.get::<T>("name")` reads the object's property as JS reads it (a getter it
   defines runs) and converts it (`Option<T>` for one that may be `undefined`; a `JsHandle` for an object in it,
   `Result<T, Exception>`: what a getter throws, or a value that does not convert). It reads on the spot inside a
   synchronous call from JS and also **between JS's turns**: Rust code on the engine thread while no JS of the
-  thread runs (a task, a component, a timer, a factory Rust runs there), where a call (`can_call_now()`) cannot be
-  made. `can_read_now()` asks first: `false` in a finalizer, once the VM is gone, and while JS of another VM on the
-  thread runs. Between turns the read is a call into JS of its own, within the VM's budget of a call (one that
+  thread runs (a task, a component, a timer, a factory Rust runs there). `can_run_now()` asks first: `false` in a
+  finalizer, once the VM is gone, and while JS of another VM on the thread runs. Between turns the read is a call into JS of its own, within the VM's budget of a call (one that
   overruns it fails, and the VM goes on; running out of memory stops the VM, as in any call), and runs before the
   calls posted earlier that have not run yet: a task that posts a change and then reads the value reads it from
   before the change. What the read's JS posts, sends or starts runs in JS's next turn, as a posted call's does
@@ -496,13 +505,13 @@ export interface Startable {
 - **When a member runs.** A method that is not `async` calls the JS method on the spot inside a synchronous call from
   JS, as a callback's `call` does (a class's method calling the service it was given). Outside one (a task, a
   timer), one returning `()` is posted for JS's next turn, in order with the other posts (`Callback::post`), and one
-  returning a value fails (the `Err` of a `Result`): JS is not running there. `stand_in.object().can_call_now()`
-  says which applies (see "Asking first" under Callbacks). An `async fn` is posted and awaited
-  (`call_async`), a promise the JS method returns settled. A getter that is not `async` is read on the spot inside a
-  call from JS and also between JS's turns (a task, a factory: see "Reading its properties" under JS objects;
-  `stand_in.object().can_read_now()` asks), so Rust reads the state a TS object publishes wherever it holds the
-  object; it fails only where JS of the thread is running without a call to Rust (a finalizer, another VM) or the
-  VM is gone. An `async` getter is posted and awaited as an `async fn`.
+  returning a value runs on the spot between JS's turns, as `Callback::call` does there (before the posts not run
+  yet). A getter that is not `async` is read on the spot in both places (see "Reading its properties" under JS
+  objects), so Rust reads the state a TS object publishes, and calls it, wherever it holds the object. They fail
+  (the `Err` of a `Result`) only where JS of the thread runs without a call to Rust (a finalizer, another VM) or the
+  VM is gone. `stand_in.object().can_call_now()` says whether a call from JS is in progress and
+  `can_run_now()` whether JS runs now at all (see "Asking first" under Callbacks). An `async fn` (and an `async`
+  getter) is posted and awaited (`call_async`), a promise the JS method returns settled.
 - **Their TS signatures.** NSH declares a member from its Rust types, an `async fn`'s result as a `Promise`. An
   awaited member also settles with a plain value JS returns, so `#[ts("(): boolean")]` on the trait's method (as
   on a class's member, checked against its parameters and its result) declares what JS returns as written, with no
@@ -649,7 +658,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   methods with `#[class]`'s member code (`class.rs`' `member_def`, `this` an `Instance<C>`) and implements
   `element::ClassExtension` (`ClassExtension::DEF`, a `ClassExtensionDef`: the class, the holder's type and the
   methods' `Member`s).
-- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()`; `JsHandle::get` and `can_read_now()` too), `Posts`, `runtime_entered`, `start_task` (`engine_thread.rs`),
+- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()` and `can_run_now()`; `JsHandle::get` too), `Posts`, `runtime_entered`, `start_task` (`engine_thread.rs`),
   `Registry::class::<C>()`, `ClassExtension` and `Registry::class_extension::<E>()` / `class_extensions()` /
   `class_extensions_in(sets)` (`class_extension.rs`, the clash checks in `component.rs`), `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
   `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /

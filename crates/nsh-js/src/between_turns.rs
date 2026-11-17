@@ -1,10 +1,10 @@
-//! Reading JS properties from Rust between JS's turns, headless: an
-//! interface's `#[getter]` and a kept object's property (`JsHandle::get`)
-//! are read on the spot from Rust code that is not in a call from JS (a
-//! task, a factory), as inside one; not in a finalizer, while JS of another
-//! VM runs, or once the VM is gone; a read that overruns the budget is
-//! interrupted and the VM goes on. Methods keep their rule (posted or
-//! failing outside a call).
+//! Running JS from Rust between JS's turns, headless: an interface's
+//! `#[getter]`, its methods returning a value, a kept object's property
+//! (`JsHandle::get`) and a function (`Callback::call`) run on the spot from
+//! Rust code that is not in a call from JS (a task, a factory), as inside
+//! one; a method returning `()` is still posted there; not in a finalizer,
+//! while JS of another VM runs, or once the VM is gone; a call that
+//! overruns the budget is interrupted and the VM goes on.
 
 use std::{cell::RefCell, time::Duration};
 
@@ -15,6 +15,8 @@ use crate::{Host, HostOptions};
 thread_local! {
     /// What `Holder.keep` keeps: an object and its stand-in.
     static KEPT: RefCell<Option<(JsHandle, JsStore)>> = const { RefCell::new(None) };
+    /// What `Holder.keepFn` keeps.
+    static KEPT_FN: RefCell<Option<Callback<f64, String>>> = const { RefCell::new(None) };
     /// What the holders' drops answered.
     static DROPS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
@@ -35,6 +37,8 @@ pub(crate) trait Store {
     }
     /// Its name, as a method.
     fn name(&self) -> Result<String, String>;
+    /// Notes `text`.
+    fn note(&self, text: String);
 }
 
 /// Holds stores for Rust.
@@ -47,7 +51,7 @@ pub(crate) struct Holder {
 impl Drop for Holder {
     fn drop(&mut self) {
         if let Some(object) = &self.watched {
-            let answer = object.can_read_now();
+            let answer = object.can_run_now();
             let read = object.get::<String>("label").is_ok();
             DROPS.with(|d| {
                 d.borrow_mut()
@@ -78,7 +82,7 @@ impl Holder {
         let object = store.object().clone();
         format!(
             "{} {} {:?} {}",
-            object.can_read_now(),
+            object.can_run_now(),
             store.label().unwrap_or_else(|e| e),
             store.limit(),
             object.get::<String>("label").unwrap_or_else(|e| e.message),
@@ -94,12 +98,17 @@ impl Holder {
                 |(object, store)| {
                     format!(
                         "{} {}",
-                        object.can_read_now(),
+                        object.can_run_now(),
                         store.label().unwrap_or_else(|e| e)
                     )
                 },
             )
         })
+    }
+
+    /// Keeps `f` for Rust.
+    pub(crate) fn keep_fn(f: Callback<f64, String>) {
+        KEPT_FN.with(|k| *k.borrow_mut() = Some(f));
     }
 
     /// A count Rust gives JS (a read's JS calling Rust).
@@ -140,6 +149,8 @@ globalThis.store = {
     label: "ann",
     get reads() { return ++counted; },
     name() { return "store"; },
+    notes: [],
+    note(text) { this.notes.push(text); },
     nested: { size: 3 },
 };
 "#;
@@ -175,7 +186,7 @@ fn a_getter_is_read_between_turns() {
     let host = host();
     let (object, store) = kept_store(&host);
     // No JS runs: Rust reads as a task would.
-    assert!(object.can_read_now());
+    assert!(object.can_run_now());
     assert!(!object.can_call_now());
     assert_eq!(store.label(), Ok("ann".to_owned()));
     // An accessor runs each time.
@@ -189,17 +200,37 @@ fn a_getter_is_read_between_turns() {
 }
 
 #[test]
-fn a_method_still_runs_only_inside_a_call() {
+fn a_method_returning_a_value_runs_between_turns_and_one_returning_unit_is_posted() {
     let host = host();
-    let (_, store) = kept_store(&host);
+    let (object, store) = kept_store(&host);
+    assert_eq!(store.name(), Ok("store".to_owned()));
+    store.note("later".to_owned());
+    assert_eq!(object.get::<Vec<String>>("notes"), Ok(Vec::new()));
+    host.run_posted_without_core();
     assert_eq!(
-        store.name(),
-        Err(
-            "Store.name: called outside a synchronous call from JS (an `async` method is \
-             called from a task)"
-                .to_owned()
-        )
+        object.get::<Vec<String>>("notes"),
+        Ok(vec!["later".to_owned()])
     );
+}
+
+#[test]
+fn a_function_is_called_between_turns() {
+    let host = host();
+    run(&host, STORE).unwrap();
+    run(
+        &host,
+        r#"Holder.keepFn((n) => { if (n < 0) throw new Error("negative"); return `${n * Holder.seven()}`; });"#,
+    )
+    .unwrap();
+    let f = KEPT_FN.with(|k| k.borrow_mut().take()).expect("kept");
+    assert!(f.can_run_now());
+    assert!(!f.can_call_now());
+    assert_eq!(f.call(2.0), Ok("14".to_owned()));
+    assert_eq!(f.call(-1.0), Err("negative".to_owned()));
+    assert!(!host.has_exception());
+    drop(host);
+    assert!(!f.can_run_now());
+    assert!(f.call(1.0).is_err());
 }
 
 #[test]
@@ -321,12 +352,12 @@ fn no_read_once_the_vm_is_gone() {
     let host = host();
     let (object, store) = kept_store(&host);
     drop(host);
-    assert!(!object.can_read_now());
+    assert!(!object.can_run_now());
     assert!(object.get::<String>("label").is_err());
     assert_eq!(
         store.label(),
         Err(
-            "Store.label: read while JS runs on this thread without a call from it to Rust (a \
+            "Store.label: called while JS runs on this thread without a call from it to Rust (a \
              finalizer, another VM), or once the VM is gone"
                 .to_owned()
         )
@@ -347,7 +378,7 @@ fn no_read_of_another_vm_s_object_while_js_runs() {
         )
         .unwrap(),
         [
-            "false Store.label: read while JS runs on this thread without a call from it to \
+            "false Store.label: called while JS runs on this thread without a call from it to \
              Rust (a finalizer, another VM), or once the VM is gone",
             "true ann None ann"
         ]

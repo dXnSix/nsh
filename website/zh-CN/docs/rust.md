@@ -346,7 +346,7 @@ Rust 中；TSX 传入 props、接收事件。类型不对的 prop（`u32` 类型
 时以其消息 reject（调用与 UI 的修改一起运行，那时 TSX 的调用已经返回，所以由 Promise 带回错误；没人 await 或 catch 的会记录为
 [未处理的 rejection](./dev-server-and-debugging.md#日志)）；返回值的得到 `Promise<T>`。参数和返回值的类型来自签名：数字、
 字符串、`Option`、`Vec`、你的 `#[derive(JsObject)]` 结构体和 `#[derive(PropEnum)]` 枚举、你的类的实例，以及 TSX 函数
-（`Callback<A, R>`：Rust 在调用中立即调用它，或之后用 `post` 和 `call_async` 调用；`Callback<f64>` 在 TS 中是
+（`Callback<A, R>`：Rust 在调用中或任务中立即调用它，或之后用 `post` 和 `call_async` 调用；`Callback<f64>` 在 TS 中是
 `(value: number) => void`，`#[args(balance)] listener: Callback<f64>` 给参数命名，得到 `(balance: number) => void`），以及 Rust
 原样保留的任意 TSX 对象（`JsHandle`，TS 中是 `object`：存进字段或映射，按身份比较，交还给 TSX 时仍是同一个对象），以及你的类本身
 （`Constructor`，TS 中是 `Function`：`getRequiredService(I18nService)` 让 Rust 知道 TSX 指的是哪个类）。这些类型比 TS 应有的类型
@@ -358,8 +358,8 @@ prototype: T } | ServiceToken<T>", doc: "…" })` 导出 `type ServiceKey<T>`。
 trait 是 TSX 对象为 Rust 实现的 TypeScript 接口：UI 集声明 `export interface Startable`（每个 trait 方法一个方法，trait 有默认实现的
 是可选成员，`#[getter]` 方法是 `readonly` 属性），Rust 通过 trait 的替身 `JsStartable` 调用这样的对象，它可以作为参数传入，也可以由
 保留的对象构造（`JsStartable::new(handle)`）；用 `registry.interface::<JsStartable>()` 注册。不是 `async` 的方法在 TSX 的调用中立即
-运行 TSX 的方法（在调用之外，返回 `()` 的方法在 TSX 的下一轮运行），`#[getter]` 在那里立即读取，在任务或组件中也可以立即读取
-（`handle.get::<T>("name")` 以同样方式读取保留对象的任意属性），`async fn` 等待它的结果（普通值和 Promise 都可以：在它上面写 `#[ts("(): boolean")]`
+运行 TSX 的方法（在调用之外，返回 `()` 的方法在 TSX 的下一轮运行），`#[getter]` 和返回值的方法在那里立即运行，在任务或组件中也可以立即运行，
+`Callback` 的 `call` 也是如此（`handle.get::<T>("name")` 以同样方式读取保留对象的任意属性），`async fn` 等待它的结果（普通值和 Promise 都可以：在它上面写 `#[ts("(): boolean")]`
 声明为 `isInitialized(): boolean`），TSX 抛出的异常是返回 `Result` 的方法
 的 `Err`。另一个 crate 可以给你的类添加方法：在它自己的某个类型的 `impl` 块上写 `#[class_extension(AppBuilder)]`，每个以
 `this: Instance<AppBuilder>` 开头的函数就是 TSX 中 `AppBuilder` 的方法（`builder.addI18n((o) => …)`）；应用使用的某个 UI 集用

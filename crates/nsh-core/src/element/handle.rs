@@ -8,7 +8,7 @@ use std::{cell::RefCell, fmt, hash, rc::Rc};
 
 use super::{
     JsValue, PropError, TsTypes,
-    callback::{CallbackHandle, CallbackRet, Exception, JsCall, JsTarget, Trace, Tracer, read_now},
+    callback::{CallbackHandle, CallbackRet, Exception, JsCall, JsTarget, Trace, Tracer, run_now},
     class::{ClassDef, Constructor},
     js::{JsHost, JsIn, JsKind, JsOwned},
 };
@@ -26,8 +26,8 @@ use super::{
 /// a [`super::Callback`] is, so an object that reaches the instance's own
 /// JS object (a listener holding its owner) is collected with it; kept
 /// elsewhere (a static, a task, an `Rc` two instances share), it is a root
-/// until dropped. [`JsHandle::can_call_now`] says whether a call on the
-/// object (an interface's member) runs on the spot now.
+/// until dropped. [`JsHandle::can_call_now`] and [`JsHandle::can_run_now`]
+/// say where a call on the object (an interface's member) runs on the spot.
 #[derive(Clone)]
 pub struct JsHandle {
     handle: Rc<dyn CallbackHandle>,
@@ -59,24 +59,27 @@ impl JsHandle {
         self.class.map(Constructor::from_def)
     }
 
-    /// Whether a call made now on the object runs on the spot (a
-    /// non-`async` member of an interface's stand-in, asked as
+    /// Whether a call made now on the object runs inside a synchronous call
+    /// from JS of its VM, where every non-`async` member of an interface's
+    /// stand-in runs on the spot, one returning `()` included (asked as
     /// `stand_in.object().can_call_now()`): what
-    /// [`super::Callback::can_call_now`] answers for a function, for the
-    /// object's VM.
+    /// [`super::Callback::can_call_now`] answers for a function. Between
+    /// JS's turns ([`JsHandle::can_run_now`]) the members returning a value
+    /// and the getters run on the spot too, and one returning `()` is
+    /// posted.
     pub fn can_call_now(&self) -> bool {
         self.handle.in_call()
     }
 
-    /// Whether a property of the object is read on the spot now
-    /// ([`JsHandle::get`], an interface's `#[getter]`): inside a
+    /// Whether JS runs on the spot now for the object ([`JsHandle::get`],
+    /// an interface's `#[getter]` and its members returning a value): inside a
     /// synchronous call from JS of the object's VM (where
     /// [`JsHandle::can_call_now`] is `true`), and between JS's turns, where
     /// no JS of the thread runs: Rust code on the engine thread in a task,
     /// a component, a timer or a factory it runs there. `false` in a
     /// finalizer (a value QuickJS frees), once the VM is gone, and while JS
     /// of another VM on the thread runs. Asking runs no JS.
-    pub fn can_read_now(&self) -> bool {
+    pub fn can_run_now(&self) -> bool {
         self.handle.in_call() || self.handle.between_turns()
     }
 
@@ -84,7 +87,7 @@ impl JsHandle {
     /// defines runs), converted to `T` (`Option<T>` for one that may be
     /// `undefined` or `null`): an interface's `#[getter]` for an object
     /// without one, or a field of a kept object. It works where
-    /// [`JsHandle::can_read_now`] is `true`, inside a synchronous call from
+    /// [`JsHandle::can_run_now`] is `true`, inside a synchronous call from
     /// JS and between JS's turns (a task, a factory); elsewhere it fails.
     /// What a getter throws, or a value that does not convert, is the
     /// `Err`.
@@ -110,7 +113,7 @@ impl JsHandle {
             None,
             false,
         );
-        if let Err(call) = read_now(&self.handle, call) {
+        if let Err(call) = run_now(&self.handle, call) {
             // Not run: its reply is not wanted.
             drop(call);
             out.borrow_mut().take();

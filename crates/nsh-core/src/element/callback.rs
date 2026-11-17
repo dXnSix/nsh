@@ -52,7 +52,7 @@ pub trait CallbackHandle: std::any::Any {
     fn in_call(&self) -> bool {
         false
     }
-    /// Whether a read made now runs on the spot between JS's turns
+    /// Whether a call made now runs on the spot between JS's turns
     /// ([`CallbackHandle::call_between_turns`]): on the engine thread while
     /// no JS of the thread runs (a task, a component, a factory Rust runs
     /// there), the VM lives and does not collect garbage. `false` inside a
@@ -60,8 +60,9 @@ pub trait CallbackHandle: std::any::Any {
     fn between_turns(&self) -> bool {
         false
     }
-    /// Runs `call` (a property's read) now, between JS's turns, within the
-    /// VM's budget of a call into JS. Where
+    /// Runs `call` (a function's call, a member's, a property's read) now,
+    /// between JS's turns, as a call into JS of its own within the VM's
+    /// budget. Where
     /// [`CallbackHandle::between_turns`] is `false` the call is dropped
     /// (its reply says it was not run).
     fn call_between_turns(&self, call: JsCall) {
@@ -71,9 +72,8 @@ pub trait CallbackHandle: std::any::Any {
 
 /// Runs `call` on the spot where JS can run now: inside a synchronous call
 /// from JS ([`CallbackHandle::in_call`]), or between JS's turns
-/// ([`CallbackHandle::between_turns`]: a property's read only); the call
-/// back where neither holds.
-pub(crate) fn read_now(handle: &Rc<dyn CallbackHandle>, call: JsCall) -> Result<(), JsCall> {
+/// ([`CallbackHandle::between_turns`]); the call back where neither holds.
+pub(crate) fn run_now(handle: &Rc<dyn CallbackHandle>, call: JsCall) -> Result<(), JsCall> {
     if handle.in_call() {
         handle.call_now(call);
         Ok(())
@@ -354,22 +354,21 @@ impl<A, R> Callback<A, R> {
         &self.handle
     }
 
-    /// Whether a call made now runs on the spot. `true` inside a
-    /// synchronous call from JS of the function's own VM (a `#[class]`
-    /// method, a function or a constructor JS called, also nested: JS that
-    /// a [`Callback::call`] runs calling back into Rust), where
-    /// [`Callback::call`] runs the function and a non-`async` member of an
-    /// interface's stand-in (`Js<Trait>`) calls its JS method.
+    /// Whether a call made now runs inside a synchronous call from JS.
+    /// `true` inside one of the function's own VM (a `#[class]` method, a
+    /// function or a constructor JS called, also nested: JS that a
+    /// [`Callback::call`] runs calling back into Rust), where every
+    /// non-`async` member of an interface's stand-in (`Js<Trait>`) calls its
+    /// JS method on the spot, one returning `()` included.
     ///
     /// `false` everywhere else: after that call returned (a task, an
     /// `async` member's body, a timer), in a finalizer (a value QuickJS
     /// frees, by its count or its collector), once the VM is gone, and
-    /// while only another VM on the thread is in a call. There `call` panics (outside a call) or
-    /// fails (in a finalizer, once JS stopped); a non-`async` interface
-    /// member returning `()` is posted for the next JS turn, one returning
-    /// `Result` fails and one returning a plain value panics. Use
-    /// [`Callback::post`], [`Callback::call_async`] or an `async` member
-    /// there.
+    /// while only another VM on the thread is in a call. Between JS's turns
+    /// (a task, a timer) [`Callback::call`] still runs the function on the
+    /// spot ([`Callback::can_run_now`] says where), and a stand-in's member
+    /// returning `()` is posted for the next JS turn, in order with the
+    /// other posts.
     ///
     /// `true` does not promise that the call succeeds: the function may
     /// throw, using an instance the call borrows throws, a member may be
@@ -377,6 +376,17 @@ impl<A, R> Callback<A, R> {
     /// thread, in `Drop` and in a finalizer too.
     pub fn can_call_now(&self) -> bool {
         self.handle.in_call()
+    }
+
+    /// Whether [`Callback::call`] runs the function on the spot now:
+    /// inside a synchronous call from JS ([`Callback::can_call_now`]), and
+    /// between JS's turns, where no JS of the thread runs: Rust code on the
+    /// engine thread in a task, a component, a timer or a factory it runs
+    /// there. `false` in a finalizer, once the VM is gone, and while JS of
+    /// another VM on the thread runs; use [`Callback::post`] or
+    /// [`Callback::call_async`] there. Asking runs no JS.
+    pub fn can_run_now(&self) -> bool {
+        self.handle.in_call() || self.handle.between_turns()
     }
 }
 
@@ -402,17 +412,21 @@ impl<A: CallbackArgs + 'static, R: CallbackRet + 'static> Callback<A, R> {
         }
     }
 
-    /// Calls the function now, inside a synchronous call from JS (a
-    /// method, a function, the constructor), as `Array.prototype.sort`
-    /// calls its comparison: its result, or what it threw (its message).
-    /// The instance the call is on stays borrowed meanwhile: the function
-    /// using it again throws.
+    /// Calls the function now, as `Array.prototype.sort` calls its
+    /// comparison: its result, or what it threw (its message). Inside a
+    /// synchronous call from JS (a method, a function, the constructor)
+    /// the instance the call is on stays borrowed meanwhile: the function
+    /// using it again throws. Between JS's turns (a task, a factory Rust
+    /// runs there) it is a call into JS of its own, within the VM's budget,
+    /// and runs before the calls posted earlier that have not run yet; what
+    /// its JS posts or sends runs in JS's next turn.
     ///
     /// # Panics
     ///
-    /// Outside a synchronous call from JS (in a task): use
-    /// [`Callback::post`] or [`Callback::call_async`] there.
-    /// [`Callback::can_call_now`] asks first.
+    /// Where JS of the thread runs without a call from it to Rust (another
+    /// VM's): use [`Callback::post`] or [`Callback::call_async`] there. It
+    /// fails (the `Err`) in a finalizer and once the VM is gone.
+    /// [`Callback::can_run_now`] asks first.
     pub fn call(&self, args: A) -> Result<R, String> {
         self.call_now(args, false).map_err(|e| e.message)
     }
@@ -422,7 +436,7 @@ impl<A: CallbackArgs + 'static, R: CallbackRet + 'static> Callback<A, R> {
     ///
     /// # Panics
     ///
-    /// As [`Callback::call`]: [`Callback::can_call_now`] asks first.
+    /// As [`Callback::call`]: [`Callback::can_run_now`] asks first.
     pub fn call_traced(&self, args: A) -> Result<R, Exception> {
         self.call_now(args, true)
     }
@@ -440,7 +454,10 @@ impl<A: CallbackArgs + 'static, R: CallbackRet + 'static> Callback<A, R> {
             false,
             traced,
         );
-        self.handle.call_now(call);
+        if let Err(call) = run_now(&self.handle, call) {
+            // The host fails it (a finalizer, the VM gone) or panics.
+            self.handle.call_now(call);
+        }
         let result = out.borrow_mut().take();
         result.unwrap_or_else(|| Err("the JS function was not called".to_owned().into()))
     }

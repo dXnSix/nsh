@@ -1610,8 +1610,8 @@ impl CallbackHandle for JsCallback {
         }
         assert!(
             classes(cx).depth.get() > 0,
-            "`Callback::call` runs the function inside a synchronous call from JS; \
-             elsewhere (in a task) use `post` or `call_async`"
+            "`Callback::call` runs the function inside a synchronous call from JS or between \
+             JS's turns; while JS of another VM runs, use `post` or `call_async`"
         );
         run_call(cx, call);
     }

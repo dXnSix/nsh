@@ -268,20 +268,13 @@ fn what_js_throws_or_gets_wrong_fails_the_member() {
 }
 
 #[test]
-fn outside_a_call_members_are_posted_or_awaited() {
+fn outside_a_call_members_are_posted_run_or_awaited() {
     let host = host();
     run(&host, GREETER).unwrap();
     run(&host, "Hall.keep(greeter);").unwrap();
     let g = KEPT.with(|k| k.borrow_mut().take()).unwrap();
-    // A value is not answered outside a call from JS.
-    assert_eq!(
-        g.greet("x".to_owned()),
-        Err(
-            "Greeter.greet: called outside a synchronous call from JS (an `async` method is \
-             called from a task)"
-                .to_owned()
-        )
-    );
+    // A value is answered on the spot between JS's turns.
+    assert_eq!(g.greet("x".to_owned()), Ok("hello x".to_owned()));
     // `()` is posted: in JS's next turn, a missing member's default then.
     g.say("later".to_owned());
     g.hear("unheard".to_owned());
