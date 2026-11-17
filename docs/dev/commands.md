@@ -47,8 +47,12 @@ echo 'await app.screenshot("a.png"); await app.press("label:Navigation"); await 
 ./target/debug/nsh run examples/gallery --target gpui                      # in a GPUI window (macOS, Windows, Linux), as GPUI apps embed it
 ./target/debug/nsh run examples/gallery --target web                       # in the browser (the dev server serves the page)
 ./target/debug/nsh package examples/gallery --target web --run             # a static site (files named by content), served on this machine
+./target/debug/nsh package examples/gallery --target tizen-web --sign <profile>   # a Samsung TV's .wgt, signed with the Tizen SDK's tz
+./target/debug/nsh package examples/gallery --target tizen --sign <profile>       # a Samsung TV's TPK (native), signed with tz
+./target/debug/nsh run examples/gallery --target tizen                     # on the TV `sdb devices` lists (nsh.json tizen.signing; `cargo xtask tizen`)
 ./target/debug/nsh package examples/gallery --target ios-simulator --run   # installable app (.app / .ipa / .apk)
 cargo xtask android [--release] [--dev]                                            # Android runtime into target/android/<profile>[-dev]
+DXN_GPUI_TIZEN=<checkout> cargo xtask tizen [--variant release|dev|both] [--arch armv7l,...] [--config <patch>]   # Tizen runtime into target/tizen
 cargo xtask dist                                                                   # the distribution in dist/nsh
 ./target/debug/nsh dev examples/counter --server-only                      # dev server only (for simulators / devices); prints local and LAN URLs
 ./target/debug/nsh build examples/counter --release                        # writes bundle.js / bundle.nshc
