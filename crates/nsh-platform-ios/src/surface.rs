@@ -485,6 +485,8 @@ impl RootView {
             // Drawings replayed into Core Graphics bitmaps
             // ([`crate::canvas::Offscreen`]).
             canvas_render: true,
+            // `UIActivityViewController` (`crate::share`).
+            share: true,
             // The Speech framework fed by the microphone.
             speech: true,
             // The notification center.

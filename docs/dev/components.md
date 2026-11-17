@@ -1407,7 +1407,9 @@ draws the menu. On iOS the app's content is covered by the native component `nsh
 (`nsh-platform-ios`'s `system_menu_button.rs`): a transparent `UIButton` whose `UIMenu`, made from the mounted items,
 is its primary action, so the tap is answered natively; the button sets itself as the element's only accessibility
 element, and an action emits `select` with the app's id. On a desktop OS a press shows the same items with
-`popup_menu`; elsewhere the content opens nothing. `nsh/mobile`'s `SegmentedControl` is the same kind of native
+`popup_menu`; elsewhere the content opens nothing. A `ContextMenu` given `items` is the same kind of menu on iOS: the native component
+`nsh/context-menu` (`system_context_menu.rs`) shows the system's context menu from `MenuButton`'s item data, and
+`menu.rs` reports it with the drawn menu's events; elsewhere, and without items, the menu is the drawn one. `nsh/mobile`'s `SegmentedControl` is the same kind of native
 component, `nsh/segmented-control` (`system_segmented_control.rs`), built as `TabBar` is.
 
 `HoverCard` (`hover_card.rs`) is `gpui-base`'s `HoverCard` on `Popover`'s overlay and presence. On the desktops the
@@ -1508,6 +1510,15 @@ descendant scroll's pan: its initial offset consumes the first part of the drag,
 distance moves the panel while the scroll stays at its adjusted top. Other backends retain their usual scroll
 arbitration. `SheetMotion` tags completion callbacks and fallback timers with a generation, so a prior exit cannot
 unmount a reopened sheet or its backdrop.
+
+With `detents` (bottom side), the panel is as tall as its largest detent and rests lower for a smaller one. The
+same native pan value moves it between detents, a release settles it at one or, past the smallest with
+`closeOnSwipe`, requests closing; sheets without detents keep the motion above unchanged and build none of the
+detents' animation graph (the detents' layers are a branch of their own, made again when a sheet gains or loses its
+detents or its bottom side). A `footer` stays at the bottom of what shows of the panel, moved by the same native value; while the
+software keyboard is up the sheet stands at its largest detent without changing the detent it reports. The detent is controlled
+or the sheet's own (`detent`, `defaultDetent`, `onDetentChange`), and the optional grabber is an adjustable part for
+screen readers. Code: `sheet.rs` (`Detents`), `popup.rs` (`SheetMotion`).
 
 `SheetMotion` derives the programmatic translation from the remaining fade fraction times the current measured
 distance from the edge. Lazy JS children can fill in over several layout rounds in one native batch; later content
@@ -1621,7 +1632,8 @@ pointer's offset; a press on the track puts the thumb's middle there and a drag 
 reports the scroll a frame or two later, and while it goes on the reports of earlier commands do not move it back.
 `mode` decides when it shows, as `gpui-base`'s: `scrolling` (a move of the target, until `motion.idle` after; the
 pointer on the bar while it shows keeps it), `hover` (also while the pointer is over the bar, which a hidden bar
-follows with a mouse) or `always`; a drag keeps it, and it never shows while the content fits. Its fades are
+follows with a mouse) or `always`; a drag keeps it. While the content fits, the bar stays hidden and passes pointer
+events through to the content in every mode. Its fades are
 `gpui-base`'s `VisibilityAnimation`: two animated values bound natively, the track's opacity and the rail's slide
 (across the axis by the track's thickness, which the track clips), started with `motion.enter` / `exit` scaled by
 the distance still to cover (the bar samples its fade to know where the native one is), linear / cubic out in and
