@@ -1267,8 +1267,14 @@ pub struct Core<M: TextEngine> {
     /// Culled views were made in this round: their styles go out in
     /// another.
     cull_made: bool,
-    /// The walk of [`Core::sync_culled`], kept for its buffer.
-    cull_scratch: Vec<(Key, f32, f32)>,
+    /// The walk of [`Core::sync_culled`], kept for its buffer: each view
+    /// with where it is in the scroll view's content and how far the
+    /// transforms around it may move it (`cull.rs`).
+    cull_scratch: Vec<(Key, f32, f32, f32, f32)>,
+    /// How far the animation graph's values may go: how far an animated
+    /// transform may move a view culling looks at
+    /// (`animation/reach.rs`).
+    reach: crate::animation::Reach,
     /// Views out of sight spread over turns (`pace.rs`).
     pace: pace::Pace,
     /// Lists' rows under this turn's layout animation (`list_motion.rs`).
@@ -1349,6 +1355,10 @@ pub struct Core<M: TextEngine> {
     /// The surface's safe-area insets (stacks at the top extend their
     /// headers under the status bar).
     safe_area: EdgeInsets,
+    /// Where the root view's anchored overlays may go, in its coordinates,
+    /// when the platform shows them beyond the root view
+    /// ([`Core::set_overlay_area`]).
+    overlay_bounds: Option<crate::geometry::Bounds<Points>>,
     list_binds: Vec<ListBind>,
     /// The lists keeping items rendered ([`Core::sync_kept`]).
     kept_lists: Vec<Key>,
@@ -1646,6 +1656,7 @@ impl<M: TextEngine> Core<M> {
             culls_content: true,
             culling: Vec::new(),
             cull_dirty: false,
+            reach: crate::animation::Reach::default(),
             cull_made: false,
             cull_scratch: Vec::new(),
             pace: pace::Pace::default(),
@@ -1677,6 +1688,7 @@ impl<M: TextEngine> Core<M> {
             accessories: Default::default(),
             header_heights: (Points(44.0), Points(96.0)),
             safe_area: EdgeInsets::default(),
+            overlay_bounds: None,
             list_binds: Vec::new(),
             kept_lists: Vec::new(),
             selection_kept: Vec::new(),
@@ -1756,6 +1768,26 @@ impl<M: TextEngine> Core<M> {
     pub fn set_safe_area(&mut self, insets: EdgeInsets) {
         if self.safe_area != insets {
             self.safe_area = insets;
+            self.needs_layout = true;
+        }
+    }
+
+    /// Where the root view's anchored overlays may be placed, in its
+    /// coordinates, when the platform shows them beyond the root view: the
+    /// web's `overlays: "viewport"` draws them over the browser window, so
+    /// this is the window's rectangle (less its safe area) relative to the
+    /// container. They are placed and flipped within it, less their
+    /// `margin`, rather than within the root view's safe area. `None` (the
+    /// default) keeps them to the root view. Overlays without an anchor
+    /// and those of modals are laid out as before.
+    pub fn set_overlay_area(&mut self, area: Option<crate::geometry::Bounds<Points>>) {
+        if self.overlay_bounds == area {
+            return;
+        }
+        self.overlay_bounds = area;
+        // Their room changed: laid out and placed again. With none shown
+        // the next one is placed in it as it shows.
+        if self.root_overlay_shown() {
             self.needs_layout = true;
         }
     }
@@ -2701,6 +2733,11 @@ impl<M: TextEngine> Core<M> {
                 Ok(())
             }
             Op::Animation(op) => {
+                // A view culled for where its transform may take it may
+                // reach further now (`cull.rs`).
+                if self.reach.apply(&op) && !self.culling.is_empty() {
+                    self.cull_dirty = true;
+                }
                 self.mount.push(MountItem::Animation(op));
                 Ok(())
             }
@@ -5565,12 +5602,18 @@ impl<M: TextEngine> Core<M> {
                 }
             }
             Prop::ScrollValue(value) => {
+                if let Some(value) = value {
+                    self.reach.drive(value);
+                }
                 if let Some(scroll) = node.scroll.as_mut() {
                     scroll.scroll_value = value;
                     flags |= dirty::SCROLL;
                 }
             }
             Prop::PullValue(value) => {
+                if let Some(value) = value {
+                    self.reach.drive(value);
+                }
                 if let Some(scroll) = node.scroll.as_mut() {
                     scroll.pull_value = value;
                     flags |= dirty::SCROLL;
@@ -5612,8 +5655,12 @@ impl<M: TextEngine> Core<M> {
                 }
             }
             Prop::Columns(columns) => {
-                if let Some(list) = node.list.as_mut() {
-                    list.set_columns(columns);
+                if let Some(list) = node.list.as_mut()
+                    && list.set_columns(columns)
+                {
+                    // Its cells are laid out again at the new width, even
+                    // when nothing else in the turn lays anything out.
+                    self.needs_layout = true;
                 }
             }
             Prop::Inverted(inverted) => {
@@ -5664,8 +5711,10 @@ impl<M: TextEngine> Core<M> {
                 }
             }
             Prop::ListContent(content) => {
-                if let Some(list) = node.list.as_mut() {
-                    list.set_content(content);
+                if let Some(list) = node.list.as_mut()
+                    && list.set_content(content)
+                {
+                    self.needs_layout = true;
                 }
             }
             Prop::Viewability(config) => {
@@ -5697,6 +5746,10 @@ impl<M: TextEngine> Core<M> {
                 }
             }
             Prop::PanValues(x, y) => {
+                // A gesture drives them: no bound on where they take a view.
+                for value in [x, y].into_iter().flatten() {
+                    self.reach.drive(value);
+                }
                 (node.gestures.pan_x, node.gestures.pan_y) = (x, y);
                 flags |= dirty::PAN;
             }
@@ -5714,10 +5767,16 @@ impl<M: TextEngine> Core<M> {
                 }
             }
             Prop::PinchValue(value) => {
+                if let Some(value) = value {
+                    self.reach.drive(value);
+                }
                 node.gestures.pinch = value;
                 flags |= dirty::PAN;
             }
             Prop::RotationValue(value) => {
+                if let Some(value) = value {
+                    self.reach.drive(value);
+                }
                 node.gestures.rotation = value;
                 flags |= dirty::PAN;
             }
@@ -5956,6 +6015,10 @@ impl<M: TextEngine> Core<M> {
                 self.set_projected_data(key, data);
                 return Ok(());
             }
+            Prop::ProjectedActive(group) => {
+                self.set_projected_active(key, group);
+                return Ok(());
+            }
             Prop::HeaderStyle(patch) => {
                 self.set_part_style(key, classes::Part::Header, patch);
                 return Ok(());
@@ -6189,6 +6252,11 @@ impl<M: TextEngine> Core<M> {
                         ModalProp::CloseOnEscape(v) => c.close_on_escape = v,
                         ModalProp::CloseOnBackdropPress(v) => c.close_on_backdrop_press = v,
                         ModalProp::CloseOnSwipe(v) => c.close_on_swipe = v,
+                        ModalProp::Detents(v) => c.detents = v,
+                        ModalProp::Detent(v) => c.detent = v,
+                        ModalProp::DefaultDetent(v) => c.default_detent = v,
+                        ModalProp::Grabber(v) => c.grabber = v,
+                        ModalProp::LargestUndimmedDetent(v) => c.largest_undimmed_detent = v,
                     }
                     flags |= dirty::MODAL;
                 }
@@ -7185,6 +7253,11 @@ impl<M: TextEngine> Core<M> {
         let node = &mut self.nodes[key as usize];
         if let Some(scroll) = node.scroll.as_mut() {
             scroll.content = None;
+            // Sticky ranges computed while culled have not reached a
+            // native view yet. Send them once this view is made.
+            if !scroll.view_sticky.is_empty() {
+                self.sticky_views.push(key);
+            }
             // The new native view counts the core's scrolls from zero.
             scroll.issued = 0;
             scroll.target = None;
@@ -7394,8 +7467,13 @@ impl<M: TextEngine> Core<M> {
         let node = &mut self.nodes[key as usize];
         node.dirty |= flags;
         // A culled view given a transform or an animated value may show
-        // away from its frame now (`cull.rs`).
-        if node.culled && flags & (dirty::VIEW | dirty::ANIMATION) != 0 {
+        // away from its frame now, and so may what a view with one holds
+        // (`cull.rs`).
+        if flags & (dirty::VIEW | dirty::ANIMATION) != 0
+            && (node.culled
+                || !self.culling.is_empty()
+                    && (!node.animated.is_empty() || !node.view_style.transform.ops().is_empty()))
+        {
             self.cull_dirty = true;
         }
         if !node.queued {
@@ -7669,7 +7747,7 @@ impl<M: TextEngine> Core<M> {
             if flags & dirty::MODAL != 0
                 && let Some(root) = &node.root
             {
-                let mut config = root.modal;
+                let mut config = root.modal.clone();
                 config.window = self.window_of(key);
                 // A platform presents a dialog when it is inserted, over the
                 // window its config names: a dialog inserted in this batch
@@ -9605,7 +9683,9 @@ impl<M: TextEngine> Core<M> {
                     EventPayload::Layout(frame),
                 ));
             }
-            self.mount.push(MountItem::Frame { id, frame });
+            if node.created {
+                self.mount.push(MountItem::Frame { id, frame });
+            }
             let node = &self.nodes[key as usize];
             // A list's cell moved: the logical order goes by where cells are.
             if self.track_tree_order
@@ -9618,7 +9698,7 @@ impl<M: TextEngine> Core<M> {
             // Translations by a fraction of the size follow it, and so does
             // the perspective of its parent, seen from the parent's center.
             let parent_perspective = self.perspective_steps(key) > 0;
-            if node.view_style.transform.has_fractions() || parent_perspective {
+            if node.created && (node.view_style.transform.has_fractions() || parent_perspective) {
                 let style = self.mounted_view_style(key);
                 self.mount.push(MountItem::ViewStyle { id, style });
             }
@@ -9934,6 +10014,18 @@ impl<M: TextEngine> Core<M> {
         let spliced = list.take_splice_anchor();
         anchor += spliced;
         let kept = anchor;
+        // A row growing under its own layout animation (a reveal) moves
+        // the end while its frames slide: a scroll to the new end would
+        // land at once, ahead of them, so the list keeps its place.
+        let revealing = !self.scoped_layout.is_empty() && {
+            let scoped = &self.scoped_layout;
+            scoped.iter().any(|&(scope, ..)| {
+                self.key(scope)
+                    .is_ok_and(|k| k != key && self.is_within(k, key))
+            })
+        };
+        let list = self.nodes[key as usize].list.as_mut().expect("list");
+        list.revealing = revealing;
         // Inverted lists keep their distance from the end instead;
         // `maintainVisibleContentPosition` follows the end near it.
         anchor += list.anchor_end(kept);

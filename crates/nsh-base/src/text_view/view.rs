@@ -1447,7 +1447,6 @@ impl Cx {
             .rounded(px(6.0))
             .items_center()
             .justify_center()
-            .cursor_pointer()
             .hover(|s| s.bg(hovered))
             .active(|s| s.bg(pressed))
             .role(AccessibilityRole::Button)

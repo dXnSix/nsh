@@ -356,6 +356,9 @@ pub(super) struct ListState {
     pub(super) viewable: Option<(u32, u32)>,
     /// `loadMoreThreshold`, in viewports.
     pub(super) end_threshold: f32,
+    /// A row grows under a scoped layout animation in this commit
+    /// ([`ListState::anchor_end`] does not follow the end it moves).
+    pub(super) revealing: bool,
     /// `loadMoreAtStartThreshold`, in viewports.
     pub(super) start_threshold: f32,
     /// Main-axis scroll offset reported by the platform (content
@@ -467,6 +470,7 @@ impl ListState {
             viewability: Viewability::default(),
             viewable: None,
             end_threshold: END_THRESHOLD,
+            revealing: false,
             start_threshold: START_THRESHOLD,
             offset: 0.0,
             viewport: 0.0,
@@ -1277,7 +1281,9 @@ impl ListState {
         }
     }
 
-    pub(super) fn set_columns(&mut self, columns: u32) {
+    /// Whether the cells change width: they are laid out again
+    /// (`Core::layout_cells`), which only runs in a turn that lays out.
+    pub(super) fn set_columns(&mut self, columns: u32) -> bool {
         let columns = columns.max(1);
         if columns != self.columns {
             // The first visible item stays where it is (a window resized to
@@ -1300,22 +1306,27 @@ impl ListState {
             if let Some((index, from_top)) = anchor {
                 self.keep_in_place(index, from_top);
             }
+            true
+        } else {
+            false
         }
     }
 
-    /// `contentStyle`: it wins over `contentClass` when set.
-    pub(super) fn set_content(&mut self, content: ListContentStyle) {
+    /// `contentStyle`: it wins over `contentClass` when set. Whether the
+    /// cells change width, as [`Self::set_columns`].
+    pub(super) fn set_content(&mut self, content: ListContentStyle) -> bool {
         self.content_style = content;
-        self.apply_content();
+        self.apply_content()
     }
 
-    /// What `contentClass` sets.
-    pub(super) fn set_class_content(&mut self, content: ListContentStyle) {
+    /// What `contentClass` sets. Whether the cells change width, as
+    /// [`Self::set_columns`].
+    pub(super) fn set_class_content(&mut self, content: ListContentStyle) -> bool {
         self.content_class = content;
-        self.apply_content();
+        self.apply_content()
     }
 
-    fn apply_content(&mut self) {
+    fn apply_content(&mut self) -> bool {
         let content = if self.content_style != ListContentStyle::default() {
             self.content_style
         } else {
@@ -1340,6 +1351,9 @@ impl ListState {
                 self.cells_cross = f32::NAN;
             }
             self.rebuild_offsets();
+            cross_changed
+        } else {
+            false
         }
     }
 
@@ -1528,6 +1542,7 @@ impl ListState {
     /// is, so a list at its end is still at its end.
     pub(super) fn anchor_end(&mut self, kept: f32) -> f32 {
         self.measured_scroll = 0.0;
+        let revealing = std::mem::take(&mut self.revealing);
         if self.viewport <= 0.0 {
             return 0.0;
         }
@@ -1557,6 +1572,13 @@ impl ListState {
             // instead of sending a competing ScrollBy on every report.
             let settle = bottom && (0.0..=PIN_SLACK).contains(&distance);
             if !opening && (was.is_nan() || distance > threshold || (end <= was && !settle)) {
+                return 0.0;
+            }
+            // A row growing under its own layout animation: the scroll
+            // would land at once while the row slides open, so the content
+            // above jumps. The list keeps its place, the row grows below
+            // the viewport, as it does further from the end (#2218).
+            if revealing && !opening && end > was {
                 return 0.0;
             }
             let delta = end - self.offset;

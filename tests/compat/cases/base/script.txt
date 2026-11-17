@@ -331,6 +331,16 @@ expect Swipes dialog
 event text:"Swipes dialog" onCancel reason=swipe
 expect Log: swipes change false swipe
 absent Swipes dialog
+# An iOS sheet at detents: the user's moves heard
+# (`onDetentChange({ detent })`).
+tap text:Clear log
+tap text:Open sheet
+expect Sheet dialog
+prop id:sheet presentation pageSheet
+event text:"Sheet dialog" onDetentChange detent=large
+expect Log: sheet detent large
+event text:"Sheet dialog" onCancel reason=swipe
+absent Sheet dialog
 covers [nsh/base] Dialog
 covers [props] presentation
 covers [props] animation
@@ -346,6 +356,7 @@ covers [events] Dialog.onOpen
 covers [events] Dialog.onClose
 covers [events] Dialog.onCancel
 covers [events] Dialog.onOpenChange
+covers [events] onDetentChange
 # base-dialog-backdrop
 tap id:case-base-dialog-backdrop
 expect Styled dialog
@@ -998,16 +1009,15 @@ wait 1000
 animated parent:text:DetentBody transform.1 0
 tap below:parent:text:DetentBody
 absent DetentBody
-covers [props] Sheet.detents
-covers [props] Sheet.detent
-covers [props] Sheet.grabber
+covers [props] detents
+covers [props] detent
+covers [props] grabber
 covers [props] Sheet.grabberClass
 covers [props] Sheet.grabberStyle
 covers [props] Sheet.grabberAccessibilityLabel
 covers [props] Sheet.footer
 covers [props] Sheet.footerClass
 covers [props] Sheet.footerStyle
-covers [events] Sheet.onDetentChange
 # Detents of points and of a share of the screen: the largest (half the
 # screen) is the panel's height, and `defaultDetent` the first rest.
 tap text:OpenCustomSheet
@@ -1017,7 +1027,7 @@ frame parent:text:CustomBody 0 422 390 422
 animated parent:text:CustomBody transform.1 0
 tap below:parent:text:CustomBody
 absent CustomBody
-covers [props] Sheet.defaultDetent
+covers [props] defaultDetent
 # `closeOnBackdropPress={false}`: its backdrop keeps it.
 tap below:parent:text:StuckSheet
 expect StuckSheet
@@ -1113,6 +1123,12 @@ frame text:Wi-Fi 52 4 39 17
 tap id:wifi
 expect Changes: 2
 prop id:wifi accessibilityState checked=false
+frame text:Wi-Fi 32 4 39 17
+# Held down, wherever on it: `active:` of the parts follows the switch
+# (the thumb 24 wide at once puts the label at 36), until it is released.
+state id:wifi pressed
+frame text:Wi-Fi 36 4 39 17
+state id:wifi none
 frame text:Wi-Fi 32 4 39 17
 # The app owns the value: a switch it keeps on asks for off and stays on.
 prop id:lights accessibilityLabel Lights
@@ -1760,13 +1776,20 @@ expect Details
 frame id:region 0 20 390 54
 frame id:details 0 0 390 30
 frame id:after 0 74 390 20
-# Closed: the frames at once, the details out once the region has closed.
+# Closed: the frames at once, the details out once the region has closed:
+# the app's spring (stiffness 64, damping 16, critically damped) settles
+# in about 1154 ms, so they are still there after 700 (the default's
+# would have gone at about 265) and gone after 1600. The margins stay
+# wide so a loaded machine's late timers cannot blur them.
 tap id:trigger
 frame id:region 0 20 390 24
 frame id:after 0 44 390 20
-wait 400
+wait 700
+frame id:details 0 0 390 30
+wait 900
 absent Details
 covers [props] Collapsible.reveal
+covers [props] Collapsible.revealSpring
 
 # base-accordion
 tap id:case-base-accordion
@@ -1821,13 +1844,17 @@ frame id:faq 0 20 390 90
 listens id:details-a onPress
 tap id:details-b
 expect Taps b: 1
-# The open item's trigger closes it; the revealed panel springs shut and
-# its content leaves once it has.
+# The open item's trigger closes it; the revealed panel springs shut on
+# the app's spring (stiffness 64, damping 16: settling in about 1154 ms,
+# the default in about 265) and its content leaves once it has, with
+# wide margins on both sides.
 tap text:Returns
 expect Open: none
 frame id:item-b 0 20 390 20
 frame id:faq 0 20 390 60
-wait 400
+wait 700
+frame id:details-b 0 0 390 30
+wait 900
 absent Returns details
 # With `multiple`, opening one leaves the others open.
 tap id:multiple
@@ -1859,6 +1886,7 @@ covers [props] Accordion.multiple
 covers [props] AccordionHeader.level
 covers [props] expandedStyle
 covers [props] AccordionPanel.reveal
+covers [props] AccordionPanel.revealSpring
 covers [props] AccordionPanel.keepMounted
 covers [props] accessibilityLabel
 

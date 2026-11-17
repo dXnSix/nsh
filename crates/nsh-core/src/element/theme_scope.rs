@@ -342,15 +342,22 @@ pub fn ThemeScope(props: ThemeScopeProps, _cx: Scope<NoEvent>) -> impl IntoEleme
     let mut scope = view();
     scope.node().bind_attr(
         move || own.get(),
-        |attrs, tokens| attrs.scope_tokens = tokens,
+        |attrs, tokens: Option<Arc<Tokens>>| {
+            if tokens.is_some() || attrs.rare.is_some() {
+                attrs.rare_mut().scope_tokens = tokens;
+            }
+        },
     );
     scope.node().bind_attr(
         move || appearance.get(),
         |attrs, appearance| {
-            attrs.appearance = match appearance {
+            let appearance = match appearance {
                 Some(ColorScheme::Dark) => Appearance::Dark,
                 Some(ColorScheme::Light) => Appearance::Light,
                 None => Appearance::System,
+            };
+            if appearance != Appearance::System || attrs.rare.is_some() {
+                attrs.rare_mut().appearance = appearance;
             }
         },
     );

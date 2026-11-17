@@ -5538,6 +5538,7 @@ name = "nsh-core"
 version = "0.5.0"
 dependencies = [
  "cap-std",
+ "chrono",
  "crc32fast",
  "flate2",
  "futures-util",
@@ -5568,7 +5569,6 @@ dependencies = [
  "unicode-properties",
  "ureq",
  "url",
- "webpki-roots 1.0.9",
  "windows-sys 0.61.2",
  "wuff",
 ]
@@ -5609,6 +5609,7 @@ dependencies = [
  "tokio",
  "ureq",
  "wgpu",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
 ]
 
@@ -5657,6 +5658,7 @@ dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn 2.0.119",
  "ttf-parser",
  "wuff",

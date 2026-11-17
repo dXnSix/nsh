@@ -47,8 +47,10 @@ use crate::{
     web::WebHost,
 };
 
+/// The mounter of a surface, reached on the main thread.
+pub(crate) type MounterCell = MainThreadBound<RefCell<Option<Mounter>>>;
 /// The mounter of one surface, shared with native callbacks.
-pub(crate) type SharedMounter = Arc<MainThreadBound<RefCell<Option<Mounter>>>>;
+pub(crate) type SharedMounter = Arc<MounterCell>;
 
 enum Native {
     /// The surface root (owned by the platform).
@@ -774,9 +776,13 @@ pub(crate) struct Mounter {
     /// The tint of this surface's alerts and action sheets, from its
     /// tokens ([`crate::system::alert_tint`]).
     alert_tint: Option<nsh_core::element::AdaptiveColor>,
+    /// The alerts shown and not answered yet (`Command::CloseDialog`).
+    dialogs: crate::system::Dialogs,
     /// The surface's share sheet, which a new share replaces
     /// ([`crate::share`]).
     share: crate::share::Current,
+    /// The sign-in session showing ([`crate::auth_session`]).
+    auth_session: crate::auth_session::Current,
     /// `SplitView`s' splits, by their native component's node
     /// ([`crate::split`]).
     splits: rustc_hash::FxHashMap<NodeId, crate::split::SplitHost>,
@@ -799,6 +805,7 @@ impl Mounter {
         let scrolls = crate::scroll_watch::SurfaceScrolls::default();
         let target = EventTarget::new(mtm, control.clone(), shared.clone(), scrolls.clone());
         let target_for_link = target.clone();
+        let shaders = crate::shader::Shaders::new(&target_for_link, &shared);
         let mut views = Vec::with_capacity(256);
         views.resize_with(2, || None);
         root.setTag(nsh_core::ROOT_ID as isize);
@@ -843,12 +850,14 @@ impl Mounter {
             created: Vec::new(),
             disappearing: Default::default(),
             frame_link: crate::animation::frame_link(&target_for_link),
-            shaders: crate::shader::Shaders::new(&target_for_link),
+            shaders,
             text_colors: crate::interaction::TextColors::new(&target_for_link),
             nav_shaders: rustc_hash::FxHashMap::default(),
             leaving_screens: rustc_hash::FxHashMap::default(),
             alert_tint: None,
+            dialogs: Default::default(),
             share: Default::default(),
+            auth_session: Default::default(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
             bottom_bar_dirty: false,
@@ -1967,7 +1976,16 @@ impl Mounter {
                 crate::system::set_status_bar(config, native.view());
             }
             (Command::Dialog(dialog), native) if id == nsh_core::ROOT_ID => {
-                crate::system::show_dialog(&dialog, self.alert_tint, native.view(), &self.control);
+                crate::system::show_dialog(
+                    &dialog,
+                    self.alert_tint,
+                    native.view(),
+                    &self.control,
+                    &self.dialogs,
+                );
+            }
+            (Command::CloseDialog(dialog), _) if id == nsh_core::ROOT_ID => {
+                crate::system::close_dialog(&self.dialogs, dialog);
             }
             (
                 Command::PickImages {
@@ -2005,6 +2023,18 @@ impl Mounter {
                 native,
             ) if id == nsh_core::ROOT_ID => {
                 crate::picker::pick_files(request, asked, native.view(), &self.control);
+            }
+            (Command::AuthSession { id: request, page }, native) if id == nsh_core::ROOT_ID => {
+                crate::auth_session::open(
+                    request,
+                    &page,
+                    native.view(),
+                    &self.auth_session,
+                    &self.control,
+                );
+            }
+            (Command::CloseAuthSession(request), _) if id == nsh_core::ROOT_ID => {
+                crate::auth_session::close(request, &self.auth_session);
             }
             (Command::Share { id: request, sheet }, native) if id == nsh_core::ROOT_ID => {
                 let anchor = sheet.anchor.and_then(|anchor| self.ui_view(anchor));
@@ -2845,7 +2875,7 @@ impl Mounter {
         // `transition::restyle` and Android's mounter skip it the same way).
         let transition = style
             .transition
-            .filter(|t| t.duration > 0.0 && s.styled && view.window().is_some());
+            .filter(|t| t.run_ms() > 0.0 && s.styled && view.window().is_some());
         s.style = style;
         s.styled = true;
         view.setHidden(s.style.hidden);
@@ -5310,6 +5340,14 @@ impl Mounter {
     /// The shaders' display link fired.
     pub(crate) fn shader_frame(&mut self) {
         self.shaders.frame();
+    }
+
+    /// The GPU device the shaders asked for opened (`None`: there is none,
+    /// which the app hears: `shadersAvailable()`).
+    pub(crate) fn shaders_opened(&mut self, renderer: Option<nsh_engine::shader::Renderer>) {
+        if self.shaders.opened(renderer) {
+            self.control.shaders_unavailable();
+        }
     }
 
     /// The display link of texts whose color transitions fired.
