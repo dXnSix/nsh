@@ -395,7 +395,8 @@ trait method, optional where the trait has a default body, `#[getter]` methods a
 calls such an object through the trait's stand-in `JsStartable`, taken as an argument or made from a kept object
 (`JsStartable::new(handle)`); register it with `registry.interface::<JsStartable>()`. A method that is not `async`
 runs the TSX method at once inside a call from TSX (outside one, a method returning `()` runs in TSX's next turn),
-an `async fn` awaits it (a value as well as a Promise: `#[ts("(): boolean")]` on it declares
+a `#[getter]` is read at once there and also from a task or a component (`handle.get::<T>("name")` reads any
+property of a kept object the same way), an `async fn` awaits it (a value as well as a Promise: `#[ts("(): boolean")]` on it declares
 `isInitialized(): boolean`), and what TSX throws is the `Err` of a method returning a `Result`. Another crate adds
 methods to your class with `#[class_extension(AppBuilder)]` on an `impl` block of a type of its own: each function
 taking `this: Instance<AppBuilder>` is a method of `AppBuilder` in TSX (`builder.addI18n((o) => …)`), on every

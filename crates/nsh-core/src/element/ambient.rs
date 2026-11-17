@@ -314,6 +314,11 @@ pub(super) fn executor() -> Rc<Executor> {
     with_data(|d| d.ambient.executor.clone()).expect("the core sets the executor")
 }
 
+/// The core's executor where a reactive runtime of an engine is entered.
+pub(super) fn try_executor() -> Option<Rc<Executor>> {
+    super::reactive::try_with_data(|d| d.ambient.executor.clone()).flatten()
+}
+
 fn act(action: Action) {
     executor().act(action);
 }

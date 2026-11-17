@@ -190,11 +190,14 @@ pub(crate) enum Phase {
     Call,
 }
 
-/// The clock of the call in progress, shared with the interrupt handler.
+/// The clock of the call in progress, shared with the interrupt handler
+/// (and, cloned, with the reads Rust makes between JS's turns: a clone
+/// shares the clock).
+#[derive(Clone)]
 pub(crate) struct Budget {
     limits: Limits,
     /// Whether a call is running (nested calls share its budget).
-    running: Cell<bool>,
+    running: Rc<Cell<bool>>,
     /// When the running call must have returned, on the clock calls are
     /// charged on (`None`: no budget, as an app on its own has none).
     deadline: Rc<Cell<Option<Charged>>>,
@@ -220,7 +223,7 @@ impl Budget {
     pub(crate) fn new(limits: Limits) -> Self {
         Self {
             limits,
-            running: Cell::new(false),
+            running: Rc::new(Cell::new(false)),
             deadline: Rc::default(),
             tripped: Rc::default(),
             phase: Rc::new(Cell::new(Phase::Call)),

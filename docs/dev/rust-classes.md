@@ -109,7 +109,8 @@ so a class's methods can run directly inside the JS call, as the web classes nsh
 - **Synchronous members run in the JS call.** `&self` / `&mut self` methods, getters and setters, statics and the
   constructor run inside the JS turn, outside the core: they compute and keep state, and cannot use the UI's free
   functions (signals, `dialog`, `theme()`): the reactive graph is not entered there, and calling one panics with a
-  message saying so (as on any thread without it). A method borrows its instance for its call; a re-entrant call
+  message saying so (as on any thread without it). `runtime_entered()` tells code that runs in both places which
+  one it is in, and `start_task(future)` starts a task of the core from either (below). A method borrows its instance for its call; a re-entrant call
   (a method reaching the same instance again) throws instead of aliasing, as the web classes do.
 - **`async` members are core tasks.** An `async fn` method gets `this: Instance<Self>` (a handle: `with` /
   `with_mut` borrow the value between awaits) and returns a promise; it runs as a task of the core, where the free
@@ -229,6 +230,16 @@ For that, two choices of the first version change:
   `async` one) starts a task of the core in order with the ops (`cx.start(future)`, nothing waits for it) and ties
   work to what owns the call in JS (`cx.on_cleanup(f)`: the reactive owner, else the module's run under hot
   reload). `process.spawn` returns its child at once and delivers the child's events from such a task.
+- **Starting a task without `cx`**: `start_task(future)` (`nsh_core::element`, prelude) starts a root task of the
+  core (no owner ends it, nothing waits for it) from Rust code that has no `CallCx` at hand: inside a synchronous
+  call from JS it goes as `cx.start` does, in order with what JS sent before the call, when the core takes the
+  turn's ops; where the reactive runtime is entered (a task, a component) it is spawned on the spot, polled at the
+  executor's next run. Elsewhere (off the engine thread, in a finalizer, once the VM is gone) it is not started:
+  `Err(NotStarted(future))` gives it back. `runtime_entered()` says whether the reactive runtime is entered on this
+  thread (the engine thread while the core runs Rust: a task, a component, an op), where signals and `spawn`
+  work; `false` in a synchronous call from JS. The JS host registers itself per VM (`CallTasks`,
+  `register_call_tasks`: `nsh-js`'s callbacks' table, the web player's bindings) so `start_task` finds the VM in a
+  call; with two VMs in calls at once (one's JS calling the other's Rust) it starts none.
 - **The VM's own state**: `sys.locals.get::<T: Local>()` is one `T` per VM, made on first use and closed
   (`Local::close`) when the VM goes, before its callbacks are released (`process`'s children).
 - **Getters of a module**: `#[getter]` on a function without JS parameters makes it a property of the module's
@@ -420,6 +431,19 @@ impl Services {
   fails, its equality still holds.
 - **Whether it can be called now.** `can_call_now()` answers for the object what a callback's does (see "Asking
   first" under Callbacks): whether an interface member called on it now runs on the spot.
+- **Reading its properties.** `handle.get::<T>("name")` reads the object's property as JS reads it (a getter it
+  defines runs) and converts it (`Option<T>` for one that may be `undefined`; a `JsHandle` for an object in it,
+  `Result<T, Exception>`: what a getter throws, or a value that does not convert). It reads on the spot inside a
+  synchronous call from JS and also **between JS's turns**: Rust code on the engine thread while no JS of the
+  thread runs (a task, a component, a timer, a factory Rust runs there), where a call (`can_call_now()`) cannot be
+  made. `can_read_now()` asks first: `false` in a finalizer, once the VM is gone, and while JS of another VM on the
+  thread runs. Between turns the read is a call into JS of its own, within the VM's budget of a call (one that
+  overruns it fails, and the VM goes on; running out of memory stops the VM, as in any call), and runs before the
+  calls posted earlier that have not run yet: a task that posts a change and then reads the value reads it from
+  before the change. What the read's JS posts, sends or starts runs in JS's next turn, as a posted call's does
+  (`CallbackHandle::between_turns` / `call_between_turns`: `nsh-js` counts the calls into JS of the thread's VMs,
+  `host.rs` `Entered`, and runs the read under the host's budget, `BetweenTurns`; the web player reads when no call
+  from the realm is in progress).
 
 ## Interfaces
 
@@ -474,7 +498,11 @@ export interface Startable {
   timer), one returning `()` is posted for JS's next turn, in order with the other posts (`Callback::post`), and one
   returning a value fails (the `Err` of a `Result`): JS is not running there. `stand_in.object().can_call_now()`
   says which applies (see "Asking first" under Callbacks). An `async fn` is posted and awaited
-  (`call_async`), a promise the JS method returns settled. A getter is read as a method of its kind is called.
+  (`call_async`), a promise the JS method returns settled. A getter that is not `async` is read on the spot inside a
+  call from JS and also between JS's turns (a task, a factory: see "Reading its properties" under JS objects;
+  `stand_in.object().can_read_now()` asks), so Rust reads the state a TS object publishes wherever it holds the
+  object; it fails only where JS of the thread is running without a call to Rust (a finalizer, another VM) or the
+  VM is gone. An `async` getter is posted and awaited as an `async fn`.
 - **Their TS signatures.** NSH declares a member from its Rust types, an `async fn`'s result as a `Promise`. An
   awaited member also settles with a plain value JS returns, so `#[ts("(): boolean")]` on the trait's method (as
   on a class's member, checked against its parameters and its result) declares what JS returns as written, with no
@@ -621,7 +649,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   methods with `#[class]`'s member code (`class.rs`' `member_def`, `this` an `Instance<C>`) and implements
   `element::ClassExtension` (`ClassExtension::DEF`, a `ClassExtensionDef`: the class, the holder's type and the
   methods' `Member`s).
-- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()`), `Posts`,
+- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()`; `JsHandle::get` and `can_read_now()` too), `Posts`, `runtime_entered`, `start_task` (`engine_thread.rs`),
   `Registry::class::<C>()`, `ClassExtension` and `Registry::class_extension::<E>()` / `class_extensions()` /
   `class_extensions_in(sets)` (`class_extension.rs`, the clash checks in `component.rs`), `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
   `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /

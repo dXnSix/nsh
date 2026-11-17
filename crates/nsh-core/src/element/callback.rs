@@ -52,6 +52,37 @@ pub trait CallbackHandle: std::any::Any {
     fn in_call(&self) -> bool {
         false
     }
+    /// Whether a read made now runs on the spot between JS's turns
+    /// ([`CallbackHandle::call_between_turns`]): on the engine thread while
+    /// no JS of the thread runs (a task, a component, a factory Rust runs
+    /// there), the VM lives and does not collect garbage. `false` inside a
+    /// synchronous call from JS, where [`CallbackHandle::in_call`] answers.
+    fn between_turns(&self) -> bool {
+        false
+    }
+    /// Runs `call` (a property's read) now, between JS's turns, within the
+    /// VM's budget of a call into JS. Where
+    /// [`CallbackHandle::between_turns`] is `false` the call is dropped
+    /// (its reply says it was not run).
+    fn call_between_turns(&self, call: JsCall) {
+        drop(call);
+    }
+}
+
+/// Runs `call` on the spot where JS can run now: inside a synchronous call
+/// from JS ([`CallbackHandle::in_call`]), or between JS's turns
+/// ([`CallbackHandle::between_turns`]: a property's read only); the call
+/// back where neither holds.
+pub(crate) fn read_now(handle: &Rc<dyn CallbackHandle>, call: JsCall) -> Result<(), JsCall> {
+    if handle.in_call() {
+        handle.call_now(call);
+        Ok(())
+    } else if handle.between_turns() {
+        handle.call_between_turns(call);
+        Ok(())
+    } else {
+        Err(call)
+    }
 }
 
 /// What receives a call's result.

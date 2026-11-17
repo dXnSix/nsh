@@ -29,6 +29,80 @@ use crate::{
     web,
 };
 
+thread_local! {
+    /// The calls into JS running on this thread, of every VM
+    /// ([`Host::guarded`], [`BetweenTurns::run`]): none between JS's turns.
+    static ENTERED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Whether JS of any VM runs on this thread (a call into it is in
+/// progress): Rust code running inside it is not between JS's turns.
+pub(crate) fn js_entered() -> bool {
+    ENTERED.with(Cell::get) > 0
+}
+
+/// Counts a call into JS while it lives (an unwind out of the call ends it
+/// too).
+struct Entered;
+
+impl Entered {
+    fn new() -> Self {
+        ENTERED.with(|e| e.set(e.get() + 1));
+        Entered
+    }
+}
+
+impl Drop for Entered {
+    fn drop(&mut self) {
+        ENTERED.with(|e| e.set(e.get().saturating_sub(1)));
+    }
+}
+
+/// What a read Rust makes between JS's turns (an interface's getter, a
+/// kept object's property, from a task) runs under: a call into JS of its
+/// own, within the VM's budget, as [`Host::guarded`] runs the host's.
+pub(crate) struct BetweenTurns {
+    budget: Budget,
+    shared: Rc<Shared>,
+    exhausted: Arc<AtomicBool>,
+}
+
+impl BetweenTurns {
+    /// Whether the VM may still run JS (it was not stopped).
+    pub(crate) fn open(&self) -> bool {
+        self.shared.fatal.borrow().is_none()
+    }
+
+    /// Runs `f` (which runs JS) as a call into JS, within the budget of a
+    /// call: one that overruns it is interrupted (the read fails), and
+    /// running out of memory stops the VM, as in the host's calls.
+    pub(crate) fn run(&self, f: impl FnOnce()) {
+        {
+            let _entered = Entered::new();
+            let _running = self.budget.run(Phase::Call);
+            f();
+        }
+        if let Some(trip) = self.budget.take_trip() {
+            log::error!(target: "js", "a read between JS's turns: {trip}");
+        }
+        if self.exhausted.load(Ordering::Relaxed) && self.shared.fatal.borrow().is_none() {
+            let reason = out_of_memory(self.budget.limits());
+            log::error!(target: "js", "{reason}");
+            self.shared.stop(reason);
+        }
+    }
+}
+
+/// Why a VM that ran out of memory was stopped.
+fn out_of_memory(limits: &Limits) -> String {
+    format!(
+        "the script ran out of memory (the JS heap is limited to {} MB) and was stopped. \
+         Keep large data out of JS: load it in pages, or keep it on the native side \
+         (a server, a native module) and hand JS only what it shows.",
+        limits.memory_bytes >> 20
+    )
+}
+
 /// Receives JS errors: uncaught exceptions ([`Host::set_error_handler`])
 /// or unhandled promise rejections ([`Host::set_rejection_handler`]).
 pub type ErrorHandler = Box<dyn Fn(&JsError)>;
@@ -193,6 +267,14 @@ impl Host {
         ))));
         cx.with(|cx| {
             crate::state::install(&cx, shared.clone(), &options.ui_sets, options.posts.clone());
+            crate::classes::set_between_turns(
+                cx.as_raw().as_ptr(),
+                BetweenTurns {
+                    budget: budget.clone(),
+                    shared: shared.clone(),
+                    exhausted: exhausted.clone(),
+                },
+            );
             web::web(cx.as_raw().as_ptr()).base_url = options
                 .base_url
                 .as_deref()
@@ -259,9 +341,11 @@ impl Host {
             return None;
         }
         self.entry_depth.set(self.entry_depth.get() + 1);
+        let entered = Entered::new();
         let running = self.budget.run(phase);
         let result = f();
         drop(running);
+        drop(entered);
         // The app may have caught running out (it is an `InternalError`):
         // the VM stops all the same.
         if self.exhausted.load(Ordering::Relaxed) && self.shared.fatal.borrow().is_none() {
@@ -303,12 +387,7 @@ impl Host {
         if let Some(trip) = self.budget.take_trip() {
             err.message = format!("{trip}\n{}", err.message);
         } else if self.exhausted.load(Ordering::Relaxed) {
-            let reason = format!(
-                "the script ran out of memory (the JS heap is limited to {} MB) and was stopped. \
-                 Keep large data out of JS: load it in pages, or keep it on the native side \
-                 (a server, a native module) and hand JS only what it shows.",
-                self.budget.limits().memory_bytes >> 20
-            );
+            let reason = out_of_memory(self.budget.limits());
             self.shared.stop(reason.clone());
             err.message = format!("{reason}\n{}", err.message);
         }

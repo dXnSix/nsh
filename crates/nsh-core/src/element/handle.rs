@@ -4,11 +4,11 @@
 //! holds, as [`super::Callback`]s' functions are, so a `#[class]` field
 //! holding one is reported to QuickJS's collector the same way.
 
-use std::{fmt, hash, rc::Rc};
+use std::{cell::RefCell, fmt, hash, rc::Rc};
 
 use super::{
     JsValue, PropError, TsTypes,
-    callback::{CallbackHandle, Trace, Tracer},
+    callback::{CallbackHandle, CallbackRet, Exception, JsCall, JsTarget, Trace, Tracer, read_now},
     class::{ClassDef, Constructor},
     js::{JsHost, JsIn, JsKind, JsOwned},
 };
@@ -66,6 +66,65 @@ impl JsHandle {
     /// object's VM.
     pub fn can_call_now(&self) -> bool {
         self.handle.in_call()
+    }
+
+    /// Whether a property of the object is read on the spot now
+    /// ([`JsHandle::get`], an interface's `#[getter]`): inside a
+    /// synchronous call from JS of the object's VM (where
+    /// [`JsHandle::can_call_now`] is `true`), and between JS's turns, where
+    /// no JS of the thread runs: Rust code on the engine thread in a task,
+    /// a component, a timer or a factory it runs there. `false` in a
+    /// finalizer (a value QuickJS frees), once the VM is gone, and while JS
+    /// of another VM on the thread runs. Asking runs no JS.
+    pub fn can_read_now(&self) -> bool {
+        self.handle.in_call() || self.handle.between_turns()
+    }
+
+    /// The object's property `name`, read now as JS reads it (a getter it
+    /// defines runs), converted to `T` (`Option<T>` for one that may be
+    /// `undefined` or `null`): an interface's `#[getter]` for an object
+    /// without one, or a field of a kept object. It works where
+    /// [`JsHandle::can_read_now`] is `true`, inside a synchronous call from
+    /// JS and between JS's turns (a task, a factory); elsewhere it fails.
+    /// What a getter throws, or a value that does not convert, is the
+    /// `Err`.
+    ///
+    /// Between JS's turns the read runs at once, within the VM's budget of
+    /// a call into JS, before the calls posted earlier
+    /// ([`super::Callback::post`]) that have not run yet: a task that posts
+    /// a change and then reads it reads the value from before the change.
+    /// JS that the read runs may post, start promises or send ops; those
+    /// run in JS's next turn, as a posted call's do.
+    pub fn get<T: CallbackRet + 'static>(&self, name: &'static str) -> Result<T, Exception> {
+        let out: Rc<RefCell<Option<Result<T, Exception>>>> = Rc::default();
+        let slot = out.clone();
+        let call = JsCall::member::<()>(
+            self.handle.clone(),
+            JsTarget::Get(name),
+            (),
+            Some(Box::new(move |result| {
+                *slot.borrow_mut() = Some(result.and_then(|v| {
+                    T::from_js(v).map_err(|e| Exception::from(format!("`{name}`: {}", e.0)))
+                }));
+            })),
+            None,
+            false,
+        );
+        if let Err(call) = read_now(&self.handle, call) {
+            // Not run: its reply is not wanted.
+            drop(call);
+            out.borrow_mut().take();
+            return Err(Exception::from(format!(
+                "`{name}` cannot be read now: JS runs on this thread without a call from it to Rust \
+                 (a finalizer, another VM), or the VM is gone"
+            )));
+        }
+        let read = out.borrow_mut().take();
+        read.unwrap_or_else(|| {
+            Err(Exception::from(format!(
+                "`{name}` was not read (JS stopped)"
+            )))
+        })
     }
 
     /// The value it keeps, as the host holds it.

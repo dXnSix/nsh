@@ -3,6 +3,8 @@ mod classes;
 mod components;
 mod cull;
 mod directional;
+#[cfg(test)]
+mod engine_thread;
 mod follow;
 #[cfg(feature = "inspect")]
 mod inspect;

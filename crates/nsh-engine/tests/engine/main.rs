@@ -22,6 +22,7 @@ mod components;
 mod counter;
 #[cfg(feature = "inspect")]
 mod dev_sources;
+mod engine_thread;
 mod errors;
 mod external_wake;
 mod fetch;

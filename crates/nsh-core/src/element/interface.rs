@@ -9,7 +9,9 @@
 //! [`super::Callback`]'s `call` does), and outside one (in a task) posts a
 //! method returning `()` for the next JS turn and fails for the others
 //! (`stand_in.object().can_call_now()`, [`JsHandle::can_call_now`], says
-//! which applies); an `async` method is posted and awaited (`call_async`:
+//! which applies); a `#[getter]` that is not `async` is read on the spot
+//! there too, and also between JS's turns (a task, a factory:
+//! [`JsHandle::can_read_now`]); an `async` method is posted and awaited (`call_async`:
 //! a promise it returns settles it). What JS throws (or rejects with) is
 //! the error of a method returning `Result<T, E>` (`E: From<Exception>`);
 //! a method returning a plain value panics with it, which the JS call
@@ -20,7 +22,7 @@ use std::{any::TypeId, cell::RefCell, fmt, rc::Rc};
 
 use super::{
     JsValue, PropError, TsType, TsTypes,
-    callback::{CallbackArgs, CallbackRet, Exception, JsCall, JsTarget},
+    callback::{CallbackArgs, CallbackRet, Exception, JsCall, JsTarget, read_now},
     class::{ClassDef, ClassRefs, MemberKind},
     handle::JsHandle,
     js::{JsIn, JsKind},
@@ -283,7 +285,9 @@ where
 {
     let member = &def.members[index];
     let handle = object.handle();
-    if handle.in_call() {
+    // A getter is also read between JS's turns (a task, a factory).
+    let now = handle.in_call() || (member.kind == MemberKind::Getter && handle.between_turns());
+    if now {
         let out: Slot<A, R::Value> = Rc::default();
         let slot = out.clone();
         let how = How {
@@ -294,7 +298,10 @@ where
         let call = member_call(object, def, index, args, how, move |outcome| {
             *slot.borrow_mut() = Some(outcome);
         });
-        handle.call_now(call);
+        if let Err(call) = read_now(handle, call) {
+            // JS started or stopped meanwhile (it cannot): not run.
+            drop(call);
+        }
         let outcome = out.borrow_mut().take();
         return match (outcome, default) {
             (Some(Outcome::Done(result)), _) => R::from_result(result, &what(def, index)),
@@ -326,14 +333,20 @@ where
         handle.post(call);
         return done;
     }
-    R::from_result(
-        Err(Exception::from(format!(
+    let message = if member.kind == MemberKind::Getter {
+        format!(
+            "{}: read while JS runs on this thread without a call from it to Rust (a finalizer, \
+             another VM), or once the VM is gone",
+            what(def, index)
+        )
+    } else {
+        format!(
             "{}: called outside a synchronous call from JS (an `async` method is called from a \
              task)",
             what(def, index)
-        ))),
-        &what(def, index),
-    )
+        )
+    };
+    R::from_result(Err(Exception::from(message)), &what(def, index))
 }
 
 /// A member called in the next JS turn, its result (a promise it returns,

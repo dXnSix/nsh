@@ -108,6 +108,9 @@ pub(crate) struct Classes {
     /// memory) a callback ended with: the synchronous call around it
     /// rethrows it, whatever Rust returned.
     uncatchable: RefCell<Option<V>>,
+    /// What reads Rust makes between JS's turns run under (the host's
+    /// budget); `None` (no host set it) refuses them.
+    between_turns: RefCell<Option<Rc<crate::host::BetweenTurns>>>,
 }
 
 impl Classes {
@@ -121,6 +124,7 @@ impl Classes {
             functions: Rc::default(),
             depth: Cell::new(0),
             uncatchable: RefCell::default(),
+            between_turns: RefCell::default(),
         }
     }
 
@@ -130,9 +134,21 @@ impl Classes {
         self.built.borrow_mut().clear();
         self.functions.free_all();
         self.uncatchable.borrow_mut().take();
+        self.between_turns.borrow_mut().take();
         // Queued calls are dropped (their replies say JS stopped).
         self.posts.close();
     }
+}
+
+/// Lets Rust read the VM's values between JS's turns, under `turns`.
+/// Also lets Rust start core tasks inside its synchronous calls
+/// (`start_task`).
+pub(crate) fn set_between_turns(cx: Ctx, turns: crate::host::BetweenTurns) {
+    let c = classes(cx);
+    *c.between_turns.borrow_mut() = Some(Rc::new(turns));
+    c.functions.cx.set(cx);
+    let functions: Rc<dyn nsh_core::element::CallTasks> = c.functions.clone();
+    nsh_core::element::register_call_tasks(Rc::downgrade(&functions));
 }
 
 fn classes<'a>(cx: Ctx) -> &'a Classes {
@@ -1458,6 +1474,34 @@ impl Functions {
     }
 }
 
+/// Starts core tasks from inside a synchronous call from JS of the VM
+/// (`nsh_core::element::start_task`), as `CallCx::start` does.
+impl nsh_core::element::CallTasks for Functions {
+    fn in_call(&self) -> bool {
+        let cx = self.cx.get();
+        !cx.is_null()
+            && !web::finalizing()
+            // SAFETY: reading the context's opaque pointer.
+            && !crate::state::state(cx).is_null()
+            && classes(cx).depth.get() > 0
+    }
+
+    fn start_task(&self, task: nsh_core::element::TaskStart) {
+        let cx = self.cx.get();
+        if cx.is_null() {
+            return;
+        }
+        let op = nsh_core::Op::Rust(RustOp {
+            call: 0,
+            run: RustCall::Task(task),
+        });
+        // Past the op limit the app is stopped: the task goes with it.
+        if crate::dom::push_op(cx, op).is_err() {
+            let _ = js::take_exception(cx);
+        }
+    }
+}
+
 /// A JS function (or any value) as Rust keeps it.
 pub(crate) struct JsCallback {
     functions: Rc<Functions>,
@@ -1570,6 +1614,40 @@ impl CallbackHandle for JsCallback {
              elsewhere (in a task) use `post` or `call_async`"
         );
         run_call(cx, call);
+    }
+
+    fn between_turns(&self) -> bool {
+        !web::finalizing()
+            && !crate::host::js_entered()
+            && self.value().is_some_and(|(cx, _)| {
+                // SAFETY: reading the context's opaque pointer.
+                !crate::state::state(cx).is_null()
+                    && classes(cx).depth.get() == 0
+                    && classes(cx)
+                        .between_turns
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|turns| turns.open())
+            })
+    }
+
+    fn call_between_turns(&self, call: JsCall) {
+        if !self.between_turns() {
+            // JS runs, or the VM is gone or stopped: dropped (its reply
+            // says so).
+            return;
+        }
+        let Some((cx, _)) = self.value() else {
+            return;
+        };
+        let Some(turns) = classes(cx).between_turns.borrow().clone() else {
+            return;
+        };
+        turns.run(|| run_call(cx, call));
+        // An interrupt (the budget, the engine stopping) ended the read:
+        // its reply has the error, and no call around it rethrows it.
+        let interrupted = classes(cx).uncatchable.borrow_mut().take();
+        drop(interrupted);
     }
 
     fn post(&self, call: JsCall) {
