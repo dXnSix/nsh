@@ -294,10 +294,10 @@ impl super::Runtime {
             for signal in names {
                 signal.set(());
             }
-            if roles_moved || changed.is_none() {
-                if let Some(roles) = with_data(|d| d.ambient.roles_signal) {
-                    roles.set(());
-                }
+            if (roles_moved || changed.is_none())
+                && let Some(roles) = with_data(|d| d.ambient.roles_signal)
+            {
+                roles.set(());
             }
         });
     }
@@ -687,7 +687,7 @@ fn surface_tokens_untracked() -> Arc<Tokens> {
 /// order with the app's other theme actions; `None`: the app's built-in
 /// document again (`Root::theme`, `nsh.json`'s `"theme"`), else the UI
 /// sets'. Returns (and logs) the read diagnostics of `json`. A text that is
-/// no document, or one of the old `cssVars` format, is not activated: the
+/// no document, or one of the old format (`legacy-format`), is not activated: the
 /// active document stays.
 ///
 /// Activating another document keeps the modifier contexts picked that it

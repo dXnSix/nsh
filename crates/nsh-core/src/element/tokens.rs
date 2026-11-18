@@ -1053,8 +1053,10 @@ impl Tokens {
         self.themed
     }
 
-    /// Says whether the app has a theme of its own ([`Tokens::is_themed`]).
-    pub(crate) fn set_themed(&mut self, themed: bool) {
+    /// Says whether the app has a theme of its own ([`Tokens::is_themed`]):
+    /// the core does on the tokens it draws with, and a host's test or a
+    /// tool does on tokens it resolved itself ([`Tokens::resolve`]).
+    pub fn set_themed(&mut self, themed: bool) {
         self.themed = themed;
     }
 }

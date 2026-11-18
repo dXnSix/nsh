@@ -518,8 +518,8 @@ impl Surface {
         let theme = self.host_theme.borrow().clone();
         let launch = self.launch_links.take();
         let setup = |control: &EngineControl| {
-            if let Some(json) = theme {
-                control.set_theme_overrides(json);
+            if theme.is_some() {
+                control.set_theme_overrides(theme.as_deref());
             }
             if let Some(displays) = displays {
                 control.set_displays(displays);

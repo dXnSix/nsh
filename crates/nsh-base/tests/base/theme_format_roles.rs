@@ -225,13 +225,8 @@ fn Reruns() -> impl IntoElement {
         counted.set(counted.get() + 1);
     });
     let counts = signal(Vec::<usize>::new());
-    let press = |id: &'static str, f: Box<dyn Fn()>| {
-        view()
-            .test_id(id)
-            .w(px(20.0))
-            .h(px(20.0))
-            .on_press(move || f())
-    };
+    let press =
+        |id: &'static str, f: Box<dyn Fn()>| view().test_id(id).w(px(20.0)).h(px(20.0)).on_press(f);
     view()
         // A token no role of nsh-base reads.
         .child(press(
@@ -343,7 +338,7 @@ fn the_fallback_document_is_the_old_default_converted() {
         .map(|(name, t)| (name, t.value_type))
         .collect();
     assert_eq!(others, [("radius", ValueType::Number)]);
-    assert!(DEFAULT_THEME.find("cssVars").is_none());
+    assert!(DEFAULT_THEME.find("cssVars").is_none()); // converted by nsh theme convert
 
     let registry = nsh_base::registry();
     assert_eq!(

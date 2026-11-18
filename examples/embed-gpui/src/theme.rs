@@ -1,17 +1,23 @@
-//! GPUI Kit's theme as NSH's: the host's theme for its embedded apps.
+//! GPUI Kit's theme as NSH's: the host's patch for its embedded apps.
 //!
-//! NSH's theme has shadcn/ui's tokens, and GPUI Kit's colors have the same
-//! roles under its own names, so the conversion maps each of shadcn's
-//! tokens to the GPUI Kit color of its role, as GPUI Kit resolved it (with
-//! its fallbacks), so the embedded components match the host's widgets
-//! exactly. It runs again on every change of the host's theme or mode, so
-//! both appearances take the current mode's colors.
+//! The embedded app draws with `nsh/base`'s default theme, whose tokens are
+//! shadcn/ui's, and GPUI Kit's colors have the same roles under its own
+//! names, so the conversion sets each of shadcn's tokens to the GPUI Kit
+//! color of its role, as GPUI Kit resolved it (with its fallbacks), and
+//! `radius` to GPUI Kit's: a theme patch (`docs/dev/theme-format.md`,
+//! section 8) the surfaces take as their host layer
+//! ([`nsh_platform_gpui::AppView::set_theme_overrides`]), so the embedded
+//! components match the host's widgets exactly. A patch holds in every
+//! context the app picks, light and dark alike, so it is the current mode's
+//! colors, sent again on every change of the host's theme or mode. A patch
+//! never adds a token, so GPUI Kit's fonts, which the default theme has no
+//! token for, stay the system's.
 
 use gpui_kit::{
     Hsla,
     component::{Theme, ThemeMode},
 };
-use nsh_platform_gpui::{AdaptiveColor, Appearance};
+use nsh_platform_gpui::{Appearance, Color};
 
 /// A GPUI color as NSH's: the same `Hsla`, channel for channel.
 fn color(c: Hsla) -> nsh_platform_gpui::Hsla {
@@ -20,6 +26,17 @@ fn color(c: Hsla) -> nsh_platform_gpui::Hsla {
         s: c.s,
         l: c.l,
         a: c.a,
+    }
+}
+
+/// A GPUI color in the theme format's form: `#rrggbb`, with its alpha
+/// (`#rrggbbaa`) below full opacity.
+fn hex(c: Hsla) -> String {
+    let Color(rgba) = Color::from(color(c));
+    if rgba & 0xff == 0xff {
+        format!("#{:06x}", rgba >> 8)
+    } else {
+        format!("#{rgba:08x}")
     }
 }
 
@@ -32,11 +49,12 @@ pub fn appearance(mode: ThemeMode) -> Appearance {
     }
 }
 
-/// `theme` (GPUI Kit's active theme) as NSH's theme, for
-/// [`nsh_platform_gpui::AppView::set_theme`].
-pub fn nsh_theme(theme: &Theme) -> nsh_platform_gpui::Theme {
-    let mut nsh = nsh_platform_gpui::Theme::default();
+/// `theme` (GPUI Kit's active theme, in its current mode) as a theme patch
+/// of shadcn's tokens, for
+/// [`nsh_platform_gpui::AppView::set_theme_overrides`].
+pub fn host_patch(theme: &Theme) -> String {
     let colors = &theme.colors;
+    let mut values = serde_json::Map::new();
     for (name, c) in [
         ("background", colors.background),
         ("foreground", colors.foreground),
@@ -76,42 +94,44 @@ pub fn nsh_theme(theme: &Theme) -> nsh_platform_gpui::Theme {
         ("sidebar-border", colors.sidebar_border),
         ("sidebar-ring", colors.ring),
     ] {
-        nsh.set_color(name, AdaptiveColor::from(color(c)));
+        values.insert(name.to_owned(), hex(c).into());
     }
-    nsh.set_number("radius", f32::from(theme.radius));
-    nsh.set_font(nsh_core::element::FONT_SANS, theme.font_family.to_string());
-    nsh.set_font(nsh_core::element::FONT_MONO, theme.mono_font_family.to_string());
-    nsh
+    values.insert("radius".to_owned(), f32::from(theme.radius).into());
+    serde_json::json!({ "values": values }).to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use nsh_platform_gpui::Color;
-
     use super::*;
 
     #[test]
-    fn colors_convert_to_rgba() {
-        assert_eq!(
-            Color::from(color(gpui_kit::rgb(0x336699).into())),
-            Color(0x336699ff)
-        );
-        assert_eq!(
-            Color::from(color(gpui_kit::transparent_black())),
-            Color(0x0000_0000)
-        );
+    fn colors_take_the_theme_formats_form() {
+        assert_eq!(hex(gpui_kit::rgb(0x336699).into()), "#336699");
+        assert_eq!(hex(gpui_kit::transparent_black()), "#00000000");
     }
 
+    /// The patch is the current mode's resolved colors under shadcn's
+    /// names.
     #[test]
-    fn the_current_modes_resolved_colors_are_shadcns_tokens() {
+    fn the_current_modes_resolved_colors_are_the_patchs_values() {
         let mut theme = Theme::default();
         theme.mode = ThemeMode::Dark;
         theme.radius = gpui_kit::px(6.0);
         theme.colors.primary = gpui_kit::rgb(0x7c3aed).into();
-        let nsh = nsh_theme(&theme);
-        assert_eq!(Color::from(nsh.primary.dark), Color(0x7c3aedff));
-        // Both appearances: the host's current mode.
-        assert_eq!(Color::from(nsh.primary.light), Color(0x7c3aedff));
-        assert_eq!(nsh.radius, nsh_core::Points(6.0));
+        let patch: serde_json::Value = serde_json::from_str(&host_patch(&theme)).unwrap();
+        assert_eq!(patch["values"]["primary"], "#7c3aed");
+        assert_eq!(patch["values"]["radius"], 6.0);
+    }
+
+    /// Every name the patch sets is a token of `nsh/base`'s default theme,
+    /// of its type: nothing is left out.
+    #[test]
+    fn the_patch_fits_nsh_bases_default_theme() {
+        let (document, _) = nsh_core::element::theme::read_document(nsh_base::DEFAULT_THEME);
+        let document = document.expect("nsh/base's default theme");
+        let (patch, read) = nsh_core::element::theme::read_patch(&host_patch(&Theme::default()));
+        assert!(read.is_empty(), "{read:?}");
+        let checked = patch.check(&document);
+        assert!(checked.is_empty(), "{checked:?}");
     }
 }

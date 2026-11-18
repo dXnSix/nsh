@@ -198,7 +198,7 @@ fn kind_path_doc_and_names_come_from_the_active_document() {
     let info = t.infos();
     assert_eq!(info.len(), 14);
     assert_eq!(
-        &*info.iter().find(|i| &*i.name == "ink").unwrap().kind,
+        info.iter().find(|i| &*i.name == "ink").unwrap().kind,
         "color"
     );
 }

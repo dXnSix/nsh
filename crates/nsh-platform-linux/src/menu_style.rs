@@ -5,14 +5,16 @@
 //! sizes and indicators are NSH's (gpui-base's popover and menu), so they
 //! look the same under every GTK theme.
 //!
-//! The tokens are shadcn/ui's, as `nsh-base`'s theme names them:
-//! `popover` and `popover-foreground` (the menu and its labels), `accent`
-//! and `accent-foreground` (the item under the pointer or the keyboard),
-//! `muted-foreground` (shortcuts, disabled items) and `border` (the menu's
-//! edge, separators). A token the app does not have takes the default
-//! theme's value, light or dark. A token's value applies to every menu, the
-//! same under `.nsh-dark` (on the root, around its context menus, and on
-//! the menu bar's slot) as outside it.
+//! The colors are `nsh-base`'s roles, each the value it resolves to in the
+//! active theme (the token the theme maps it onto, else the one of its
+//! name): `popover` and `popover-foreground` (the menu and its labels),
+//! `accent` and `accent-foreground` (the item under the pointer or the
+//! keyboard), `muted-foreground` (shortcuts, disabled items) and `border`
+//! (the menu's edge, separators). A resolved value is the current one, in
+//! whatever context the app picked (`colorMode`'s `light` or `dark`), so it
+//! applies to every menu, the same under `.nsh-dark` (on the root, around
+//! its context menus, and on the menu bar's slot) as outside it. A role
+//! that resolves to nothing takes the default theme's light value, in both.
 //!
 //! The indicators are drawn by the style sheet itself rather than taken
 //! from the icon theme (Yaru's submenu arrow is a hairline glyph): a
@@ -32,33 +34,34 @@ use nsh_core::{
     element::{Role, Tokens, role},
 };
 
-/// The default theme's colors (`nsh-base`'s, neutral): `(role, light,
-/// dark)`.
-const DEFAULTS: [(Role, u32, u32); 6] = [
-    (role::POPOVER, 0xffffff, 0x0a0a0a),
-    (role::POPOVER_FOREGROUND, 0x0a0a0a, 0xfafafa),
-    (role::ACCENT, 0xf5f5f5, 0x262626),
-    (role::ACCENT_FOREGROUND, 0x171717, 0xfafafa),
-    (role::MUTED_FOREGROUND, 0x737373, 0xa3a3a3),
-    (role::BORDER, 0xe5e5e5, 0x262626),
+/// The default theme's light colors (`nsh-base`'s, neutral): what a role
+/// that resolves to nothing is drawn in, light and dark.
+const DEFAULTS: [(Role, u32); 6] = [
+    (role::POPOVER, 0xffffff),
+    (role::POPOVER_FOREGROUND, 0x0a0a0a),
+    (role::ACCENT, 0xf5f5f5),
+    (role::ACCENT_FOREGROUND, 0x171717),
+    (role::MUTED_FOREGROUND, 0x737373),
+    (role::BORDER, 0xe5e5e5),
 ];
 
-/// The menus' style sheet for `tokens`.
+/// The menus' style sheet for `tokens`: each role's current value, the
+/// same outside `.nsh-dark` and under it.
 pub(crate) fn css(tokens: &Tokens) -> String {
+    let color = |role: Role| {
+        tokens.role(role).map(css_color).unwrap_or_else(|| {
+            let light = DEFAULTS
+                .iter()
+                .find(|(r, _)| *r == role)
+                .map_or(0, |(_, light)| *light);
+            format!("#{light:06x}")
+        })
+    };
+    let (popover, foreground) = (color(role::POPOVER), color(role::POPOVER_FOREGROUND));
+    let (accent, accent_foreground) = (color(role::ACCENT), color(role::ACCENT_FOREGROUND));
+    let (muted, border) = (color(role::MUTED_FOREGROUND), color(role::BORDER));
     let mut out = String::from(SHAPE);
-    for dark in [false, true] {
-        let scope = if dark { ".nsh-dark " } else { "" };
-        let color = |role: Role| {
-            let (_, light, night) = DEFAULTS.iter().find(|(r, ..)| *r == role).unwrap();
-            let fallback = if dark { *night } else { *light };
-            tokens
-                .role(role)
-                .map(css_color)
-                .unwrap_or_else(|| format!("#{fallback:06x}"))
-        };
-        let (popover, foreground) = (color(role::POPOVER), color(role::POPOVER_FOREGROUND));
-        let (accent, accent_foreground) = (color(role::ACCENT), color(role::ACCENT_FOREGROUND));
-        let (muted, border) = (color(role::MUTED_FOREGROUND), color(role::BORDER));
+    for scope in ["", ".nsh-dark "] {
         out.push_str(&format!(
             "
 {scope}popover.menu > contents {{ background-color: {popover}; color: {foreground}; border-color: {border}; }}
@@ -127,25 +130,62 @@ mod tests {
 
     use super::css;
 
-    /// The tokens of theme document `json`.
-    fn tokens_of(json: &str) -> Tokens {
+    /// The tokens of theme document `json` under the modifier picks
+    /// `picks`.
+    fn tokens_of(json: &str, picks: &[(&str, &str)]) -> Tokens {
         let document = nsh_theme::read(json).document;
-        Tokens::resolve(Arc::new(document), Default::default(), Vec::new()).0
+        let selection = picks
+            .iter()
+            .fold(nsh_theme::Selection::new(), |s, (m, c)| s.with(*m, *c));
+        Tokens::resolve(Arc::new(document), selection, Vec::new()).0
     }
 
-    /// A theme that maps a role onto a token of its own colors the menus
-    /// with that token.
+    /// A theme whose `popover` maps onto a token of its own, with a dark
+    /// context.
+    const MAPPED: &str = r##"{
+        "tokens": { "surface-overlay": { "kind": "color", "value": "#123456" } },
+        "modifiers": { "colorMode": { "default": "light", "contexts": {
+            "light": {}, "dark": { "surface-overlay": "#654321" } } } },
+        "resolutionOrder": ["colorMode"],
+        "roles": { "popover": "surface-overlay" }
+    }"##;
+
+    /// A resolved role is drawn in its current value, the same outside
+    /// `.nsh-dark` and under it: the token the theme maps it onto, in the
+    /// context the app picked.
     #[test]
-    fn menu_style_reads_the_tokens_roles_map_onto() {
-        let tokens = tokens_of(
-            r##"{ "tokens": { "surface-overlay": { "kind": "color", "value": "#123456" } },
-                 "roles": { "popover": "surface-overlay" } }"##,
-        );
-        let sheet = css(&tokens);
-        assert!(sheet.contains("popover.menu > contents { background-color: rgba(18, 52, 86, 1);"));
-        assert!(sheet.contains(
-            ".nsh-dark popover.menu > contents { background-color: rgba(101, 67, 33, 1);"
-        ));
+    fn menu_style_draws_a_resolved_role_in_its_current_value_in_both_slots() {
+        for (picks, rgba) in [
+            (&[][..], "rgba(18, 52, 86, 1)"),
+            (&[("colorMode", "dark")][..], "rgba(101, 67, 33, 1)"),
+        ] {
+            let sheet = css(&tokens_of(MAPPED, picks));
+            for scope in ["", ".nsh-dark "] {
+                assert!(
+                    sheet.contains(&format!(
+                        "\n{scope}popover.menu > contents {{ background-color: {rgba};"
+                    )),
+                    "{scope:?} {rgba}: {sheet}"
+                );
+            }
+        }
+    }
+
+    /// A role that resolves to nothing takes the default theme's light
+    /// value, in both slots, even under a dark pick.
+    #[test]
+    fn menu_style_draws_an_unresolved_role_in_its_light_default_in_both_slots() {
+        let sheet = css(&tokens_of(MAPPED, &[("colorMode", "dark")]));
+        for scope in ["", ".nsh-dark "] {
+            assert!(sheet.contains(&format!(
+                "\n{scope}popover.menu modelbutton:hover, {scope}popover.menu modelbutton:selected {{ \
+                 background-color: #f5f5f5; color: #171717; }}"
+            )));
+            assert!(sheet.contains(&format!(
+                "\n{scope}popover.menu separator {{ background-color: #e5e5e5; }}"
+            )));
+        }
+        assert!(!sheet.contains("#262626"));
     }
 
     /// The style sheet takes the app's colors, the default theme's where
@@ -153,15 +193,17 @@ mod tests {
     /// opened).
     #[test]
     fn menu_style_follows_the_tokens_and_parses() {
-        let tokens =
-            tokens_of(r##"{ "tokens": { "accent": { "kind": "color", "value": "#ff0000" } } }"##);
+        let tokens = tokens_of(
+            r##"{ "tokens": { "accent": { "kind": "color", "value": "#ff0000" } } }"##,
+            &[],
+        );
         let sheet = css(&tokens);
-        assert!(sheet.contains(
-            "popover.menu modelbutton:hover, popover.menu modelbutton:selected { \
-             background-color: rgba(255, 0, 0, 1);"
-        ));
-        assert!(sheet.contains(".nsh-dark popover.menu modelbutton:hover"));
-        assert!(sheet.contains("background-color: rgba(0, 0, 255, 1)"));
+        for scope in ["", ".nsh-dark "] {
+            assert!(sheet.contains(&format!(
+                "{scope}popover.menu modelbutton:hover, {scope}popover.menu modelbutton:selected {{ \
+                 background-color: rgba(255, 0, 0, 1);"
+            )));
+        }
         assert!(sheet.contains("background-color: #ffffff; color: #0a0a0a"));
         crate::gtk_test::run(move || {
             let provider = gtk::CssProvider::new();

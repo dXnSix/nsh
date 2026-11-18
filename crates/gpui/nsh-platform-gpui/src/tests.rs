@@ -1541,12 +1541,18 @@ fn asset_uris_resolve_in_the_first_directory_that_has_the_file(cx: &mut TestAppC
 
 /// A box drawn in the token `primary` and a focused field showing `LABEL`
 /// and the tokens `primary` and `secondary` of the app's own theme
-/// (`setTheme`) as the app reads them.
+/// document (`setTheme`) as the app reads them.
 const THEMED_FIELD: &str = r##"
 import { mount, setTheme, token, View } from "nsh";
 import { Input } from "nsh/base";
 
-setTheme({ cssVars: { light: { primary: "#111111", secondary: "#222222" } } });
+setTheme({
+  tokens: {
+    background: { kind: "color", value: "#fafafa" },
+    primary: { kind: "color", value: "#111111" },
+    secondary: { kind: "color", value: "#222222" },
+  },
+});
 mount(() => (
   <View style={{ flex: 1 }}>
     <View class="h-10 w-10 bg-primary" />
@@ -1591,19 +1597,23 @@ fn the_host_s_theme_overrides_win_over_the_app_s_tokens_they_name(cx: &mut TestA
         view.load(App::Js(Bundle::source(code("first"))))
     });
     cx.update(|window, cx| window.focus(&view.focus_handle(cx), cx));
-    wait_for(&view, cx, "first #111111ff #222222ff");
+    wait_for(&view, cx, "first #111111 #222222");
     wait_until_painted(cx, 0x111111);
-    // Given to the running app, they are drawn with no input.
+    // The window is drawn on the theme's `background`.
+    wait_until_painted(cx, 0xfafafa);
+    // Given to the running app, the host's patch is drawn with no input,
+    // its `background` too.
     view.update(cx, |view, cx| {
         view.set_theme_overrides(
-            Some(r##"{ "cssVars": { "light": { "primary": "#ff0000" } } }"##),
+            Some(r##"{ "values": { "primary": "#ff0000", "background": "#00ffff" } }"##),
             cx,
         )
         .unwrap();
     });
     wait_until_painted(cx, 0xff0000);
-    wait_for(&view, cx, "first #ff0000ff #222222ff");
-    // A file that does not parse changes nothing.
+    wait_until_painted(cx, 0x00ffff);
+    wait_for(&view, cx, "first #ff0000 #222222");
+    // Text that is no patch changes nothing.
     view.update(cx, |view, cx| {
         assert!(view.set_theme_overrides(Some("{"), cx).is_err());
     });
@@ -1612,11 +1622,12 @@ fn the_host_s_theme_overrides_win_over_the_app_s_tokens_they_name(cx: &mut TestA
         view.load(App::Js(Bundle::source(code("again"))))
     });
     cx.update(|window, cx| window.focus(&view.focus_handle(cx), cx));
-    wait_for(&view, cx, "again #ff0000ff #222222ff");
+    wait_for(&view, cx, "again #ff0000 #222222");
     wait_until_painted(cx, 0xff0000);
     view.update(cx, |view, cx| view.set_theme_overrides(None, cx).unwrap());
     wait_until_painted(cx, 0x111111);
-    wait_for(&view, cx, "again #111111ff #222222ff");
+    wait_for(&view, cx, "again #111111 #222222");
+    wait_until_painted(cx, 0xfafafa);
 }
 
 fn releasing_shift_before_alt_keeps_the_auto_hidden_menu_bar_hidden(cx: &mut TestAppContext) {

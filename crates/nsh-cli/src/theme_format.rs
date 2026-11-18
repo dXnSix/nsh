@@ -1,7 +1,7 @@
 //! The `nsh` CLI in the theme format (TOOL-BUNDLE, TOOL-TYPES): the Rust
 //! app runner passes `nsh.json`'s `"theme"` to `Root::theme` and its
 //! `"themeOverrides"` to `Root::theme_overrides` (a file, or an inline
-//! member written to the workspace), passes no old `cssVars` theme, and
+//! member written to the workspace), passes no theme of the old format, and
 //! warns of what the members say; `nsh init` prints the theme's diagnostics
 //! and types the active document (B10).
 
@@ -122,7 +122,7 @@ fn an_old_cssvars_theme_is_not_passed_and_is_warned_of() {
         ),
         (
             "theme.json",
-            r##"{ "cssVars": { "light": { "primary": "#e11d48" } } }"##,
+            r##"{ "cssVars": { "light": { "primary": "#e11d48" } } }"##, /* nsh theme convert's input */
         ),
         ("overrides.json", r#"{ "values": { "radius": 10 } }"#),
     ]);

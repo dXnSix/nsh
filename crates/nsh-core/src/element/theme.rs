@@ -13,7 +13,7 @@
 //! 3. else the document of [`super::Registry::fallback_theme_document`].
 //!
 //! Documents are never merged. A text that is no document (`not-a-document`)
-//! or is in the old `cssVars` format (`legacy-format`) is never active.
+//! or is in the old format (`legacy-format`) is never active.
 //!
 //! No theme input panics: each diagnostic is logged once, with
 //! `log::warn!` and the target `nsh::theme`, as `{code} {pointer}:
@@ -31,9 +31,11 @@ pub(crate) fn report(diagnostics: &[Diagnostic]) {
     }
 }
 
-/// Whether `diagnostics` refuse the text whole: it is no document, or one
-/// of the old format. Such a text is never active.
-pub(crate) fn refused(diagnostics: &[Diagnostic]) -> bool {
+/// Whether `diagnostics` (of [`read_document`] or [`read_patch`]) refuse
+/// the text whole: it is no document or patch (`not-a-document`), or a
+/// document of the old format (`legacy-format`). Such a text is never
+/// active, and a host that is given it changes nothing.
+pub fn refused(diagnostics: &[Diagnostic]) -> bool {
     diagnostics
         .iter()
         .any(|d| d.code == code::NOT_A_DOCUMENT || d.code == code::LEGACY_FORMAT)
@@ -41,7 +43,7 @@ pub(crate) fn refused(diagnostics: &[Diagnostic]) -> bool {
 
 /// Reads theme document `text` and logs its diagnostics (`nsh::theme`):
 /// the document (`None` when it is refused whole: no document,
-/// `not-a-document`, or one of the old `cssVars` format, `legacy-format`)
+/// `not-a-document`, or one of the old format, `legacy-format`)
 /// and the diagnostics. The script runtimes read TS's `setTheme` with it.
 pub fn read_document(text: &str) -> (Option<ThemeDocument>, Vec<Diagnostic>) {
     let read = nsh_theme::read(text);

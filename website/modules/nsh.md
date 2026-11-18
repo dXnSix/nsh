@@ -441,14 +441,16 @@ Rust: `tokens().value(name)`, `kind_name`, `infos` and `value_json` of `Tokens`.
 ```ts
 function setModifier<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void;
 function modifier<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined;
-function modifiers(): ModifierAxis[];
+function modifiers(): ModifierAxes[];
 
-interface ModifierAxis {
-  name: string;
-  contexts: string[];
-  default: string;
-  selected: string;
+interface ModifierAxis<K extends keyof ThemeModifiers = keyof ThemeModifiers> {
+  name: K;
+  contexts: ThemeModifiers[K][];
+  default: ThemeModifiers[K];
+  selected: ThemeModifiers[K];
 }
+// One axis per modifier, each with its own contexts (strings without `.nsh/types`).
+type ModifierAxes = { [K in keyof ThemeModifiers]: ModifierAxis<K> }[keyof ThemeModifiers];
 ```
 
 A document's `modifiers` are its modes (light and dark, a brand, a density, a contrast): each names its `default` and

@@ -12,7 +12,7 @@ use nsh_core::{
     element::{Patch, Root},
     prelude::*,
 };
-use nsh_engine::{App, ColorScheme, Engine, EngineConfig, Environment};
+use nsh_engine::{App, Engine, EngineConfig, Environment};
 
 use crate::ChannelSink;
 
@@ -36,9 +36,16 @@ fn themed(hex: &str) -> Patch {
     patch(&format!(r#"{{ "primary": "{hex}" }}"#))
 }
 
+/// The Rust app's own document: a `primary` its overrides and the host's
+/// patch can set.
+const SWATCH_THEME: &str =
+    r##"{ "tokens": { "primary": { "kind": "color", "value": "#888888" } } }"##;
+
+/// [`Swatch`] under [`SWATCH_THEME`] with the app's overrides `app_theme`,
+/// and the host's patch `host_theme` sent before the start.
 fn start(app_theme: Option<Patch>, host_theme: Option<Patch>) -> (Engine, Receiver<MountBatch>) {
     let (tx, rx) = crossbeam_channel::unbounded();
-    let mut root = Root::new::<Swatch>(|| ());
+    let mut root = Root::new::<Swatch>(|| ()).theme(SWATCH_THEME);
     if let Some(theme) = app_theme {
         root = root.theme_overrides(nsh_theme::write_patch(&theme));
     }
@@ -102,7 +109,6 @@ fn backgrounds(rx: &Receiver<MountBatch>) -> Vec<Color> {
 }
 
 #[test]
-#[ignore = "migrated in s8"]
 fn a_host_theme_sent_before_the_start_is_in_the_first_frame() {
     let (_engine, rx) = start(Some(themed("#0000ff")), Some(themed("#00ff00")));
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -118,7 +124,6 @@ fn a_host_theme_sent_before_the_start_is_in_the_first_frame() {
 }
 
 #[test]
-#[ignore = "migrated in s8"]
 fn the_host_theme_updates_the_views_and_gives_way_to_the_apps_when_cleared() {
     let (engine, rx) = start(Some(themed("#0000ff")), None);
     assert_eq!(backgrounds(&rx), vec![Color(0x0000ffff)]);
@@ -204,17 +209,18 @@ fn backgrounds_by_id(rx: &Receiver<MountBatch>) -> BTreeMap<u32, Color> {
     seen
 }
 
-/// The SDKs' theme overrides (`nsh_base::theme_overrides`): what the host
-/// sets wins over the app's own theme (`nsh.json`), light and dark, and
-/// what it leaves out stays the app's.
+/// The SDKs' theme overrides, a patch: what the host sets wins over the
+/// app's own theme (`nsh.json`), and what it leaves out stays the app's.
 #[test]
-#[ignore = "migrated in s8"]
 fn a_hosts_theme_overrides_win_over_the_apps_tokens_they_set_and_keep_the_rest() {
     let dir = std::env::temp_dir().join(format!("nsh-theme-overrides-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("nsh.json"),
-        r##"{ "theme": { "cssVars": { "light": { "primary": "#0000ff", "background": "#ffff00" } } } }"##,
+        r##"{ "theme": { "tokens": {
+            "primary": { "kind": "color", "value": "#0000ff" },
+            "background": { "kind": "color", "value": "#ffff00" }
+        } } }"##,
     )
     .unwrap();
     let entry = dir.join("App.tsx");
@@ -270,7 +276,7 @@ fn a_hosts_theme_overrides_win_over_the_apps_tokens_they_set_and_keep_the_rest()
         login_item: None,
         data_dir: None,
     };
-    // A brand's primary, light and dark, set before the app runs.
+    // A brand's primary, set before the app runs.
     let overrides = patch(r##"{ "primary": "#e11d48" }"##);
     let engine = Engine::start_with(
         config,
@@ -285,12 +291,6 @@ fn a_hosts_theme_overrides_win_over_the_apps_tokens_they_set_and_keep_the_rest()
         colors(backgrounds_by_id(&rx)),
         vec![Color(0xe11d48ff), Color(0xffff00ff)]
     );
-    // Dark: the override's dark value.
-    engine.control().set_environment(Environment {
-        color_scheme: ColorScheme::Dark,
-        ..Environment::default()
-    });
-    assert!(colors(backgrounds_by_id(&rx)).contains(&Color(0xfb7185ff)));
     // Changed live, then cleared: the app's own again.
     engine
         .control()
@@ -413,16 +413,15 @@ fn the_apps_theme_tokens_are_read_in_the_first_render() {
 /// The embedding app's tokens sent before the start win in the first
 /// render too; changed later, what read them reactively follows.
 #[test]
-#[ignore = "migrated in s8"]
 fn the_host_tokens_win_in_the_first_render_and_reads_follow_their_changes() {
     let overrides = |hex: &str| patch(&format!(r#"{{ "brand": "{hex}" }}"#));
     let (engine, rx) = start_branded("host-first-render", Some(overrides("#abcdef")));
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(texts(&first), vec!["#abcdefff #abcdefff".to_owned()]);
+    assert_eq!(texts(&first), vec!["#abcdef #abcdef".to_owned()]);
     engine.control().set_tokens(Some(overrides("#00ff00")));
-    assert_eq!(last_text(&rx).as_deref(), Some("#abcdefff #00ff00ff"));
+    assert_eq!(last_text(&rx).as_deref(), Some("#abcdef #00ff00"));
     engine.control().set_tokens(None);
-    assert_eq!(last_text(&rx).as_deref(), Some("#abcdefff #123456ff"));
+    assert_eq!(last_text(&rx).as_deref(), Some("#abcdef #123456"));
 }
 
 /// A TSX app that sets its theme while it runs: a step every 100 ms, each
@@ -447,7 +446,7 @@ const steps = [
   },
   () => {
     setModifier("colorMode", "light");
-    const said = setTheme({ cssVars: { light: { brand: "#0000ff" } } });
+    const said = setTheme({ cssVars: { light: { brand: "#0000ff" } } }); // refused: nsh theme convert converts it
     return `${said.map((d) => d.code).join(",")}; kept`;
   },
   () => {
@@ -476,7 +475,7 @@ mount(() => <App />);
 
 /// `setTheme` replaces the app's document while it runs: `token()` and the
 /// classes naming its tokens follow within the frame, under each context
-/// picked; an old `cssVars` theme is refused whole and the document stays;
+/// picked; an old theme (`nsh theme convert`'s input) is refused whole and the document stays;
 /// `null` gives back `nsh.json`'s. Each change runs what read a token once,
 /// and the first frame once, with the app's document.
 #[test]
@@ -529,7 +528,7 @@ fn set_theme_replaces_the_apps_theme_while_it_runs() {
 }
 
 /// `setTheme` refuses whole only what is no document or one of the old
-/// `cssVars` format. A document with a bad entry is activated with the
+/// format (`nsh theme convert`'s input). A document with a bad entry is activated with the
 /// entry left out. Each returns its diagnostics, and the core draws the
 /// last document of the turn: the turn's writes resolve once.
 #[test]
@@ -539,8 +538,8 @@ const status = signal("start");
 const green = { tokens: { brand: { kind: "color", value: "#00ff00" } } };
 setTimeout(() => {
   const invalid = [
-    { cssVars: null },
-    { cssVars: { light: { brand: "rgb(255 0 0" } } },
+    { cssVars: null }, // the old format, which nsh theme convert converts
+    { cssVars: { light: { brand: "rgb(255 0 0" } } }, // the same, nsh theme convert's input
     [],
     [{ tokens: {} }],
     { tokens: { brand: { kind: "color", value: "#zz" } } },

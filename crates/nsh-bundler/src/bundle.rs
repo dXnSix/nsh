@@ -374,8 +374,8 @@ impl ResolveSetup {
 #[non_exhaustive]
 pub struct AppTheme {
     /// The app's document as written, which the build ships (`None`: the
-    /// app has none, or it is no document: `not-a-document`, or the old
-    /// `cssVars` format, `legacy-format`).
+    /// app has none, or it is no document: `not-a-document`, or one of the
+    /// old format, `legacy-format`).
     pub document: Option<String>,
     /// The app's override patch as written, which the build ships (`None`:
     /// none, or no JSON object).

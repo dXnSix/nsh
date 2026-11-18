@@ -544,16 +544,29 @@ export interface TokenInfo {
   doc?: string;
 }
 
-/** A modifier of the active theme document as `modifiers()` lists it. */
-export interface ModifierAxis {
-  name: string;
+/**
+ * A modifier `K` of the active theme document as `modifiers()` lists it,
+ * typed by `ThemeModifiers`: its name and its contexts are what
+ * `setModifier` takes.
+ */
+export interface ModifierAxis<K extends keyof ThemeModifiers = keyof ThemeModifiers> {
+  name: K;
   /** Its contexts, in the document's order. */
-  contexts: string[];
+  contexts: ThemeModifiers[K][];
   /** The context it shows when none is picked. */
-  default: string;
+  default: ThemeModifiers[K];
   /** The context it shows: the one picked, else `default`. */
-  selected: string;
+  selected: ThemeModifiers[K];
 }
+
+/**
+ * An entry of `modifiers()`: the `ModifierAxis` of one of the app's
+ * modifiers, each with its own contexts; names and contexts as strings
+ * where `ThemeModifiers` declares none (no `.nsh/types`).
+ */
+export type ModifierAxes = [keyof ThemeModifiers] extends [never]
+  ? { name: string; contexts: string[]; default: string; selected: string }
+  : { [K in keyof ThemeModifiers]: ModifierAxis<K> }[keyof ThemeModifiers];
 "#;
 
 /// The sources of what `nsh` serves (`NativeModule::moved_to`), kept by

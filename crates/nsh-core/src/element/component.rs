@@ -696,7 +696,7 @@ impl Root {
     /// the active document from the first frame on, over the UI sets'
     /// ([`super::theme`](super::theme)). [`super::set_theme`] replaces it
     /// while the app runs, and `set_theme(None)` comes back to it. A text
-    /// that is no document, or one of the old `cssVars` format, is logged
+    /// that is no document, or one of the old format (`legacy-format`), is logged
     /// and not activated.
     pub fn theme(mut self, json: impl Into<Arc<str>>) -> Self {
         self.theme = Some(json.into());
@@ -1520,8 +1520,8 @@ impl Registry {
     /// ([`super::theme`](super::theme)). Documents are never merged.
     ///
     /// It never panics: its diagnostics are logged (target `nsh::theme`). A
-    /// text that is no document (`not-a-document`) or of the old `cssVars`
-    /// format (`legacy-format`) is skipped, so the next document by
+    /// text that is no document (`not-a-document`) or of the old format
+    /// (`legacy-format`) is skipped, so the next document by
     /// precedence is active; a document with errors keeps its good entries.
     pub fn theme_document(&mut self, json: &'static str) -> &mut Self {
         let owner = self.ui_set.unwrap_or("the app's set");

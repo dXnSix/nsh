@@ -1184,8 +1184,10 @@ impl<M: TextEngine> Core<M> {
 
     /// Makes `document` the app's document while it runs (`None`: none,
     /// so the built-in document, else the sets', is active again; TS's
-    /// `setTheme`, `Prop::UiThemeDocument`).
-    pub(crate) fn activate(&mut self, document: Option<Arc<ThemeDocument>>) {
+    /// `setTheme`, `Prop::UiThemeDocument`, the embedding app's
+    /// `EngineControl::set_theme_document`). Applies with the turn's other
+    /// theme actions.
+    pub fn activate(&mut self, document: Option<Arc<ThemeDocument>>) {
         let state = &mut self.components.theme;
         state.runtime = document;
         state.pending = true;
@@ -1352,8 +1354,10 @@ impl<M: TextEngine> Core<M> {
     /// time: once per turn, whatever the number of actions. The values
     /// that changed reach the typed store, the readers of those tokens,
     /// the classes that read them and the platforms' own controls.
-    /// Whether the tokens changed.
-    pub(crate) fn install_theme(&mut self) -> bool {
+    /// Whether the tokens changed. An engine calls it before it hands a
+    /// script runtime its first tokens, so the theme input it was given
+    /// before the start (the host's patch) is in them.
+    pub fn install_theme(&mut self) -> bool {
         if !std::mem::take(&mut self.components.theme.pending) {
             return false;
         }

@@ -1,7 +1,7 @@
 //! The bundler in the theme format (TOOL-BUNDLE, TOOL-TYPES): `nsh.json`'s
 //! `"theme"` and `"themeOverrides"` as a path and inline, their
-//! diagnostics as warnings naming the file and the pointer, an old
-//! `cssVars` theme or no document shipping nothing, the class check through
+//! diagnostics as warnings naming the file and the pointer, a theme of the
+//! old format or no document shipping nothing, the class check through
 //! the active document and the sets' roles, `setup.ui`'s `{ document,
 //! overrides }`, and the three `.nsh/types` files.
 
@@ -244,7 +244,7 @@ fn an_old_cssvars_theme_ships_no_document() {
         ("nsh.json", r#"{ "theme": "theme.json" }"#),
         (
             "theme.json",
-            r##"{ "cssVars": { "light": { "primary": "#e11d48" } } }"##,
+            r##"{ "cssVars": { "light": { "primary": "#e11d48" } } }"##, /* nsh theme convert's input */
         ),
     ];
     let theme = theme_of(&files, &[kit_set(Some(DOCUMENT))]);

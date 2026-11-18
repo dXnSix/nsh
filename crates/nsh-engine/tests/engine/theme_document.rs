@@ -116,7 +116,7 @@ fn start(app_theme: bool, host: Option<&str>) -> (Engine, Receiver<MountBatch>) 
         ChannelSink(tx),
         move |control| {
             if let Some(json) = host {
-                control.set_theme_overrides(json);
+                control.set_theme_overrides(Some(&json));
             }
         },
     )

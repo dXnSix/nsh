@@ -457,8 +457,8 @@ fn diagnostics(cx: *mut JsContext, diagnostics: &[Diagnostic]) -> JsValue {
 /// `null` gives that one back. The core activates it with this turn's ops,
 /// and `token()` reads its tokens once the core hands them on. Returns the
 /// read's diagnostics and the role checks of its mappings; a text that is
-/// no document, or one of the old `cssVars` format, keeps the active
-/// document.
+/// no document, or one in the old format (`nsh theme convert` converts
+/// it), keeps the active document.
 unsafe extern "C" fn set_theme(
     cx: *mut JsContext,
     _this: JsValue,
@@ -834,8 +834,9 @@ pub(crate) const MODIFIERS_EXPORT: crate::modules::Item = (
     "modifiers",
     Export::Function(modifiers, 0),
     Ts::function(
-        "The active theme document's modifiers in its `resolutionOrder`, reactive:\neach one's name, its contexts, the context it shows when none is picked\n(`default`) and the one it shows (`selected`).",
-        &["(): ModifierAxis[]"],
+        "The active theme document's modifiers in its `resolutionOrder`, reactive:\neach one's name, its contexts, the context it shows when none is picked\n(`default`) and the one it shows (`selected`), typed by `ThemeModifiers`:
+an entry's name and contexts go to `setModifier` as they are.",
+        &["(): ModifierAxes[]"],
     ),
 );
 

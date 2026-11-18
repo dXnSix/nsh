@@ -61,7 +61,7 @@ use nsh_core::{
 pub use nsh_core::{
     JsonValue,
     access::{Access, Capabilities},
-    element::{EngineContext, Patch, Root, Tokens},
+    element::{Diagnostic, EngineContext, Patch, Root, ThemeDocument, Tokens},
     geometry::{self, Bounds, Edges, Point, Points, Size},
     js::{HostLimits, Limits},
     main_thread::MainThreadTask,
@@ -1323,10 +1323,11 @@ enum Message {
     /// not be loaded (its id and the message).
     Chunk(Result<Chunk, (String, String)>),
     Perf(Option<Arc<perf::PerfMonitor>>),
-    /// The embedding app's overrides, a theme patch.
+    /// The embedding app's overrides, a theme patch: the host layer.
     Tokens(Option<Box<Patch>>),
-    /// The embedding app's overrides, a theme patch's text the core reads.
-    ThemeOverrides(String),
+    /// A theme document the embedding app activates as the app's
+    /// ([`EngineControl::set_theme`]; `None`: the app's own again).
+    Theme(Option<Arc<ThemeDocument>>),
     /// A font file the embedding app registers (TrueType, OpenType, WOFF or
     /// WOFF2), before the first frame and whenever it registers another.
     HostFont(Vec<u8>),
@@ -1633,21 +1634,62 @@ impl EngineControl {
         let _ = self.tx.send(Message::Perf(monitor));
     }
 
-    /// Sets the embedding app's overrides, a theme patch over the app's
-    /// (`None`: none, the app's own theme again; [`Core::set_host_patch`]).
-    /// Sent from [`Engine::start_with`]'s `setup`, they are in the first
-    /// frame.
+    /// Sets the embedding app's overrides, the host layer: a theme patch
+    /// (`docs/dev/theme-format.md`, section 8) above the app's own
+    /// overrides, so its values and role mappings win over the app's. The
+    /// layer is one patch: each `Some` replaces it whole, here or through
+    /// [`EngineControl::set_theme_overrides`], and `None` from either
+    /// clears it, giving the app its own theme back. What the active
+    /// document refuses of it (`undeclared-token`, `bad-value`, ...) is
+    /// logged and left out ([`Core::set_host_patch`]). Sent from
+    /// [`Engine::start_with`]'s `setup`, it is in the first frame.
     pub fn set_tokens(&self, patch: Option<Patch>) {
         let _ = self.tx.send(Message::Tokens(patch.map(Box::new)));
     }
 
-    /// Sets the embedding app's overrides from a theme patch's text
-    /// (`docs/dev/theme-format.md`), read by the core
-    /// ([`Core::set_host_theme`]): its tokens and roles win over the app's.
-    /// [`EngineControl::set_tokens`]`(None)` gives the app its own theme back.
-    /// Sent from [`Engine::start_with`]'s `setup`, they are in the first frame.
-    pub fn set_theme_overrides(&self, json: impl Into<String>) {
-        let _ = self.tx.send(Message::ThemeOverrides(json.into()));
+    /// [`EngineControl::set_tokens`] with a patch's text,
+    /// `{ "values": { token → value }, "roles": { role → token } }`, read
+    /// here, on the caller's thread (`None`: clears the host layer).
+    /// Returns the read's diagnostics, also logged (`nsh::theme`). Text that
+    /// is no patch (`not-a-document`: no JSON, or no JSON object) changes
+    /// nothing; a patch with a bad entry is taken with the entry left out.
+    pub fn set_theme_overrides(&self, json: Option<&str>) -> Vec<Diagnostic> {
+        let Some(json) = json else {
+            self.set_tokens(None);
+            return Vec::new();
+        };
+        let (patch, diagnostics) = nsh_core::element::theme::read_patch(json);
+        if !nsh_core::element::theme::refused(&diagnostics) {
+            self.set_tokens(Some(patch));
+        }
+        diagnostics
+    }
+
+    /// Activates `document` as the app's while it runs, as TS's `setTheme`
+    /// does, over its built-in document (`nsh.json`'s `"theme"`, a Rust
+    /// root's): the embedding app's theme. `None` gives the app its
+    /// built-in document back. The app's own `setTheme` replaces it, and
+    /// the overrides (the app's and the host layer) stay over it. Sent from
+    /// [`Engine::start_with`]'s `setup`, it is in the first frame.
+    pub fn set_theme_document(&self, document: Option<Arc<ThemeDocument>>) {
+        let _ = self.tx.send(Message::Theme(document));
+    }
+
+    /// [`EngineControl::set_theme_document`] with a document's text
+    /// (`docs/dev/theme-format.md`), read here, on the caller's thread
+    /// (`None`: the app's built-in document again). Returns the read's
+    /// diagnostics, also logged (`nsh::theme`). A text refused whole
+    /// (`not-a-document`, `legacy-format`) changes nothing.
+    pub fn set_theme(&self, json: Option<&str>) -> Vec<Diagnostic> {
+        let Some(json) = json else {
+            self.set_theme_document(None);
+            return Vec::new();
+        };
+        let (document, diagnostics) = nsh_core::element::theme::read_document(json);
+        if let Some(document) = document {
+            self.set_theme_document(Some(Arc::new(document)));
+        }
+        diagnostics
     }
 
     /// Registers a font file the embedding app ships (TrueType, OpenType,
@@ -2319,9 +2361,7 @@ impl<M: TextEngine + 'static> Driver<M> {
         while let Ok(message) = rx.try_recv() {
             match message {
                 Message::Tokens(patch) => core.set_host_patch(patch.map(|p| *p)),
-                Message::ThemeOverrides(json) => {
-                    core.set_host_theme(Some(&json));
-                }
+                Message::Theme(document) => core.activate(document),
                 Message::HostFont(data) => {
                     if let Err(err) = core.register_font(&data) {
                         log::error!("font failed: {err}");
@@ -2337,6 +2377,12 @@ impl<M: TextEngine + 'static> Driver<M> {
                 message => early.push(message),
             }
         }
+        // What the early messages changed (the embedding app's patch or
+        // document) is installed now, so the tokens the script runtime
+        // starts with have it: the entry's top-level reads, and the app's
+        // theme it layers over them from the bundle's setup
+        // (`Tokens::with_app_theme`), see the host's layer.
+        core.install_theme();
         let js_tokens = core.tokens().clone();
         let state = State {
             core,
@@ -4185,9 +4231,7 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             state.perf_commit = perf::CommitTiming::default();
         }
         Message::Tokens(patch) => state.core.set_host_patch(patch.map(|p| *p)),
-        Message::ThemeOverrides(json) => {
-            state.core.set_host_theme(Some(&json));
-        }
+        Message::Theme(document) => state.core.activate(document),
         Message::HostFont(data) => {
             if let Err(err) = state.core.register_font(&data) {
                 log::error!("font failed: {err}");

@@ -419,14 +419,16 @@ interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string
 ```ts
 function setModifier<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void;
 function modifier<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined;
-function modifiers(): ModifierAxis[];
+function modifiers(): ModifierAxes[];
 
-interface ModifierAxis {
-  name: string;
-  contexts: string[];
-  default: string;
-  selected: string;
+interface ModifierAxis<K extends keyof ThemeModifiers = keyof ThemeModifiers> {
+  name: K;
+  contexts: ThemeModifiers[K][];
+  default: ThemeModifiers[K];
+  selected: ThemeModifiers[K];
 }
+// 每个修饰符一项，各带它自己的上下文（没有 `.nsh/types` 时为字符串）。
+type ModifierAxes = { [K in keyof ThemeModifiers]: ModifierAxis<K> }[keyof ThemeModifiers];
 ```
 
 文档的 `modifiers` 是它的各种模式（浅色和深色、品牌、密度、对比度）：每个修饰符给出它的 `default` 和 `contexts`，每个上下文是它改变的令牌值。

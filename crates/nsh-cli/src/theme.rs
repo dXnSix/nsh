@@ -221,14 +221,11 @@ fn cycles(
     // An odometer over the combinations; all zeros, the defaults, are
     // `defaults`' own.
     let mut picks = vec![0usize; axes.len()];
-    loop {
-        let Some(turn) = picks
-            .iter()
-            .zip(&axes)
-            .rposition(|(pick, (_, contexts))| pick + 1 < contexts.len())
-        else {
-            break;
-        };
+    while let Some(turn) = picks
+        .iter()
+        .zip(&axes)
+        .rposition(|(pick, (_, contexts))| pick + 1 < contexts.len())
+    {
         picks[turn] += 1;
         for pick in &mut picks[turn + 1..] {
             *pick = 0;

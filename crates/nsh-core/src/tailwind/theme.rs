@@ -493,7 +493,7 @@ impl ClassTokens {
                 count += 1;
             }
         }
-        places[..count].sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        places[..count].sort_unstable_by_key(|place| std::cmp::Reverse(place.0));
         for &(at, rows) in &places[..count] {
             let (prefix, name) = (&base[..at], &base[at + 1..]);
             let unsigned = prefix.strip_prefix('-').unwrap_or(prefix);

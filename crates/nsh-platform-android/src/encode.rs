@@ -931,18 +931,11 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                         }
                     }
                     // `SystemUi.dialog` draws alerts and action sheets in
-                    // them: each of `DIALOG_ROLES`, its current value in
-                    // both the light and the dark slot (0: the system's).
-                    // An app without a theme of its own (the core says so:
-                    // `Tokens::is_themed`) keeps the system's colors.
+                    // them: `dialog_colors`.
                     Command::Tokens(tokens) => {
                         e.int(27);
-                        let themed = tokens.is_themed();
-                        for role in DIALOG_ROLES {
-                            let color = tokens.role(role).filter(|_| themed);
-                            for _ in 0..2 {
-                                e.int(color.map_or(0, |c| argb(c.into())));
-                            }
+                        for color in dialog_colors(&tokens) {
+                            e.int(color);
                         }
                     }
                 }
@@ -954,14 +947,39 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
 
 /// The roles alerts and action sheets are drawn in (`SystemUi.java`'s
 /// order): the dialog, its title, its message, its buttons and a
-/// destructive action.
-const DIALOG_ROLES: [nsh_core::element::Role; 5] = [
-    nsh_core::element::role::POPOVER,
-    nsh_core::element::role::POPOVER_FOREGROUND,
-    nsh_core::element::role::MUTED_FOREGROUND,
-    nsh_core::element::role::PRIMARY,
-    nsh_core::element::role::DESTRUCTIVE,
+/// destructive action, each with the default theme's light value
+/// (`nsh-base`'s, neutral), which a role that resolves to nothing takes.
+const DIALOG_ROLES: [(nsh_core::element::Role, Color); 5] = [
+    (nsh_core::element::role::POPOVER, Color(0xffff_ffff)),
+    (
+        nsh_core::element::role::POPOVER_FOREGROUND,
+        Color(0x0a0a_0aff),
+    ),
+    (
+        nsh_core::element::role::MUTED_FOREGROUND,
+        Color(0x7373_73ff),
+    ),
+    (nsh_core::element::role::PRIMARY, Color(0x1717_17ff)),
+    (nsh_core::element::role::DESTRUCTIVE, Color(0xe700_0bff)),
 ];
+
+/// The colors `Mounter.java` keeps for `SystemUi.dialog` (op 27), as ARGB:
+/// for each of [`DIALOG_ROLES`], its light and its dark slot. Both hold the
+/// role's current value, in whatever context the app picked (`colorMode`'s
+/// `light` or `dark`); a role that resolves to nothing holds its light
+/// default in both. An app without a theme of its own (the core says so:
+/// `Tokens::is_themed`) keeps the system's colors: 0 in every slot.
+fn dialog_colors(tokens: &nsh_core::element::Tokens) -> [i32; 2 * DIALOG_ROLES.len()] {
+    let mut colors = [0; 2 * DIALOG_ROLES.len()];
+    if !tokens.is_themed() {
+        return colors;
+    }
+    for (slots, (role, light)) in colors.chunks_exact_mut(2).zip(DIALOG_ROLES) {
+        let color = tokens.role(role).map_or(light, Color::from);
+        slots.fill(argb(color));
+    }
+    colors
+}
 
 /// An audio command after its opcode (47), as `Audio.command` reads it:
 /// 0 load (id, bytes, hint, max duration in ms), 1 load from a URL (id),
@@ -2147,6 +2165,68 @@ mod tests {
             assert!(floats[7].is_nan() && floats[8].is_nan());
             assert_eq!(floats.len(), 9);
         }
+    }
+
+    /// The tokens an app drawn with theme document `json` has (a theme of
+    /// its own).
+    fn tokens_of(json: &str) -> nsh_core::element::Tokens {
+        let document = nsh_core::element::theme::read_document(json).0.unwrap();
+        let (mut tokens, _) = nsh_core::element::Tokens::resolve(
+            std::sync::Arc::new(document),
+            Default::default(),
+            Vec::new(),
+        );
+        tokens.set_themed(true);
+        tokens
+    }
+
+    /// The dialog roles' slots (op 27): each resolved role's current value
+    /// in both its light and its dark slot, the token the theme maps it
+    /// onto in the context picked; a role that resolves to nothing its
+    /// light default in both; an app without a theme of its own the
+    /// system's colors (0).
+    #[test]
+    fn the_dialog_roles_fill_both_slots_with_their_current_value() {
+        // Its `colorMode` in context `mode`.
+        let json = |mode: &str| {
+            r##"{
+                "tokens": {
+                    "sheet": { "kind": "color", "value": "#123456" },
+                    "primary": { "kind": "color", "value": "#ff0000" }
+                },
+                "modifiers": { "colorMode": { "default": "MODE", "contexts": {
+                    "light": {}, "dark": { "sheet": "#654321" } } } },
+                "resolutionOrder": ["colorMode"],
+                "roles": { "popover": "sheet" }
+            }"##
+            .replace("MODE", mode)
+        };
+        let argb = |rgb: u32| (0xff00_0000 | rgb) as i32;
+        for (mode, sheet) in [("light", 0x123456), ("dark", 0x654321)] {
+            assert_eq!(
+                dialog_colors(&tokens_of(&json(mode))),
+                [
+                    // `popover`, mapped onto `sheet`.
+                    argb(sheet),
+                    argb(sheet),
+                    // `popover-foreground` and `muted-foreground`: none.
+                    argb(0x0a0a0a),
+                    argb(0x0a0a0a),
+                    argb(0x737373),
+                    argb(0x737373),
+                    // `primary`, the token of its name.
+                    argb(0xff0000),
+                    argb(0xff0000),
+                    // `destructive`: none.
+                    argb(0xe7000b),
+                    argb(0xe7000b),
+                ]
+            );
+        }
+        assert_eq!(
+            dialog_colors(&nsh_core::element::Tokens::default()),
+            [0; 10]
+        );
     }
 
     /// The ints a batch of one file request is encoded as.

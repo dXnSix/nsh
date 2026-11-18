@@ -573,25 +573,34 @@ impl AppView {
         crate::system::host_environment_changed(&self.surface);
     }
 
-    /// The embedding app's theme overrides: a theme file of shadcn/ui's
-    /// (`{ "cssVars": { "theme": { … }, "light": { … }, "dark": { … } } }`,
-    /// values as CSS writes them, as `nsh.json`'s `"theme"`), whose tokens
-    /// win over the app's of the same names, light and dark, while the
-    /// app's others stay (a brand's `primary` and `radius`). Classes naming
-    /// them (`bg-primary`) are resolved again at once, and every app loaded
-    /// later starts with them. `None` gives the app its own theme back.
-    /// Fails, changing nothing, on a file that does not parse.
+    /// The embedding app's theme overrides: a theme patch,
+    /// `{ "values": { token → value }, "roles": { role → token } }`
+    /// (`docs/dev/theme-format.md`, section 8), the host layer above the
+    /// app's own overrides. Its values and role mappings win over the app's
+    /// theme while the rest of it stays (a brand's `primary` and `radius`),
+    /// in every context the app picks (`colorMode`'s `light` and `dark`
+    /// alike): a host that themes both modes sends the other mode's values
+    /// when its mode changes. Each call replaces the whole layer, and `None`
+    /// clears it, giving the app its own theme back. Classes naming them
+    /// (`bg-primary`) are resolved again at once, and every app loaded later
+    /// starts with them. An entry the app's theme refuses (a token it does
+    /// not declare, a value of the wrong type) is logged and left out
+    /// (`nsh::theme`). Fails, changing nothing, on text that is no JSON
+    /// object.
     pub fn set_theme_overrides(&self, json: Option<&str>) -> Result<(), nsh_base::ThemeError> {
         if let Some(json) = json {
-            serde_json::from_str::<serde_json::Value>(json)
+            let value = serde_json::from_str::<serde_json::Value>(json)
                 .map_err(|e| nsh_base::ThemeError(e.to_string()))?;
+            if !value.is_object() {
+                return Err(nsh_base::ThemeError(
+                    "a theme patch is a JSON object".into(),
+                ));
+            }
         }
         *self.surface.host_theme.borrow_mut() = json.map(str::to_owned);
-        // The engine reads the file with the app's UI set, against its
-        // defaults.
-        self.surface.control(|c| match json {
-            Some(json) => c.set_theme_overrides(json),
-            None => c.set_tokens(None),
+        // The engine reads the patch into its host layer.
+        self.surface.control(|c| {
+            c.set_theme_overrides(json);
         });
         Ok(())
     }

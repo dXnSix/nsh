@@ -288,7 +288,7 @@ fn the_page_has_its_sections_in_order() {
         "## 9. The layer table",
         "## 10. The active document",
         "## 11. Diagnostics",
-        "## 12. The conversion from `cssVars`",
+        "## 12. The conversion from `cssVars`", // nsh theme convert
         "## 13. A complete example",
     ];
     let mut at = 0;

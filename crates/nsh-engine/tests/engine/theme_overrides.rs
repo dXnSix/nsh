@@ -1,8 +1,7 @@
-//! The embedding app's theme overrides as a theme file
-//! (`EngineControl::set_theme_overrides`), read by the core with the app's
-//! UI set against the app's defaults: the same tokens the SDKs made with
-//! `nsh_base::theme_overrides` before, in the first frame when sent before
-//! the start, followed when sent later, and cleared with `set_tokens(None)`.
+//! The embedding app's theme overrides as a theme patch's text
+//! (`EngineControl::set_theme_overrides`), what the SDKs send: the host
+//! layer over the app's document, in the first frame when sent before the
+//! start, followed when sent later, and cleared with `set_tokens(None)`.
 
 use std::time::Duration;
 
@@ -12,14 +11,20 @@ use nsh_engine::{App, Engine, EngineConfig, Environment};
 
 use crate::ChannelSink;
 
-/// A TSX app whose theme (`nsh.json`) adds `brand`, showing it.
+/// A TSX app whose theme (`nsh.json`) is a document of its own, with
+/// `brand`, `primary` and `ring`, showing `brand`, `primary` and `edge`
+/// (which it lacks).
 fn start(name: &str, overrides: Option<&str>) -> (Engine, Receiver<MountBatch>) {
     let dir =
         crate::temporary_root().join(format!("nsh-theme-overrides-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("nsh.json"),
-        r##"{ "theme": { "cssVars": { "light": { "brand": "#123456" } } } }"##,
+        r##"{ "theme": { "tokens": {
+            "brand": { "kind": "color", "value": "#123456" },
+            "primary": { "kind": "color", "value": "#222222" },
+            "ring": { "kind": "color", "value": "#333333" }
+        } } }"##,
     )
     .unwrap();
     let entry = dir.join("App.tsx");
@@ -71,14 +76,13 @@ fn start(name: &str, overrides: Option<&str>) -> (Engine, Receiver<MountBatch>) 
         windows: None,
         login_item: None,
     };
-    let overrides = overrides.map(str::to_owned);
     let engine = Engine::start_with(
         config,
         || ApproxTextEngine,
         ChannelSink(tx),
         |control| {
-            if let Some(json) = overrides {
-                control.set_theme_overrides(json);
+            if overrides.is_some() {
+                control.set_theme_overrides(overrides);
             }
         },
     )
@@ -108,69 +112,41 @@ fn last_text(rx: &Receiver<MountBatch>) -> Option<String> {
     last
 }
 
-fn hex(c: nsh_core::Hsla) -> String {
-    format!("#{:08x}", nsh_core::Color::from(c).0)
-}
-
-/// The default theme's primary, as `token()` shows it.
-fn primary() -> String {
-    hex(nsh_base::Theme::default().primary)
-}
-
 #[test]
 fn overrides_sent_before_the_start_are_in_the_first_render() {
-    let (_engine, rx) = start(
-        "first",
-        Some(r##"{ "cssVars": { "light": { "brand": "#abcdef" } } }"##),
-    );
+    let (_engine, rx) = start("first", Some(r##"{ "values": { "brand": "#abcdef" } }"##));
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(
-        texts(&first),
-        vec![format!("#abcdefff {} undefined", primary())]
-    );
+    assert_eq!(texts(&first), vec!["#abcdef #222222 undefined"]);
 }
 
-/// A `var()` they name and do not set is the default theme's token, not
-/// the app's (`nsh.json`'s `brand`): one naming a token only the app has is
-/// left out. Changed later they are followed, and `set_tokens(None)` gives
-/// the app's own back.
+/// A reference they hold resolves over every layer, theirs included: one
+/// naming a token they set reads their value, one naming a token they
+/// leave out the app's. A name the app's document lacks (`edge`) is left
+/// out. Changed later they are followed, each replacing the last whole, and
+/// `set_tokens(None)` gives the app its own back.
 #[test]
-fn overrides_follow_their_changes_and_name_the_default_theme() {
+fn overrides_follow_their_changes_and_resolve_their_references() {
     let (engine, rx) = start("later", None);
-    assert_eq!(
-        last_text(&rx),
-        Some(format!("#123456ff {} undefined", primary()))
-    );
-    engine.control().set_theme_overrides(
-        r##"{ "cssVars": { "light": { "brand": "var(--primary)", "primary": "#00ff00" } } }"##,
-    );
-    // The file's own `primary` is the one `var(--primary)` names.
-    assert_eq!(
-        last_text(&rx).as_deref(),
-        Some("#00ff00ff #00ff00ff undefined")
-    );
-    engine.control().set_theme_overrides(
-        r##"{ "cssVars": { "light": { "primary": "var(--ring)", "edge": "var(--brand)" } } }"##,
-    );
-    // `ring`, which it does not set, is the default theme's; `brand`, only
-    // the app's, is none of the default theme's, so `edge` is left out.
-    let ring = hex(nsh_base::Theme::default().ring);
-    assert_eq!(last_text(&rx), Some(format!("#123456ff {ring} undefined")));
+    assert_eq!(last_text(&rx).as_deref(), Some("#123456 #222222 undefined"));
+    engine.control().set_theme_overrides(Some(
+        r##"{ "values": { "brand": "{primary}", "primary": "#00ff00" } }"##,
+    ));
+    assert_eq!(last_text(&rx).as_deref(), Some("#00ff00 #00ff00 undefined"));
+    engine.control().set_theme_overrides(Some(
+        r##"{ "values": { "primary": "{ring}", "edge": "#ffffff" } }"##,
+    ));
+    assert_eq!(last_text(&rx).as_deref(), Some("#123456 #333333 undefined"));
     engine.control().set_tokens(None);
-    assert_eq!(
-        last_text(&rx),
-        Some(format!("#123456ff {} undefined", primary()))
-    );
+    assert_eq!(last_text(&rx).as_deref(), Some("#123456 #222222 undefined"));
 }
 
 /// Text that is no JSON changes nothing.
 #[test]
 fn overrides_that_are_no_json_change_nothing() {
     let (engine, rx) = start("bad", None);
-    assert_eq!(
-        last_text(&rx),
-        Some(format!("#123456ff {} undefined", primary()))
-    );
-    engine.control().set_theme_overrides("not json");
+    assert_eq!(last_text(&rx).as_deref(), Some("#123456 #222222 undefined"));
+    let said = engine.control().set_theme_overrides(Some("not json"));
+    assert_eq!(said.len(), 1);
+    assert_eq!(said[0].code, "not-a-document");
     assert_eq!(last_text(&rx), None);
 }

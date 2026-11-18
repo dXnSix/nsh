@@ -909,7 +909,9 @@ impl RootView {
         let engine = match Engine::start_with(config, CoreTextEngine::default, sink, |control| {
             match theme {
                 Some(HostTheme::Patch(patch)) => control.set_tokens(Some(*patch)),
-                Some(HostTheme::File(json)) => control.set_theme_overrides(json),
+                Some(HostTheme::File(json)) => {
+                    control.set_theme_overrides(Some(&json));
+                }
                 None => {}
             }
             for font in fonts {
@@ -1183,10 +1185,10 @@ impl Surface {
         self.view.publish_environment();
     }
 
-    /// The embedding app's theme overrides, a theme patch whose tokens and
-    /// roles win over the app's (`None`: the app's own again): sent to the
-    /// running app at once, and to every app started later before its
-    /// first frame.
+    /// The embedding app's theme overrides, a theme patch whose values and
+    /// role mappings win over the app's (`None`: none, the app's own
+    /// again): the engine's host layer, replaced whole, sent to the running
+    /// app at once and to every app started later before its first frame.
     pub fn set_host_tokens(&self, patch: Option<nsh_engine::Patch>) {
         *self.view.ivars().host_theme.borrow_mut() =
             patch.clone().map(|p| HostTheme::Patch(Box::new(p)));
@@ -1195,18 +1197,16 @@ impl Surface {
         }
     }
 
-    /// The embedding app's theme overrides as a theme patch's text, which
-    /// the engine reads (`None`: the app's own theme again): sent to the
-    /// running app at once, and to every app started later before its
-    /// first frame.
+    /// [`Surface::set_host_tokens`] with a theme patch's text, which the
+    /// engine reads (`None`: none, the app's own theme again).
     pub fn set_host_theme(&self, json: Option<String>) {
-        *self.view.ivars().host_theme.borrow_mut() = json.clone().map(HostTheme::File);
         if let Some(running) = &*self.view.ivars().running.borrow() {
-            match json {
-                Some(json) => running.engine.control().set_theme_overrides(json),
-                None => running.engine.control().set_tokens(None),
-            }
+            running
+                .engine
+                .control()
+                .set_theme_overrides(json.as_deref());
         }
+        *self.view.ivars().host_theme.borrow_mut() = json.map(HostTheme::File);
     }
 
     /// Replaces the fonts registered before the app starts. The engine reads

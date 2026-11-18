@@ -90,8 +90,8 @@ pub mod code {
 
     /// The text is not JSON, or not a JSON object.
     pub const NOT_A_DOCUMENT: &str = "not-a-document";
-    /// A top-level `cssVars` and no `tokens`: the old format, which
-    /// `nsh theme convert` converts.
+    /// A top-level `cssVars` and no `tokens` (`nsh theme convert`): the old
+    /// format, which that command converts.
     pub const LEGACY_FORMAT: &str = "legacy-format";
     /// A JSON object with a member name twice; the first is kept.
     pub const DUPLICATE_MEMBER: &str = "duplicate-member";

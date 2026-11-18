@@ -1,6 +1,7 @@
 //! `theme_keys!`: a typed key for each token a theme document declares, in
 //! modules by its path, typed by its value type, reading the tokens the
-//! document makes. The fixtures are the old `cssVars` ones, converted.
+//! document makes. The fixtures are the old ones, converted with
+//! `nsh theme convert`.
 
 use std::sync::Arc;
 

@@ -301,18 +301,24 @@ public class NshView extends FrameLayout {
     }
 
     /**
-     * Overrides the app's theme with the host's: a theme file of shadcn/ui's
-     * ({@code { "cssVars": { "theme": {…}, "light": {…}, "dark": {…} } }},
-     * values as CSS writes them, the format of {@code nsh.json}'s
-     * {@code "theme"}). Its tokens win over the app's of the same names, in
-     * light and dark mode; the app's others stay, so a branded host sets only
-     * what its brand changes ({@code primary}, {@code radius}, ...). Call it
+     * Overrides the app's theme with the host's: a theme patch,
+     * {@code { "values": { token: value }, "roles": { role: token } }}
+     * ({@code docs/dev/theme-format.md}, section 8, as {@code updateTheme}
+     * takes one), the host layer above the app's theme and its own
+     * overrides. Its values and role mappings win in every context the app
+     * picks ({@code colorMode}'s {@code light} and {@code dark} alike); the
+     * app's other tokens stay, so a branded host sets only what its brand
+     * changes ({@code primary}, {@code radius}, ...). A host that themes both
+     * modes sends the other mode's values when its mode changes. Each call
+     * replaces the whole layer. A name the app's theme does not declare, or a
+     * value that does not fit its token, is logged and left out. Call it
      * before or after loading: it applies at once (classes such as
      * {@code bg-primary} are resolved again) and to every app loaded later,
      * from its first frame. Main thread.
      *
-     * @param json the theme file, or null to give the app its own theme back
-     * @throws IllegalArgumentException when the file does not parse; the
+     * @param json the theme patch, or null to clear it and give the app its
+     *     own theme back
+     * @throws IllegalArgumentException when the text is no JSON object; the
      *     overrides then stay as they were
      */
     public void setThemeOverrides(String json) {

@@ -786,7 +786,7 @@ pub(crate) struct ThemeMember {
     /// the workspace.
     path: PathBuf,
     /// Whether the runners get it: a theme document (not one of the old
-    /// `cssVars` format, nor no JSON object), or a patch that is a JSON
+    /// format, nor no JSON object), or a patch that is a JSON
     /// object (`nsh_bundler::read_app_theme`).
     shipped: bool,
 }
@@ -1108,8 +1108,8 @@ pub(crate) fn root_config(
     if !component.split("::").all(ident) {
         bail!("nsh.json: \"root\": {component:?} is not a Rust path (`App`, `shell::Gallery`)");
     }
-    // Read as a TSX app's are (`nsh_bundler::read_app_theme`): an old
-    // `cssVars` theme, or no document, is not given to the root. What the
+    // Read as a TSX app's are (`nsh_bundler::read_app_theme`): a theme of
+    // the old format, or no document, is not given to the root. What the
     // members say is warned of once the app's sets are described
     // ([`theme_warnings`]).
     let mut theme = ThemeMember::of(dir, config, workspace, "theme", "theme.json")?;

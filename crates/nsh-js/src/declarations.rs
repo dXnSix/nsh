@@ -1749,7 +1749,7 @@ declare const text: "export default ignored";
             assert!(ts.contains(&line), "{line}");
         }
         // No type has the old format's member.
-        assert!(!ts.contains("cssVars:") && !ts.contains("cssVars?:"));
+        assert!(!ts.contains("cssVars:") && !ts.contains("cssVars?:")); // nsh theme convert reads it
     }
 
     /// The document, patch and diagnostic shapes are declared, the codes
@@ -1762,8 +1762,11 @@ declare const text: "export default ignored";
             "export interface ThemePatch {",
             "export interface ThemeDiagnostic {",
             "export type TokenDeclaration = {",
-            "export interface ModifierAxis {",
-            "  selected: string;",
+            "export interface ModifierAxis<K extends keyof ThemeModifiers = keyof ThemeModifiers> {",
+            "  selected: ThemeModifiers[K];",
+            "export type ModifierAxes = [keyof ThemeModifiers] extends [never]",
+            "{ [K in keyof ThemeModifiers]: ModifierAxis<K> }[keyof ThemeModifiers];",
+            "modifiers(): ModifierAxes[];",
             "resolutionOrder?: string[];",
         ] {
             assert!(ts.contains(shape), "{shape}");

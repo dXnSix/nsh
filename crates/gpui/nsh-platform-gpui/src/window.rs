@@ -2210,12 +2210,10 @@ impl Element for WindowElement {
             || w.attribute(|a| a.backdrop)
                 .is_some_and(|b| b != Backdrop::None);
         if !see_through {
-            let background = match &*surface.host_theme.borrow() {
-                Some(theme) if dark => theme.background.dark.into(),
-                Some(theme) => theme.background.light.into(),
-                None => crate::system::window_background(&surface),
-            };
-            window.paint_quad(gpui::fill(bounds, crate::render::hsla(background)));
+            window.paint_quad(gpui::fill(
+                bounds,
+                crate::render::hsla(surface.background()),
+            ));
         }
         crate::events::install(
             &surface,

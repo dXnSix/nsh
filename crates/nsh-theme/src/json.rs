@@ -98,7 +98,8 @@ impl Json {
 
 /// Parses `text` into a tree, reporting duplicate members into
 /// `diagnostics`. `skip` names top-level members whose content is checked as
-/// JSON but not kept (`cssVars`). `None` when the text is not JSON.
+/// JSON but not kept (the old format's member). `None` when the text is not
+/// JSON.
 pub(crate) fn parse(text: &str, skip: &[&str], diagnostics: &mut Vec<Diagnostic>) -> Option<Json> {
     let found = RefCell::new(Vec::new());
     let mut deserializer = serde_json::Deserializer::from_str(text);

@@ -265,7 +265,8 @@ pub(crate) fn dark(surface: &Surface) -> bool {
     surface.environment.get().color_scheme == ColorScheme::Dark
 }
 
-/// The color behind the app's views (the default theme's background).
+/// The color behind the views of an app without a theme of its own: the
+/// default theme's background, light or dark as the system.
 pub(crate) fn window_background(surface: &Surface) -> Color {
     if dark(surface) {
         Color(0x0a0a_0aff)
@@ -1606,6 +1607,8 @@ pub(crate) fn command(surface: &Rc<Surface>, _id: NodeId, command: &Command) {
         }
         Command::Announce(text) => crate::access::announce(surface, text),
         Command::PerfMonitor(on) => surface.set_stats(*on),
+        // The window background follows the theme's `background` role.
+        Command::Tokens(tokens) => surface.tokens_changed(tokens),
         // The status bar is a phone's; layout animations arrive as mount
         // items. `Back` and `Desktop` are routed by the mounter.
         Command::StatusBar(_)
