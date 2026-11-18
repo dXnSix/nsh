@@ -4283,6 +4283,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nsh-theme"
+version = "0.6.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nsh-tui-host"
 version = "0.6.0"
 dependencies = [

@@ -146,7 +146,7 @@ jobs:
       RUSTUP_TOOLCHAIN: stable
       PACKAGES: >-
         -p nsh-core -p nsh-macros -p nsh-js -p nsh-base -p nsh-engine
-        -p nsh-bundler -p nsh-package -p nsh-testing
+        -p nsh-bundler -p nsh-package -p nsh-testing -p nsh-theme
         --features nsh-bundler/bundle,nsh-testing/bundle,nsh-testing/agent
     steps:
       - uses: actions/checkout@v6

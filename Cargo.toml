@@ -35,6 +35,7 @@ vte = { version = "0.15", default-features = false }
 unicode-bidi = "0.3.18"
 unicode-linebreak = "0.1.5"
 nsh-core = { version = "0.6.0", path = "crates/nsh-core" }
+nsh-theme = { version = "0.6.0", path = "crates/nsh-theme" }
 nsh-package = { version = "0.6.0", path = "crates/nsh-package" }
 nsh-i18n = { version = "0.6.0", path = "crates/nsh-i18n" }
 nsh-updater = { version = "0.6.0", path = "crates/nsh-updater" }
