@@ -132,6 +132,17 @@ pub(super) struct NodeParts {
     /// `contentClass`; a typed list has none): they are parsed again when
     /// the theme or the design tokens they read change.
     class_names: Vec<(Part, Box<str>)>,
+    /// The group whose press it shows as a part (`Prop::ProjectedActive`).
+    active_group: Option<&'static str>,
+    /// It was last styled with that group's press.
+    group_pressed: bool,
+}
+
+impl NodeParts {
+    /// The group whose press it shows as a part.
+    pub(super) fn active_group(&self) -> Option<&'static str> {
+        self.active_group
+    }
 }
 
 /// The [`state`] bits an element is in by its accessibility state `s`:
@@ -468,17 +479,24 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
-    /// The states `key` is styled by: its own and those it shows as a
-    /// part of a control, with `FOCUS_VISIBLE` on a part projected focused
-    /// while the focus shows. Virtual focus is projected while its control
-    /// has the focus, so on its rows `focus:` is the cursor and
-    /// `focus-visible:` the cursor the keyboard is on.
+    /// The states `key` is styled by: its own, those it shows as a part
+    /// of a control and a hover a component passes on to it, with
+    /// `FOCUS_VISIBLE` on a part projected focused while the focus shows.
+    /// Virtual focus is projected while its control has the focus, so on
+    /// its rows `focus:` is the cursor and `focus-visible:` the cursor the
+    /// keyboard is on.
     pub(super) fn styled_states(&self, key: Key) -> u16 {
         let node = &self.nodes[key as usize];
-        let states = node.states | node.projected;
+        let passed = if node.passed_hover { state::HOVERED } else { 0 };
+        let mut states = node.states | node.projected | passed;
+        if let Some(group) = node.parts.as_ref().and_then(|p| p.active_group) {
+            states |= self.group_states(key, group) & state::PRESSED;
+        }
         // The states a dev tool forces.
         #[cfg(feature = "inspect")]
-        let states = states | node.dev.as_deref().map_or(0, |dev| dev.layer.states);
+        {
+            states |= node.dev.as_deref().map_or(0, |dev| dev.layer.states);
+        }
         if node.projected & state::FOCUSED != 0 && self.focus_visible_on.is_some() {
             states | state::FOCUS_VISIBLE
         } else {
@@ -662,6 +680,52 @@ impl<M: TextEngine> Core<M> {
             }
             self.states_changed(key);
         }
+    }
+
+    /// The group whose press `key` shows as a part of a control
+    /// (`Prop::ProjectedActive`).
+    pub(super) fn set_projected_active(&mut self, key: Key, group: Option<&'static str>) {
+        let node = &mut self.nodes[key as usize];
+        if node.parts.as_ref().and_then(|p| p.active_group) == group {
+            return;
+        }
+        let base = node.classes.clone();
+        let parts = node.parts.get_or_insert_with(|| {
+            Box::new(NodeParts {
+                base,
+                ..NodeParts::default()
+            })
+        });
+        parts.active_group = group;
+        parts.group_pressed = false;
+        self.states_changed(key);
+    }
+
+    /// A group around part `key` that shows its press changed its states:
+    /// restyled when the press it shows came or went.
+    fn group_press_changed(&mut self, key: Key) {
+        let Some(group) = self.nodes[key as usize]
+            .parts
+            .as_ref()
+            .and_then(|p| p.active_group)
+        else {
+            return;
+        };
+        let pressed = self.group_states(key, group) & state::PRESSED != 0;
+        let node = &mut self.nodes[key as usize];
+        let parts = node.parts.as_mut().expect("a part with its group");
+        if parts.group_pressed == pressed {
+            return;
+        }
+        parts.group_pressed = pressed;
+        if !node
+            .classes
+            .as_ref()
+            .is_some_and(|c| c.deps() & deps::STATE != 0)
+        {
+            return;
+        }
+        self.restyle(key);
     }
 
     /// The `data-*` attributes `key` shows as a part of a component
@@ -880,8 +944,10 @@ impl<M: TextEngine> Core<M> {
             }
             Part::Content => {
                 let content = self.list_content(key);
-                if let Some(list) = self.nodes[key as usize].list.as_mut() {
-                    list.set_class_content(content);
+                if let Some(list) = self.nodes[key as usize].list.as_mut()
+                    && list.set_class_content(content)
+                {
+                    self.needs_layout = true;
                 }
             }
             _ => {}
@@ -1067,9 +1133,7 @@ impl<M: TextEngine> Core<M> {
             .transition
             .filter(|t| t.properties.0 != 0)
             .map_or(std::time::Duration::ZERO, |t| {
-                std::time::Duration::from_secs_f32(
-                    (t.duration.max(0.0) + t.delay.max(0.0)) / 1000.0,
-                )
+                std::time::Duration::from_secs_f32((t.run_ms() + t.delay.max(0.0)) / 1000.0)
             })
     }
 
@@ -1402,12 +1466,20 @@ impl<M: TextEngine> Core<M> {
         while let Some(k) = stack.pop() {
             let node = &self.nodes[k as usize];
             stack.extend_from_slice(&node.children);
+            let follows = changed & deps::GROUP != 0
+                && node
+                    .parts
+                    .as_ref()
+                    .is_some_and(|p| p.active_group.is_some());
             if node
                 .classes
                 .as_ref()
                 .is_some_and(|c| c.deps() & changed != 0)
             {
                 self.restyle(k);
+            }
+            if follows {
+                self.group_press_changed(k);
             }
         }
     }
@@ -1432,7 +1504,7 @@ impl<M: TextEngine> Core<M> {
                 return;
             }
             let n = &self.nodes[k as usize];
-            if (n.states | n.projected != 0 || !n.data.is_empty())
+            if (n.states | n.projected != 0 || n.passed_hover || !n.data.is_empty())
                 && n.classes.as_ref().is_some_and(|c| !c.groups().is_empty())
             {
                 break;

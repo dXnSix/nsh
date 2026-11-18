@@ -2167,7 +2167,7 @@ dependencies = [
 [[package]]
 name = "dxn_gpui_tizen"
 version = "0.1.0"
-source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=52edd69d05f36ceb83a1b80eefd6c265e4d2099e#52edd69d05f36ceb83a1b80eefd6c265e4d2099e"
+source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=8de11018db4896c9fed2e8d737d64c170fbf43cb#8de11018db4896c9fed2e8d737d64c170fbf43cb"
 dependencies = [
  "accesskit_unix",
  "anyhow",
@@ -2187,7 +2187,7 @@ dependencies = [
 [[package]]
 name = "dxn_gpui_tizen_sys"
 version = "0.1.0"
-source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=52edd69d05f36ceb83a1b80eefd6c265e4d2099e#52edd69d05f36ceb83a1b80eefd6c265e4d2099e"
+source = "git+https://github.com/dXnSix/dXn.GpuiTizen?rev=8de11018db4896c9fed2e8d737d64c170fbf43cb#8de11018db4896c9fed2e8d737d64c170fbf43cb"
 
 [[package]]
 name = "dyn-clone"
@@ -3317,8 +3317,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3387,8 +3387,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-apple"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "anyhow",
  "async-task",
@@ -3426,8 +3426,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-linux"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -3470,8 +3470,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-macos"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3503,6 +3503,7 @@ dependencies = [
  "parking_lot",
  "raw-window-handle",
  "semver",
+ "serde_json",
  "smallvec",
  "strum",
  "uuid",
@@ -3510,8 +3511,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-macros"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3521,8 +3522,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-platform"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -3537,8 +3538,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-web"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -3565,8 +3566,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-wgpu"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -3592,8 +3593,8 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-windows"
-version = "0.1.14"
-source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#5e879b3c4d611748b63412f0b05e7aa625d5eb8a"
+version = "0.1.16"
+source = "git+https://github.com/dXnSix/gpui-fast?branch=tizen-release#1c1253391ca3ad8ad7d3e9e561d92736c95fae2a"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5493,7 +5494,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-base"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "chrono",
  "html5ever 0.27.0",
@@ -5522,7 +5523,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-bundler"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dunce",
  "log",
@@ -5535,9 +5536,10 @@ dependencies = [
 
 [[package]]
 name = "nsh-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cap-std",
+ "chrono",
  "crc32fast",
  "flate2",
  "futures-util",
@@ -5568,14 +5570,13 @@ dependencies = [
  "unicode-properties",
  "ureq",
  "url",
- "webpki-roots 1.0.9",
  "windows-sys 0.61.2",
  "wuff",
 ]
 
 [[package]]
 name = "nsh-dev"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "dunce",
@@ -5587,7 +5588,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-engine"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "block2 0.6.2",
  "crossbeam-channel",
@@ -5609,12 +5610,13 @@ dependencies = [
  "tokio",
  "ureq",
  "wgpu",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "nsh-gpui-host"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "log",
  "nsh-base",
@@ -5625,11 +5627,11 @@ dependencies = [
 
 [[package]]
 name = "nsh-i18n"
-version = "0.5.0"
+version = "0.6.0"
 
 [[package]]
 name = "nsh-js"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
@@ -5651,12 +5653,13 @@ dependencies = [
 
 [[package]]
 name = "nsh-macros"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "imagesize 0.15.0",
  "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn 2.0.119",
  "ttf-parser",
  "wuff",
@@ -5664,7 +5667,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-package"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -5678,7 +5681,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-platform-gpui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "accesskit_consumer",
  "anyhow",
@@ -5721,7 +5724,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-platform-tizen"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "dxn_gpui_tizen",
  "dxn_gpui_tizen_sys",
@@ -5740,7 +5743,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-testing"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "crossbeam-channel",
@@ -5756,7 +5759,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-updater"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",

@@ -211,9 +211,8 @@ reasons: `reactive-components.md`.
     the app's function in a root of its own under the component's owner (so context reaches it), inserts what it
     returns into a holder view (`componentRender`: the prop, U+001F, the key) and the holder into the host, replacing
     the key's previous one; the core places the holder as the only child of the key's placeholder (the last one placed
-    when a view places a key twice, skipping those in list cells their lists freed: a cell whose row went still reads
-    the row now at its old index until the list binds it again, so it may place the key of a row that moved to another
-    cell, which keeps showing it; none placed: it waits out of the tree for the `Unrender`). Until its holder
+    when a view places a key twice; a list shows each row in one cell at most, so a row's key is placed once;
+    none placed: it waits out of the tree for the `Unrender`). Until its holder
     arrives a placeholder is empty, so a list cell holding one is not measured (`Core::cells_awaiting_renders`): its
     row keeps its estimate (or its last size) and stays in the window, and is measured in the commit the holder
     comes in; measured empty, a list in a view sized by its content would shrink that view's viewport to nothing
@@ -292,8 +291,12 @@ reasons: `reactive-components.md`.
   stack (an `Each` of the routes: the screens below keep their state; `on_dismiss` reports a native pop). The root
   can be any element: the host becomes it (a screen, a modal, a text, a list); a component as the root is made on
   the host itself (no view of its own); a region as the root goes in the host view.
-  The core reuses retained `each` rows in the same key order while their item bindings update the content
-  (`core/components.rs`). Region placement checks the actual child order before moving nodes
+  An update of an `each` passes its rows in order and keeps each one while the key in its place is its own: no map
+  of the rows, and nothing written for a row whose item is equal. Only from the first place whose key is another
+  are the rows left looked up by key (`Rows::update`, `element/flow.rs`; with a key twice among the rows the map
+  of them all decides, as before). The core likewise leaves the elements a run starts with, kept in their places,
+  as they are while their item bindings update the content, and matches only what follows them
+  (`reconcile_region`, `core/views.rs`). Region placement checks the actual child order before moving nodes
   (`core/views.rs`), after updating anchors and slots. Regions that only populate or retain nodes skip listener and
   binding cleanup. When nodes leave, affected views are cleaned once per binding batch; recycled list cells use the
   same boundary when their static children leave.
@@ -775,6 +778,11 @@ it changes, and they are resolved again when the tokens change (`Components::app
   `.project_checked(props.checked)` / `.project_indeterminate(props.indeterminate)` / `.project_disabled(props.disabled)`
   (`gpui-base`'s `SwitchThumb::new(checked)`, `CheckboxIndicator::state(..)`): the app writes `checked:` /
   `indeterminate:` / `disabled:` in the part's class, and only the control's root is an accessibility element.
+  The control's press, which only the platform knows, reaches a part through a group: the root is
+  `.group_named("nsh-switch")` and each part `.project_group_active("nsh-switch")`, so the part's `active:` applies
+  while the control is held wherever the press went down (the label included), changing as for any other state (a
+  transform animates with `transition-*`, layout at once). A name of NSH's keeps the app's own `group` classes
+  around or inside the control the app's.
   `.project_focused(..)` does the same for `focus:` on the part the keys act on while the control keeps the
   platform's focus (a list's highlighted option, the cell of a code input that takes the next character): NSH has
   no active descendant, and the platform's focus stays where it is. While that focus shows the part shows
@@ -1175,10 +1183,11 @@ what changed.
   sets when the nested component starts or stops placing its children (slots and rows stay), instead of telling JS.
 - Content that comes and goes with a reveal (`Collapsible`'s `reveal`, `gpui-base`'s `MotionReveal`): the view puts
   it in a clip view (`overflow_hidden`) whose height is zero while closed and the content's own while open, and calls
-  `ElementRef::animate_layout` on the clip with a critically damped spring in the effect that follows `open`, so the
+  `ElementRef::animate_layout` on the clip with a critically damped spring (or the app's `revealSpring`, read as
+  `open` changes) in the effect that follows `open`, so the
   commit that changes the height animates every frame it moves on the platform's animator (the clip's, the views
-  after it) and no other (a list updating in the same commit elsewhere changes at once), with no JS per frame. The content's region follows a signal that turns on with `open` and off after the motion's duration
-  (`set_timeout`, voided by a newer change: layout animations report no end), so it stays in the tree, clipped, while
+  after it) and no other (a list updating in the same commit elsewhere changes at once), with no JS per frame. The content's region follows a signal that turns on with `open` and off after the motion's duration (the
+  spring's `settle_ms`; `set_timeout`, voided by a newer change: layout animations report no end), so it stays in the tree, clipped, while
   the clip closes. Reduced motion skips both. Heights are not animated values, so this is how a component sizes
   something with motion. `collapsible::follow_open` is that signal and effect; `AccordionPanel` shares it, its own
   view the clip (zero high while closed, `invisible()` once the reveal has closed it, so content it keeps mounted takes
@@ -1371,7 +1380,8 @@ core (`ElementRef::transition_time`, an `Action::TransitionTime` the commit answ
 `transition`, the app's `class`, `style` and theme included: the longest duration plus delay, two seconds at most),
 waits that long, then unmounts, and `onClose` follows. A generation counter keeps a stale frame or exit from acting on
 a newer change: opened again on its way out, the popup goes back to its look (its transitions run back) and was
-never gone, so neither `onClose` nor `onOpen` fires. On its way out it takes no keys either: the keyboard focus inside
+never gone, so neither `onClose` nor `onOpen` fires. A spring timing (`ease-spring-[k,c]`) runs its entrance and
+exit on a spring, whose settling time `transition_time` reports. On its way out it takes no keys either: the keyboard focus inside
 goes back to the trigger as it closes, not once it is gone (`PopupPresence::focus_back_on_close`, `Popover`'s and a
 desktop menu's; a dropdown's `Presence::back`, a combobox's to its input), unless the choice that closed it moved the
 focus out of the popup in the same turn (`ElementRef::focus_back` yields to a `focus()` outside the popup in its
@@ -1410,7 +1420,10 @@ element, and an action emits `select` with the app's id. On a desktop OS a press
 `popup_menu`; elsewhere the content opens nothing. A `ContextMenu` given `items` is the same kind of menu on iOS: the native component
 `nsh/context-menu` (`system_context_menu.rs`) shows the system's context menu from `MenuButton`'s item data, and
 `menu.rs` reports it with the drawn menu's events; elsewhere, and without items, the menu is the drawn one. `nsh/mobile`'s `SegmentedControl` is the same kind of native
-component, `nsh/segmented-control` (`system_segmented_control.rs`), built as `TabBar` is.
+component, `nsh/segmented-control` (`system_segmented_control.rs`), built as `TabBar` is; so is its `Switch`,
+`nsh/switch` (`system_switch.rs` on iOS, `SwitchComponent.java` on Android), and its `DateTimePicker`,
+`nsh/date-time-picker` (iOS `system_date_time_picker.rs`, Android `DateTimePickerComponent.java`): values cross to the
+platforms as their fields, never as strings to parse, and come back the same way.
 
 `HoverCard` (`hover_card.rs`) is `gpui-base`'s `HoverCard` on `Popover`'s overlay and presence. On the desktops the
 pointer is followed by Rust listeners, `onMouseEnter` / `onMouseLeave` on the `trigger` slot (the app's element) and on
@@ -1457,8 +1470,8 @@ starting from `defaultQuery`, or the app's `query`, whose changes highlight the 
 footer is a part of the popup after the rows (`listbox::Footer`). Mod+Return closes it with `"select"`. A press on
 the input opens and closes the list in every idiom, as `gpui-component`'s trigger does (`"triggerPress"`); on touch
 screens the focus a tap gives opens it, and the press of that tap is then skipped (`focus_opened`). The input reports
-the press after the focus it takes: the terminal (`docs/dev/tui.md`), Linux (`docs/dev/linux.md`) and the headless
-driver report an `Input`'s `onPress` today; the other backends follow in a later change, and until then a press on the
+the press after the focus it takes: the terminal (`docs/dev/tui.md`), Linux (`docs/dev/linux.md`), Windows
+(`docs/dev/windows.md`) and the headless driver report an `Input`'s `onPress` today; the other backends follow in a later change, and until then a press on the
 input there opens the list on touch screens only (through the focus).
 
 `DatePicker` (`date_picker.rs`) is `Select`'s popup (`popup::dropdown`, at least as wide as the trigger, a sheet on

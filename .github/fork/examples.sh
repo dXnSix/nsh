@@ -140,7 +140,7 @@ case "$target" in
   # The files upstream's `windows.yml` runs (`fork-full.yml` lists them in
   # its `windows` job; this entry is for a run by hand).
   windows)
-    gallery=(context-menu device dock form gestures hover links navigation network photos
+    gallery=(combobox-click context-menu device dock form gestures hover links navigation network photos
       resizable shortcuts storage timers)
     filtered=("environment appearance")
     ;;

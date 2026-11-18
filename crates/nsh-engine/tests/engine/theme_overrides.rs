@@ -56,6 +56,7 @@ fn start(name: &str, overrides: Option<&str>) -> (Engine, Receiver<MountBatch>) 
         limits: nsh_engine::Limits::default(),
         ui_sets: vec![nsh_base::registry()],
         runtime: None,
+        support_dir: None,
         data_dir: None,
         storage: None,
         clock: Default::default(),
