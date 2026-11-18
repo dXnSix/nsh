@@ -225,7 +225,10 @@ pub use self::{
         CallCx, Cleanup, ErrorClass, ErrorFields, Held, IntoThrown, JsError, Later, Local, Locals,
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
-    task::{Answer, ClipboardImage, ClipboardItem, DialogAnswer, DialogCloser, ImageSize, Task},
+    task::{
+        Answer, ClipboardImage, ClipboardItem, DialogAnswer, DialogCloser, DialogReply, ImageSize,
+        Task,
+    },
     theme_scope::{
         ModifierContext, ScopeModifiers, ThemeScope, ThemeScopeElement, ThemeScopeProps,
         theme_scope,
@@ -263,7 +266,7 @@ pub use crate::geometry::{
 pub use crate::{
     AccessibilityRole, AccessibilityState, AutoCapitalize, AutoFill, BackdropMaterial, BlendMode,
     BoxShadow, ColorStop, ContextMenuEvent, Cursor, Dialog, DialogButton, DialogButtonStyle,
-    EdgeInsets, EllipsizeMode, EventKind, EventPayload, FpsMode, Haptic, HapticImpact,
+    DialogInput, EdgeInsets, EllipsizeMode, EventKind, EventPayload, FpsMode, Haptic, HapticImpact,
     HapticNotification, HeaderSystemItem, KeyCapture, KeyEvent, KeyboardAppearance,
     KeyboardDismissMode, KeyboardTaps, KeyboardType, KeyframeAnimation, Keyframes, LayoutAnimation,
     LayoutCurve, LayoutProperty, LayoutTransition, ListAlignment, ListScrollPosition, ListViewport,

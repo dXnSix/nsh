@@ -109,7 +109,8 @@ module:
 - The entry's prologue imports, before any other module, `virtual:nsh-setup`, whose `setup(…)` gives the renderer the
   app's themes (the Tailwind theme and `setup.ui`, `{ document, overrides }`, which the runtime reads at once with
   `Tokens::with_app_theme`, so a module's top-level `token()` reads the app's theme), the appearance and the status
-  bar's default (`nsh.json` `"statusBar"`), before anything renders. Then it imports `virtual:nsh-app`, whose
+  bar's default (`nsh.json` `"statusBar"`), before anything renders. The fourth argument to `setup` is the default as
+  a JSON string, or `null` to leave the status bar alone. Then it imports `virtual:nsh-app`, whose
   `setup(null, null, null, null, app)` hands over what `appInfo()`
   reports (`nsh.json`'s id, name, version and build, the package's `--version` and `--build`, and whether the build is
   a development one), so a module reads it at its top level; a runtime that predates the fifth argument ignores it. A font import

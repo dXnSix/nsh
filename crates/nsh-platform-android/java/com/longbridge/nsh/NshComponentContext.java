@@ -13,7 +13,6 @@ public final class NshComponentContext {
         this.id = id;
     }
 
-    /** The node id of the component's view. */
     int id() {
         return id;
     }
