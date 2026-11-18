@@ -742,8 +742,9 @@ it changes, and they are resolved again when the tokens change (`Components::app
   token of the role's name, as `Tokens::role`; it tracks both tokens, and a theme that maps roles onto other tokens
   runs every reader again. The names are typed from the roles the UI sets list (`Registry::roles`,
   `description::roles`, `roles.d.ts`). A class reads a role as a variable (`bg-(--popover)`): `ClassTokens` holds
-  the role map and `ClassTokens::variable` gives the token of the name, else the one the role is mapped onto; the
-  list records the token it read, and a change of the map resolves every class (`same_names`). The build's class
+  the role map and `ClassTokens::variables` gives the token the role is mapped onto, else the token of the name; the
+  list records the token it read, and a change of the map resolves again only the classes that read its old or new
+  target (`ClassTokens::changed`). The build's class
   check has the map with the tokens it reads (the theme documents' defaults, `nsh.json`'s `"roles"`).
   `ThemeScope` (`element/theme_scope.rs`, exported by `nsh` and the prelude) is a view with an appearance of its
   own for itself and what is in it. Classes and adaptive declarations need nothing from it: the core applies them
@@ -867,7 +868,7 @@ family from one `Typography` (`.typography(move || tokens().typography("text-bod
 **The active document** (`element/theme.rs`): one at a time, never merged.
 
 1. The app's: `Root::theme(json)` or `nsh.json`'s `"theme"` (`Core::set_app_theme`), replaced while the app runs by
-   `element::set_theme(Some(json))` (`ModuleCx::set_theme`; TS's `setTheme`, the root's `Prop::UiTheme`).
+   `element::set_theme(Some(json))` (`ModuleCx::set_theme`; TS's `setTheme` sends `Prop::UiThemeDocument`, the root's text `Prop::UiTheme`).
 2. Else the document of the first UI set, in the host's set order, that registers one (`Registry::theme_document`;
    each other set's is logged `document-unused`, `Registry::theme_document_of_sets`).
 3. Else the first fallback (`Registry::fallback_theme_document`: nsh-base's default theme).

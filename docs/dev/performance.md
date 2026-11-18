@@ -1410,7 +1410,7 @@ base kept the value it copied at read time, which is why the benchmark's model h
 `setColorScheme` changed no token. It restyled the classes that depend on the appearance, and its cost did not
 grow with the theme (500 µs at 1,000 tokens, 504 µs at 5,000). On the head the appearance is the `colorMode`
 modifier, so a switch does all of the above. It does more than a `brand` switch, because `colorMode`'s `dark`
-context sets about 60 % of the tokens (600 / 2,900 entries for `resolve`). About 80 % of the values change through
+context sets about 60 % of the tokens (about 600 / 3,000 entries for `resolve`). About 80 % of the values change through
 references, so `from_resolved` converts that many. `ClassTokens::changed` reports them all, every class reading one
 is resolved again, and JS's `env::install` takes the all-tokens signal: about 0.76 µs a token (1,244 → 4,270 µs).
 
