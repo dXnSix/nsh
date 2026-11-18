@@ -1302,7 +1302,7 @@ either way; paint and frame times are what it resolves.
 ## Theme format (nsh-theme, the one-document store)
 
 Measured on 2026-11-18 on an Apple M5, macOS 26 (Darwin 25.6.0), release engine test binaries; the fork's `main`
-before the theme format, `c9bf1fe9a` (the old `cssVars` store), against the theme format's branch, `2a4ebb009`. The
+before the theme format, `c9bf1fe9a` (the old store), against the theme format's branch, `2a4ebb009`. The
 benchmark is kept outside the repository in two copies, one per API, that differ only where the APIs do. Each copy
 runs in its own worktree as `crates/nsh-engine/tests/engine/theme_bench.rs`, with
 `cargo test --release -p nsh-engine --test engine theme_bench:: -- --ignored --nocapture --test-threads=1`. Five
@@ -1314,7 +1314,7 @@ The themes have 1,000 and 5,000 tokens: shadcn's 32 colors and `radius`, then 60
 value, 15 % numbers, 20 % color references (half of them chains), 5 % number references. Three modifiers: the
 appearance, `brand` (`forest` sets four colors) and `density` (`compact` sets eleven numbers). The head reads them as
 theme documents, with `colorMode`, `brand` and `density` in `resolutionOrder`. The base reads the same model as
-`cssVars` `theme` / `light` / `dark` with `var()` references and old `{ theme }` contexts. Both sides read every
+the old format's `theme` / `light` / `dark` with `var()` references and old `{ theme }` contexts. Both sides read every
 token in every combination of contexts as the model has it. The app has 100 cards drawn with token classes, 200
 `Text`s that each show a `token()`, and six controls. Each switch is 60 presses (`setModifier`, `setColorScheme`,
 `setTheme` of the same document or of the other one, `updateTheme` of `primary`). On the head the appearance
@@ -1357,7 +1357,7 @@ side of a modifier switch or of `updateTheme` is faster on the head (34 µs agai
 tokens), as JS no longer computes tokens of its own.
 
 **Faster.** Activating a document (the same again, or another) and the 5,000-token first frame read the theme once.
-The base read the `cssVars` text twice, in JS for `token()` and again in the core (`Prop::UiTheme(json)`, then
+The base read the old-format text twice, in JS for `token()` and again in the core (`Prop::UiTheme(json)`, then
 `Core::set_ui_theme`). The head's `setTheme` reads the document once, in JS
 (`nsh_core::element::theme::read_document`), and hands it to the core as an `Arc` (`Prop::UiThemeDocument`). The
 core then only resolves it, and skips the class tokens and the restyle when nothing changed (`Core::install_theme`'s
@@ -1419,7 +1419,7 @@ activations above are faster in total). `nsh_theme::read` builds its own JSON tr
 member written twice is reported (`json::parse`, a serde visitor). It then checks every token by the rules
 (`apply_rules`: the name, the value against its type, unique paths, every reference, every context entry), with a
 pointer and a message string built per entry. `Tokens::resolve` then resolves the document and converts every value.
-The base's reader (`nsh_base::Theme::from_json_lenient`) laid the `cssVars` sections over the default tokens
+The base's reader (`nsh_base::Theme::from_json_lenient`) laid the old format's sections over the default tokens
 without these checks.
 
 **What would bring them back** (follow-ups, outside this change):
