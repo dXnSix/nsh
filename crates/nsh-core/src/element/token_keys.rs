@@ -235,3 +235,110 @@ impl Tokens {
         })
     }
 }
+
+/// What `theme_keys!` refuses, each a compile error that names the
+/// conflict, with its fixture in `tests/fixtures/theme_keys/`. These docs
+/// are the refusals' tests (`cargo test -p nsh-core --doc theme_keys`).
+///
+/// A document that reads with no error and makes one Rust item of each
+/// name compiles:
+///
+/// ```
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/valid.json");
+/// }
+/// let gap: nsh_core::element::TokenKey<f32> = keys::space::_3;
+/// assert_eq!(gap.name(), "space-3");
+/// assert_eq!(keys::modifiers::Density::DEFAULT.name(), "regular");
+/// ```
+///
+/// An error of the document stops generation, naming its pointer
+/// (`bad-kind` at `/tokens/space-3`); a warning wouldn't:
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/error.json");
+/// }
+/// ```
+///
+/// A modifier whose type would be `Self`, a keyword that can't be a raw
+/// identifier (`"self"`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/modifier_self.json");
+/// }
+/// ```
+///
+/// A context whose variant would be `Self` (`"density"`'s `"self"`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/context_self.json");
+/// }
+/// ```
+///
+/// A group whose module would be `super` (`"path": "super.app"`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/group_super.json");
+/// }
+/// ```
+///
+/// A group whose module would be `crate`, at any depth
+/// (`"path": "surface.crate.app"`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/group_crate.json");
+/// }
+/// ```
+///
+/// A top-level group named `modifiers`, the module of the modifiers' enums
+/// (`"path": "modifiers.gap"`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/group_modifiers.json");
+/// }
+/// ```
+///
+/// Two groups that differ only in case or separators (`type-scale` and
+/// `typeScale`, both `type_scale`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/groups_collide.json");
+/// }
+/// ```
+///
+/// Two constants of one group that differ only in case or separators
+/// (`text-xl` and `textXl`, both `TEXT_XL`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/constants_collide.json");
+/// }
+/// ```
+///
+/// Two modifiers that differ only in case or separators (`high-contrast`
+/// and `highContrast`, both `HighContrast`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/modifiers_collide.json");
+/// }
+/// ```
+///
+/// Two contexts of one modifier that differ only in case or separators
+/// (`extra-compact` and `extra_compact`, both `ExtraCompact`):
+///
+/// ```compile_fail
+/// mod keys {
+///     nsh_core::element::theme_keys!("tests/fixtures/theme_keys/contexts_collide.json");
+/// }
+/// ```
+#[doc(hidden)]
+#[allow(unreachable_pub)]
+pub mod theme_keys_refusals {}

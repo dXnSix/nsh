@@ -1,6 +1,6 @@
 //! `theme_keys!`: a typed key for each token a theme document declares, in
-//! modules by its path, typed by its kind, reading the tokens the document
-//! makes.
+//! modules by its path, typed by its value type, reading the tokens the
+//! document makes. The fixtures are the old `cssVars` ones, converted.
 
 use std::sync::Arc;
 
@@ -28,9 +28,11 @@ mod keys {
 fn keys_follow_the_paths_and_kinds() {
     let primary: TokenKey<Hsla> = keys::colors::backgrounds::PRIMARY;
     assert_eq!(primary.name(), "colors-backgrounds-primary");
-    // A token without a path is named after its name.
+    // A token without a path is at the top, named after its name.
     let ink: TokenKey<Hsla> = keys::INK;
     assert_eq!(ink.name(), "ink");
+    let forest: TokenKey<Hsla> = keys::INK_BRAND_FOREST;
+    assert_eq!(forest.name(), "ink.brand.forest");
     let card: TokenKey<f32> = keys::radius::CARD;
     assert_eq!(card.name(), "radius-card");
     // Segments become Rust names: `type-scale` a module `type_scale`,

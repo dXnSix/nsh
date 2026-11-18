@@ -1,19 +1,9 @@
 {
-  "cssVars": {
-    "theme": {
-      "brand-name": "Acme",
-      "feature-beta": true,
-      "duration-fast": "120ms",
-      "ease-snappy": "cubic-bezier(0.2, 0, 0, 1)",
-      "text-title": "24px",
-      "text-title--line-height": "1.25"
-    }
-  },
   "tokens": {
-    "brand-name": { "kind": "string", "path": "brand.name" },
-    "feature-beta": { "kind": "boolean", "path": "features.beta" },
-    "duration-fast": { "kind": "duration", "path": "motion.fast" },
-    "ease-snappy": { "kind": "easing", "path": "motion.snappy" },
-    "text-title": { "kind": "typography", "path": "type.title" }
+    "brand-name": { "kind": "string", "value": "Acme", "path": "brand.name" },
+    "feature-beta": { "kind": "boolean", "value": true, "path": "features.beta" },
+    "duration-fast": { "kind": "duration", "value": "120ms", "path": "motion.fast" },
+    "ease-snappy": { "kind": "easing", "value": [0.2, 0, 0, 1], "path": "motion.snappy" },
+    "text-title": { "kind": "typography", "value": { "fontSize": 24, "lineHeight": 1.25 }, "path": "type.title" }
   }
 }

@@ -1,0 +1,8 @@
+{
+  "tokens": { "space-3": { "kind": "number", "value": 12 } },
+  "modifiers": {
+    "high-contrast": { "default": "off", "contexts": { "off": {}, "on": {} } },
+    "highContrast": { "default": "off", "contexts": { "off": {}, "on": {} } }
+  },
+  "resolutionOrder": ["high-contrast", "highContrast"]
+}

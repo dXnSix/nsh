@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 
 mod native_components;
+mod theme_format_keys;
 mod theme_keys;
 
 // `#[native_components]` as an app's crate has it: at the crate's root, one

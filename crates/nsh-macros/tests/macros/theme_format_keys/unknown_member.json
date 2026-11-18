@@ -1,0 +1,8 @@
+{
+  "$schema": "https://example.com/theme.schema.json",
+  "extensions": { "com.example.tool": { "exported": true } },
+  "tokens": {
+    "surface-app": { "kind": "color", "value": "#fcfcfc", "path": "surface.app", "$extensions": { "figma": "S:1" } },
+    "space-3": { "kind": "number", "value": 12, "comment": "an unknown member of an entry" }
+  }
+}
