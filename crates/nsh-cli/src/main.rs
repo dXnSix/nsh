@@ -31,6 +31,8 @@ mod test_host;
 mod test_ios;
 mod test_tizen;
 mod test_web;
+#[cfg(test)]
+mod theme_format;
 mod tizen;
 mod tizen_web;
 mod ui;

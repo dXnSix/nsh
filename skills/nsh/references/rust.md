@@ -58,7 +58,8 @@ version of the `nsh` you run; a mismatch is a build problem, not something to wo
 |---|---|---|
 | `rust` | `"."`, `"native"`, or a list of crate paths | Where the crate is. With a list, each crate has its own `#[native_module]` and package name |
 | `root` | `"App"`, `"shell::Gallery"` | The component's path in the crate (in the first crate of a list). Without it the app is TSX |
-| `theme` | `"theme.json"` or the theme inline | shadcn `cssVars`. A bad path, bad JSON or another format fails the build |
+| `theme` | `"theme.json"` or the document inline | The app's theme document (`docs/dev/theme-format.md`), passed to `Root::theme`. A bad path fails the build; a document of the old format, or no JSON object, is warned of and not passed |
+| `themeOverrides` | `"overrides.json"` or the patch inline | `{ "values": {…}, "roles": {…} }` over the active document, passed to `Root::theme_overrides`. Its diagnostics are warnings naming the file and the entry |
 | `appearance` | `"system"` | As in any app |
 
 `examples/gallery-rs/nsh.json` is a real one, with `"rust": "native"` and `"root": "Gallery"`. Every key is in

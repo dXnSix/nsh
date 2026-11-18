@@ -174,15 +174,14 @@ export function A(p: { on: boolean }) {
         );
         let names: Vec<&str> = found.iter().map(|u| u.class.as_str()).collect();
         assert_eq!(names, ["bg-chart-up", "rounded-(--radius-card)"]);
-        // The app's own theme (`nsh.json` `"theme"`) adds its keys.
-        let (document, _) = nsh_core::element::theme_convert::convert(
-            r##"{ "cssVars": { "theme": { "radius-card": "10px" }, "light": { "chart-up": "#00ff00" } } }"##,
-            Some(nsh_core::element::theme_convert::OLD_DEFAULT),
-        );
-        let (tokens, _) = nsh_core::element::Tokens::resolve(
-            std::sync::Arc::new(nsh_theme::read(&document).document),
-            Default::default(),
-            Vec::new(),
+        // The app's own theme document (`nsh.json` `"theme"`) names its own.
+        let tokens = crate::types::tests_support::tokens_of(
+            r##"{ "tokens": {
+                "primary": { "kind": "color", "value": "#111111" },
+                "muted-foreground": { "kind": "color", "value": "#222222" },
+                "radius-card": { "kind": "number", "value": 10 },
+                "chart-up": { "kind": "color", "value": "#00ff00" }
+            } }"##,
         );
         assert!(check(source, SourceType::tsx(), &themed(&tokens)).is_empty());
     }

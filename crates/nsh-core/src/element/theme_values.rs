@@ -35,6 +35,64 @@ use crate::{
     style::{BorderStyle, LineHeight},
 };
 
+/// The TypeScript type of a resolved value of `value_type` as TS reads it
+/// (`token()`, `role()`, `tokens.get`): the value's canonical JSON form
+/// (`docs/dev/theme-format.md`; `nsh_theme::Value::to_json`), references
+/// resolved, a compound's members at their default left out. The one
+/// mapping `.nsh/types` (`tokens.d.ts`, `roles.d.ts`) and nsh-js's
+/// declarations type a value type with.
+///
+/// | Value type | TypeScript |
+/// | --- | --- |
+/// | color, font, string | `string` (a color `#rrggbb` or `#rrggbbaa`) |
+/// | number | `number` |
+/// | boolean | `boolean` |
+/// | duration | `` `${number}ms` `` |
+/// | easing | `[number, number, number, number]` or a keyword |
+/// | typography, shadow, gradient, blur, border, transition | an object (a shadow: an array of layers) of their members |
+pub fn token_ts_type(value_type: nsh_theme::ValueType) -> &'static str {
+    use nsh_theme::ValueType as T;
+
+    macro_rules! duration {
+        () => {
+            "`${number}ms`"
+        };
+    }
+    macro_rules! easing {
+        () => {
+            "[number, number, number, number] | \"linear\" | \"ease\" | \"ease-in\" | \"ease-out\" | \"ease-in-out\""
+        };
+    }
+    match value_type {
+        T::Number => "number",
+        T::Boolean => "boolean",
+        T::Duration => duration!(),
+        T::Easing => easing!(),
+        T::Typography => {
+            "{ fontFamily?: string; fontSize: number; fontWeight?: number; lineHeight?: number | `${number}px`; letterSpacing?: number }"
+        }
+        T::Shadow => {
+            "{ color: string; x?: number; y?: number; blur?: number; spread?: number; inset?: boolean }[]"
+        }
+        T::Gradient => {
+            "{ type: \"linear\" | \"radial\" | \"conic\"; angle?: number; stops: { color: string; position?: number }[] }"
+        }
+        T::Blur => "{ type: \"layer\" | \"background\"; radius: number }",
+        T::Border => "{ color: string; width: number; style: \"solid\" | \"dashed\" | \"dotted\" }",
+        T::Transition => concat!(
+            "{ duration: ",
+            duration!(),
+            "; delay?: ",
+            duration!(),
+            "; easing?: ",
+            easing!(),
+            " }"
+        ),
+        // Color, font, string, and a type a newer format adds.
+        _ => "string",
+    }
+}
+
 /// A text style as one token (`typography`): its font size with its font
 /// family, line height, letter spacing and weight, which
 /// [`super::Styled::typography`] sets together.

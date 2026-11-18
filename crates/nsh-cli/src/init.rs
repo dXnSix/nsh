@@ -355,26 +355,12 @@ pub(crate) fn write_types(dir: &Path) {
     ));
     let mut definitions = nsh_js::type_definitions(&sets);
     definitions.extend(nsh_bundler::type_definitions());
-    // The theme's errors are the build's to report: its names are the
-    // default's meanwhile.
-    let tokens = nsh_bundler::theme_tokens_of(dir, &sets)
-        .unwrap_or_else(|_| nsh_base::Theme::default().into_tokens());
-    definitions.push((
-        "nsh/tokens.d.ts".to_owned(),
-        nsh_bundler::tokens_declaration(&tokens),
-    ));
-    definitions.push((
-        "nsh/modifiers.d.ts".to_owned(),
-        nsh_bundler::modifiers_declaration(&tokens),
-    ));
-    // The roles the sets list, for `role()`; a role two sets list with two
-    // kinds is the build's to report, and names none meanwhile.
-    definitions.push((
-        "nsh/roles.d.ts".to_owned(),
-        nsh_bundler::roles_declaration(&sets)
-            .or_else(|_| nsh_bundler::roles_declaration(&[]))
-            .unwrap_or_default(),
-    ));
+    // The theme's types, and what its members say (B10).
+    let (theme, warnings) = theme_types(dir, &sets);
+    for warning in warnings {
+        ui::warn(warning);
+    }
+    definitions.extend(theme);
     remove_stale(&types, &types, &definitions);
     let files = definitions
         .iter()
@@ -395,6 +381,53 @@ pub(crate) fn write_types(dir: &Path) {
     }
     migrate_tsconfig(dir);
     warn_undocumented(&crate::ui_sets());
+}
+
+/// `.nsh/types`' theme files for the app in `dir` whose UI sets are `sets`:
+/// `tokens.d.ts` and `modifiers.d.ts` of its active theme document (the
+/// app's `nsh.json` `"theme"`, else the sets', under `"themeOverrides"`;
+/// `nsh_bundler::app_theme`), and `roles.d.ts` of the roles the sets
+/// register. With the warnings of the theme's members, each naming its file
+/// and JSON pointer, and of a theme the build cannot read, whose types are
+/// then the sets' document's: printed, never a silent fallback.
+pub(crate) fn theme_types(
+    dir: &Path,
+    sets: &[nsh_core::element::description::SetDescription],
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut warnings = Vec::new();
+    let tokens = match nsh_bundler::app_theme(dir, sets) {
+        Ok(theme) => {
+            warnings.extend(theme.warnings);
+            theme.tokens
+        }
+        Err(error) => {
+            warnings.push(format!(
+                "{}; .nsh/types names the UI sets' theme meanwhile",
+                error.plain
+            ));
+            nsh_bundler::read_app_theme(None, None, sets).tokens
+        }
+    };
+    // A role two sets list with two value types is the build's to report
+    // too; the core's roles alone meanwhile.
+    let roles = nsh_bundler::roles_declaration(sets).unwrap_or_else(|error| {
+        warnings.push(format!(
+            "the app's UI sets: {error}; .nsh/types names the core's roles alone meanwhile"
+        ));
+        nsh_bundler::roles_declaration(&[]).unwrap_or_default()
+    });
+    let files = vec![
+        (
+            "nsh/tokens.d.ts".to_owned(),
+            nsh_bundler::tokens_declaration(&tokens),
+        ),
+        (
+            "nsh/modifiers.d.ts".to_owned(),
+            nsh_bundler::modifiers_declaration(&tokens),
+        ),
+        ("nsh/roles.d.ts".to_owned(), roles),
+    ];
+    (files, warnings)
 }
 
 /// Warns of the exports of `sets` (an app's crates') without a doc comment:

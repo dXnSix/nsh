@@ -52,16 +52,21 @@ pub(crate) struct NshPlugin {
     pub(crate) split: bool,
 }
 
-/// The `"tailwind"`, `"theme"`, `"appearance"` and `"statusBar"` of the
-/// app's `nsh.json`.
+/// The `"tailwind"`, `"theme"`, `"themeOverrides"`, `"appearance"` and
+/// `"statusBar"` of the app's `nsh.json`.
 #[derive(Debug, Default)]
 pub(crate) struct ThemeSetup {
     /// The Tailwind theme as JSON, for the runtime (`None`: the default).
     pub(crate) json: Option<String>,
     /// Parsed, to check classes at build time.
     pub(crate) theme: nsh_core::tailwind::Theme,
-    /// The theme of the Rust components (a gpui-kit theme file), checked.
+    /// The app's theme for the runtime (`setup.ui`): `{ "document": …,
+    /// "overrides": … }`, its theme document and its override patch as
+    /// written, each `null` when it ships none (`bundle::AppTheme`).
     pub(crate) ui: Option<String>,
+    /// The diagnostics of the app's theme and overrides, which the build
+    /// warns of.
+    pub(crate) theme_warnings: Vec<String>,
     /// `"appearance"`: `"light"` or `"dark"` (`None`: the system's).
     pub(crate) appearance: Option<&'static str>,
     /// `"statusBar"`, checked, as JSON: the status bar's default.

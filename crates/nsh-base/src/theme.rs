@@ -542,17 +542,15 @@ mod listed_roles {
             .iter()
             .find(|r| r.name == "popover")
             .unwrap();
-        assert_eq!(popover.kind, "color");
-        assert!(!popover.doc.contains("Name `"), "{}", popover.doc);
+        assert_eq!(popover.value_type, ValueType::Color);
+        let doc = popover.doc.as_deref().unwrap_or_default();
+        assert!(!doc.contains("Name `"), "{doc}");
         let warning = described
             .roles
             .iter()
             .find(|r| r.name == "warning")
             .unwrap();
-        assert!(
-            warning.doc.starts_with("What to watch out for"),
-            "{}",
-            warning.doc
-        );
+        let doc = warning.doc.as_deref().unwrap_or_default();
+        assert!(doc.starts_with("What to watch out for"), "{doc}");
     }
 }

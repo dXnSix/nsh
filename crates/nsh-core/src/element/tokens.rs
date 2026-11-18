@@ -563,6 +563,32 @@ impl Tokens {
         (tokens, resolved.diagnostics)
     }
 
+    /// [`Tokens::resolve`] with the roles `declarations` declare besides the
+    /// core's (a toolchain's view of the sets a host serves, described):
+    /// their mappings resolve as a core serving those sets resolves them.
+    /// The diagnostics are those of resolving, then those of checking the
+    /// layers' roles (`nsh_theme::check_roles`: `role-type`, `role-unknown`,
+    /// `role-unmapped`), returned, not logged. A role two declarations give
+    /// different value types is logged (`role-conflict`), the first kept.
+    pub fn resolve_with_roles(
+        document: Arc<ThemeDocument>,
+        selection: Selection,
+        patches: Vec<Arc<Patch>>,
+        declarations: &[RoleSpec],
+    ) -> (Tokens, Vec<nsh_theme::Diagnostic>) {
+        let layers = Arc::new(ThemeLayers {
+            document,
+            selection,
+            patches,
+            roles: Arc::new(RoleTable::of(declarations, &[])),
+        });
+        let (tokens, resolved) = Tokens::resolve_layers(layers);
+        let roles = tokens.check_roles(&resolved);
+        let mut diagnostics = resolved.diagnostics;
+        diagnostics.extend(roles);
+        (tokens, diagnostics)
+    }
+
     /// The tokens of `layers`, and what resolving them gave.
     pub(crate) fn resolve_layers(layers: Arc<ThemeLayers>) -> (Tokens, Resolved) {
         let resolved =

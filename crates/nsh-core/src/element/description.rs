@@ -16,11 +16,11 @@
 
 use serde_json::{Map, Value, json};
 
-use super::Registry;
+use super::{Registry, RoleDeclaration};
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 7;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -110,11 +110,13 @@ pub struct SetDescription {
     /// The exports TS sees without a doc comment ([`Registry::undocumented`]),
     /// which the toolchain warns of.
     pub undocumented: Vec<String>,
-    /// The theme documents it registers ([`Registry::theme_document`]),
-    /// as written.
-    pub theme_documents: Vec<String>,
-    /// The roles its components draw with ([`Registry::roles`]).
-    pub roles: Vec<RoleDescription>,
+    /// The theme documents it registers, as written: its own
+    /// ([`Registry::theme_document`]), then its fallbacks
+    /// ([`Registry::fallback_theme_document`]), marked.
+    pub theme_documents: Vec<ThemeDocumentDescription>,
+    /// The roles its components draw with ([`Registry::roles`]): their
+    /// declarations, with value type, doc and `required`.
+    pub roles: Vec<RoleDeclaration>,
     /// The class extensions it registers ([`Registry::class_extension`]):
     /// the methods `.nsh/types` adds to its classes' other declarations.
     pub class_extensions: Vec<ClassExtensionDescription>,
@@ -170,42 +172,43 @@ impl ClassExtensionDescription {
     }
 }
 
-/// A role a set lists ([`Registry::roles`]), as data: what the toolchain
-/// types TS's `role()` from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleDescription {
-    /// Its name (`popover`).
-    pub name: String,
-    /// The value type of what it reads ([`super::ValueType::name`]).
-    pub kind: String,
-    /// Its doc ([`super::RoleSpec`]'s, empty without one).
-    pub doc: String,
+/// A theme document a set registers, as data: its text as written, and
+/// whether it is a fallback ([`Registry::fallback_theme_document`]), active
+/// only when no set registers a document of its own.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThemeDocumentDescription {
+    /// The document as written.
+    pub json: String,
+    /// Whether it is a fallback document.
+    pub fallback: bool,
 }
 
-impl RoleDescription {
-    /// The description of `spec`.
-    fn of(spec: &super::RoleSpec) -> Self {
-        RoleDescription {
-            name: spec.name.clone(),
-            kind: spec.value_type.name().to_owned(),
-            doc: spec.doc.clone().unwrap_or_default(),
+impl ThemeDocumentDescription {
+    /// The document `json`, a fallback or not.
+    pub fn new(json: impl Into<String>, fallback: bool) -> Self {
+        Self {
+            json: json.into(),
+            fallback,
         }
     }
 }
 
 /// The roles `sets` list and the core's own ([`super::role::all`]), each
-/// once, by name: every role TS's `role()` may name. `Err` names a role
-/// two sets list reading different kinds.
-pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDescription>, String> {
+/// once, by name, as declared: every role TS's `role()` may name. `Err`
+/// names a role two sets list reading different value types.
+pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDeclaration>, String> {
     let core = super::role::all();
-    let own = core.iter().map(RoleDescription::of);
-    let mut out: Vec<RoleDescription> = Vec::new();
-    for role in own.chain(sets.iter().flat_map(|s| s.roles.iter().cloned())) {
+    let mut out: Vec<RoleDeclaration> = Vec::new();
+    for role in core
+        .into_iter()
+        .chain(sets.iter().flat_map(|s| s.roles.iter().cloned()))
+    {
         match out.iter().find(|r| r.name == role.name) {
-            Some(listed) if listed.kind != role.kind => {
+            Some(listed) if listed.value_type != role.value_type => {
                 return Err(format!(
                     "the role `{}` is listed reading {} and {}",
-                    role.name, listed.kind, role.kind
+                    role.name, listed.value_type, role.value_type
                 ));
             }
             Some(_) => {}
@@ -218,17 +221,21 @@ pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDescription>, String> {
 
 /// The document `sets` make active when the app has none of its own, as
 /// the core takes it ([`Registry::theme_document_of_sets`]): the first a set
-/// registers, read, with its diagnostics and a `document-unused` warning of
-/// each other set's. Documents are never merged. How the toolchain reads
-/// the theme the core will draw with.
+/// registers, else the first fallback, read, with its diagnostics and a
+/// `document-unused` warning of each other set's own. Documents are never
+/// merged. How the toolchain reads the theme the core will draw with.
 pub fn theme_document(
     sets: &[SetDescription],
 ) -> (Option<nsh_theme::ThemeDocument>, Vec<nsh_theme::Diagnostic>) {
-    let mut documents = sets.iter().flat_map(|set| {
-        set.theme_documents
-            .iter()
-            .map(move |text| (set.specifier.as_str(), text))
-    });
+    let of = |fallback: bool| {
+        sets.iter().flat_map(move |set| {
+            set.theme_documents
+                .iter()
+                .filter(move |d| d.fallback == fallback)
+                .map(move |d| (set.specifier.as_str(), d.json.as_str()))
+        })
+    };
+    let mut documents = of(false);
     let mut said = Vec::new();
     let mut active = None;
     for (owner, text) in documents.by_ref() {
@@ -238,6 +245,17 @@ pub fn theme_document(
         if !refused {
             active = Some((owner, read.document));
             break;
+        }
+    }
+    if active.is_none() {
+        for (owner, text) in of(true) {
+            let read = nsh_theme::read(text);
+            let refused = super::theme::refused(&read.diagnostics);
+            said.extend(read.diagnostics);
+            if !refused {
+                active = Some((owner, read.document));
+                break;
+            }
         }
     }
     for (owner, _) in documents {
@@ -312,13 +330,15 @@ impl SetDescription {
             theme_documents: registry
                 .theme_documents()
                 .into_iter()
-                .map(|(_, json)| json.to_owned())
+                .map(|(_, json)| ThemeDocumentDescription::new(json, false))
+                .chain(
+                    registry
+                        .fallback_theme_documents()
+                        .into_iter()
+                        .map(|(_, json)| ThemeDocumentDescription::new(json, true)),
+                )
                 .collect(),
-            roles: registry
-                .role_specs()
-                .iter()
-                .map(RoleDescription::of)
-                .collect(),
+            roles: registry.role_specs().to_vec(),
             class_extensions: ClassExtensionDescription::of(registry),
             class_types: registry
                 .class_specs()
@@ -357,11 +377,15 @@ impl SetDescription {
                 "source": a.source,
             })).collect::<Vec<_>>(),
             "undocumented": self.undocumented,
-            "theme_documents": self.theme_documents,
+            "theme_documents": self.theme_documents.iter().map(|d| json!({
+                "json": d.json,
+                "fallback": d.fallback,
+            })).collect::<Vec<_>>(),
             "roles": self.roles.iter().map(|r| json!({
                 "name": r.name,
-                "kind": r.kind,
+                "kind": r.value_type.name(),
                 "doc": r.doc,
+                "required": r.required,
             })).collect::<Vec<_>>(),
             "classExtensions": self.class_extensions.iter().map(|e| json!({
                 "class": e.class,
@@ -424,7 +448,18 @@ impl SetDescription {
             native_values: strings(set, "native_values", &at)?,
             assets,
             undocumented: strings(set, "undocumented", &at)?,
-            theme_documents: strings(set, "theme_documents", &at)?,
+            theme_documents: array(set, "theme_documents", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    let at = format!("{at}.theme_documents[{i}]");
+                    let d = object(d, &at)?;
+                    Ok(ThemeDocumentDescription::new(
+                        string(d, "json", &at)?,
+                        boolean(d, "fallback", &at)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
             roles: array(set, "roles", &at)?
                 .iter()
                 .enumerate()
@@ -432,13 +467,18 @@ impl SetDescription {
                     let at = format!("{at}.roles[{i}]");
                     let r = object(r, &at)?;
                     let kind = string(r, "kind", &at)?;
-                    if super::ValueType::from_name(&kind).is_none() {
-                        return Err(format!("{at}.kind: unknown kind {kind:?}"));
-                    }
-                    Ok(RoleDescription {
-                        name: string(r, "name", &at)?,
-                        kind,
-                        doc: string(r, "doc", &at)?,
+                    let value_type = super::ValueType::from_name(&kind)
+                        .ok_or_else(|| format!("{at}.kind: unknown kind {kind:?}"))?;
+                    let doc = match r.get("doc") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(doc)) => Some(doc.clone()),
+                        Some(_) => return Err(format!("{at}.doc: not a string")),
+                    };
+                    let declaration = RoleDeclaration::new(string(r, "name", &at)?, value_type)
+                        .with_required(boolean(r, "required", &at)?);
+                    Ok(match doc {
+                        Some(doc) => declaration.with_doc(doc),
+                        None => declaration,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?,
@@ -570,6 +610,13 @@ fn string(object: &Map<String, Value>, key: &str, at: &str) -> Result<String, St
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| format!("{at}: no string {key}"))
+}
+
+fn boolean(object: &Map<String, Value>, key: &str, at: &str) -> Result<bool, String> {
+    object
+        .get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("{at}: no boolean {key}"))
 }
 
 fn array<'v>(object: &'v Map<String, Value>, key: &str, at: &str) -> Result<&'v [Value], String> {
@@ -723,7 +770,10 @@ mod theme_documents {
         assert!(text.contains(&format), "{text}");
         let read = Description::from_json(&text).unwrap();
         assert_eq!(read, doc);
-        assert_eq!(read.sets[0].theme_documents, [DS]);
+        assert_eq!(
+            read.sets[0].theme_documents,
+            [ThemeDocumentDescription::new(DS, false)]
+        );
         // The format before is refused, as every other.
         let before = format!("\"format\":{}", FORMAT - 1);
         assert!(Description::from_json(&text.replace(&format, &before)).is_err());
@@ -777,17 +827,11 @@ mod set_roles {
         assert_eq!(
             described.roles,
             [
-                RoleDescription {
-                    name: "banner".into(),
-                    kind: "color".into(),
-                    // The doc's lines joined, without the line naming it.
-                    doc: "A banner's surface, whatever the app calls it.".into(),
-                },
-                RoleDescription {
-                    name: "chip-radius".into(),
-                    kind: "number".into(),
-                    doc: "How round a chip is.".into(),
-                },
+                // The doc's lines joined, without the line naming it.
+                RoleDeclaration::new("banner", crate::element::ValueType::Color)
+                    .with_doc("A banner's surface, whatever the app calls it."),
+                RoleDeclaration::new("chip-radius", crate::element::ValueType::Number)
+                    .with_doc("How round a chip is."),
             ]
         );
         // The constants are what they were: a role is its name.
@@ -841,13 +885,16 @@ mod set_roles {
             ]
         );
         let of = |name: &str| all.iter().find(|r| r.name == name).unwrap();
-        assert_eq!(of("font-sans").kind, "font");
+        assert_eq!(of("font-sans").value_type, crate::element::ValueType::Font);
         // The first to list a role documents it: the core, then the sets
         // in order.
-        assert_eq!(of("popover").doc, "Popovers, menus, tooltips, alerts.");
         assert_eq!(
-            of("banner").doc,
-            "A banner's surface, whatever the app calls it."
+            of("popover").doc.as_deref(),
+            Some("Popovers, menus, tooltips, alerts.")
+        );
+        assert_eq!(
+            of("banner").doc.as_deref(),
+            Some("A banner's surface, whatever the app calls it.")
         );
     }
 

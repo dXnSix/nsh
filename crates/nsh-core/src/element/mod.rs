@@ -80,6 +80,8 @@ pub(crate) mod task;
 pub mod theme;
 pub mod theme_convert;
 #[cfg(test)]
+mod theme_format_describe;
+#[cfg(test)]
 mod theme_format_layers;
 #[cfg(test)]
 mod theme_format_roles;
@@ -227,7 +229,9 @@ pub use self::{
         ModifierContext, ScopeModifiers, ThemeScope, ThemeScopeElement, ThemeScopeProps,
         theme_scope,
     },
-    theme_values::{Blur, BlurKind, Border, PatchValues, TransitionToken, Typography},
+    theme_values::{
+        Blur, BlurKind, Border, PatchValues, TransitionToken, Typography, token_ts_type,
+    },
     token_info::TokenInfo,
     token_keys::{TokenError, TokenKey, TokenValue},
     tokens::{

@@ -136,7 +136,8 @@ mount(App);
 | `icon` | string \| object | `package`、`run` | 一张正方形 PNG，最好是 1024×1024，路径相对于 `nsh.json`；也可按平台分别提供（`{ "macos": "…", "windows": "…" }`，[打包](./packaging.md#图标)）。 |
 | `tailwind` | object | 每次构建 | 扩展 `class` 字符串所依据的 Tailwind 主题（[Tailwind](./tailwind.md)）。 |
 | `locales` | string[] | 每次构建 | 应用除英语外格式化数字和日期所用的语言（`["de", "zh-CN"]`），bundle 会携带它们的数据。默认：`locales/` 中翻译所包含的语言（[I18n](./i18n.md#数字和日期)）。 |
-| `theme` | string 或 object | 每次构建 | 应用的设计令牌（shadcn/ui 的 `cssVars`，叠加在默认的 `neutral` 主题之上），供 token 类名、`token()` 和 Rust 组件绘制时使用：相对于 `nsh.json` 的主题文件路径，或直接内联的主题（[用 Rust 开发](./rust.md#主题)、[主题 token](./tailwind.md#主题-token)）。 |
+| `theme` | string 或 object | 每次构建 | 应用的主题文档：它的 token、改变 token 的 modifier（包括浅色和深色）以及组件读取的角色（映射到它的 token 上）。token 类名、`token()`、`role()` 和 Rust 组件都用它绘制。它整体替换 UI 集合的主题和默认主题。值为相对于 `nsh.json` 的路径，或直接内联的文档（[用 Rust 开发](./rust.md#主题)、[主题 token](./tailwind.md#主题-token)）。旧格式的主题，或不是 JSON 对象的值，不会被打包：构建会给出警告，应用改用 UI 集合的主题绘制。 |
+| `themeOverrides` | string 或 object | 每次构建 | 叠加在当前主题文档（应用的 `theme`，否则为 UI 集合的）之上的值和角色映射：`{ "values": { "<token>": <值> }, "roles": { "<角色>": "<token>" } }`。值为相对于 `nsh.json` 的路径，或直接内联。它不会新增 token；`updateTheme()` 和 Rust 的 `update_tokens` 叠加在它之后。 |
 | `statusBar` | object | 每次构建、`package` | 所有页面和对话框之下的状态栏默认值（iOS 和 Android）：`{ "foreground": "auto" \| "light" \| "dark", "hidden": boolean }`，两个字段都可省略。打包的 iOS 应用从启动屏起就使用它（[状态栏](../modules/nsh-base.md#status-bar)）。 |
 | `capabilities` | object | 每次构建 | 应用可以访问 VM 之外的哪些资源：网络主机、网页视图主机、状态栏、应用自己的窗口（[沙箱与权限](./sandbox-and-capabilities.md)）。 |
 | `window` | object | 每次构建、`package` | 桌面平台上主窗口的启动设置，从第一帧起生效：`title`、`defaultSize`、`minSize`、`titleBar`、`backdrop` 以及窗口的其他选项和属性，写法与 `nsh/desktop` 的 `WindowOptions` 相同（`{ "defaultSize": { "width": 1100, "height": 720 }, "titleBar": { "style": "hidden" } }`），以及 `defaultVisible`（为 `false` 时启动时隐藏，像托盘应用那样）（[主窗口](../modules/nsh-desktop.md#主窗口)）。 |
@@ -199,8 +200,9 @@ NSH 不需要 `node_modules`。取而代之的是，每个构建应用的命令�
 | `jsx-runtime.d.ts` | TypeScript 通过 `jsxImportSource` 解析的 JSX 运行时（`JSX` 命名空间） |
 | `globals.d.ts` | `If` 和 `Each`；`console`、定时器、`requestAnimationFrame`、`fetch` 及其他[全局 API](../modules/globals.md) |
 | `assets.d.ts` | 导入图片或字体得到的值 |
-| `tokens.d.ts` | `Tokens`：应用的设计令牌，来自它的 `"theme"`，为 [`token()`](../modules/nsh.md#token) 提供类型 |
-| `roles.d.ts` | `Roles`：UI 集合绘制时使用的主题角色，为 [`role()`](../modules/nsh.md#role) 提供类型 |
+| `tokens.d.ts` | `Tokens`：应用当前主题文档（它的 `"theme"`，否则为 UI 集合的）中的 token，各带类型和说明，为 [`token()`](../modules/nsh.md#token) 提供类型 |
+| `modifiers.d.ts` | `ThemeModifiers`：当前主题文档的 modifier 及其各自的 context |
+| `roles.d.ts` | `Roles`：UI 集合绘制时使用的主题角色，各带类型并注明主题是否必须映射它，为 [`role()`](../modules/nsh.md#role) 提供类型 |
 | `mobile.d.ts`、`desktop.d.ts` | 每个模块一个文件（`nsh/mobile`、`nsh/desktop`） |
 | `base.d.ts` | `nsh/base` |
 

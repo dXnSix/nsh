@@ -121,3 +121,5 @@ mod tests {
 
 #[cfg(all(test, feature = "bundle"))]
 mod standard_tests;
+#[cfg(all(test, feature = "bundle"))]
+mod theme_format_tests;

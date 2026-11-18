@@ -2,7 +2,12 @@
 //! a duplicate member is reported where it is written (the first is kept).
 //!
 //! It is built by a serde visitor over `serde_json::Deserializer`, so the
-//! workspace's `serde_json` features stay as they are. serde_json's own
+//! workspace's `serde_json` features stay as they are. One of them changes
+//! what the visitor sees: with `arbitrary_precision` (which a build enables
+//! when any crate in it does, as rolldown does for the bundler and the
+//! `nsh` CLI), a number that is no 64-bit integer (`0.5`, `1e3`) reaches
+//! it as a map of one member, [`NUMBER_TOKEN`], holding the number's text;
+//! the visitor reads that as the number. serde_json's own
 //! recursion limit (128 levels) refuses deeper input with an error, which
 //! the reader turns into `not-a-document`, so nothing here recurses deeper
 //! than that.
@@ -12,6 +17,11 @@ use std::{cell::RefCell, collections::HashSet, fmt};
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 
 use crate::diagnostic::{Diagnostic, code, pointer};
+
+/// The one member serde_json's `arbitrary_precision` hands a visitor a
+/// number as (its private `serde_json::private::Number`), its value the
+/// number's text.
+const NUMBER_TOKEN: &str = "$serde_json::private::Number";
 
 /// A JSON value with ordered objects.
 #[derive(Clone, Debug, PartialEq)]
@@ -179,6 +189,14 @@ impl<'de> Visitor<'de> for Seed<'_> {
         let mut seen = HashSet::new();
         let top = self.path.is_empty();
         while let Some(key) = map.next_key::<String>()? {
+            // A number under `arbitrary_precision`: its text, alone.
+            if members.is_empty() && seen.is_empty() && key == NUMBER_TOKEN {
+                let text: String = map.next_value()?;
+                return text
+                    .parse::<f64>()
+                    .map(Json::Number)
+                    .map_err(|_| de::Error::custom(format!("`{text}` is not a number")));
+            }
             if !seen.insert(key.clone()) {
                 // The first is kept: the second is checked as JSON only.
                 map.next_value::<IgnoredAny>()?;
