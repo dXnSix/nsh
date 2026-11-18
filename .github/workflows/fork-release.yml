@@ -262,7 +262,7 @@ jobs:
           CARGO_PROFILE_WEB_CODEGEN_UNITS: "1"
           NSH_DIST_NO_ANDROID: ${{ !matrix.shared && '1' || '' }}
           NSH_DIST_NO_WEB: ${{ !matrix.shared && '1' || '' }}
-        run: cargo xtask dist -v
+        run: cargo --locked xtask dist -v
 
       - name: Check the iOS runtime build versions
         if: matrix.name == 'macos-arm64'

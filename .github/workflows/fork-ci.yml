@@ -278,7 +278,7 @@ jobs:
           lockfiles: "**/Cargo.lock"
       - name: Clippy
         working-directory: crates/gpui
-        run: cargo clippy --all-targets --features nsh-platform-gpui/dev -- -D warnings
+        run: cargo clippy --locked --all-targets --features nsh-platform-gpui/dev -- -D warnings
       - name: Check without optional features
         working-directory: crates/gpui
         run: cargo clippy -p nsh-platform-gpui --no-default-features --features js -- -D warnings
