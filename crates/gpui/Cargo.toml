@@ -52,8 +52,8 @@ nsh-platform-gpui = { version = "0.6.0", path = "nsh-platform-gpui", default-fea
 # `rev` and takes it from there, so dXn.GpuiTizen is published before an NSH
 # release with a crate that depends on it. TV builds take gpui-fast and wgpu
 # from their forks (`[patch.crates-io]` below).
-dxn_gpui_tizen = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "52edd69d05f36ceb83a1b80eefd6c265e4d2099e" }
-dxn_gpui_tizen_sys = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "52edd69d05f36ceb83a1b80eefd6c265e4d2099e" }
+dxn_gpui_tizen = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "8de11018db4896c9fed2e8d737d64c170fbf43cb" }
+dxn_gpui_tizen_sys = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "8de11018db4896c9fed2e8d737d64c170fbf43cb" }
 # Freeing the C strings the Tizen APIs return.
 libc = "0.2"
 
