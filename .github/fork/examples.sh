@@ -119,8 +119,10 @@ case "$target" in
   # has chosen its item before the test's press on it, which finds no menu.
   # Menus runs all but one test: "off iOS the system's menu card…"
   # (upstream's #1736) opens the gallery as macOS, which `--target ios`
-  # refuses. Device runs all but its size classes (upstream's #2081): it
-  # opens the gallery at 500 × 700, and a simulator keeps its device's size.
+  # refuses; so does controls' "off the phones the system's switch card…"
+  # (upstream's #2284), which its switch filters leave out. Device runs all
+  # but its size classes (upstream's #2081): it opens the gallery at
+  # 500 × 700, and a simulator keeps its device's size.
   ios)
     gallery=(animations error-boundary gestures links list-search
       mention navigation network photos press shaders storage text-view timers)
@@ -132,7 +134,9 @@ case "$target" in
       "menus the placement and alignment" "menus a long menu scrolls"
       "menus a command that takes a while" "menus on iOS the system's menu card"
       "context-menu-press a tap presses"
-      "controls switch" "controls check" "controls a radio picks" "controls choice cards and sized"
+      "controls a switch turns" "controls on a phone the system's switch card"
+      "controls a quick setting is a tile" "controls the gallery's toggle is a switch"
+      "controls check" "controls a radio picks" "controls choice cards and sized"
       "controls tabs show" "controls collapsible" "controls accordion" "controls progress bar"
       "controls uploads" "controls stepped setup" "controls equalizer" "controls cart's quantities"
       "controls a sign-in code" "controls segmented control")
