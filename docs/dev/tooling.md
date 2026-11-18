@@ -309,9 +309,10 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 
 Every platform's `dev` feature turns on `nsh-core`'s `inspect` (release runners never do): dev tools ask the core
 about its nodes with `nsh_core::element::dev_tree()` (every node from the root: kind, parent and children, a Rust
-component's name, `class` as written, `testID`, raw text, frame, page position, flags), `dev_node(id)` (inline
-style declarations, the resolved view and text style, the unrounded box with padding, border and margin, states,
-events, accessibility props, a scroll view's offset and content size, a list's or cell's state) and
+component's name, `class` as written, `testID`, the text of a raw text run or of the only run a text block holds
+without a node, frame, page position, flags), `dev_node(id)` (inline style declarations, the resolved view and
+text style, the unrounded box with padding, border and margin, states, events, accessibility props, a scroll
+view's offset and content size, a list's or cell's state) and
 `dev_pick(point, skip)` (the nodes under a page point, innermost and topmost first, whatever their `pointerEvents`,
 listeners or disabled state: modals above the surface, shown overlays above their root view in the order they were
 shown, clipping counts, hidden views and `skip`'s subtree, its overlays included, are left out). Each returns an
