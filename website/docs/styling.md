@@ -120,7 +120,7 @@ New views carry no style at all until you give them one, so unstyled wrappers co
 
 ## Colors
 
-In Rust, colors are typed values: `rgb(0x0099ff)`, `rgba(0x0099ffcc)`, `hsla(..)`, `white()`, `black()`, and Tailwind's palette as `nsh_core::element::palette` (`BLUE.shade(500)`). Color methods take an `AdaptiveColor`, a light and a dark value: `AdaptiveColor::rgb(0xffffff, 0x0d1117)` switches with the system appearance natively, with no render. Colors from the app's theme (`theme().primary` from `nsh_base`) are adaptive too ([Rust](./rust.md#theme)). A design system's own tokens, declared in a theme document, are read typed through the keys `theme_keys!` makes of it and are adaptive as well ([Theme documents](./rust.md#theme-documents-and-typed-keys)).
+In Rust, colors are typed values: `rgb(0x0099ff)`, `rgba(0x0099ffcc)`, `hsla(..)`, `white()`, `black()`, and Tailwind's palette as `nsh_core::element::palette` (`BLUE.shade(500)`). Color methods take an `AdaptiveColor`, a light and a dark value: `AdaptiveColor::rgb(0xffffff, 0x0d1117)` switches with the system appearance natively, with no render. Colors from the app's theme (`theme().primary` from `nsh_base`) hold one value each and follow the theme instead, read in a binding (`.bg(move || theme().primary)`): its dark values are a context of its `colorMode` modifier, which the app picks with the appearance ([Rust](./rust.md#theme)). A design system's own tokens, declared in a theme document, are read typed through the keys `theme_keys!` makes of it and follow it the same way ([Theme documents](./rust.md#theme-documents-and-typed-keys)).
 
 In TSX, color properties accept CSS color strings:
 

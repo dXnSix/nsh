@@ -86,3 +86,7 @@ objc2-ui-kit.workspace = true
 objc2-authentication-services.workspace = true
 rustc-hash.workspace = true
 libc.workspace = true
+
+# The alert tint tests read theme documents.
+[target.'cfg(target_os = "ios")'.dev-dependencies]
+nsh-theme.workspace = true

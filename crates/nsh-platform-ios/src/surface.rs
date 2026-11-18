@@ -908,8 +908,10 @@ impl RootView {
         let fonts = self.ivars().fonts.borrow().clone();
         let engine = match Engine::start_with(config, CoreTextEngine::default, sink, |control| {
             match theme {
-                Some(HostTheme::Tokens(tokens)) => control.set_tokens(Some(*tokens)),
-                Some(HostTheme::File(json)) => control.set_theme_overrides(json),
+                Some(HostTheme::Patch(patch)) => control.set_tokens(Some(*patch)),
+                Some(HostTheme::File(json)) => {
+                    control.set_theme_overrides(Some(&json));
+                }
                 None => {}
             }
             for font in fonts {
@@ -1183,30 +1185,28 @@ impl Surface {
         self.view.publish_environment();
     }
 
-    /// The embedding app's theme overrides (`nsh_base::theme_overrides`),
-    /// which win over the app's tokens of the same names (`None`: the
-    /// app's own again): sent to the running app at once, and to every app
-    /// started later before its first frame.
-    pub fn set_host_tokens(&self, tokens: Option<nsh_engine::Tokens>) {
+    /// The embedding app's theme overrides, a theme patch whose values and
+    /// role mappings win over the app's (`None`: none, the app's own
+    /// again): the engine's host layer, replaced whole, sent to the running
+    /// app at once and to every app started later before its first frame.
+    pub fn set_host_tokens(&self, patch: Option<nsh_engine::Patch>) {
         *self.view.ivars().host_theme.borrow_mut() =
-            tokens.clone().map(|t| HostTheme::Tokens(Box::new(t)));
+            patch.clone().map(|p| HostTheme::Patch(Box::new(p)));
         if let Some(running) = &*self.view.ivars().running.borrow() {
-            running.engine.control().set_tokens(tokens);
+            running.engine.control().set_tokens(patch);
         }
     }
 
-    /// The embedding app's theme overrides as a theme file, which the
-    /// engine reads with the app's UI set against its defaults (`None`: the
-    /// app's own theme again): sent to the running app at once, and to every
-    /// app started later before its first frame.
+    /// [`Surface::set_host_tokens`] with a theme patch's text, which the
+    /// engine reads (`None`: none, the app's own theme again).
     pub fn set_host_theme(&self, json: Option<String>) {
-        *self.view.ivars().host_theme.borrow_mut() = json.clone().map(HostTheme::File);
         if let Some(running) = &*self.view.ivars().running.borrow() {
-            match json {
-                Some(json) => running.engine.control().set_theme_overrides(json),
-                None => running.engine.control().set_tokens(None),
-            }
+            running
+                .engine
+                .control()
+                .set_theme_overrides(json.as_deref());
         }
+        *self.view.ivars().host_theme.borrow_mut() = json.map(HostTheme::File);
     }
 
     /// Replaces the fonts registered before the app starts. The engine reads
@@ -1390,11 +1390,11 @@ fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
 }
 
 /// The embedding app's theme overrides a surface keeps for the apps it
-/// starts: tokens made already ([`Surface::set_host_tokens`]), or a theme
-/// file the engine reads ([`Surface::set_host_theme`]).
+/// starts: a theme patch ([`Surface::set_host_tokens`]), or a patch's
+/// text the engine reads ([`Surface::set_host_theme`]).
 #[derive(Clone)]
 enum HostTheme {
-    /// Boxed: tokens are large beside a file's text.
-    Tokens(Box<nsh_engine::Tokens>),
+    /// Boxed: a patch is large beside a file's text.
+    Patch(Box<nsh_engine::Patch>),
     File(String),
 }

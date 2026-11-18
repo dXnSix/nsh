@@ -3732,10 +3732,10 @@ covers [nsh/base/plot] PlotAppearScope
 covers [props] PlotAppearScope.id
 covers [props] Plot.appearGeneration
 
-# The app's design tokens: shadcn's `neutral` with the app's theme over it.
+# The app's design tokens: nsh/base's default document with the app's own.
 tap id:case-base-token
-expect token up #138a5aff
-expect token primary #171717ff
+expect token up #138a5a
+expect token primary #171717
 expect token radius-card 14
 style id:up backgroundColor #138a5aff
 style id:primary backgroundColor #17171780
@@ -3743,109 +3743,118 @@ style id:faded color #138a5a80
 covers [nsh] token
 
 # base-role
-# A role without declared tokens: the token of its name, in the appearance
-# shown; none until the theme has one.
+# A role the theme maps onto nothing: the token of its name; none while the
+# theme has no token of that name.
 tap id:case-base-role
-expect role popover #ffffffff
+expect role popover #ffffff
 expect role radius 10
 expect role warning its own
 style id:themed backgroundColor #d97706ff
+# The app's overrides map it onto a token: the role reads that token.
 tap id:warn
-expect role warning #b45309ff
-style id:themed backgroundColor #b45309ff
-# A theme's `roles`: the role reads the token it is mapped onto.
+expect role warning #e7000b
+style id:themed backgroundColor #e7000bff
+# A mapping onto another token, which a class reads as a variable.
 tap id:map
-expect role popover #fafafaff
-style id:classed backgroundColor #fafafaff
+expect role popover #f5f5f5
+style id:classed backgroundColor #f5f5f5ff
+# The mapped tokens at the dark context, picked with the appearance.
 tap id:dark
-expect role warning #fbbf24ff
-expect role popover #262626ff
+expect role warning #ff6467
+expect role popover #262626
 style id:classed backgroundColor #262626ff
-style id:themed backgroundColor #fbbf24ff
-# `resetTheme` takes a role's name: the token of that name goes back to
-# the app's theme, which has none.
+style id:themed backgroundColor #ff6467ff
+# `resetTheme` takes a role's name: its mapping goes, and the theme has no
+# token of that name.
 tap id:unwarn
 expect role warning its own
 style id:themed backgroundColor #d97706ff
 covers [nsh] role
 
 # base-set-theme
-# Another theme while the app runs, in place of nsh.json's and over
-# shadcn's `neutral`; `null` gives nsh.json's back.
+# Another theme document while the app runs, in place of nsh.json's; `null`
+# gives nsh.json's back.
 tap id:case-base-set-theme
-expect theme up #138a5aff
+expect theme up #138a5a
+expect theme primary #171717
 expect theme radius-card 14
 style id:themed backgroundColor #138a5aff
 prop id:page headerStyle backgroundColor=#138a5aff
-# `token()` reads it at once and classes follow. nsh.json's theme is not
-# under it (`radius-card` is gone), the default is (`primary`).
+# `token()` reads it from the next turn on and classes follow. Documents
+# are never merged: nsh.json's other tokens are gone (`radius-card`,
+# `primary`).
 tap id:set
-expect theme result set #2563ebff
-expect theme up #2563ebff
+expect theme result set none
+expect theme up #2563eb
 expect theme radius-card undefined
-expect theme primary #171717ff
+expect theme primary undefined
 style id:themed backgroundColor #2563ebff
 prop id:page headerStyle backgroundColor=#2563ebff
-# Its dark value in the dark appearance.
+# Its dark value at the dark context, picked with the appearance.
 tap id:dark
-expect theme up #93c5fdff
+expect theme up #93c5fd
 style id:themed backgroundColor #93c5fdff
 prop id:page headerStyle backgroundColor=#93c5fdff
-tap id:system
-expect theme up #2563ebff
-# A theme with a value NSH cannot read (no color in the dark appearance):
-# a TypeError, and the theme in force stays.
+tap id:light
+expect theme up #2563eb
+# A theme with a value that does not fit (no color at the dark context):
+# that entry is left out and returned, the rest of the document applies.
 tap id:bad
-expect theme result refused TypeError
-expect theme up #2563ebff
-style id:themed backgroundColor #2563ebff
-# Malformed JSON shapes and colors leave the current theme in force.
+expect theme result bad bad-value /modifiers/colorMode/contexts/dark/up
+expect theme up #16a34a
+style id:themed backgroundColor #16a34aff
+# A theme of the old format is refused, and the theme in force stays.
 tap id:bad-structure
-expect theme result bad-structure refused TypeError
-expect theme up #2563ebff
-style id:themed backgroundColor #2563ebff
+expect theme result bad-structure legacy-format
+expect theme up #16a34a
+style id:themed backgroundColor #16a34aff
+# Bad colors and lengths are left out; the token beside them applies.
 tap id:bad-function
-expect theme result bad-function refused TypeError
-expect theme up #2563ebff
-style id:themed backgroundColor #2563ebff
+expect theme result bad-function bad-value /tokens/down
+expect theme up #16a34a
+style id:themed backgroundColor #16a34aff
 tap id:bad-length
-expect theme result bad-length refused TypeError
-expect theme up #2563ebff
-style id:themed backgroundColor #2563ebff
+expect theme result bad-length bad-value /tokens/down
+expect theme up #16a34a
+style id:themed backgroundColor #16a34aff
 tap id:bad-suffix
-expect theme result bad-suffix refused TypeError
-expect theme up #2563ebff
-style id:themed backgroundColor #2563ebff
+expect theme result bad-suffix bad-value /tokens/down
+expect theme up #16a34a
+style id:themed backgroundColor #16a34aff
 tap id:built
 expect theme result built
-expect theme up #138a5aff
+expect theme up #138a5a
+expect theme primary #171717
 expect theme radius-card 14
 style id:themed backgroundColor #138a5aff
 covers [nsh] setTheme
 
 # base-theme-scope
-# A scope with a theme: its values of the tokens it sets, over the app's.
+# A scope with a theme patch: its values of the tokens it sets, over the
+# app's. The scope inside it picks the dark appearance and the theme's dark
+# context, and starts from its values, which win over that context.
 tap id:case-base-theme-scope
-expect outside up #138a5aff
-expect inside up #7c3aedff radius-card 14
-expect dark up #a78bfaff
+expect outside up #138a5a
+expect inside up #7c3aed radius-card 14
+expect dark up #7c3aed
 style id:outside backgroundColor #138a5aff
 style id:inside backgroundColor #7c3aedff
-style id:dark backgroundColor #a78bfaff
+style id:dark backgroundColor #7c3aedff
 prop id:scoped-page headerStyle backgroundColor=#7c3aedff
-# Another theme: only what the scope holds follows.
+# Another patch: only what the scope holds follows.
 tap id:pink
-expect inside up #db2777ff radius-card 14
-expect dark up #f472b6ff
-expect outside up #138a5aff
+expect inside up #db2777 radius-card 14
+expect dark up #db2777
+expect outside up #138a5a
 style id:inside backgroundColor #db2777ff
-style id:dark backgroundColor #f472b6ff
+style id:dark backgroundColor #db2777ff
 style id:outside backgroundColor #138a5aff
 prop id:scoped-page headerStyle backgroundColor=#db2777ff
-# Without a theme it is drawn with the app's.
+# Without a theme it is drawn with the app's, and the inner scope with the
+# app's dark values.
 tap id:none
-expect inside up #138a5aff radius-card 14
-expect dark up #45d49aff
+expect inside up #138a5a radius-card 14
+expect dark up #45d49a
 style id:inside backgroundColor #138a5aff
 style id:dark backgroundColor #45d49aff
 prop id:scoped-page headerStyle backgroundColor=#138a5aff
@@ -3855,47 +3864,56 @@ covers [nsh] ThemeScope
 # Some of the app's tokens changed while it runs, over nsh.json's theme;
 # `resetTheme` puts them back.
 tap id:case-base-update-theme
-expect update up #138a5aff
+expect update up #138a5a
 expect update radius-card 14
 style id:updated backgroundColor #138a5aff
-# `token()` reads it at once and classes follow; the tokens it does not
-# set stay nsh.json's (`radius-card`) and the default's (`primary`).
+# `token()` reads it from the next turn on and classes follow; the tokens
+# it does not set stay nsh.json's (`radius-card`, `primary`).
 tap id:update
-expect update result update #2563ebff
-expect update up #2563ebff
+expect update result update none
+expect update up #2563eb
 expect update radius-card 14
-expect update primary #171717ff
+expect update primary #171717
 style id:updated backgroundColor #2563ebff
-# Its dark value in the dark appearance.
+# An override wins over the dark context, picked with the appearance; the
+# tokens it leaves alone take the context's values.
 tap id:dark
-expect update up #93c5fdff
-style id:updated backgroundColor #93c5fdff
-tap id:system
-expect update up #2563ebff
+expect update up #2563eb
+expect update primary #e5e5e5
+style id:updated backgroundColor #2563ebff
+tap id:light
+expect update up #2563eb
+expect update primary #171717
 # Two updates in a row both take.
 tap id:two
 expect update result two
-expect update primary #dc2626ff
+expect update primary #dc2626
 expect update radius-card 20
-expect update up #2563ebff
-# An update with a value NSH cannot read (no color in the dark
-# appearance): a TypeError, and no token changes.
+expect update up #2563eb
+# A patch never adds a token: a name the theme lacks is left out and
+# returned, and no token changes.
 tap id:bad
-expect update result refused TypeError
-expect update up #2563ebff
+expect update result bad undeclared-token /values/down
+expect update up #2563eb
 style id:updated backgroundColor #2563ebff
+# A value that does not fit replaces the override and is returned: the
+# token reads the theme's value.
+tap id:unfit
+expect update result unfit bad-value /values/up
+expect update up #138a5a
+style id:updated backgroundColor #138a5aff
 covers [nsh] updateTheme
 # The tokens named go back to nsh.json's; the others stay.
 tap id:reset
 expect update result reset
-expect update up #138a5aff
+expect update up #138a5a
 expect update radius-card 14
-expect update primary #dc2626ff
+expect update primary #dc2626
 style id:updated backgroundColor #138a5aff
 # Without names, every token.
 tap id:all
 expect update result all
-expect update primary #171717ff
+expect update primary #171717
 covers [nsh] resetTheme
 
 # base-named-classes
@@ -3910,7 +3928,8 @@ covers [props] class
 
 # base-dark-numbers
 # A number with a dark value: `token()` and the class naming it follow the
-# appearance; a number given once is the same in both.
+# dark context, picked with the appearance; a number given once is the same
+# in both.
 tap id:case-base-dark-numbers
 tap id:set
 expect numbers result set
@@ -3929,15 +3948,16 @@ covers [nsh] token
 covers [nsh] setColorScheme
 
 # base-shadow-tokens
-# A shadow token: the class naming it and `token()` follow the appearance.
+# A shadow token: the class naming it and `token()` follow the dark
+# context, picked with the appearance.
 tap id:case-base-shadow-tokens
 tap id:set
 expect shadows result set
 tap id:light
-expect shadows raised 0px 2px 4px 0px #0000004d
+expect shadows raised 0 2 4 0 #0000004d
 style id:raised boxShadow 0 2 4 0 #0000004d
 tap id:dark
-expect shadows raised 0px 4px 8px 0px #ffffff33
+expect shadows raised 0 4 8 0 #ffffff33
 style id:raised boxShadow 0 4 8 0 #ffffff33
 tap id:light
 style id:raised boxShadow 0 2 4 0 #0000004d
@@ -3945,15 +3965,16 @@ covers [nsh] token
 covers [props] class
 
 # base-gradient-tokens
-# A gradient token: the class naming it and `token()` follow the appearance.
+# A gradient token: the class naming it and `token()` follow the dark
+# context, picked with the appearance.
 tap id:case-base-gradient-tokens
 tap id:set
 expect gradients result set
 tap id:light
-expect gradients hero linear-gradient(135deg, #7c3aedff, #db2777ff)
+expect gradients hero linear 135 #7c3aed, #db2777
 style id:hero backgroundImage linear-gradient(135deg, #7c3aedff, #db2777ff)
 tap id:dark
-expect gradients hero linear-gradient(135deg, #a78bfaff, #f472b6ff)
+expect gradients hero linear 135 #a78bfa, #f472b6
 style id:hero backgroundImage linear-gradient(135deg, #a78bfaff, #f472b6ff)
 tap id:light
 style id:hero backgroundImage linear-gradient(135deg, #7c3aedff, #db2777ff)

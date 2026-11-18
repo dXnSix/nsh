@@ -154,8 +154,8 @@ final class Native {
             long handle, String url, int status, String[] headers, byte[] body, String[] redirects);
 
     /**
-     * The embedding app's theme overrides (a shadcn/ui theme file, null: the
-     * app's own theme). Returns why the file does not parse, or null.
+     * The embedding app's theme overrides (a theme patch, null: none, the
+     * app's own theme). Returns why the text is no JSON object, or null.
      */
     static native String setThemeOverrides(long handle, String json);
 

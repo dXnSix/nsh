@@ -420,8 +420,8 @@ impl Surface {
         // The app reads the displays as it first renders.
         let displays = crate::window::displays();
         let setup = |control: &EngineControl| {
-            if let Some(json) = theme {
-                control.set_theme_overrides(json);
+            if theme.is_some() {
+                control.set_theme_overrides(theme.as_deref());
             }
             if !displays.is_empty() {
                 control.set_displays(displays);

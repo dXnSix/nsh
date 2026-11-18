@@ -618,6 +618,32 @@ environment); `Os::is_desktop()` stays the desktop backends' OSes (`nsh/desktop`
 desktop backends, the web gives the core no header heights (`NO_NATIVE_HEADER`): a page's `header` slot is all
 there is at its top. The browser's bars are the browser's: the web ignores `Command::StatusBar` (pages' and dialogs' `statusBar`).
 
+### Themes
+
+TS's theme calls read and write the theme format ([theme-format.md](theme-format.md)) with nsh-js's results: the
+module's ops (`src/browser/mod.rs`) call the nsh-core functions `env.rs` calls, and `browser/environment.js` passes
+their shapes through. A write is an op on the root that the core applies with the turn's other ops, resolving the theme
+once; the page resolves nothing, and a read in the same turn gives the values before it.
+
+| Op | Call | What it does |
+| --- | --- | --- |
+| 402, 414 | `token(name)`, `role(name)` | the value in its canonical form, as read (`Tokens::json`, `Tokens::role_json`), of the `ThemeScope` the third argument names, else the surface's; `undefined` for none |
+| 403 | the bundle's setup | `setup.ui` (`{ document, overrides }`, `theme::read_app_theme`) as `Prop::UiAppTheme`; the page reads them at once, `Tokens::with_app_theme` (the core's install of them, which its own install gives again), so a module's top-level read gets the app's theme; its document is the one `setTheme(null)` gives back |
+| 406 | `setTheme(doc \| null)` | `theme::read_document` and `Tokens::check_document`, then `Prop::UiThemeDocument`; returns the diagnostics (`theme::diagnostics_json`). A text that is no document, or an old theme, activates nothing and returns its error. Anything but an object or `null` throws a `TypeError` |
+| 409 | `updateTheme(patch)` | `theme::read_patch` and `Tokens::check_patch` against the document active in this turn, then `Prop::UiThemeUpdate`; returns the diagnostics. Anything but an object throws a `TypeError` |
+| 410 | `resetTheme(names?)` | `Prop::UiThemeReset` |
+| 411–413 | a `ThemeScope`'s tokens | `Tokens::scoped` of its picks and patch over the tokens around it, kept in a slot |
+| 415 | `setModifier(name, context)` | `theme::unknown_pick` against the document active in this turn (a `setTheme` of it counts): a modifier or context it lacks throws a `TypeError` naming it, else `Prop::UiModifier` |
+| 416, 417 | `modifier(name)`, `modifiers()` | the context shown; the modifiers in `resolutionOrder` with `contexts`, `default` and `selected` (JSON) |
+| 418–421 | `tokens.get`, `kind`, `names`, `entries` | `{ kind, value }` (`Tokens::value_json`), the kind, the names, the entries (JSON) |
+
+The tokens the core resolves reach the page through `Host::set_tokens` (`src/browser/engine.rs`), which says what
+changed (`token_changes`: the names whose values changed and the roles mapped onto them, `whole` when roles were mapped
+anew, `shape` when the names, kinds or modifiers did). `environment.js` (`changedTokens`) runs what read a token by
+name, as `env.rs` does: one signal per name read, one for all when most of them changed, one for what lists them.
+`theme-format.test.mjs` holds the module to `theme_format_ts`' calls and results with `NSH_BROWSER_WASM`, a turn ending
+as the engine ends one (`nsh_browser_test_turn`, `src/browser/fixtures.rs`).
+
 ## The protocol
 
 Exports are `nsh_*` functions (`src/lib.rs`); imports are module `nsh` (`src/ffi.rs`). Every export that reaches

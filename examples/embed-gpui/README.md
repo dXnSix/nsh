@@ -3,10 +3,10 @@
 A GPUI Kit app embedding NSH apps (`nsh_platform_gpui::AppView`): a sidebar, an input, buttons and a dialog of GPUI
 Kit around two order tickets in a resizable split, each running `app/` in its own engine. Each pane's GPUI Kit title
 bar names its ticket (the app shows no heading of its own) with the desk's symbol and orders, and closes it. The
-host's theme and light or dark mode reach the surfaces on every change (`src/theme.rs`), Tab moves through the host's
-widgets and the surfaces' fields, GPUI Kit's dialogs and notifications draw above the surfaces, and closing a pane
-drops its view, which stops its engine. "Violet theme" loads `themes/violet.json`, a GPUI Kit theme file, into GPUI Kit's
-theme registry, and the surfaces take it as shadcn/ui's tokens.
+host's theme and light or dark mode reach the surfaces on every change, Tab moves through the host's widgets and the
+surfaces' fields, GPUI Kit's dialogs and notifications draw above the surfaces, and closing a pane drops its view,
+which stops its engine. "Violet theme" loads `themes/violet.json`, a GPUI Kit theme file, into GPUI Kit's theme
+registry, and the surfaces follow it.
 
 ```sh
 cargo run                              # in examples/embed-gpui
@@ -17,6 +17,14 @@ cargo run -p example-embed-gpui        # from the repository's root
 the app with the host and rebuilds it when a file under `app/` changes. Everything the host provides, it connects by
 name when it runs the app.
 
+- **The host's theme.** `src/theme.rs` turns GPUI Kit's current colors (its current mode's, as GPUI Kit resolved
+  them) and radius into a theme patch (`docs/dev/theme-format.md`, section 8) of shadcn/ui's token names, the
+  tokens of `nsh/base`'s default theme the app draws with: `{ "values": { "primary": "#7c3aed", "radius": 6, ... } }`.
+  `AppView::set_theme_overrides` gives it to each surface as the engine's host layer, before the app starts and
+  again whenever GPUI Kit's theme or mode changes (`observe_global::<Theme>`), each patch replacing the last. A
+  patch holds in every context the app picks, light and dark alike, so the host sends the colors of its mode as it
+  changes, along with `AppView::set_appearance`; the surfaces' window background is the patched `background`. A
+  patch never adds a token: GPUI Kit's fonts, which the default theme has no token for, stay the system's.
 - **The host's functions.** `src/trading.rs` is the host's paper-trading desk (sample prices; no order leaves the
   process), registered as the UI set `host/trading` with `set_ui_sets`, next to NSH's `nsh/base`. The app
   declares its type and reaches it with `nativeModule<{ Trading: TradingApi }>("host/trading")`: `Trading.quote`,

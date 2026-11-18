@@ -232,7 +232,7 @@ the props' snake-case names.
 | `headerRight` | `.header_right(..)` | `JSX.Element` | none | iOS and Android: content at the trailing edge of the system header. |
 | `headerTitle` | `.header_title(..)` | `JSX.Element` | none | iOS and Android: content that replaces the title. |
 | `headerStyle` | `.header_style(..)` | `{ backgroundColor?, color?, tintColor? }` | platform | iOS and Android: the system header's colors: its background, the title's (`color`) and the buttons' (`tintColor`). |
-| `headerClass` | `.header_style_with(\|s\| ..)` | `string` | none | The same colors as classes: `bg-*`, `text-*` for the title, `tint-*` for the buttons (in Rust `.bg(..)`, `.text_color(..)`, `.tint_color(..)`, theme colors following the appearance). `headerStyle` wins over them. |
+| `headerClass` | `.header_style_with(\|s\| ..)` | `string` | none | The same colors as classes: `bg-*`, `text-*` for the title, `tint-*` for the buttons (in Rust `.bg(..)`, `.text_color(..)`, `.tint_color(..)`, theme colors following the theme's picked contexts, `colorMode` included). `headerStyle` wins over them. |
 | `popOnBack` | `.pop_on_back(..)` | `boolean` | `true` | The back buttons and the swipe back pop the page. See [Leaving a page](#leaving-a-page). |
 | `popOnSwipe` | `.pop_on_swipe(..)` | `boolean` | `true` | The interactive back gesture pops the page: iOS swipe back, Android predictive back that follows the finger. The back buttons pop either way. |
 | `animation` | `.animation(..)` | `"default" \| "slide" \| "fade" \| "none"` | `"default"` | How the page enters and leaves. |

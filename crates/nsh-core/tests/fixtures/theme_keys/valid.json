@@ -1,0 +1,10 @@
+{
+  "tokens": {
+    "surface-app": { "kind": "color", "value": "#fcfcfc", "path": "surface.app" },
+    "space-3": { "kind": "number", "value": 12, "path": "space.3" }
+  },
+  "modifiers": {
+    "density": { "default": "regular", "contexts": { "regular": {}, "compact": { "space-3": 8 } } }
+  },
+  "resolutionOrder": ["density"]
+}

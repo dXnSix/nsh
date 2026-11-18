@@ -1,0 +1,16 @@
+{
+  "tokens": {
+    "gray-1": { "kind": "color", "value": "#fcfcfc" },
+    "space-3": { "kind": "number", "value": 12, "path": "space.3" },
+    "surface-app": { "kind": "color", "value": "{gray-1}", "path": "surface.app" }
+  },
+  "modifiers": {
+    "colorMode": { "default": "light", "contexts": { "light": {}, "dark": { "gray-1": "#111111" } } },
+    "density": {
+      "default": "regular",
+      "contexts": { "compact": { "space-3": 8 }, "regular": {}, "2x": { "space-3": 24 } }
+    },
+    "high-contrast": { "default": "off", "contexts": { "off": {}, "on": { "gray-1": "#ffffff" } } }
+  },
+  "resolutionOrder": ["colorMode", "density", "high-contrast"]
+}

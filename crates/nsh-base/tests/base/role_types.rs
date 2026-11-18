@@ -8,7 +8,7 @@ use std::time::Duration;
 use nsh_base::{DiffIndicators, DiffLayout, diff_view, text_view};
 use nsh_core::{
     Color, Size,
-    element::{Registry, Root, TokenKey, Tokens},
+    element::{Patch, PatchValues, Registry, Root, TokenKey},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -20,24 +20,31 @@ const GREEN: AdaptiveColor = AdaptiveColor::rgb(0x15803d, 0x4ade80);
 const VIOLET: AdaptiveColor = AdaptiveColor::rgb(0x7c3aed, 0xc4b5fd);
 const TEAL: AdaptiveColor = AdaptiveColor::rgb(0x0f766e, 0x2dd4bf);
 
-/// A design system's document: its caution color is nsh-base's warning,
-/// one green is what succeeded and a diff's added lines, and its keyword
-/// color is the highlighter's.
+/// A design system's document, the active one: its caution color is
+/// nsh-base's warning, one green is what succeeded and a diff's added lines,
+/// and its keyword color is the highlighter's. Its dark values are its
+/// `colorMode` modifier's `dark` context.
 const ACME: &str = r##"{
-    "cssVars": {
-        "light": { "status-caution": "#b45309", "status-positive": "#15803d", "code-keyword": "#7c3aed" },
-        "dark": { "status-caution": "#fbbf24", "status-positive": "#4ade80", "code-keyword": "#c4b5fd" }
-    },
     "tokens": {
-        "status-caution": { "kind": "color" },
-        "status-positive": { "kind": "color" },
-        "code-keyword": { "kind": "color" }
+        "status-caution": { "kind": "color", "value": "#b45309" },
+        "status-positive": { "kind": "color", "value": "#15803d" },
+        "code-keyword": { "kind": "color", "value": "#7c3aed" }
     },
+    "modifiers": {
+        "colorMode": {
+            "default": "light",
+            "contexts": {
+                "light": {},
+                "dark": { "status-caution": "#fbbf24", "status-positive": "#4ade80", "code-keyword": "#c4b5fd" }
+            }
+        }
+    },
+    "resolutionOrder": ["colorMode"],
     "roles": { "warning": "status-caution", "success": "status-positive",
                "diff-added": "status-positive", "syntax-keyword": "code-keyword" }
 }"##;
 
-const POSITIVE: TokenKey<AdaptiveColor> = TokenKey::new("status-positive");
+const POSITIVE: TokenKey<nsh_core::Hsla> = TokenKey::new("status-positive");
 
 fn light(color: AdaptiveColor) -> Color {
     Color::from(color.light)
@@ -129,7 +136,7 @@ fn a_documents_tokens_color_what_their_roles_draw() {
 #[component]
 fn Sets() -> impl IntoElement {
     set_timeout(Duration::from_millis(300), || {
-        update_tokens(Tokens::default().with(POSITIVE, TEAL));
+        update_tokens(Patch::new().key(POSITIVE, TEAL.light));
     });
     content()
 }

@@ -122,12 +122,15 @@ void nsh_app_set_font_scale(NshApp *app, float scale);
 /// `bytes` is not a font, or NULL.
 char *_Nullable nsh_app_register_font(NshApp *app, const uint8_t *_Nullable bytes, size_t len);
 
-/// The embedding app's theme overrides: a theme file of shadcn/ui's
-/// (`{ "cssVars": { "theme": {...}, "light": {...}, "dark": {...} } }`, as
-/// `nsh.json`'s `"theme"`), whose tokens win over the app's of the same
-/// names, light and dark; NULL gives the app its own theme back. Applies at
-/// once and to every app loaded later. Returns why the file does not parse,
-/// or NULL.
+/// The embedding app's theme overrides: a theme patch,
+/// `{ "values": { token: value }, "roles": { role: token } }`
+/// (`docs/dev/theme-format.md`, section 8), the host layer above the app's
+/// theme and its own overrides. Its values and role mappings win in every
+/// context the app picks (light and dark alike); a name the app's theme does
+/// not declare is logged and left out. Each call replaces the whole layer;
+/// NULL clears it, giving the app its own theme back. Applies at once and to
+/// every app loaded later. Returns why the text is no JSON object (nothing
+/// changes), or NULL.
 char *_Nullable nsh_app_set_theme_overrides(NshApp *app, const char *_Nullable json);
 
 /// Development: loads from a `nsh dev` server (`ws://host:port/ws`) and

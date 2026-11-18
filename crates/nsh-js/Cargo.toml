@@ -27,6 +27,7 @@ serde.workspace = true
 nsh-i18n.workspace = true
 log.workspace = true
 nsh-core.workspace = true
+nsh-theme.workspace = true
 rustc-hash.workspace = true
 thiserror.workspace = true
 percent-encoding.workspace = true

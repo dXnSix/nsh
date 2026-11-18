@@ -106,9 +106,11 @@ module:
 - **Text** follows Babel's algorithm (what React renders): lines are trimmed except at the text's ends, whitespace-only
   lines dropped, the rest joined with a space; whitespace on one line is kept (`{a} {b}` keeps its space).
 - The app's expressions keep their spans, so the source map points at the app.
-- The entry's prologue gives the renderer the app's themes (`setup`: the Tailwind theme and the components' `uiTheme`,
-  the appearance and the status bar's default, `nsh.json` `"statusBar"`, before anything renders). Before any other
-  import, the entry imports `virtual:nsh-app`, whose `setup(null, null, null, null, app)` hands over what `appInfo()`
+- The entry's prologue imports, before any other module, `virtual:nsh-setup`, whose `setup(…)` gives the renderer the
+  app's themes (the Tailwind theme and `setup.ui`, `{ document, overrides }`, which the runtime reads at once with
+  `Tokens::with_app_theme`, so a module's top-level `token()` reads the app's theme), the appearance and the status
+  bar's default (`nsh.json` `"statusBar"`), before anything renders. Then it imports `virtual:nsh-app`, whose
+  `setup(null, null, null, null, app)` hands over what `appInfo()`
   reports (`nsh.json`'s id, name, version and build, the package's `--version` and `--build`, and whether the build is
   a development one), so a module reads it at its top level; a runtime that predates the fifth argument ignores it. A font import
   (`import Inter from "./Inter.ttf"`) compiles to `nsh:rt`'s `font(uri, family)`: its family, registered by the host

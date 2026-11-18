@@ -3757,6 +3757,7 @@ dependencies = [
  "nsh-core",
  "nsh-engine",
  "nsh-testing",
+ "nsh-theme",
  "ratex-font",
  "ratex-layout",
  "ratex-parser",
@@ -3787,6 +3788,7 @@ dependencies = [
  "nsh-core",
  "nsh-i18n",
  "nsh-js",
+ "nsh-theme",
  "oxc",
  "oxc_sourcemap",
  "resvg",
@@ -3824,6 +3826,7 @@ dependencies = [
  "nsh-js",
  "nsh-package",
  "nsh-testing",
+ "nsh-theme",
  "nsh-updater",
  "plist",
  "ring",
@@ -3860,6 +3863,7 @@ dependencies = [
  "naga",
  "nsh-core",
  "nsh-macros",
+ "nsh-theme",
  "nsh-updater",
  "ordered-float",
  "resvg",
@@ -3916,6 +3920,7 @@ dependencies = [
  "nsh-i18n",
  "nsh-js",
  "nsh-package",
+ "nsh-theme",
  "nsh-updater",
  "objc2",
  "objc2-core-foundation",
@@ -3977,6 +3982,7 @@ dependencies = [
  "nsh-base",
  "nsh-core",
  "nsh-i18n",
+ "nsh-theme",
  "percent-encoding",
  "quickjs-jit",
  "quickjs-jit-stdlib",
@@ -4042,10 +4048,10 @@ version = "0.6.0"
 dependencies = [
  "imagesize 0.15.0",
  "nsh-core",
+ "nsh-theme",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.119",
  "ttf-parser",
  "wuff",
@@ -4120,6 +4126,7 @@ dependencies = [
  "nsh-engine",
  "nsh-platform-apple",
  "nsh-testing",
+ "nsh-theme",
  "objc2",
  "objc2-authentication-services",
  "objc2-core-foundation",
@@ -4151,6 +4158,7 @@ dependencies = [
  "nsh-dev",
  "nsh-engine",
  "nsh-testing",
+ "nsh-theme",
  "pango",
  "pangocairo",
  "rustc-hash 2.1.3",
@@ -4226,6 +4234,7 @@ dependencies = [
  "nsh-dev",
  "nsh-engine",
  "nsh-testing",
+ "nsh-theme",
  "rustc-hash 2.1.3",
  "serde_json",
  "sha1 0.10.7",
@@ -4280,6 +4289,14 @@ dependencies = [
  "tokio",
  "ureq",
  "url",
+]
+
+[[package]]
+name = "nsh-theme"
+version = "0.6.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

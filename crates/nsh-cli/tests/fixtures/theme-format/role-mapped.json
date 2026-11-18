@@ -1,0 +1,4 @@
+{
+  "tokens": { "brand": { "kind": "color", "value": "#123456" } },
+  "roles": { "banner": "brand" }
+}

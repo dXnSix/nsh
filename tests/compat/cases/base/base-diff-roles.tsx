@@ -2,16 +2,20 @@
 // roles of `nsh/base`, `diff-added` and `diff-deleted`, as a theme sets
 // them. A `DiffView`'s `+` and `−` draw the view's own green and red while
 // the theme has no token of those names, the theme's once `setTheme` gives
-// it them, and their own again with nsh.json's theme back. Its script
-// checks each.
-import { Text, View, cleanup, setTheme } from "nsh";
+// it a document with them, and their own again with nsh.json's theme back.
+// Its script checks each.
+import { Text, type Theme, View, cleanup, setTheme } from "nsh";
 import { DiffView } from "nsh/base";
 
-const diff = {
-  cssVars: {
-    light: { "diff-added": "#0f766e", "diff-deleted": "#be123c" },
-    dark: { "diff-added": "#5eead4", "diff-deleted": "#fda4af" },
+const diff: Theme = {
+  tokens: { "diff-added": { kind: "color", value: "#0f766e" }, "diff-deleted": { kind: "color", value: "#be123c" } },
+  modifiers: {
+    colorMode: {
+      default: "light",
+      contexts: { light: {}, dark: { "diff-added": "#5eead4", "diff-deleted": "#fda4af" } },
+    },
   },
+  resolutionOrder: ["colorMode"],
 };
 
 function BaseDiffRoles() {

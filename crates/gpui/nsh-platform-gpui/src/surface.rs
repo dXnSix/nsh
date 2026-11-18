@@ -285,13 +285,14 @@ pub(crate) struct Surface {
     /// engine).
     #[cfg(test)]
     pub(crate) asked_past: RefCell<Vec<(NodeId, nsh_core::focus::Direction)>>,
-    /// The embedding app's theme ([`crate::AppView::set_theme`]): sent to
-    /// every engine the surface starts, before its first frame.
-    pub(crate) host_theme: RefCell<Option<nsh_base::Theme>>,
-    /// The embedding app's theme overrides
-    /// ([`crate::AppView::set_theme_overrides`]): over the host's theme if
-    /// it gave one, else over the app's own.
-    pub(crate) host_overrides: RefCell<Option<nsh_engine::Tokens>>,
+    /// The embedding app's theme: its document and its patch, given to
+    /// every engine the surface starts before its first frame
+    /// ([`HostTheme::send`]).
+    pub(crate) host_theme: RefCell<HostTheme>,
+    /// The theme's `background` as the engine last resolved it
+    /// ([`nsh_core::Command::Tokens`], [`theme_background`]); `None` while
+    /// the app has no theme of its own.
+    pub(crate) theme_background: Cell<Option<nsh_core::Color>>,
     /// The window is see-through where the app draws nothing
     /// ([`crate::AppOptions::transparent`]): no window background.
     pub(crate) transparent: Cell<bool>,
@@ -381,8 +382,8 @@ impl Surface {
             #[cfg(test)]
             asked_past: RefCell::default(),
             chrome: Default::default(),
-            host_theme: RefCell::new(None),
-            host_overrides: RefCell::new(None),
+            host_theme: RefCell::default(),
+            theme_background: Cell::new(None),
             transparent: Cell::new(false),
             host_dark: Cell::new(None),
             host_environment: Cell::default(),
@@ -481,16 +482,12 @@ impl Surface {
             return;
         };
         let family: Arc<str> = Arc::from(&*crate::text::ui_family_for(&text_system));
-        let tokens = self.host_tokens();
+        let host_theme = self.host_theme.borrow().clone();
         match Engine::start_with(
             config,
             move || GpuiTextEngine::new(text_system, family),
             sink,
-            |control| {
-                if tokens.is_some() {
-                    control.set_tokens(tokens);
-                }
-            },
+            |control| host_theme.send(control),
         ) {
             Ok(engine) => {
                 // The app's downloaded images go through its disk cache.
@@ -548,22 +545,22 @@ impl Surface {
         self.control(|c| c.set_perf_monitor(on.then(Default::default)));
     }
 
-    /// The tokens the embedding app gives the engine: its overrides over
-    /// its theme.
-    pub(crate) fn host_tokens(&self) -> Option<nsh_engine::Tokens> {
-        let theme = self.host_theme.borrow();
-        let overrides = self.host_overrides.borrow();
-        match (&*theme, &*overrides) {
-            (Some(theme), Some(overrides)) => Some(overrides.over(theme.tokens())),
-            (Some(theme), None) => Some(theme.tokens().clone()),
-            (None, overrides) => overrides.clone(),
-        }
+    /// The color behind the app's views: the theme's `background` as the
+    /// engine last resolved it, for an app with a theme of its own (its
+    /// own, a UI set's or the embedding app's), else the system's.
+    pub(crate) fn background(&self) -> nsh_core::Color {
+        self.theme_background
+            .get()
+            .unwrap_or_else(|| crate::system::window_background(self))
     }
 
-    /// Sends [`Surface::host_tokens`] to the engine.
-    pub(crate) fn host_tokens_changed(&self) {
-        let tokens = self.host_tokens();
-        self.control(|c| c.set_tokens(tokens));
+    /// The engine resolved new design tokens ([`nsh_core::Command::Tokens`]):
+    /// the surface is drawn on their `background`.
+    pub(crate) fn tokens_changed(&self, tokens: &nsh_core::element::Tokens) {
+        let background = theme_background(tokens);
+        if self.theme_background.replace(background) != background {
+            self.invalidate();
+        }
     }
 
     pub(crate) fn control(&self, f: impl FnOnce(&EngineControl)) {
@@ -1017,6 +1014,96 @@ pub(crate) fn flush_all(cx: &mut gpui::App) {
     }
 }
 
+/// The embedding app's theme a surface keeps for the apps it starts.
+#[derive(Clone, Default)]
+pub(crate) struct HostTheme {
+    /// Its document ([`crate::AppView::set_theme_json`]), active as the
+    /// app's over its built-in one.
+    pub(crate) document: Option<Arc<nsh_engine::ThemeDocument>>,
+    /// Its patch ([`crate::AppView::set_theme_overrides`]), the engine's
+    /// host layer.
+    pub(crate) patch: Option<nsh_engine::Patch>,
+}
+
+impl HostTheme {
+    /// Takes the host's document `json` (`None`: none), read here, and
+    /// returns it, for the running engine
+    /// ([`EngineControl::set_theme_document`]). A text refused whole (no
+    /// document, the old format) is an error and changes nothing.
+    pub(crate) fn set_document(
+        &mut self,
+        json: Option<&str>,
+    ) -> Result<Option<Arc<nsh_engine::ThemeDocument>>, nsh_base::ThemeError> {
+        let document = match json {
+            None => None,
+            Some(json) => match nsh_core::element::theme::read_document(json) {
+                (Some(document), _) => Some(Arc::new(document)),
+                (None, diagnostics) => return Err(refusal(&diagnostics)),
+            },
+        };
+        self.document = document.clone();
+        Ok(document)
+    }
+
+    /// Takes the host's patch `json` (`None`: none), read here, and returns
+    /// it, for the running engine's host layer
+    /// ([`EngineControl::set_tokens`]). Text that is no patch (no JSON, no
+    /// JSON object) is an error and changes nothing.
+    pub(crate) fn set_patch(
+        &mut self,
+        json: Option<&str>,
+    ) -> Result<Option<nsh_engine::Patch>, nsh_base::ThemeError> {
+        let patch = match json {
+            None => None,
+            Some(json) => {
+                let (patch, diagnostics) = nsh_core::element::theme::read_patch(json);
+                if nsh_core::element::theme::refused(&diagnostics) {
+                    return Err(refusal(&diagnostics));
+                }
+                Some(patch)
+            }
+        };
+        self.patch = patch.clone();
+        Ok(patch)
+    }
+
+    /// Gives an engine that starts both, before its first frame.
+    pub(crate) fn send(&self, control: &EngineControl) {
+        if let Some(document) = &self.document {
+            control.set_theme_document(Some(document.clone()));
+        }
+        if let Some(patch) = &self.patch {
+            control.set_tokens(Some(patch.clone()));
+        }
+    }
+}
+
+/// Why a theme text was refused whole: its first diagnostic.
+fn refusal(diagnostics: &[nsh_core::element::Diagnostic]) -> nsh_base::ThemeError {
+    nsh_base::ThemeError(
+        diagnostics
+            .first()
+            .map_or_else(|| "the theme was refused".to_owned(), |d| d.message.clone()),
+    )
+}
+
+/// The light `background` of `nsh-base`'s default theme: what a role that
+/// resolves to nothing draws.
+const BACKGROUND_LIGHT: nsh_core::Color = nsh_core::Color(0xffff_ffff);
+
+/// The window background `tokens` give: for an app with a theme of its own
+/// (`Tokens::is_themed`), the current value of its `background` role, in
+/// whatever context the app picked (`colorMode`'s `light` or `dark`), or
+/// the default theme's light one when the role resolves to nothing;
+/// `None` (the system's) otherwise.
+pub(crate) fn theme_background(tokens: &nsh_core::element::Tokens) -> Option<nsh_core::Color> {
+    tokens.is_themed().then(|| {
+        tokens
+            .role(nsh_base::role::BACKGROUND)
+            .map_or(BACKGROUND_LIGHT, nsh_core::Color::from)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1032,34 +1119,6 @@ mod tests {
             tx.send(m).unwrap();
         }
         *surface.rx.borrow_mut() = Some(rx);
-    }
-
-    #[test]
-    fn the_hosts_theme_overrides_go_over_its_theme_and_stay_when_it_changes() {
-        let surface = Surface::new(nsh_engine::Environment::default());
-        let color = |tokens: &nsh_engine::Tokens, name: &str| {
-            tokens.color(name).map(|c| nsh_core::Color::from(c.light).0)
-        };
-        let theme = |json: &str| Some(nsh_base::Theme::from_json(json).unwrap());
-        *surface.host_overrides.borrow_mut() = Some(
-            nsh_base::theme_overrides(r##"{ "cssVars": { "light": { "primary": "#ff0000" } } }"##)
-                .unwrap(),
-        );
-        // Over the app's own theme: only what they name.
-        let tokens = surface.host_tokens().unwrap();
-        assert_eq!(color(&tokens, "primary"), Some(0xff0000ff));
-        assert_eq!(color(&tokens, "secondary"), None);
-        *surface.host_theme.borrow_mut() = theme(
-            r##"{ "cssVars": { "light": { "primary": "#00ff00", "secondary": "#0000ff" } } }"##,
-        );
-        let tokens = surface.host_tokens().unwrap();
-        assert_eq!(color(&tokens, "primary"), Some(0xff0000ff));
-        assert_eq!(color(&tokens, "secondary"), Some(0x0000ffff));
-        *surface.host_overrides.borrow_mut() = None;
-        let tokens = surface.host_tokens().unwrap();
-        assert_eq!(color(&tokens, "primary"), Some(0x00ff00ff));
-        *surface.host_theme.borrow_mut() = None;
-        assert!(surface.host_tokens().is_none());
     }
 
     #[test]

@@ -92,3 +92,7 @@ nsh-testing = { workspace = true, features = ["agent"], optional = true }
 # 2.42: downloads (`WebKitDownload`), which the web view's destination
 # decisions use.
 webkit6 = { workspace = true, optional = true, features = ["v2_42"] }
+
+# The menu style tests read theme documents.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+nsh-theme.workspace = true

@@ -1,0 +1,13 @@
+{
+  "tokens": {
+    "a": { "kind": "color", "value": "#111111" },
+    "b": { "kind": "color", "value": "#222222" },
+    "c": { "kind": "color", "value": "{b}" },
+    "halo-shadow": { "kind": "shadow", "value": [{ "color": "{a}", "spread": 2 }] }
+  },
+  "modifiers": {
+    "first": { "default": "off", "contexts": { "off": {}, "on": { "a": "{b}" } } },
+    "second": { "default": "off", "contexts": { "off": {}, "on": { "b": "{a}" } } }
+  },
+  "resolutionOrder": ["first", "second"]
+}

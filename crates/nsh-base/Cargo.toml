@@ -35,6 +35,7 @@ math = ["dep:ratex-parser", "dep:ratex-layout", "dep:ratex-types", "dep:ratex-fo
 [dependencies]
 zstd = { workspace = true, optional = true }
 nsh-core.workspace = true
+nsh-theme.workspace = true
 chrono.workspace = true
 rustc-hash.workspace = true
 serde_json.workspace = true

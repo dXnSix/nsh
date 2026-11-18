@@ -212,7 +212,7 @@ final class EmbedController: UIViewController {
 | `grantCapabilities(_ json: String?) throws` | 此后加载的应用最多能做什么，JSON 格式与 `nsh.json` 的 `capabilities` 相同；`nil` 表示授予每个应用所声明的能力。JSON 无效时抛出 `NshError`。 |
 | `locale: Locale?` | 代替用户设置的语言和地区：`Intl`、`locale()` 和组件立即跟随，此后加载的应用也从它开始。`nil` 跟随系统。 |
 | `fontScale: CGFloat?` | 代替动态字体的文字大小（1 为默认）：文字和输入框按它重新排版，`fontScale()` 读到它，立即生效，此后加载的应用也一样；长度保持原样。`nil` 跟随系统。 |
-| `setThemeOverrides(_ json: String?) throws` | 把宿主的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件。其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变。立即生效，并作用于之后加载的应用；`nil` 恢复应用自己的主题。文件无法解析时抛出 `NshError`。 |
+| `setThemeOverrides(_ json: String?) throws` | 把宿主的品牌加在应用的[主题](./tailwind.md#主题-token)之上：一个主题补丁 `{ "values": { token: value }, "roles": { role: token } }`，形状与 [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) 接受的相同。对应用主题声明的 token，其值覆盖应用的主题、主题的上下文（浅色和深色）以及应用自己的覆盖，应用的其他 token 保持不变。立即生效，并作用于之后加载的应用；`nil` 清除它并恢复应用自己的主题。不是 JSON 对象的文本抛出 `NshError`。 |
 | `registerFont(_ data: Data) throws` | 注册宿主自带的字体文件（TrueType、OpenType、WOFF 或 WOFF2）。应用在 `fontFamily` 里写它的字体族名，不必把文件打进 bundle。加载前注册的字体在该应用的第一帧就可用；应用运行中注册的，从下一次排版开始使用。`data` 不是字体时抛出 `NshError`。 |
 | `storageDirectory: URL?` | 此后加载的应用保存其[存储](../modules/nsh.md#storage)的目录；`nil`：`Library/Application Support/nsh/<app id>`，按应用自己的 id。 |
 | `cacheOptions: NshCacheOptions` | 此后加载的应用保存缓存（[下载的图片](./images-and-assets.md#磁盘缓存)）的位置和每种缓存的大小：`location` 为 `.system`（`Library/Caches/nsh`，每个应用在 `<app id>`）、`.directory(URL)` 或 `.off`；`images` 为 `.default`（256 MB）、`.maxSize(megabytes:)` 或 `.off`。 |
@@ -315,20 +315,20 @@ app.watchScroll("page", sheet)
 
 ## 主题覆盖
 
-嵌入在多个品牌宿主应用中的同一个应用会采用各个宿主的品牌：宿主给出其品牌要改的 token，格式与 `nsh.json` 的 `"theme"` 相同的主题文件（shadcn/ui 的 `cssVars`，值按 CSS 的写法）。它们覆盖应用的同名 token，应用的其他 token 保持不变。在 `dark` 下给出 token 的深色模式值（只在 `light` 或 `theme` 下设置的 token 在两种模式下都是这个颜色）：
+嵌入在多个品牌宿主应用中的同一个应用会采用各个宿主的品牌：宿主以主题补丁给出其品牌要改的 token，`{ "values": { token: value }, "roles": { role: token } }`，形状与 [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) 接受的相同。每个值是其 token 的值类型、按主题格式书写（颜色 `"#e11d48"`，以点为单位的数字 `16`），或指向另一个 token 的引用（`"{blue-9}"`）；`roles` 把角色映射到主题的某个 token。补丁是宿主的一层：它覆盖应用的主题、应用选中的上下文（覆盖值在浅色和深色下相同）以及应用自己的覆盖，引用在它之后解析，所以覆盖一个调色板颜色会影响所有引用它的 token。补丁从不新增 token：应用当前主题没有声明的名字，或不符合其 token 类型的值，会被略去并记录日志（格式见[主题](./rust.md#主题)；仓库中的 `docs/dev/theme-format.md` 给出完整定义）。
 
 ```swift
 try app.setThemeOverrides("""
-{ "cssVars": {
-    "theme": { "radius": "0.75rem" },
-    "light": { "primary": "#e11d48", "primary-foreground": "#ffffff" },
-    "dark": { "primary": "#fb7185", "primary-foreground": "#1c1917" }
+{ "values": {
+    "radius": 12,
+    "primary": "#e11d48",
+    "primary-foreground": "#ffffff"
 } }
 """)
 try app.loadBundle(at: url)
 ```
 
-在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(nil)` 恢复应用自己的主题。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
+在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(nil)` 清除宿主这一层并恢复应用自己的主题。
 
 ## 应用打开的链接
 

@@ -514,8 +514,8 @@ impl Surface {
         let displays = crate::window_state::displays(self.mtm);
         let links = std::mem::take(&mut *self.launch_links.borrow_mut());
         let setup = |control: &EngineControl| {
-            if let Some(json) = theme {
-                control.set_theme_overrides(json);
+            if theme.is_some() {
+                control.set_theme_overrides(theme.as_deref());
             }
             control.set_displays(displays);
             for url in links {

@@ -37,7 +37,7 @@ pub use self::{
     theme::{Theme, ThemeError},
 };
 pub(crate) use self::{
-    theme::ClassTokens,
+    theme::{ClassTokens, role_patterns},
     utilities::{Decl, Len, Part},
 };
 use crate::{
@@ -952,8 +952,9 @@ impl ClassList {
 /// ([`Tailwind::set_tokens`]).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TokenChange {
-    /// The values of these tokens ([`theme::token_key`]); the names are as
-    /// they were. Only the classes that read one resolve again.
+    /// The values of these tokens ([`theme::token_key`]), or the roles
+    /// that resolved to one of them or now do; the names are as they were.
+    /// Only the classes that read one resolve again.
     Values(FxHashSet<u64>),
     /// The names: every class resolves again (an unknown one may name a
     /// new token).
@@ -1060,12 +1061,7 @@ pub fn parse(theme: &Theme, classes: &str) -> ClassList {
     for token in classes.split_ascii_whitespace() {
         match parse_token(theme, token, &mut read) {
             Some(Token::Rule(rule)) => list.add(rule),
-            Some(Token::Themed(rule, dark)) => {
-                list.add(rule);
-                if let Some(dark) = dark {
-                    list.add(*dark);
-                }
-            }
+            Some(Token::Themed(rule)) => list.add(rule),
             Some(Token::Group(name)) => {
                 list.tracked |= state::PRESSED | state::HOVERED | state::FOCUS_WITHIN;
                 list.groups.push(name);
@@ -1083,8 +1079,8 @@ pub fn parse(theme: &Theme, classes: &str) -> ClassList {
 
 enum Token {
     Rule(Rule),
-    /// A utility naming theme tokens: one rule, or one per appearance.
-    Themed(Rule, Option<Box<Rule>>),
+    /// A utility reading the theme: one rule, with the values of now.
+    Themed(Rule),
     Group(Box<str>),
     /// Accepted, but has no effect natively (`antialiased`; [`ignored`]).
     Ignored,
@@ -1141,11 +1137,22 @@ fn parse_token(theme: &Theme, token: &str, read: &mut Vec<u64>) -> Option<Token>
     if ignored(utility) {
         return Some(Token::Ignored);
     }
-    if theme.tokens().replaces(utility) {
-        return themed(theme, cond, rank, important, utility, read);
+    // The theme wins over Tailwind's built-in value of the same class
+    // (`shadow-md`, `rounded-lg`), as Tailwind 4's `@theme` does.
+    let tokens = theme.tokens();
+    if let Some(token) = themed(&cond, &rank, important, read, |read| {
+        tokens.class(theme, utility, read)
+    }) {
+        return Some(token);
     }
     let Some(decls) = utilities::parse(theme, utility) else {
-        return themed(theme, cond, rank, important, utility, read);
+        // Variables (`bg-(--primary)`) read the theme's roles.
+        if !utility.contains('(') {
+            return None;
+        }
+        return themed(&cond, &rank, important, read, |read| {
+            utilities::parse(theme, &tokens.variables(utility, read)?)
+        });
     };
     if cond.pseudo() && cond.pseudo_color(&decls).is_none() {
         return None;
@@ -1179,23 +1186,23 @@ fn ignored(utility: &str) -> bool {
         .is_some_and(|v| v.len() > 1 && v.ends_with(']'))
 }
 
-/// `utility` naming theme tokens (`bg-primary`, `rounded-(--radius)`):
-/// parsed with their light and their dark values; two rules of the same
-/// rank when those differ, so later utilities still win in both. The
-/// tokens it read are added to `read`, each once; none when it is no class.
+/// A class reading the theme (`bg-primary`, `rounded-(--radius)`): one
+/// rule of what `decls` declares, with the tokens' values of now (TW-SINGLE);
+/// none when it declares nothing or a pseudo-element takes none of it. The
+/// tokens it read are added to `read`, each once.
 fn themed(
-    theme: &Theme,
-    cond: Condition,
-    rank: Rank,
+    cond: &Condition,
+    rank: &Rank,
     important: bool,
-    utility: &str,
     read: &mut Vec<u64>,
+    decls: impl FnOnce(&mut Vec<u64>) -> Option<Vec<Decl>>,
 ) -> Option<Token> {
     let known = read.len();
-    let token = themed_rules(theme, cond, rank, important, utility, read, known);
-    if token.is_none() {
+    let decls = decls(read).filter(|d| !cond.pseudo() || cond.pseudo_color(d).is_some());
+    let Some(decls) = decls else {
         read.truncate(known);
-    }
+        return None;
+    };
     // The tokens an earlier class of the list read are there already.
     let mut at = known;
     while at < read.len() {
@@ -1205,59 +1212,13 @@ fn themed(
             at += 1;
         }
     }
-    token
-}
-
-/// [`themed`]'s rules; `read` keeps what it had up to `known`, then the
-/// tokens the utility read in the appearance parsed last (both read the
-/// same ones).
-fn themed_rules(
-    theme: &Theme,
-    cond: Condition,
-    rank: Rank,
-    important: bool,
-    utility: &str,
-    read: &mut Vec<u64>,
-    known: usize,
-) -> Option<Token> {
-    let tokens = theme.tokens();
-    let pseudo = Condition {
-        placeholder: cond.placeholder,
-        selection: cond.selection,
-        ..Condition::default()
-    };
-    let mut parse = |dark: bool| {
-        read.truncate(known);
-        let mut decls = utilities::parse(theme, &tokens.substitute(utility, dark, read)?)?;
-        // A text style's class sets its parts too.
-        for part in tokens.typography_parts(utility, dark, read) {
-            decls.extend(utilities::parse(theme, &part)?);
-        }
-        (!pseudo.pseudo() || pseudo.pseudo_color(&decls).is_some()).then_some(decls)
-    };
-    let rule = |cond: Condition, decls: Vec<Decl>| Rule {
-        cond,
+    Some(Token::Themed(Rule {
+        cond: cond.clone(),
         decls,
         rank: rank.clone(),
         important,
         theme: true,
-    };
-    // `dark:bg-primary` only needs the dark values.
-    if cond.dark == Some(true) {
-        return Some(Token::Themed(rule(cond, parse(true)?), None));
-    }
-    let (light, dark) = (parse(false)?, parse(true)?);
-    if light == dark {
-        return Some(Token::Themed(rule(cond, light), None));
-    }
-    let mut dark_cond = cond.clone();
-    dark_cond.dark = Some(true);
-    let mut light_cond = cond;
-    light_cond.dark = Some(false);
-    Some(Token::Themed(
-        rule(light_cond, light),
-        Some(Box::new(rule(dark_cond, dark))),
-    ))
+    }))
 }
 
 /// Whether `name` names a boolean `data-*` attribute (`data-<name>:`):
@@ -1524,3 +1485,5 @@ fn variant(theme: &Theme, v: &str, cond: &mut Condition) -> Option<Key> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod theme_format_classes;

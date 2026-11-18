@@ -5503,6 +5503,7 @@ dependencies = [
  "markdown",
  "markup5ever_rcdom",
  "nsh-core",
+ "nsh-theme",
  "ratex-font",
  "ratex-layout",
  "ratex-parser",
@@ -5527,8 +5528,8 @@ version = "0.6.0"
 dependencies = [
  "dunce",
  "log",
- "nsh-base",
  "nsh-core",
+ "nsh-theme",
  "oxc",
  "oxc_sourcemap",
  "serde_json",
@@ -5550,6 +5551,7 @@ dependencies = [
  "log",
  "naga",
  "nsh-macros",
+ "nsh-theme",
  "nsh-updater",
  "ordered-float",
  "resvg",
@@ -5639,6 +5641,7 @@ dependencies = [
  "log",
  "nsh-core",
  "nsh-i18n",
+ "nsh-theme",
  "percent-encoding",
  "quickjs-jit",
  "quickjs-jit-stdlib",
@@ -5656,10 +5659,10 @@ name = "nsh-macros"
 version = "0.6.0"
 dependencies = [
  "imagesize 0.15.0",
+ "nsh-theme",
  "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.119",
  "ttf-parser",
  "wuff",
@@ -5755,6 +5758,14 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
+]
+
+[[package]]
+name = "nsh-theme"
+version = "0.6.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

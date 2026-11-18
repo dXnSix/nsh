@@ -1,0 +1,19 @@
+[package]
+name = "nsh-theme"
+description = "The theme document: its model, reading with diagnostics, writing, editing, layering, references and role checks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+homepage.workspace = true
+readme.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# Only serde and serde_json: an exporter or a tool can depend on the format
+# alone, with no NSH, UI, platform or JS crate (docs/dev/theme-format.md).
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

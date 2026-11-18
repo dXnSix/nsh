@@ -1889,23 +1889,34 @@ fn methods_impl(mut item: ItemImpl) -> syn::Result<TokenStream2> {
 
 /// `theme_keys!("design/theme.json")`: a typed key
 /// (`nsh_core::element::TokenKey`) for each token the theme document
-/// declares in its `"tokens"` section, the path relative to the crate's
-/// manifest. Each key is a constant in modules by the token's path
-/// (`"path": "colors.backgrounds.primary"` is
-/// `colors::backgrounds::PRIMARY`; a token without a path is named after
-/// its name, `RADIUS_CARD`), documented with the token's doc, of the type
-/// its kind's value is: a color `AdaptiveColor`, a number, weight or line
-/// height `f32`, a radius, spacing, size, tracking or blur `Points`, a font
-/// `SharedString`, shadows `AdaptiveShadow`, gradients `AdaptiveGradient`.
-/// Path segments are snake case for modules and upper snake case for
-/// constants (`type-scale`, `fontSize` are `type_scale`, `FONT_SIZE`; a
-/// digit first takes `_`). Each of the document's theme modifiers is an enum
-/// of its contexts in `modifiers` (`"brand"` with `ocean` and `forest`:
+/// (`docs/dev/theme-format.md`) declares, the path relative to the crate's
+/// manifest, or under its `OUT_DIR` after `$OUT_DIR/` (a document its build
+/// script writes: `"$OUT_DIR/theme.json"`). Each key is a constant in
+/// modules by the token's path (`"path": "colors.backgrounds.primary"` is
+/// `colors::backgrounds::PRIMARY`; a token without a path is at the top,
+/// named after its name, `RADIUS_CARD`), documented with the token's doc,
+/// of its value type's Rust type: a color `Hsla`, a number `f32`, a font
+/// `Arc<str>`, a string `String`, a boolean `bool`, a duration `Duration`,
+/// an easing `CubicBezier`, a text style `Typography`, shadows
+/// `Arc<[BoxShadow]>`, a gradient `Gradient`, a blur `Blur`, a border
+/// `Border` and a transition `TransitionToken`. Path segments are snake case
+/// for modules (a keyword raw, `r#type`) and upper snake case for constants
+/// (`type-scale`, `fontSize` are `type_scale`, `FONT_SIZE`; a digit first
+/// takes `_`). Each of the document's modifiers is an enum of its contexts
+/// in `modifiers` (`"brand"` with `ocean` and `forest`:
 /// `modifiers::Brand::{Ocean, Forest}`, with `NAME`, `ALL`, `DEFAULT`,
 /// `name()`, `set()`, which gives the modifier that context, and
-/// `current()`). Read at compile time: a changed document builds the crate
-/// again. A missing or broken document fails the build, as do a kind there
-/// is not, two tokens of one key and two contexts of one variant.
+/// `current()`).
+///
+/// The document is read as the runtime reads it (`nsh_theme::read`) at
+/// compile time, and a changed document builds the crate again. Its errors
+/// fail the build, each naming its JSON pointer; its warnings (an unknown
+/// member) don't. A missing document fails it too, and so do names that
+/// make no Rust item or two of one name: a modifier, context or group whose
+/// name would be `self`, `Self`, `super` or `crate`; a top-level group
+/// `modifiers`; two groups, two keys of one group, two modifiers or two
+/// contexts of one modifier that differ only in case or separators
+/// (`text-xl` and `textXl`); and a path with an empty segment.
 #[proc_macro]
 pub fn theme_keys(input: TokenStream) -> TokenStream {
     let lit = parse_macro_input!(input as LitStr);

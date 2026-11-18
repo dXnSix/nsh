@@ -1,4 +1,4 @@
-import { mount, Scroll, signal, Text, View } from "nsh";
+import { colorScheme, effect, modifiers, mount, Scroll, setModifier, signal, Text, View } from "nsh";
 import {
   Button,
   Input,
@@ -107,6 +107,13 @@ const classes = {
 };
 
 function App() {
+  // The theme's dark values (its `colorMode` modifier) with the system's dark
+  // appearance, which itself changes no token.
+  effect(() => {
+    const scheme = colorScheme();
+    const colorMode = modifiers().find((m) => m.name === "colorMode");
+    if (colorMode && colorMode.selected !== scheme) setModifier("colorMode", scheme);
+  });
   const editor = createRichEditor({
     // The crate's suggestions are an extension of high priority: their
     // Enter and Tab pick, before the keymap splits the paragraph.

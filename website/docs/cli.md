@@ -1,6 +1,6 @@
 ---
 title: CLI
-description: Every NSH subcommand and flag - init, build, test, check, dev, run, package, and the signing commands keygen, certify, publish, verify, symbolicate and revoke.
+description: Every NSH subcommand and flag - init, build, test, check, theme, dev, run, package, and the signing commands keygen, certify, publish, verify, symbolicate and revoke.
 order: 6
 group: start
 ---
@@ -16,6 +16,7 @@ nsh <COMMAND>
   build        Build an app: describe a Rust app's crates, or bundle a TSX app and compile it to QuickJS bytecode
   test         Run an app's tests headless, and its Rust crates' with cargo test
   check        Type check an app with TypeScript's native compiler, and its Rust crates with cargo check
+  theme        Convert old themes to the theme format, and check theme documents and patches
   dev          Serve an app to dev hosts (simulators, devices) and push rebuilds
   run          Like dev, and also run the app in a development host
   package      Package an installable app from the prebuilt runtime
@@ -175,6 +176,18 @@ NSH-generated files stay under `.nsh/`: declarations, runner sources, and defaul
 `.nsh/out/`. Cargo keeps its normal `target/` cache and existing `CARGO_TARGET_DIR` behavior; NSH does not
 add Cargo configuration to relocate it. `--out` still overrides the output location. With [huacnlee/cargo](https://github.com/huacnlee/cargo), which we
 recommend, the builds live under `~/.cargo/targets/` and the binaries still land in `target/`.
+
+## nsh theme
+
+```sh
+nsh theme convert <OLD> [--over <BASE>] [-o <NEW>]
+nsh theme check <FILE> [--app <DIR>]
+nsh theme check --patch <FILE> --app <DIR>
+```
+
+`nsh theme convert` converts an old theme, one with `cssVars`, to a theme document: it writes the document to `NEW` (`-o`), else to standard output, and what it reports to standard error. `--over <BASE>` converts an app's old theme over the old library default it extended, so that the document is complete, the base's tokens and the app's together; `--over nsh/base` names `nsh/base`'s old default, which `nsh` keeps. It exits with 1 on any error, and writes the output either way.
+
+`nsh theme check` reads a theme document, resolves it at its defaults and under every combination of one context per modifier (a reference cycle is reported with the picks that make it), and checks its roles: against the roles of the core, `nsh/base` and Tailwind's classes, or with `--app <DIR>` those the app's UI sets register (its Rust crates are described for them). With `--patch`, `FILE` is an override patch, checked against the app's active document (`nsh.json`'s `"theme"`, else its UI sets'); `--patch` needs `--app`. It prints each diagnostic as `<severity> <code> <pointer>: <message>` and exits with 1 on any error or unmapped required role (`role-unmapped`), else 0.
 
 ## nsh build
 

@@ -33,13 +33,13 @@ const DELETED: AdaptiveColor = AdaptiveColor::rgb(0xdc2626, 0xf87171);
 /// token the app's theme maps it onto, else the one of that name), else the
 /// view's own green.
 pub(crate) fn added_color() -> AdaptiveColor {
-    theme().tokens().role(role::DIFF_ADDED).unwrap_or(ADDED)
+    nsh_core::element::role(role::DIFF_ADDED).map_or(ADDED, AdaptiveColor::from)
 }
 
 /// Deleted lines' color: the theme's `diff-deleted`
 /// ([`role::DIFF_DELETED`]), else the view's own red.
 pub(crate) fn deleted_color() -> AdaptiveColor {
-    theme().tokens().role(role::DIFF_DELETED).unwrap_or(DELETED)
+    nsh_core::element::role(role::DIFF_DELETED).map_or(DELETED, AdaptiveColor::from)
 }
 /// The width of a bar indicator.
 const BAR: f32 = 3.0;
@@ -472,7 +472,7 @@ fn gutter_row(
                     .text_color(move || match tint {
                         Tint::Added => added_color(),
                         Tint::Deleted => deleted_color(),
-                        _ => theme().muted_foreground,
+                        _ => theme().muted_foreground.into(),
                     });
                 first = first.child(match which {
                     Some(p) => part(sign, props, p),
@@ -510,7 +510,7 @@ fn gutter_row(
 fn line_tint(props: DiffViewProps, tint: Tint) -> Option<AdaptiveColor> {
     match tint {
         Tint::Context => None,
-        Tint::Filler => Some(theme().muted.opacity(0.5)),
+        Tint::Filler => Some(theme().muted.opacity(0.5).into()),
         Tint::Added if props.background.get() => Some(added_color().opacity(0.12)),
         Tint::Deleted if props.background.get() => Some(deleted_color().opacity(0.12)),
         _ => None,

@@ -216,7 +216,7 @@ Tailwind 主题影响你的类名。类型化方法保持 Tailwind 的默认刻�
 
 ## 主题 token
 
-应用的主题（`nsh.json` 中的 `"theme"`）保存它的设计令牌：shadcn/ui 的颜色（`background`、`foreground`、`primary`、`muted-foreground`、`border`、`ring`、`chart-1`、`sidebar` 等）、`radius`、字体 `font-sans` 和 `font-mono`，以及应用自己添加的令牌。类名像 Tailwind 引用 CSS `@theme` 变量那样引用它们，Rust 组件用 `nsh_base` 的 `theme()` 读取，TSX 用 `nsh` 的 `token()` 读取，所以 TSX 页面和 Rust 组件使用同一套主题：
+应用的主题（`nsh.json` 中的 `"theme"`，一份[主题文档](./rust.md#主题)）保存它的设计令牌：shadcn/ui 的颜色（`background`、`foreground`、`primary`、`muted-foreground`、`border`、`ring`、`chart-1`、`sidebar` 等）、`radius`、字体 `font-sans` 和 `font-mono`，以及应用自己添加的令牌。类名像 Tailwind 4 读取 CSS `@theme` 变量那样读取它们，Rust 组件用 `nsh_base` 的 `theme()` 读取，TSX 用 `nsh` 的 `token()` 读取，所以 TSX 页面和 Rust 组件使用同一套主题：
 
 ```rust tabs
 use nsh_base::theme;
@@ -250,39 +250,57 @@ view()
 </View>
 ```
 
-token 的名称就是主题文件中 CSS 变量去掉 `--` 后的名称：`muted-foreground`、`radius`、`chart-1`。在 Rust 中，shadcn 的令牌是 `theme()` 的方法（`primary()`、`muted_foreground()`、`radius()`、`font_mono()`），所有令牌也都可以用 `theme().color("up")`、`theme().number("radius-card")` 或 `theme().font("font-display")` 读取。
+类名读取的是一个**角色**：主题把这个名称映射到的 token（`"roles": { "popover": "overlay" }`），没有映射时是同名的 token。因此 `bg-primary` 是 token `primary`，或主题把 `primary` 映射到的那个 token，在多个应用之间共享的组件只需写一次 `bg-popover rounded-card`，就适用于每个设计系统。在 Rust 中，shadcn 的令牌是 `theme()` 的字段（`primary`、`muted_foreground`、`radius`、`font_mono`），所有令牌也都可以用 `tokens().color("up")`、`tokens().number("radius-card")` 或 `tokens().font("font-display")` 读取，或用类型化键的 `get()` 读取，它只跟随那一个令牌（[主题文档与类型化键](./rust.md#主题文档与类型化键)）。
 
-| 写法 | 取值 | 示例 |
-|---|---|---|
-| 任意颜色类里的颜色名 | 主题颜色，也可带不透明度 | `bg-primary`、`text-muted-foreground/70`、`bg-up/30`、`border-t-border`、`ring-ring`、`from-accent`、`placeholder:text-muted-foreground` |
-| `(--name)`，Tailwind 4 的变量简写 | 主题颜色或数值，或同名主题角色被映射到的 token | `bg-(--primary)`、`rounded-(--radius)`、`p-(--gap-card)`、`bg-(--popover)` |
-| `(color:--name)`、`(length:--name)`、`(number:--name)`、`(family-name:--name)` | 同上，在一个类可以接受多种值时标明类型 | `text-(color:--up)`、`text-(length:--text-title)`、`font-(family-name:--font-mono)` |
-| `font-sans`、`font-mono` | 主题设置的字体 | `font-mono` |
-| 数字 token 名称在其命名空间的工具类中 | Tailwind 4 命名空间中的数字 token，按名称的其余部分 | `rounded-card`（`radius-card`）、`p-gutter`、`gap-x-gutter`（`spacing-gutter`）、`text-body`（`text-body`）、`font-strong`（`font-weight-strong`）、`tracking-label`、`leading-body`、`blur-soft` |
+| 类名 | 读取的角色 | 种类 | 示例 |
+|---|---|---|---|
+| 任意颜色工具类的 `<utility>-<n>`，也可带不透明度 | `<n>` | `color` | `bg-primary`、`text-muted-foreground/70`、`bg-up/30`、`border-t-border`、`ring-ring`、`from-accent`、`placeholder:text-muted-foreground` |
+| `rounded-<n>`、`rounded-t-<n>`、`rounded-bl-<n>` 等 | `radius-<n>` | `number` | `rounded-card` |
+| `p-<n>`、`m-<n>`、`gap-<n>`、`w-<n>`、`h-<n>`、`size-<n>`、`inset-<n>`、`top-<n>`、`space-x-<n>`、`translate-x-<n>` 等 | `spacing-<n>` | `number` | `p-gutter`、`-mt-gutter`、`gap-x-gutter` |
+| `text-<n>` | `text-<n>` | `typography`，或只设字号的 `number` | `text-title`、`text-body` |
+| `font-<n>` | `font-<n>`，其次 `font-weight-<n>` | `font`，其次 `number` | `font-display`、`font-strong` |
+| `tracking-<n>` | `tracking-<n>` | `number`，单位为点 | `tracking-label` |
+| `leading-<n>` | `leading-<n>` | `number`，字号的倍数 | `leading-body` |
+| `blur-<n>`、`backdrop-blur-<n>` | `blur-<n>` | `number`，或 `blur` 的半径 | `blur-soft`、`backdrop-blur-glass` |
+| `duration-<n>`、`delay-<n>` | `duration-<n>` | `duration` | `duration-quick` |
+| `ease-<n>` | `ease-<n>` | `easing` | `ease-snappy` |
+| `shadow-<n>` | `shadow-<n>` | `shadow` | `shadow-raised` |
+| `bg-<n>` | `background-image-<n>` | `gradient` | `bg-hero` |
+| `(--name)`，Tailwind 4 的变量简写，以及 `(color:--name)`、`(length:--name)`、`(number:--name)`、`(family-name:--name)`、`(image:--name)` | `name` | 任意种类，在一个工具类可接受多种值时由提示标明 | `bg-(--popover)`、`rounded-(--radius)`、`text-(length:--text-title)`、`font-(family-name:--font-mono)`、`bg-(image:--background-image-hero)` |
 
-- **应用自己的令牌。** 主题文件中的每个名称都是 token，就像 CSS `@theme` 中的每个变量：`"up": "#16a34a"` 生成 `bg-up`、`text-up` 和 `bg-up/30`；`"radius-card": "14px"` 生成 `rounded-(--radius-card)`；`"font-display": "Pacifico"` 生成 `font-(family-name:--font-display)`。长度的单位是点；`(number:--name)` 传入不带单位的数值。
-- **主题角色。** 变量也可以指名[主题角色](../modules/nsh.md#role)：当主题没有名为 `popover` 的 token，并把角色 `popover` 映射到自己的 token `overlay`（主题文档或主题文件的 `"roles": { "popover": "overlay" }`）时，`bg-(--popover)` 在每种外观下都是 `overlay` 的颜色，并随它变化。因此在多个应用之间共享的组件只需写一次 `bg-(--popover) rounded-(--radius)`，就适用于每个设计系统。同名的 token 优先，而不带括号的类（`bg-popover`）只指名 token。构建时会根据主题映射的角色检查该变量。
+- **两种方式，同一结果。** 主题声明 `corner-card` 并映射 `"radius-card": "corner-card"` 时，`rounded-card` 绘制
+  `corner-card`；主题声明名为 `radius-card` 的 token 而不做映射时，结果相同。映射到所在行不接受的种类的 token
+  （把 `"radius-card"` 映射到颜色）会在主题加载时报告（`role-type`）并被略过，该角色读取同名的 token。长度的单位是点；
+  `(number:--name)` 传入不带单位的数值。
+- **谁先谁后。** 两行都能指名同一个类时，较长的工具类优先（`inset-shadow-card` 是内阴影的颜色 `card`，无论
+  `spacing-shadow-card` 是什么）。在同一个工具类下，带命名空间的角色先于同名的颜色，但 `text-<n>` 例外：颜色优先，
+  其次是 typography，再次是数字；`font-<n>` 先是字体，再是字重；`bg-<n>` 先是颜色，再是渐变。种类不被所在行接受的
+  角色在该行被跳过：类名落到下一行，再落到 Tailwind 自己的工具类，两者都不适用时就是未知类。
+- **复合值整体读取。** `text-title` 一起设置其 typography 的字号、行高（倍数或点）、字间距、字重和字体族；同一元素上的
+  `leading-*`、`tracking-*` 或 `font-*` 类无论位置都胜过这些部分，与 Tailwind 4 的 `--text-*--line-height` 等一样。
+  `shadow-raised` 绘制阴影的各层，包括内阴影；`bg-hero` 绘制渐变，线性、径向或锥形；`blur-glass` 和
+  `backdrop-blur-glass` 把模糊的半径分别放进滤镜和背景滤镜，与模糊本身的类型无关。
+- **主题胜过 Tailwind 的值。** 类名同时也是 Tailwind 内置值的角色或 token 胜过内置值，与 Tailwind 4 的 `@theme`
+  一样：主题的 `shadow-md` 让类 `shadow-md` 成为它的阴影，所以 `token("shadow-md")` 与 `shadow-md` 绘制的相同；
+  `radius-lg`、`text-lg`、`blur-md`、`ease-in`、`duration-150` 和 `spacing-4`（对应 `p-4`）也各自如此。没有这样的名称时，
+  Tailwind 的值不变；主题的角色种类不对时也不变：映射到数字的 `shadow-md` 绘制 Tailwind 的 `shadow-md`。颜色角色同样
+  胜过 `"tailwind"` 的 `colors` 或 Tailwind 调色板中的同名颜色。Tailwind 自己的类可带的修饰符同样适用于主题的类：
+  `text-sm/6` 和 `text-title/6` 设置主题的字号（typography 则整体设置），行高取修饰符的值；`shadow-md/20` 和
+  `shadow-raised/20` 以该不透明度绘制主题的各层阴影；除颜色的不透明度外，其他主题类不接受修饰符。
 - **字体。** `font-sans` 是应用的字体：没有设置自己字体族的文字都用它绘制，就像网页使用 Tailwind 的 `--font-sans`。`font-mono` 是 `font-mono` 类和 `TextView` 中代码的字体。未设置时两者都是系统字体。
-- **两种外观。** token 带有主题的浅色值和深色值：`bg-primary`、`theme().primary` 和 `token("primary")` 都会随外观自动切换，不需要 `dark:` 类。只在一种外观里设置的颜色在两种外观下都使用该值。数字也可以有深色值：在浅色的 `14px` 之外写 `"dark": { "radius-card": "6px" }`，`rounded-card` 和 `rounded-(--radius-card)` 在浅色外观下为 14 点，在深色外观下为 6 点，`token("radius-card")` 取当前显示外观的值；主题只给出一次的数字在两种外观下相同。
-- **具名数字类名。** 名称以 Tailwind 4 某个命名空间开头的数字 token，是该命名空间工具类的一个类名，按名称的其余部分命名，就像 Tailwind 中 `--radius-card` 产生 `rounded-card`：`radius-` 对应圆角工具类（`rounded-card`、`rounded-t-card`、`rounded-bl-card`）；`spacing-` 对应内边距、外边距、间距、尺寸、偏移和平移（`p-gutter`、`-mt-gutter`、`gap-x-gutter`、`w-gutter`、`inset-x-gutter`）；`text-` 对应字号；`font-weight-` 对应字重（`"font-weight-strong": "650"` 产生 `font-strong`）；`tracking-`、`leading-` 和 `blur-` 对应各自的工具类。`tracking-` token 是以点为单位的长度（`px` 或 `rem`）；`em` 单位的值会被略过，shadcn 的 `tracking-normal: 0em` 一直如此。它们可以用在变体下，并像所有 token 类名一样跟随主题。`text-` 也是颜色工具类：同名的颜色在那里仍然优先；其他情况下较长的工具类优先（`inset-shadow-card` 是内阴影的颜色 `card`）。
-- **时长、缓动和文字样式 token。** `duration-<n>`（`"duration-fast": "150ms"` 或 `0.2s`）是以毫秒计的时长，`duration-fast` 和 `delay-fast` 读取它；写成 CSS 缓动的 `ease-<n>`（`"ease-snappy": "cubic-bezier(0.2, 0, 0, 1)"`）是缓动，类名 `ease-snappy` 读取它，与 Tailwind 4 的 `--ease-*` 一样。带子值的字号 `text-<n>`（`"text-title": "24px"`、`"text-title--line-height": "1.25"`、`"text-title--letter-spacing": "-0.5px"`、`"text-title--font-weight": "650"`）与 Tailwind 4 的 `--text-*` 一样，使 `text-title` 设置字号及其具有的每个部分。主题文档可以把它们声明为 `duration`、`easing` 和 `typography` 令牌，也可以声明名称无法表明种类的字符串和布尔值（[主题文档](./rust.md#主题文档与类型化键)）。
-- **渐变 token。** 写成 CSS 渐变的 `background-image-<n>`（`"background-image-hero": "linear-gradient(135deg, #7c3aed, #db2777)"`，可在 `light` 和 `dark` 中分别给值；线性、径向和锥形渐变，可重复，一个或多个）是渐变 token，与 Tailwind 4 的 `--background-image-*` 一样：类名 `bg-hero` 和 `bg-(image:--background-image-hero)` 按当前显示的外观绘制它。色标中的 `var()` 是主题在该外观下的颜色（在 `theme` 中写一次的 `linear-gradient(to right, var(--primary), var(--accent))` 在两种外观下各是一个渐变）。名为 `hero` 的颜色或 Tailwind 自己的类名会保留 `bg-hero` 的原意，构建时会像数字 token 一样列出该 token；这时用 `(image:--…)` 的形式读取它。在 Rust 中，`.adaptive_gradient(move || tokens().gradient("background-image-hero").cloned().unwrap_or_default())` 跟随主题和外观；`token("background-image-hero")` 是它的 CSS，可以直接用作 `backgroundImage` 样式。
-- **阴影 token。** 写成 CSS `box-shadow` 的 `shadow-<n>`（`"shadow-raised": "0 1px 2px #0000001a"`，可在 `light` 和 `dark` 中分别给值）是阴影 token：类名 `shadow-raised` 和 `shadow-(--shadow-raised)` 按当前显示的外观绘制它的各层阴影。主题中其他 `shadow-*` 名称（shadcn 的 `shadow-color`、`shadow-opacity`）仍是原来的颜色和数字；`shadow-sm`、`shadow-md` 等仍是 Tailwind 的类名，和其他 Tailwind 名称一样，且不会提示（tweakcn 导出的主题会写它们）：用 `shadow-(--shadow-sm)` 读取这样的 token。在 Rust 中，`.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())` 跟随主题和外观；`token("shadow-raised")` 是它的 CSS。
-- **Tailwind 的名称优先。** 当某个 token 的命名空间类名与 Tailwind 自己的名称相同时，Tailwind 的名称保持原意：`"radius-lg"` 不改变 Tailwind 的 `rounded-lg`，`"spacing-md"` 让 `p-md` 成为该 token 的类名，而 `max-w-md` 仍是 Tailwind 的宽度。构建时会列出该 token 不对应的类名（`` `spacing-md` is no class where Tailwind's or a color's keeps its meaning: `max-w-md`, … ``），与颜色 `card` 同名的字号 `text-card` 也是如此；可以用 `rounded-(--radius-lg)` 读取这样的 token。
-- **你的 Tailwind 颜色优先。** `"tailwind"` 的 `colors` 或 Tailwind 调色板里的名称就是那个颜色，所以 Tailwind 主题里没有 `primary` 这个颜色时，`bg-primary` 是主题 token。
-- **主题可以在运行时改变。** 嵌入原生应用的 NSH 应用拿到宿主的主题时，以及主题每次变化时，引用 token 的类、读取 `theme()` 的 Rust 绑定和读取 `token()` 的 TSX 代码都会更新，其中类和绑定在原生侧更新。宿主主题里没有的 token 使用应用自己 `"theme"` 中的值（再没有则用默认主题的值）。只想加上自己品牌的宿主给出主题覆盖，即用同样的文件格式写出其品牌要改的 token（[iOS](./ios.md#主题覆盖)、[Android](./android.md#主题覆盖)，桌面端为 `AppView::set_theme_overrides`）。
-- **应用可以换一个主题。** `nsh` 的 [`setTheme(theme)`](../modules/nsh.md#settheme) 在应用运行时把一个同样格式的主题设为应用的主题，取代它的 `"theme"`，在每个平台和 `nsh test` 里都一样；`setTheme(null)` 恢复应用自己的主题。`token()` 立即读到新的 token。主题要整个读得懂：有读不懂的值时抛出列出该值的 `TypeError`，正在显示的主题保持不变。请从应用自己的主题文件出发构造新主题，这样类名引用的每个 token 都还有值。Rust 应用用 `set_tokens(theme.into())` 设置一个 `nsh_base::Theme` 的 token。
-- **与其他类名一样检查。** 既不是默认主题、也不是应用 `"theme"` 中 token 的名称，在构建时会报告为未知类（`unknown class 'bg-chart-up'`）。要使用只有宿主或运行时设置的主题提供的 token，在应用的 `"theme"` 里也给它一个值：应用单独运行时显示这个值。
-- **已声明的令牌。** 应用的 crate 注册了[主题文档](./rust.md#主题文档与类型化键)，或应用的主题文件声明了它的令牌时，已声明的 token 就是主题的 token，以文档的默认值为起点：类名像使用任何 token
-  一样使用它们（`bg-surface-raised`、`text-action/70`，`radius-card` 对应 `rounded-card`，`spacing-gutter` 对应 `p-gutter`），`token()` 读取它们。
-  角色是 NSH 自己的部分绘制时使用的，类名使用的是 token：设计系统把 `primary` 角色映射到 `action` 时，它的类名是 `bg-action`，而只有某份文档声明了
-  `primary`，`bg-primary` 才是已知的类名。
+- **同一时刻一个值。** token 只有一个值：主题的修饰器当前显示的上下文中的值。类名是带这个值的一条规则；选择另一个上下文
+  （主题的深色值、某个品牌，[`set_modifier`](./rust.md#在应用运行时修改令牌)）会重新解析读取了被它改变的 token 的类，
+  其他类不变。`dark:` 跟随外观（系统的，或 `nsh.json` 的 `"appearance"`），与主题的修饰器无关：选择主题明暗修饰器的
+  `dark` 上下文时，主题才显示它的深色值。
+- **主题可以在运行时改变。** 嵌入原生应用的 NSH 应用拿到宿主的主题时，以及主题每次变化时，读取主题的类、读取 `theme()` 的 Rust 绑定和读取 `token()` 的 TSX 代码都会更新，其中类和绑定在原生侧更新。只想加上自己品牌的宿主给出主题覆盖，即其品牌要改的值和角色组成的补丁（[iOS](./ios.md#主题覆盖)、[Android](./android.md#主题覆盖)，桌面端为 `AppView::set_theme_overrides`）。新值会重新解析读取它的类；只把某个角色映射到另一个 token 的补丁会重新解析读取该角色的类。
+- **应用可以换一个主题。** `nsh` 的 [`setTheme(theme)`](../modules/nsh.md#settheme) 在应用运行时把另一份主题文档设为应用的主题，取代它的 `"theme"`，在每个平台和 `nsh test` 里都一样；`setTheme(null)` 恢复应用自己的主题，`token()` 在本轮之后的那一帧读到新的 token。Rust 应用调用 `set_theme(Some(document))`。请从应用自己的主题出发构造新主题，这样类名读取的每个角色都还有 token。
+- **与其他类名一样检查。** 既不是默认主题、也不是应用 `"theme"` 中角色的名称，在构建时会报告为未知类（`unknown class 'bg-chart-up'`）。要使用只有宿主或运行时设置的主题提供的 token，在应用的 `"theme"` 里也给它一个值：应用单独运行时显示这个值。
 
-引用 token 的类和其他类一样，每套主题只解析一次：绘制时的开销与调色板颜色相同。
+读取主题的类和其他类一样，在它读取的内容每次变化时只解析一次：绘制时的开销与调色板颜色相同。主题不为之提供任何角色的类，首次解析时一次查找即可判定。
 
 ### TSX 中的 `token()`
 
-`nsh` 的 `token(name)` 是令牌在当前外观下的值：颜色是 `#rrggbbaa`，长度是以点为单位的数值，字体是字体族名称。它是响应式的，在组件、memo 或 effect 中读取它的代码会在主题或外观变化时重新运行，适合类名用不到的地方，例如画布或图表：
+`nsh` 的 `token(name)` 是令牌的值，采用主题格式的规范形式：颜色是 `#rrggbb`（不完全不透明时为 `#rrggbbaa`），长度是以点为单位的数值，字体是字体族列表，阴影、渐变等复合值是由其成员组成的对象（[`token`](../modules/nsh.md#token)）。它是响应式的，在组件、memo 或 effect 中读取它的代码会在该令牌变化时（换主题、补丁、选择修饰器的上下文）重新运行，适合类名用不到的地方，例如画布或图表：
 
 ```tsx
 import { Canvas, token } from "nsh";
@@ -300,19 +318,19 @@ import { Canvas, token } from "nsh";
 />
 ```
 
-名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。使用已声明的令牌时，它列出已声明的 token，每个按其种类标注类型（`number`，颜色、字体和阴影为 `string`），并附带文档注释。
+名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。每个令牌按其种类、以 `token()` 给出的形式标注类型（颜色或字体为 `string`，`number`，`boolean`，时长为 `` `${number}ms` ``，复合类型为由其成员组成的对象，阴影为各层组成的数组），并附带文档注释。
 
 ### 应用某一部分的 token
 
-`ThemeScope` 让应用的一部分使用它自己的主题 token 值，就像 Web 上设置 CSS 变量的类一样。它的 `theme` 是一个主题文件，其中的值叠加在它外层的 token 之上；其中的 token 类、`token()` 和 Rust 组件在每种外观下都跟随它：
+`ThemeScope` 让应用的一部分使用它自己的值，就像 Web 上设置 CSS 变量的类一样。它的 `theme` 是主题值和角色的补丁（`{ values: { ... }, roles: { ... } }`，与 `updateTheme` 接受的相同），叠加在它外层的 token 之上；它的 `modifiers` 为其中的内容选择主题修饰器的上下文。其中的 token 类、`token()` 和 Rust 组件都跟随它：
 
 ```rust tabs
 use nsh_base::theme;
 use nsh_core::prelude::*;
 
-let brand = r##"{ "cssVars": { "light": { "primary": "#7c3aed" }, "dark": { "primary": "#a78bfa" } } }"##;
+let brand = Patch::new().value("primary", Hsla::from(rgb(0x7c3aed)));
 
-theme_scope().theme(Some(ScopeTheme::file(brand))).child(
+theme_scope().theme(Some(brand)).child(
     view()
         .rounded(move || theme().radius)
         .bg(move || theme().primary)
@@ -324,14 +342,14 @@ theme_scope().theme(Some(ScopeTheme::file(brand))).child(
 ```tsx tabs
 import { Text, ThemeScope, View } from "nsh";
 
-<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+<ThemeScope theme={{ values: { primary: "#7c3aed" } }}>
   <View class="rounded-(--radius) bg-primary p-4">
     <Text class="text-primary-foreground">Upgrade</Text>
   </View>
 </ThemeScope>
 ```
 
-作用域只设置应用主题已有的 token 的值，且种类与主题中的相同：主题没有的名称，或主题中属于另一种类的名称（主题中是数字的名称被设为颜色），会被略过并给出警告，所以每个类在各处都对应同一种类的一个 token。它没有设置的 token 仍是应用的，并跟随 `setTheme` 和 `updateTheme`；嵌套在内的作用域从外层作用域的值开始。设置 `appearance` 后，作用域还会以浅色或深色显示其内容（[设备与环境](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)）。
+作用域只设置主题已声明的 token 的值，且种类与主题中的相同：主题拒绝的条目（主题没有的名称、另一种类的值、映射到角色不接受的种类的 token）会被略过并给出警告，所以每个类在各处都对应同一种类的一个 token。其中的映射（`roles: { popover: "overlay" }`）只在该作用域内改变读取这个角色的类。它没有设置的 token 仍是应用的，并跟随 `setTheme` 和 `updateTheme`；嵌套在内的作用域从外层作用域的值和选择开始。设置 `appearance` 后，作用域还会以浅色或深色显示其内容（[设备与环境](./device-and-environment.md#a-part-of-the-app-in-its-own-appearance)）：它决定其中的 `dark:` 类，从不决定 token 的值，所以作用域要显示主题的深色值，还需选择它们：`modifiers={{ colorMode: "dark" }}`（Rust 中为 `.modifiers(Some(ScopeModifiers::new([("colorMode", "dark")])))`）。
 
 ## 类名检查
 

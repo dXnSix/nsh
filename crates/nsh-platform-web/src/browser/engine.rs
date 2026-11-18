@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use nsh_core::{
     EventKind, EventPayload, NodeId, Op,
-    element::{JsEvent, JsHost, ThemeTokens, Tokens},
+    element::{JsEvent, JsHost, Tokens},
 };
 use nsh_engine::{
     Environment,
@@ -66,8 +66,9 @@ impl Host for Runtime {
             .cloned()
             .chain(services.registries)
             .collect();
-        *self.tokens.borrow_mut() = Some(services.tokens);
-        *self.theme.borrow_mut() = Some(services.theme);
+        // What the app is drawn with from the start: what `token()` reads
+        // before the first theme write.
+        let _ = self.take_tokens(services.tokens);
         *self.host.borrow_mut() = Some(services.host);
         *self.wake.borrow_mut() = Some(services.wake);
         self.timers.set_clock(services.clock);
@@ -244,12 +245,16 @@ impl Host for Runtime {
                 .map(|v| vec![Value(v.0[0] as u32)]),
         );
     }
+    /// The page's readers of what changed run again (`environment.js`'s
+    /// `changedTokens`, told what changed as JSON: `token_changes`).
     fn set_tokens(&self, tokens: Arc<Tokens>) {
-        *self.tokens.borrow_mut() = Some(tokens);
-        self.notify("tokens", []);
-    }
-    fn set_theme_tokens(&self, theme: ThemeTokens) {
-        *self.theme.borrow_mut() = Some(theme);
+        let Some(changes) = self.take_tokens(tokens) else {
+            return;
+        };
+        match Value::string(&changes.to_string()) {
+            Ok(changes) => self.notify("tokens", [changes]),
+            Err(_) => self.notify("tokens", []),
+        }
     }
     fn take_fonts(&self, out: &mut Vec<String>) {
         out.append(&mut self.fonts.borrow_mut());

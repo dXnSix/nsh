@@ -20,7 +20,8 @@ use std::{
 use rustc_hash::FxHashMap;
 
 use super::{
-    AdaptiveColor, Environment, Memo, Owner, Signal, SignalEquals, Tokens, cleanup, computed,
+    AdaptiveColor, Environment, Memo, Owner, Role, RoleValue, Signal, SignalEquals, Token, Tokens,
+    cleanup, computed,
     reactive::with_data,
     signal_with,
     task::{
@@ -45,6 +46,12 @@ pub(crate) struct Ambient {
     executor: Option<Rc<Executor>>,
     env: Option<EnvSignals>,
     tokens: Option<Signal<Arc<Tokens>>>,
+    /// A signal per token name a Rust reader read outside a
+    /// [`super::ThemeScope`] ([`token`], [`super::TokenKey::get`], [`role`]),
+    /// set when that token's value changes.
+    token_signals: FxHashMap<Box<str>, Signal<()>>,
+    /// Set when a resolved role mapping changes.
+    roles_signal: Option<Signal<()>>,
     globals: FxHashMap<TypeId, Box<dyn Any>>,
     /// The insets of the screens or modals components are on, by host.
     insets: FxHashMap<NodeId, Signal<EdgeInsets>>,
@@ -64,9 +71,6 @@ pub(crate) struct Ambient {
     /// The main window's close presses: how many, and the last one's
     /// reason ([`crate::element::desktop::WindowRef::on_close_press`]).
     main_close_press: Option<Signal<(u64, crate::desktop::CloseReason)>>,
-    /// How theme files are read ([`ThemeTokens`]), for a
-    /// [`super::ThemeScope`]'s `theme`.
-    theme_tokens: Option<super::ThemeTokens>,
     /// The app's address (`set_app_url` resolves against its page base).
     app_url: Option<crate::url_scheme::AppUrlCell>,
     /// A [`super::ThemeScope`] was made on this surface.
@@ -83,11 +87,6 @@ impl Ambient {
     /// A [`super::ThemeScope`] is made.
     pub(crate) fn set_scoped(&mut self) {
         self.scoped = true;
-    }
-
-    /// How theme files are read on this surface.
-    pub(crate) fn theme_tokens(&self) -> Option<super::ThemeTokens> {
-        self.theme_tokens.clone()
     }
 
     /// The hosts whose insets components read.
@@ -264,23 +263,43 @@ impl super::Runtime {
         displays_signal().with_untracked(|d| placement.fit_on_displays(d))
     }
 
-    /// How the surface's UI sets read theme files.
-    pub(crate) fn set_theme_tokens(&self, theme: super::ThemeTokens) {
-        let _entered = self.enter();
-        with_data(|d| d.ambient.theme_tokens = Some(theme));
-    }
-
-    /// The design tokens now: what read them runs again.
-    pub(crate) fn set_tokens(&self, tokens: Arc<Tokens>) {
+    /// The design tokens now: what read them whole ([`tokens`]) runs
+    /// again, and of the readers of single tokens ([`token`],
+    /// [`super::TokenKey::get`], [`role`]) those of the names `changed`
+    /// names, and those that went through a role when `roles_moved` (a
+    /// role mapping changed). `changed` `None`: every reader.
+    pub(crate) fn set_tokens(
+        &self,
+        tokens: Arc<Tokens>,
+        changed: Option<&[String]>,
+        roles_moved: bool,
+    ) {
         let _entered = self.enter();
         let signal = with_data(|d| d.ambient.tokens);
-        match signal {
-            Some(signal) => signal.set(tokens),
-            None => {
-                let signal = Owner::detached().run(|| signal_with(tokens, SignalEquals::Never));
-                with_data(|d| d.ambient.tokens = Some(signal));
+        super::batch(|| {
+            match signal {
+                Some(signal) => signal.set(tokens),
+                None => {
+                    let signal = Owner::detached().run(|| signal_with(tokens, SignalEquals::Never));
+                    with_data(|d| d.ambient.tokens = Some(signal));
+                }
             }
-        }
+            let names: Vec<Signal<()>> = with_data(|d| match changed {
+                Some(changed) => changed
+                    .iter()
+                    .filter_map(|name| d.ambient.token_signals.get(name.as_str()).copied())
+                    .collect(),
+                None => d.ambient.token_signals.values().copied().collect(),
+            });
+            for signal in names {
+                signal.set(());
+            }
+            if (roles_moved || changed.is_none())
+                && let Some(roles) = with_data(|d| d.ambient.roles_signal)
+            {
+                roles.set(());
+            }
+        });
     }
 
     /// The hosts whose insets components read.
@@ -575,83 +594,170 @@ pub fn is_tv() -> bool {
     idiom() == Idiom::Tv
 }
 
-/// The design tokens the app is drawn with (reading them subscribes: new
-/// tokens reach what read them).
+/// The design tokens the app is drawn with (reading them subscribes to
+/// every token: a change of any reaches what read them; [`token`] reads
+/// one).
 pub fn tokens() -> Arc<Tokens> {
     super::theme_scope::ScopeTokens::nearest().unwrap_or_else(surface_tokens)
 }
 
-/// The design token `name` as the app is shown where it is read (TS:
-/// `token()`): the nearest [`super::ThemeScope`]'s, a number its value in
-/// the appearance there ([`Tokens::get_in`]), any other kind as
-/// [`Tokens::get`] gives it. Reading it subscribes, as [`tokens`] does, and
-/// to the appearance for a number with a dark value.
-pub fn token(name: &str) -> Option<super::Token> {
-    let tokens = tokens();
-    let dark = tokens.has_dark_number(name) && dark();
-    tokens.get_in(name, dark)
+/// The design tokens of the nearest [`super::ThemeScope`] around what reads
+/// them, `None` outside one. Reading them subscribes to the scope's
+/// tokens; outside a scope it subscribes to nothing: for a reader that
+/// keeps its own memo of the surface's tokens (`nsh-base`'s `theme()`) and
+/// makes a scope's apart.
+pub fn scope_tokens() -> Option<Arc<Tokens>> {
+    super::theme_scope::ScopeTokens::nearest()
+}
+
+/// The design token `name` where it is read (TS: `token()`): the nearest
+/// [`super::ThemeScope`]'s, else the surface's. Outside a scope, reading it
+/// subscribes to that token alone: what read it runs again only when its
+/// value changes. Inside one, to the scope's tokens.
+pub fn token(name: &str) -> Option<Token> {
+    with_token(name, |token| token.cloned())
+}
+
+/// What `role` draws with where it is read: the token a theme maps it
+/// onto, else the one of its own name ([`Tokens::role`]). Outside a
+/// [`super::ThemeScope`], reading it subscribes to that token and to the
+/// role mappings alone.
+pub fn role<V: RoleValue>(role: Role<V>) -> Option<V> {
+    if let Some(scope) = super::theme_scope::ScopeTokens::nearest() {
+        return scope.role(role);
+    }
+    track_roles();
+    let tokens = surface_tokens_untracked();
+    let name = tokens.role_target(role.name())?;
+    track_token(name);
+    tokens.typed_role(role, name)
+}
+
+/// `f` of token `name` where it is read, subscribing as [`token`] does.
+pub(super) fn with_token<R>(name: &str, f: impl FnOnce(Option<&Token>) -> R) -> R {
+    if let Some(scope) = super::theme_scope::ScopeTokens::nearest() {
+        return f(scope.value(name));
+    }
+    track_token(name);
+    f(surface_tokens_untracked().value(name))
+}
+
+/// Subscribes what runs to the signal of token `name`, made on its first
+/// read.
+fn track_token(name: &str) {
+    let signal = match with_data(|d| d.ambient.token_signals.get(name).copied()) {
+        Some(signal) => signal,
+        None => {
+            let signal = Owner::detached().run(|| signal_with((), SignalEquals::Never));
+            with_data(|d| d.ambient.token_signals.insert(name.into(), signal));
+            signal
+        }
+    };
+    signal.with(|_| ());
+}
+
+/// Subscribes what runs to the role mappings.
+fn track_roles() {
+    let signal = match with_data(|d| d.ambient.roles_signal) {
+        Some(signal) => signal,
+        None => {
+            let signal = Owner::detached().run(|| signal_with((), SignalEquals::Never));
+            with_data(|d| d.ambient.roles_signal = Some(signal));
+            signal
+        }
+    };
+    signal.with(|_| ());
 }
 
 /// The design tokens the surface is drawn with, whatever scope is around.
 pub(super) fn surface_tokens() -> Arc<Tokens> {
     with_data(|d| d.ambient.tokens)
-        .expect("the core sets the tokens")
-        .get()
+        .map(|signal| signal.get())
+        .unwrap_or_default()
 }
 
-/// Draws the app with the design tokens `tokens` (the app's own, which an
-/// embedding app's still win over), in place of the UI set's defaults or
-/// the theme file's: Tailwind's token classes, [`tokens`] and the
-/// platform's own controls (Linux's menus, Android's alerts) follow. An app that picks its
-/// theme while it runs sets it here (`set_tokens(theme.into())` of an
-/// `nsh_base::Theme`). They are read by nothing declared: tokens a theme
-/// document declares come through the app's theme file (TS's `setTheme`).
-pub fn set_tokens(tokens: impl Into<Tokens>) {
-    act(Action::Tokens(tokens.into()));
+/// [`surface_tokens`], subscribing to nothing.
+fn surface_tokens_untracked() -> Arc<Tokens> {
+    with_data(|d| d.ambient.tokens)
+        .map(|signal| signal.get_untracked())
+        .unwrap_or_default()
 }
 
-/// Changes some of the app's design tokens: each token `tokens` has takes
-/// its value, the others stay as they are ([`set_tokens`] replaces them
-/// all). The change applies in order with the app's other actions, so two
-/// updates in one turn both take, the later over the earlier; what reads
-/// a changed token follows in the same frame. TS: `updateTheme`.
-pub fn update_tokens(tokens: impl Into<Tokens>) {
-    act(Action::UpdateTokens(tokens.into()));
+/// Activates theme document `json` as the app's theme (TS: `setTheme`), in
+/// order with the app's other theme actions; `None`: the app's built-in
+/// document again (`Root::theme`, `nsh.json`'s `"theme"`), else the UI
+/// sets'. Returns (and logs) the read diagnostics of `json`. A text that is
+/// no document, or one of the old format (`legacy-format`), is not activated: the
+/// active document stays.
+///
+/// Activating another document keeps the modifier contexts picked that it
+/// has, and the app's overrides as they are.
+pub fn set_theme(json: Option<&str>) -> Vec<super::Diagnostic> {
+    let Some(json) = json else {
+        act(Action::Theme(None));
+        return Vec::new();
+    };
+    let (document, diagnostics) = super::theme::read_document(json);
+    if let Some(document) = document {
+        act(Action::Theme(Some(Arc::new(document))));
+    }
+    diagnostics
+}
+
+/// Merges `patch` into the app's overrides (TS: `updateTheme`): its entries
+/// replace the app's for the same token or role, in order with the app's
+/// other theme actions, and every theme action of a turn resolves once.
+/// Overrides win over picked modifier contexts. An entry the active
+/// document refuses (a name it does not declare, a value that does not fit
+/// the token's type) is logged and skipped, and kept: it applies when a
+/// document that declares the name is active.
+///
+/// ```
+/// use nsh_core::element::{Patch, PatchValues};
+/// # fn run() {
+/// nsh_core::element::update_tokens(Patch::new().value("radius-card", 12.0));
+/// # }
+/// ```
+pub fn update_tokens(patch: super::Patch) {
+    act(Action::UpdateTokens(patch));
 }
 
 /// Gives the theme's modifier `name` (`brand`) the context `context`
-/// (`forest`): the tokens its contexts set take that context's values, in
-/// order with the app's other actions, and what reads them follows (TS:
-/// `setModifier`). A name or context the theme has not is logged.
+/// (`forest`), in order with the app's other theme actions, and what reads
+/// the tokens it changes follows (TS: `setModifier`). It works from the
+/// app's first turn on: a pick made while the root is built reaches the
+/// first frame. A modifier or context the active document lacks is logged
+/// (`unknown-modifier`, `unknown-context`) and changes nothing.
 pub fn set_modifier(name: &str, context: &str) {
     act(Action::SetModifier(name.into(), context.into()));
 }
 
-/// The context the theme's modifier `name` has now where it is read (the
-/// nearest [`super::ThemeScope`]'s tokens'), `None` when the theme has no
-/// such modifier. Reading it subscribes, as [`tokens`] does.
+/// The context the theme's modifier `name` shows where it is read (the
+/// nearest [`super::ThemeScope`]'s tokens'), `None` when the active document
+/// has no such modifier. Reading it subscribes, as [`tokens`] does.
 pub fn modifier(name: &str) -> Option<Box<str>> {
-    tokens().modifiers()?.selected(name).map(Into::into)
+    tokens().modifier(name).map(Into::into)
 }
 
-/// The theme's modifiers, each with its contexts and default (none when
-/// the theme has none). Reading it subscribes, as [`tokens`] does.
+/// The active document's modifiers, each with its contexts and default.
+/// Reading it subscribes, as [`tokens`] does.
 pub fn modifiers() -> Vec<super::ModifierAxis> {
-    tokens()
-        .modifiers()
-        .map(super::ThemeModifiers::axes)
-        .unwrap_or_default()
+    tokens().modifiers()
 }
 
-/// Puts the design tokens `names` back to their values in the app's theme
-/// (the UI set's defaults with `nsh.json`'s theme, or the theme last set
-/// whole with [`set_tokens`] or `setTheme`), undoing [`update_tokens`] for
-/// them; a name the theme lacks is removed. The other tokens stay as they
-/// are. TS: `resetTheme`.
+/// Removes the names `names` from the app's overrides (TS: `resetTheme`),
+/// each as a token and as a role: what they set goes back to the layer
+/// below, and stays so across modifier switches.
 pub fn reset_tokens<S: Into<Box<str>>>(names: impl IntoIterator<Item = S>) {
-    act(Action::ResetTokens(
+    act(Action::ResetTokens(Some(
         names.into_iter().map(Into::into).collect(),
-    ));
+    )));
+}
+
+/// Empties the app's overrides (TS: `resetTheme()`), `themeOverrides`'
+/// entries included.
+pub fn reset_all_tokens() {
+    act(Action::ResetTokens(None));
 }
 
 /// The width of `text` on one line in `font` (the CSS `font` shorthand; an

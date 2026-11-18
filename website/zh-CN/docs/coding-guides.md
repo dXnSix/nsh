@@ -618,15 +618,18 @@ view()
 
 有效的优先级为：元素自身的样式，然后是状态样式，后面的状态优先，`disabled` 高于一切。后一层只替换自己设置的字段。
 
-新的应用自有表现优先使用主题的语义 token。应用主题文件中的每个名称都是 token，如同 Tailwind `@theme` 的变量（`"up": "#16a34a"`
-生成 `text-up`、`bg-up/30`、TSX 中的 `token("up")` 和 Rust 中的 `theme().color("up")`），主题有浅色和深色两套值，所以 token 不用 `dark:` 类名也会跟随外观模式。以角色而不是组件命名 token，避免它成为每个控件的扩展点。
+新的应用自有表现优先使用主题的语义 token。应用主题文档中的每个 token 都像 Tailwind `@theme` 的变量那样命名（`"up": { "kind": "color", "value": "#16a34a" }`
+生成 `text-up`、`bg-up/30`、TSX 中的 `token("up")` 和 Rust 中的 `tokens().color("up")`）。它的深色值是文档浅色/深色修饰器的一个上下文
+（`colorMode`，[主题](./rust.md#主题)）：外观不改变任何 token，所以切换或跟随外观的应用要同时选择这个修饰器（`setModifier("colorMode", colorScheme())`），
+token 随后不用 `dark:` 类名也会跟随。以角色而不是组件命名 token，避免它成为每个控件的扩展点。
 
 通过应用的主题文件（`nsh.json` 的 `"theme"`）修改主题，或让嵌入应用提供它自己的主题：主题变化时，引用 token 的类名和读取
 `theme()` 的 Rust 绑定都会原生地重新设置样式，无需运行任何 JavaScript。把 token 的值复制到自己的 signal 中的代码就不再跟随它。
 
 设计系统的组件在绑定中通过 `theme_keys!` 根据其文档生成的类型化键读取令牌，
 `.bg(move || keys::surface::RAISED.get().unwrap_or_default())`：这次读取是响应式的，不是键的名称无法编译。运行时用
-`update_tokens(Tokens::default().with(keys::ACTION, color))` 修改令牌，用 `reset_tokens` 恢复；两者都和主题文件一样原生地重新设置样式。
+补丁修改令牌，即 `update_tokens(Patch::new().key(keys::ACTION, color))`（TSX 中是 `updateTheme({ values: { action: color } })`），用 `reset_tokens` 恢复；
+两者都和主题文件一样原生地重新设置样式。
 
 向外绘制的焦点环需要空间，带 `overflow: hidden`（`overflow-hidden`）的祖先会裁掉它。优先让布局留出空间；产品确实需要大量
 裁剪时，在控件内部绘制获得焦点的状态，不能悄悄消除键盘焦点。

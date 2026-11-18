@@ -608,13 +608,14 @@ batches to a test that keeps its own model of the screen. `examples/rust-exports
 
 The look of an app is the app's own: NSH provides the primitives and the unstyled base components of `nsh_base`, and
 your crate is the styled layer on top, the app's own component library ([Three layers](./architecture.md#three-layers)). Rust components take their colors, corner radius and fonts from a theme, `theme()` from
-`nsh_base`, so one file restyles every component of the app. Each color has a light and a dark value;
-when the system switches appearance, a binding such as `.bg(move || theme().primary)` changes color natively, with no
-render.
+`nsh_base`, so one theme document restyles every component of the app. A binding such as
+`.bg(move || theme().primary)` follows every change of the theme natively, with no render.
 
 The theme has the design tokens of [shadcn/ui](https://ui.shadcn.com/docs/theming), and its default is shadcn's
 `neutral` theme, a black-and-white palette with a 10 pt corner radius. To use your own, set `"theme"` in `nsh.json`
-to the path of a theme file, relative to `nsh.json`, or to the theme's content inline:
+to the path of a theme document, relative to `nsh.json`, or to the document inline; it replaces the default whole.
+To change a few tokens of the theme and keep the others, override them with a patch instead
+([below](#changing-tokens-while-the-app-runs)):
 
 ```json
 {
@@ -624,68 +625,67 @@ to the path of a theme file, relative to `nsh.json`, or to the theme's content i
 }
 ```
 
-A theme file is shadcn's `cssVars`, the format of shadcn's themes and registry items, so a theme exported from
-[shadcn's themes](https://ui.shadcn.com/themes) or [tweakcn](https://tweakcn.com) works as it is. `light` sets the
-values of the light appearance, `dark` those of the dark one, and `theme` those of both:
+A theme document is JSON: each token with its `kind` and its `value`, the modifiers whose contexts change values
+(its light and dark appearance among them), and the roles NSH's own parts read:
 
 ```json
 {
-  "cssVars": {
-    "theme": {
-      "radius": "0.5rem",
-      "font-sans": "Inter, sans-serif"
-    },
-    "light": {
-      "primary": "oklch(0.541 0.281 293.009)",
-      "primary-foreground": "oklch(0.969 0.016 293.756)",
-      "ring": "var(--primary)",
-      "up": "#16a34a"
-    },
-    "dark": {
-      "primary": "oklch(0.702 0.183 293.541)",
-      "primary-foreground": "oklch(0.283 0.141 291.089)",
-      "up": "#4ade80"
+  "tokens": {
+    "violet-9": { "kind": "color", "value": "#7c3aed" },
+    "violet-4": { "kind": "color", "value": "#a78bfa" },
+    "primary": { "kind": "color", "value": "{violet-9}" },
+    "primary-foreground": { "kind": "color", "value": "#f5f3ff" },
+    "ring": { "kind": "color", "value": "{primary}" },
+    "up": { "kind": "color", "value": "#16a34a" },
+    "radius": { "kind": "number", "value": 8 },
+    "font-sans": { "kind": "font", "value": "Inter, sans-serif" }
+  },
+  "modifiers": {
+    "colorMode": {
+      "default": "light",
+      "contexts": {
+        "light": {},
+        "dark": { "primary": "{violet-4}", "primary-foreground": "#2e1065", "up": "#4ade80" }
+      }
     }
-  }
+  },
+  "resolutionOrder": ["colorMode"]
 }
 ```
 
-- Your theme is applied over the default theme, so you list only what you change. A value `light` sets and `dark`
-  leaves out is used in both appearances.
-- Values are written as in CSS. Colors are any CSS color (`#7c3aed`, `rgb(…)`, `hsl(…)`, `oklch(…)`, `white`),
-  `color-mix(in oklab, var(--primary) 80%, white)`, or another token of the same appearance, `var(--primary)` (with a
-  fallback: `var(--brand, #7c3aed)`). Lengths are `rem` (16 points) or `px` (points). Fonts are font family lists:
-  the first family that is not a generic one is used, and a generic first family (`system-ui`, `sans-serif`) is the
-  system font.
-- **Gradients.** A `background-image-<n>` written as CSS gradients (`"background-image-hero": "linear-gradient(135deg,
-  #7c3aed, #db2777)"`, per appearance in `light` and `dark`) is a gradient token:
-  `tokens().gradient("background-image-hero")` is an `AdaptiveGradient`, and
-  `.adaptive_gradient(move || tokens().gradient("background-image-hero").cloned().unwrap_or_default())` draws it as
-  the background, following theme changes and switching with the appearance natively as `.bg(..)` does.
-  `AdaptiveGradient::parse("linear-gradient(…)")` reads gradients of the app's own, the same in both.
-- **Shadows.** A `shadow-<n>` written as CSS `box-shadow` (`"shadow-raised": "0 1px 2px #0000001a"`, per appearance in
-  `light` and `dark`) is a shadow token: `tokens().shadow("shadow-raised")` is an `AdaptiveShadow`, and
-  `.adaptive_shadow(move || tokens().shadow("shadow-raised").cloned().unwrap_or_default())` draws it, following theme
-  changes and switching with the appearance natively as `.bg(..)` does. `.shadow(layers)` takes static layers, the
-  same in both.
-- **Numbers per appearance.** A number in `dark` is its dark value (`"dark": { "radius-card": "6px" }`): classes,
-  TSX's `token()`, Rust's `element::token("radius-card")` and a typed key's `get()` follow the appearance shown, and
-  so does `theme().radius`. `tokens().number(..)` and `tokens().get(..)` give the light
-  value (the only one of a number the theme gives once); `number_in("radius-card", dark)` and `get_in(.., dark)` read
-  either. `Tokens::set_dark_number` gives one in code.
+- A token's `kind` is what it holds, whatever its name: `color` (`#rgb`, `#rrggbb`, `#rrggbbaa`), `number` (points,
+  or a plain number), `font` (a font family list: the first family that is not a generic one is used, and a generic
+  first family, `system-ui` or `sans-serif`, is the system font), `string`, `boolean`, `duration` (`"150ms"`),
+  `easing` (`[0.2, 0, 0, 1]` or `ease-out`), and the compounds `typography`, `shadow`, `gradient`, `blur`, `border`
+  and `transition`. A value may be another token, `"{violet-9}"`: references resolve after everything else, so a
+  change of `violet-9` reaches `primary` and `ring`.
+- **Light and dark.** A token holds one value. The theme's dark values are the `dark` context of its light/dark
+  modifier, `colorMode` above, and `set_modifier("colorMode", "dark")` shows them (below). The appearance (`nsh.json`'s
+  `"appearance"`, the system's) decides `dark:` classes, `dark()`, `color(..)` and the colors given per appearance
+  (`AdaptiveColor::rgb(0xffffff, 0x0d1117)`), never a token's value.
+- **Other modes.** A brand, a density or a contrast is a modifier too ([Modifiers](#theme-documents-and-typed-keys)),
+  and `"resolutionOrder"` lists the modifiers in the order their contexts apply, a later one winning.
+- **Gradients, shadows and text styles.** A `gradient` token is a `Gradient` (`tokens().gradient("hero")`), a `shadow`
+  token its layers (`tokens().shadow("shadow-raised")`), and a `typography` token a `Typography`, which
+  `.typography(move || tokens().typography("text-title").cloned().unwrap_or_default())` sets on a text whole (size,
+  line height, letter spacing, weight and family). `.adaptive_gradient(..)` and `.adaptive_shadow(..)` take one per
+  appearance: `AdaptiveShadow::new(light, dark)` of two tokens' layers.
 - **Your own tokens.** Any other name is a token of the app, as a variable in Tailwind's `@theme` is: `"up"` above is
-  `theme().color("up")` in Rust, `bg-up` / `text-up/70` in classes and `token("up")` in TSX
-  ([Theme tokens](./tailwind.md#theme-tokens)). A number such as `"radius-card": "14px"` is `theme().number("radius-card")`
-  and `rounded-(--radius-card)`.
-- The bundler checks the theme when it builds: a missing file, invalid JSON or a theme other than `cssVars` fails the
-  build with an `nsh.json: theme: …` error.
-- `nsh run` and `nsh package` hand the theme file to the app's root, `Root::theme(json)`, so it is read as a TSX
-  app's is and is in the first frame; the `cargo run` binary that `nsh init` writes does the same with `nsh.json`'s
-  `"theme"`. A root you make yourself (a test's `EngineConfig::new(Root::of::<App>())`) takes one with
-  `.theme(include_str!("../brand-theme.json"))`; the UI set that reads themes reads it, so the engine's `ui_sets`
-  need `nsh_base::registry()` (the desktops' `run_app` has it already).
+  `token("up")` or a typed key's `get()` in Rust ([below](#theme-documents-and-typed-keys)), `bg-up` / `text-up/70` in
+  classes and `token("up")` in TSX ([Theme tokens](./tailwind.md#theme-tokens)). A number such as `"radius-card"` is
+  `TokenKey::<Points>::new("radius-card").get()` and `rounded-(--radius-card)`. Each follows its token where it is
+  read; `theme().color(name)` reads the tokens the theme was made of and does not follow a token no role reads.
+- A document never stops the app: what it cannot use (a value that does not fit its kind, a reference to no token) is
+  left out and logged (target `nsh::theme`), and the rest applies. The runtime refuses a shadcn theme file of the old
+  format: `Root::theme` and `set_theme` report `legacy-format` and activate nothing, and the theme stays.
+  [`nsh theme convert`](./cli.md#nsh-theme) writes such a file as a theme document; `nsh build`, `nsh dev` and
+  `nsh run` warn of a `"theme"` in `nsh.json` of the old format (`legacy-format`) and leave it out.
+- `nsh run` and `nsh package` hand the theme to the app's root, `Root::theme(json)`, so it is read as a TSX app's is
+  and is in the first frame; the `cargo run` binary that `nsh init` writes does the same with `nsh.json`'s `"theme"`.
+  A root you make yourself (a test's `EngineConfig::new(Root::of::<App>())`) takes one with
+  `.theme(include_str!("../brand-theme.json"))`, and overrides with `.theme_overrides(..)`.
 
-The tokens, with their default light and dark values (shadcn's `neutral`):
+The tokens, with their default light and dark values (shadcn's `neutral`; the dark ones are `colorMode`'s `dark`):
 
 | Token | `theme()` | Light | Dark | Role |
 |---|---|---|---|---|
@@ -708,70 +708,72 @@ The tokens, with their default light and dark values (shadcn's `neutral`):
 
 ### Changing tokens while the app runs
 
-`set_tokens(theme.into())` makes another theme the app's ([Theme tokens](./tailwind.md#theme-tokens)). To change a
-few tokens and keep the others, pass just those to `update_tokens`; `reset_tokens` puts the tokens it names back to
-the app's theme:
+The app's overrides are one patch over the theme: the entries of its root's `Root::theme_overrides`, then each
+`update_tokens(patch)`. To change a few tokens and keep the others, pass just those; `reset_tokens` takes the names it
+lists out of the patch, back to the theme's values; `set_theme` makes another document the app's theme:
 
 ```rust
-use nsh_core::prelude::*;
+use nsh_core::{element::set_modifier, prelude::*};
 
-let mut brand = Tokens::default();
-brand.set_color("primary", AdaptiveColor::rgb(0xe11d48, 0xfb7185));
-update_tokens(brand); // only `primary` changes
-reset_tokens(["primary"]); // the app's primary again
+update_tokens(Patch::new().value("primary", Hsla::from(rgb(0xe11d48)))); // only `primary` changes
+reset_tokens(["primary"]); // the theme's primary again
+set_modifier("colorMode", "dark"); // the theme's dark values
+set_theme(Some(include_str!("../high-contrast.json"))); // another theme document
+set_theme(None); // `nsh.json`'s again
 ```
 
-- A change applies in order with the app's other actions: two updates in one turn both take, the later over the
-  earlier. What reads a changed token (`theme()`, a class, `token()` in TSX) follows in the same frame, and the
-  platform's own controls with it.
-- The app's theme is `nsh.json`'s over the default, or the one `set_tokens` or `setTheme` set last. A name
-  `reset_tokens` gives that the theme does not have is removed.
-- A synchronous `#[module]` function does the same with `cx.update_tokens(..)` and `cx.reset_tokens(..)` of its
-  `ModuleCx`. TSX: [`updateTheme` and `resetTheme`](../modules/nsh.md#updatetheme-resettheme).
+- A change applies in order with the app's other actions, and all of a turn's theme changes resolve once. What reads
+  a changed token (`theme()`, a class, `token()` in TSX) follows in the same frame, and the platform's own controls
+  with it.
+- An update replaces the patch's entry for the same token, so a thousand updates of one token are one entry. An
+  override wins over a modifier's context: update `radius-card` to 12, pick a compact density, and it stays 12. An
+  entry the theme does not declare, or of another kind than its token, is logged and left out (and applies again
+  under a theme that declares it). `Patch::new().role("popover", "surface")` maps a role.
+- `reset_tokens(names)` takes each name out of the patch, a token's override and a role's mapping alike, so the
+  theme's value (or the picked context's) is back and stays across modifier switches; `reset_all_tokens()` empties
+  the patch, `Root::theme_overrides`' entries included.
+- `set_theme(Some(json))` returns what it could not use of the document. A text that is no theme document is refused
+  and the theme stays. Another theme keeps the modifier contexts picked that it has, and the overrides.
+- A synchronous `#[module]` function does the same with `cx.update_tokens(..)`, `cx.reset_tokens(..)`,
+  `cx.reset_all_tokens()`, `cx.set_modifier(..)` and `cx.set_theme(..)` of its `ModuleCx`. TSX:
+  [`updateTheme` and `resetTheme`](../modules/nsh.md#updatetheme-resettheme).
 
 ### Theme documents and typed keys
 
 A design system with a token structure of its own (surfaces by level, an action color, a card radius) ships its
-tokens as a **theme document**: a theme file whose `"tokens"` section declares each token, what kind it is, its place
-in the designer's tree and its doc, beside its values and the roles it maps. The theme document is the app's token
-source in place of nsh-base's shadcn theme; an app with none keeps the shadcn theme above.
+tokens as a **theme document** whose tokens also say their place in the designer's tree and their doc, and whose
+roles map NSH's own parts onto them. The theme document is the app's theme in place of nsh-base's shadcn theme; an
+app with none keeps the shadcn theme above.
 
 ```json
 {
-  "cssVars": {
-    "light": { "surface-raised": "#ffffff", "surface-overlay": "#ffffff", "action": "#4f46e5" },
-    "dark": { "surface-raised": "#18181b", "surface-overlay": "#27272a", "action": "#818cf8" },
-    "theme": { "radius-card": "14px" }
-  },
   "tokens": {
-    "surface-raised": { "kind": "color", "path": "surface.raised", "doc": "Cards and sheets." },
-    "surface-overlay": { "kind": "color", "path": "surface.overlay", "doc": "Popovers and menus." },
-    "action": { "kind": "color", "doc": "The main action." },
-    "radius-card": { "kind": "radius", "path": "radius.card", "doc": "Cards' corners." }
+    "surface-raised": { "kind": "color", "value": "#ffffff", "path": "surface.raised", "doc": "Cards and sheets." },
+    "surface-overlay": { "kind": "color", "value": "#ffffff", "path": "surface.overlay", "doc": "Popovers and menus." },
+    "action": { "kind": "color", "value": "#4f46e5", "doc": "The main action." },
+    "radius-card": { "kind": "number", "value": 14, "path": "radius.card", "doc": "Cards' corners." }
   },
+  "modifiers": {
+    "colorMode": {
+      "default": "light",
+      "contexts": {
+        "light": {},
+        "dark": { "surface-raised": "#18181b", "surface-overlay": "#27272a", "action": "#818cf8" }
+      }
+    }
+  },
+  "resolutionOrder": ["colorMode"],
   "roles": { "popover": "surface-overlay", "primary": "action" }
 }
 ```
 
-- `kind` is what the token holds: `color`, `number`, `radius`, `spacing`, `text`, `weight`, `tracking`, `leading`,
-  `blur`, `font`, `shadow`, `gradient`, `string`, `boolean`, `duration`, `easing` or `typography`. A theme file is read
-  by it: each value as its token's kind. A `string` is a JSON string (`"Acme"`), a `boolean` `true` or `false`, a
-  `duration` `150ms`, `0.2s` or a number of milliseconds, an `easing` a CSS easing (`cubic-bezier(0.2, 0, 0, 1)`,
-  `ease-out`); a string, a boolean and an easing are one value in both appearances. A `typography` token is a text
-  style, as Tailwind 4's `--text-*` with its sub-values: `text-title` is its size, and the numbers
-  `text-title--line-height`, `text-title--letter-spacing` and `text-title--font-weight` its parts, which it declares
-  (each may be left out); the class `text-title` sets them together.
-- A token's name is the one classes, `var()` and `token()` use. A color's and a number's are free (`surface-raised`,
-  `action`); a namespaced kind's starts with its Tailwind namespace, which its classes read it by (`radius-card` is
-  `rounded-card`; `spacing-`, `text-`, `font-weight-`, `tracking-`, `leading-`, `blur-`, a duration's `duration-`,
-  which `duration-fast` and `delay-fast` read, a text style's `text-`); a font's starts with `font-`, a shadow's with
-  `shadow-`, a gradient's with `background-image-`, an easing's with `ease-` (`ease-snappy` is the class too).
+- A token's name is the one classes, `{…}` references and `token()` use, and says nothing about its kind: a number
+  named `radius-card` is read by `rounded-card` and `rounded-(--radius-card)` as any number is.
 - `path` is the token's place in the designer's tree (`surface.raised`), and `doc` its description, which
   `.nsh/types/nsh/tokens.d.ts` shows on `token()`. A path names one token: a second token at the same path is
-  refused, in one document, across documents and in the app's theme file.
-- A theme document has these sections and no others: `cssVars`, `tokens`, `modifiers`, `roles` (and `$schema`, for
-  an editor). Another is said and left out. A shadcn or tweakcn file, which declares no tokens and has no modifiers,
-  is read as before, its own members (`name`, `type`, `css`) passed over.
+  left out and reported.
+- A theme document has these sections: `name`, `tokens`, `modifiers`, `resolutionOrder` and `roles` (and `$schema`,
+  for an editor). Another is reported and left out.
 - `"roles"` maps the roles NSH's own parts draw with onto the document's tokens (below).
 
 The UI set registers its document in its `#[native_module]` function, and `theme_keys!` makes a typed key of each
@@ -791,85 +793,99 @@ pub mod keys {
 
 view()
     .bg(move || keys::surface::RAISED.get().unwrap_or_default())
-    .rounded(move || keys::radius::CARD.get().unwrap_or_default())
+    .rounded(move || px(keys::radius::CARD.get().unwrap_or_default()))
     .p_4()
 
-update_tokens(Tokens::default().with(keys::ACTION, AdaptiveColor::rgb(0xe11d48, 0xfb7185)));
-reset_tokens([keys::ACTION.name()]); // the app's action again
+update_tokens(Patch::new().key(keys::ACTION, rgb(0xe11d48).into()));
+reset_tokens([keys::ACTION.name()]); // the theme's action again
 ```
 
-- A key is a `TokenKey<V>`: its token's name with the type of its value. A color is an `AdaptiveColor`; a number,
-  weight or line height an `f32`; a radius, spacing, size, tracking or blur `Points`; a font a `SharedString`; shadows
-  an `AdaptiveShadow`; gradients an `AdaptiveGradient`; a string a `String`; a boolean a `bool`; a duration a
-  `std::time::Duration`; an easing a `CubicBezier`; a text style a `Typography` (`size`, `line_height`,
-  `letter_spacing`, `font_weight`). Its doc is the token's.
-- `key.get()` reads the token where it is used: the nearest [`ThemeScope`](../modules/nsh.md#themescope)'s, a number in the
-  appearance shown. It is reactive as `tokens()` is. `tokens().key(key)` reads it from tokens in hand (a number its
-  light value), and `tokens().get_as::<V>(name)` reads a token by name, with an error that says whether it is missing
-  or of another kind.
-- `Tokens::with(key, value)` and `Tokens::set(key, value)` write a token typed: hand the tokens to `update_tokens`.
+- A key is a `TokenKey<V>`: its token's name with the type of its value. A color is an `Hsla`; a number an `f32`,
+  points or a plain number (`px(..)` makes it a length, as above); a font an `Arc<str>`; a string a `String`; a
+  boolean a `bool`; a duration a `std::time::Duration`; an easing a `CubicBezier`; a text style a `Typography`
+  (`font_family`, `size`, `line_height`, `letter_spacing`, `font_weight`); shadows an `Arc<[BoxShadow]>`; a gradient a
+  `Gradient`; a blur a `Blur`, a border a `Border` and a transition a `TransitionToken`. Its doc is the token's.
+- `key.get()` reads the token where it is used: the nearest [`ThemeScope`](../modules/nsh.md#themescope)'s. It is
+  reactive, and outside a scope runs again only when that token changes. `tokens().key(key)` reads it from tokens in
+  hand, and `tokens().get_as::<V>(name)` reads a token by name, with an error that says whether it is missing or of
+  another kind.
+- `Patch::new().key(key, value)` writes a token typed: hand the patch to `update_tokens`.
 - `theme_keys!` reads the document when the crate builds, relative to its manifest, and builds the crate again when it
   changes. Path segments become modules in snake case and keys in upper snake case (`type-scale.gutter`:
   `type_scale::GUTTER`); a token without a path is named after its name (`ACTION`).
+- `tokens()` says what the active document declares: each name's kind (`kind_of`), path (`path_of`) and doc
+  (`doc_of`), the token at a path (`name_at`) and every name (`names()`).
 - Code that does not know the app's names, such as `nsh_base`'s components, reads roles instead.
 
 **Roles.** NSH's own parts draw with roles, constants of the crate that draws with them (`nsh_base::role`: `POPOVER`,
-`PRIMARY`, `BORDER`, `RADIUS`, `FONT_SANS`, …; [Theme roles](../modules/nsh-base.md#theme-roles)), and a crate with
-components of its own declares its roles the same way (`pub const BANNER: Role = Role::new("banner");`). A document's
-`"roles"` maps roles onto its tokens, a color token for a color's role, a number for a number's, a font for a font's,
-so `nsh_base`'s `theme()` fields and components, the tab bar, the platforms' menus and alerts, and the default font
-draw with the document's tokens: above, `theme().popover` is the design system's `surface-overlay` and
-`theme().primary` its `action`. A token may play several roles (`"card": "surface", "popover": "surface"`): a design
-system with one surface for cards and popovers maps both onto it, and both follow every change of it. A role is played
-by one token.
+`PRIMARY`, `BORDER`, `RADIUS`, `FONT_SANS`, …; [Theme roles](../modules/nsh-base.md#theme-roles)). A role is a name
+and the kind of token it reads, in its type: `Role` reads a color (an `Hsla`), `NumberRole` a number, `FontRole` a
+font, and `Role<Typography>`, `Role<Arc<[BoxShadow]>>` and the like the other kinds. A document's `"roles"` maps
+roles onto its tokens, a token of the kind the role reads, so `nsh_base`'s `theme()` fields and components, the tab
+bar, the platforms' menus and alerts, and the default font draw with the document's tokens: above, `theme().popover`
+is the design system's `surface-overlay` and `theme().primary` its `action`. Without a mapping a role reads the token
+of its own name. A token may play several roles (`"card": "surface", "popover": "surface"`): a design system with one
+surface for cards and popovers maps both onto it, and both follow every change of it. A role is played by one token.
 
-A set lists the roles its components draw with in its registry, mapped by a theme or not, so the toolchain knows
-them: `registry.roles(role::all())`, where `nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }`
-writes the constants with `all()` beside them. `nsh/base` lists its own.
+- A role resolves in the active document alone, `nsh_base`'s as any library's: a document that neither maps one of
+  nsh-base's roles nor has a token of its name gives it nothing, and `theme()` draws that color transparent and the
+  `radius` as 0. nsh-base's default document is a theme only while it is the active one.
+- A mapping onto a token the theme does not have, or of another kind than the role reads, is reported and left out,
+  and the role reads what it would without it (a patch's mapping falls back on the document's).
+- `role(role::POPOVER)` reads a role where it is used, typed (`Option<Hsla>` for a color's), and outside a
+  [`ThemeScope`](../modules/nsh.md#themescope) runs again only when its token or its mapping changes; `tokens().role(..)`
+  reads it from tokens in hand. `theme()` reads its fields the same way: what reads it runs again when one of its
+  roles changes, and not for a token none of them reads.
 
-**Several documents.** A design system's crate and the app's crate each register their own document: the design
-system's tokens, and the app's own beside them (`odds-up` for a betting app). Their tokens merge into one theme. A
-token name or a role that two documents claim panics when the UI sets are merged, naming both sets, as does a
-document that says what it cannot: a kind there is not, a value of another kind than its token's, a name it does not
-declare, a role mapped onto a token of another kind than the role reads.
+A crate with components of its own declares its roles, and lists them in its registry, mapped by a theme or not, so
+the toolchain and the theme's checks know them: `registry.roles(role::all())`, where
 
-**The theme file.** `nsh.json`'s `"theme"` sets the documents' tokens by name, each read as its declared kind (a color
-as a CSS color, a radius as a length). A role's name sets the token the role is mapped onto: `"primary"` below sets
-the design system's `action`. `var(--surface-raised)` names a token the file sets, else the documents' default; it
-copies a color or a number (`"radius-card": "var(--radius)"`, `var(--radius, 8px)` with a fallback) in each
-appearance, once, when the file is read. A
-name that nothing declares, or a value of another kind, is a build warning and is left out when the app runs. A key
-that is a role's name, in a section that also sets the token the role is mapped onto, gives way to that token; so
-does the second of two roles' names that set one token to two values. An embedding app's theme overrides and TSX's
-`setTheme` and `updateTheme` read their files the same way: they leave a name nothing declares out, and refuse a value
-they cannot read. `resetTheme` reads its names the same way. Beside `cssVars`, a file's `"roles"` maps a role no
-document maps onto one of the declared tokens (`"roles": { "warning": "status-caution" }`); a role a document maps is
-the document's.
+```rust
+pub mod role {
+    use nsh_core::element::{NumberRole, Role};
 
-```json
-{
-  "cssVars": {
-    "theme": { "radius-card": "12px" },
-    "light": { "surface-overlay": "#fafafa", "primary": "#e11d48", "odds-up": "#16a34a" },
-    "dark": { "surface-overlay": "#27272a", "primary": "#fb7185", "odds-up": "#4ade80" }
-  }
+    nsh_core::roles! {
+        /// A banner's surface.
+        pub BANNER: Role = "banner" required,
+        /// How round a chip is.
+        pub CHIP_RADIUS: NumberRole = "chip-radius",
+    }
 }
 ```
 
-**The app's own declared tokens.** An app's theme file may declare its tokens itself, with a `"tokens"` section of
-its own: a TSX app's `nsh.json` theme is then its theme document. Its declared tokens replace the shadcn theme, and
-the file is read by them as above. A change (`updateTheme`) may declare tokens of its own beside the ones the app has.
-`tokens().declarations()` says what declares the tokens: each name's kind (`kind_of`), path (`path_of`), doc and
-owner, and the token at a path (`name_at`).
+writes the constants with `all()` beside them, each with its doc and kind. `required` marks a role every theme should
+map: a theme that does not is warned of when it loads. Two sets that list one role with different kinds keep the
+first, with a warning. `nsh/base` lists its own: 48 roles, none required.
 
-**Modifiers.** A theme's other modes (a brand, a density, a contrast) are its `"modifiers"`, in a document or the
-app's theme file: each with its `default` and its `contexts`, each context the part of `cssVars` it changes
-([`setModifier`](../modules/nsh.md#setmodifier-modifier-modifiers)). The tokens are the values with each modifier's
-picked context over them, in order: a document's modifiers first, then the app's file's, and the file's values are
-the ones under the contexts. `set_modifier("brand", "forest")` picks a context in order with the app's other actions,
-`modifier("brand")` is the one picked now (reactive) and `modifiers()` lists them, as `tokens().modifiers()` does
-(`ThemeModifiers`: `axes()`, `selected()`, `select()`, `tokens()`). `theme_keys!` makes an enum of each modifier's
-contexts in `keys::modifiers`, so the compiler checks the names:
+**One document at a time.** The app's document (`nsh.json`'s `"theme"`, `Root::theme`, or `set_theme`'s) is the
+theme; without one, the first UI set's that registers one; without any, nsh-base's default. Documents are never
+merged, and a token of a document that is not active is read nowhere: an app that adds tokens of its own to a design
+system's (`odds-up` for a betting app) ships one document with both. A document that says what it cannot (a kind
+there is not, a value of another kind, a role mapped onto a token of another kind) loads with its good entries and
+reports the rest.
+
+**The app's overrides.** A patch, `Root::theme_overrides(json)` on the app's root, changes tokens of the theme by
+name, and its `"roles"` maps roles onto other tokens:
+
+```json
+{
+  "values": { "surface-overlay": "#fafafa", "action": "#e11d48", "radius-card": 12 },
+  "roles": { "warning": "status-caution" }
+}
+```
+
+A name the theme does not declare, or a value of another kind than its token's, is a warning and is left out. The
+overrides win over every modifier's context, and an embedding app's overrides win over the app's.
+
+**Modifiers.** A theme's modes (its light and dark values, a brand, a density, a contrast) are its `"modifiers"`:
+each with its `default` and its `contexts`, each context the token values it changes, and `"resolutionOrder"` the
+order they apply in ([`setModifier`](../modules/nsh.md#setmodifier-modifier-modifiers)). The tokens are the
+document's values with each modifier's picked context over them, then the overrides, then references.
+`set_modifier("brand", "forest")` picks a context in order with the app's other actions (from the app's first turn,
+so a pick made while the root is built is in the first frame); a modifier or context the theme lacks is logged and
+changes nothing. `modifier("brand")` is the one picked now (reactive) and `modifiers()` lists them with their
+contexts and defaults, as `tokens().modifiers()` does. `theme_keys!` makes an enum of each modifier's contexts in
+`keys::modifiers`, so the compiler checks the names:
 
 ```rust
 use keys::modifiers::Brand;
@@ -883,14 +899,11 @@ theme_scope()
     .child(preview())
 ```
 
-The app's picks are its own: a theme read again (`setTheme`, a hot reload of the theme file) keeps each context the
-app picked, where the new theme still has it. A change (`updateTheme`, `update_tokens`) changes the modifiers too:
-its `"modifiers"` give a context new values, add a context or a modifier and move a `default`, the contexts picked
-staying picked; a token a context sets takes the change's value as its own, under the contexts, so a context picked
-still sets it. A modifier's entry has `default` and `contexts`, a context `theme`, `light` and `dark`; another member
-is said and left out.
+The app's picks are its own: another theme (`set_theme`, a hot reload of the theme file) keeps each context the app
+picked where the new theme has it, and the others go back to their defaults. A `ThemeScope`'s `appearance` changes
+only its color scheme; it shows the theme's dark values when its `modifiers` also pick `colorMode`'s `dark`.
 
-**The toolchain.** `nsh build` and `nsh dev` learn the documents from the app's crates and its theme file: classes
+**The toolchain.** `nsh build` and `nsh dev` learn the documents from the app's crates and its theme: classes
 name their tokens (`bg-surface-raised`, `rounded-card`), and `.nsh/types/nsh/tokens.d.ts` types `token()` by kind, with
 the docs ([Theme tokens](./tailwind.md#theme-tokens)).
 

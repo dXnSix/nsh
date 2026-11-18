@@ -2,7 +2,7 @@ import { cleanup, resource, Share, type ShareResult, signal, Text, View, type Vi
 import fs from "fs/promises";
 import process from "process";
 import { createAnimatedValue, Easing } from "nsh";
-import { colorScheme, fontScale, horizontalSizeClass, verticalSizeClass, windowSize } from "nsh";
+import { colorScheme, fontScale, horizontalSizeClass, modifier, verticalSizeClass, windowSize } from "nsh";
 import { AlertDialog, type AlertDialogAction, Dialog, type StatusBarForeground } from "nsh/base";
 import { keyboardFrame, safeArea } from "nsh";
 import { Menu } from "nsh/desktop";
@@ -91,6 +91,9 @@ function Environment() {
         <View style={{ flex: 1 }} />
         <Badge label={colorScheme() === "dark" ? "Dark scheme" : "Light scheme"} tone={colorScheme() === "dark" ? "info" : "warn"} outline />
       </View>
+      {/* The theme's light/dark modifier, which the gallery picks with the
+          appearance (`followColorScheme`), in the theme's text color. */}
+      <Text style={{ fontSize: 12, color: colors.text, fontFamily: mono }}>{`Theme colorMode: ${modifier("colorMode") ?? "none"}`}</Text>
     </Card>
   );
 }

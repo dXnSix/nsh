@@ -13,7 +13,7 @@ use std::{
 
 use nsh_core::{
     EventKind, EventPayload, NodeId, Op, TextEngine,
-    element::{JsEvent, Posts, Registry, ThemeTokens, Tokens},
+    element::{JsEvent, Posts, Registry, Tokens},
     time::Instant,
 };
 
@@ -40,8 +40,6 @@ pub struct Services {
     pub environment: Environment,
     /// The initial design tokens.
     pub tokens: Arc<Tokens>,
-    /// The initial theme.
-    pub theme: ThemeTokens,
     /// The engine's clock, which the host's timers and `Date` read: a
     /// test's manual one moves only when the test moves it.
     pub clock: nsh_core::time::Clock,
@@ -57,7 +55,6 @@ impl Default for Services {
             posts: Default::default(),
             environment: Default::default(),
             tokens: Default::default(),
-            theme: Default::default(),
             clock: Default::default(),
         }
     }
@@ -99,8 +96,6 @@ pub trait Host {
     fn set_environment(&self, environment: &Environment);
     /// Update design tokens.
     fn set_tokens(&self, tokens: Arc<Tokens>);
-    /// Update the theme.
-    fn set_theme_tokens(&self, theme: ThemeTokens);
     /// Take fonts registered by loaded modules.
     fn take_fonts(&self, out: &mut Vec<String>);
     /// Whether the browser host needs an animation frame.
@@ -276,7 +271,6 @@ impl Script {
         // A browser page has no displays of its own (`displays()` is empty).
         _displays: &[nsh_core::desktop::Display],
         tokens: Arc<Tokens>,
-        theme: ThemeTokens,
         _text: Rc<M>,
         _stop: Arc<AtomicBool>,
         sink: Rc<dyn MountSink>,
@@ -311,7 +305,6 @@ impl Script {
                 posts,
                 environment: *environment,
                 tokens,
-                theme,
                 // Startup runs on the engine's clock.
                 clock: nsh_core::time::current(),
             })?;
@@ -401,9 +394,6 @@ impl Script {
     pub(crate) fn set_perf_stats(&self, _: Option<&nsh_core::platform::PerfStats>) {}
     pub(crate) fn set_tokens(&self, value: Arc<Tokens>) {
         self.0.set_tokens(value);
-    }
-    pub(crate) fn set_theme_tokens(&self, value: ThemeTokens) {
-        self.0.set_theme_tokens(value);
     }
     pub(crate) fn take_fonts(&self, out: &mut Vec<String>) {
         self.0.take_fonts(out);

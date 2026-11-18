@@ -75,7 +75,7 @@ pub(crate) struct Host {
     /// What the running app may reach (web view navigations check it).
     access: Mutex<Arc<nsh_engine::Access>>,
     /// The embedding app's theme overrides (`NshView.setThemeOverrides`):
-    /// a theme file the engine reads.
+    /// a theme patch's text the engine reads into its host layer.
     host_theme: Mutex<Option<String>>,
     /// Links the system opened the app with (`NshView.openUrl`) before an
     /// engine started: the next one applies them before the app's code
@@ -148,16 +148,14 @@ impl Host {
         *self.limits.lock().expect("limits") = limits;
     }
 
-    /// The embedding app's theme overrides (`None`: the app's own theme):
-    /// sent to the running app at once, and to every app loaded later
-    /// before its first frame.
+    /// The embedding app's theme overrides, a theme patch (`None`: none,
+    /// the app's own theme): sent to the running app at once, replacing
+    /// its host layer, and to every app loaded later before its first
+    /// frame.
     fn set_host_theme(&self, json: Option<String>) {
         *self.host_theme.lock().expect("theme") = json.clone();
         if let Some(control) = self.control() {
-            match json {
-                Some(json) => control.set_theme_overrides(json),
-                None => control.set_tokens(None),
-            }
+            control.set_theme_overrides(json.as_deref());
         }
     }
 
@@ -269,8 +267,8 @@ impl Host {
         let links = std::mem::take(&mut *self.url_schemes.lock().expect("links"));
         let fonts = self.fonts.lock().expect("fonts").clone();
         let setup = move |control: &EngineControl| {
-            if let Some(json) = theme {
-                control.set_theme_overrides(json);
+            if theme.is_some() {
+                control.set_theme_overrides(theme.as_deref());
             }
             for font in fonts {
                 control.register_font(font);
@@ -989,11 +987,13 @@ extern "system" fn Java_com_longbridge_nsh_Native_imageCacheComplete<'local>(
     }
 }
 
-/// The embedding app's theme overrides: a theme file of shadcn/ui's
-/// (`cssVars`, as `nsh.json`'s `"theme"`), whose tokens win over the app's
-/// of the same names (null: the app's own theme again). Applies at once and
-/// to every app loaded later. Returns why the file does not parse (nothing
-/// changes), or null.
+/// The embedding app's theme overrides: a theme patch,
+/// `{ "values": { token → value }, "roles": { role → token } }`
+/// (`docs/dev/theme-format.md`, section 8), the host layer over the app's
+/// theme and its own overrides (null: none, the app's own theme again).
+/// Each call replaces the whole layer. Applies at once and to every app
+/// loaded later. Returns why the text is no JSON object (nothing changes),
+/// or null.
 #[unsafe(no_mangle)]
 extern "system" fn Java_com_longbridge_nsh_Native_setThemeOverrides<'local>(
     mut env: JNIEnv<'local>,
@@ -1009,9 +1009,11 @@ extern "system" fn Java_com_longbridge_nsh_Native_setThemeOverrides<'local>(
         match env.get_string(&json) {
             Ok(json) => {
                 let json = String::from(json);
-                nsh_core::element::theme_file::check(&json)
-                    .map(|()| Some(json))
-                    .map_err(|err| format!("invalid theme: {err}"))
+                match serde_json::from_str::<serde_json::Value>(&json) {
+                    Ok(value) if value.is_object() => Ok(Some(json)),
+                    Ok(_) => Err("invalid theme: a theme patch is a JSON object".to_owned()),
+                    Err(err) => Err(format!("invalid theme: {err}")),
+                }
             }
             Err(err) => Err(format!("invalid theme: {err}")),
         }

@@ -239,17 +239,18 @@ pub(crate) enum Action {
     Frame(AnswerSlot<Instant>),
     /// Sets the app's appearance.
     Appearance(crate::platform::Appearance),
-    /// Sets the app's design tokens.
-    Tokens(super::Tokens),
-    /// Sets some of the app's design tokens, over its others
+    /// Activates the app's theme document (`None`: the app's built-in
+    /// one again, else the sets'; [`super::set_theme`]).
+    Theme(Option<std::sync::Arc<nsh_theme::ThemeDocument>>),
+    /// Merges a patch into the app's overrides
     /// ([`super::update_tokens`]).
-    UpdateTokens(super::Tokens),
+    UpdateTokens(nsh_theme::Patch),
     /// Picks the context of a theme modifier: its name, the context's
     /// ([`super::set_modifier`]).
     SetModifier(Box<str>, Box<str>),
-    /// Puts the app's design tokens of these names back to its theme's
-    /// ([`super::reset_tokens`]).
-    ResetTokens(Vec<Box<str>>),
+    /// Removes these names from the app's overrides, as tokens and as
+    /// roles (`None`: every entry; [`super::reset_tokens`]).
+    ResetTokens(Option<Vec<Box<str>>>),
     /// Sets the app's translations ([`crate::i18n`]).
     Translations(crate::i18n::Translations),
     /// Shows the app in a language whatever the user's (`None`: the

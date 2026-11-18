@@ -422,13 +422,14 @@ pub unsafe extern "C" fn nsh_app_register_font(
     status(data.and_then(|data| app.view.register_font(data)))
 }
 
-/// The embedding app's theme overrides: a theme file of shadcn/ui's
-/// (`{ "cssVars": { "theme": { … }, "light": { … }, "dark": { … } } }`, as
-/// `nsh.json`'s `"theme"`), whose tokens win over the app's of the same
-/// names, light and dark; `NULL` gives the app its own theme back. Applies
-/// at once (classes naming the tokens are resolved again) and to every app
-/// loaded later, from its first frame. Returns why the file does not parse
-/// (nothing changes), or `NULL`.
+/// The embedding app's theme overrides: a theme patch,
+/// `{ "values": { token → value }, "roles": { role → token } }`
+/// (`docs/dev/theme-format.md`, section 8), the host layer above the app's
+/// theme and its own overrides ([`crate::AppView::set_theme_overrides`]).
+/// Each call replaces the whole layer; `NULL` clears it, giving the app its
+/// own theme back. Applies at once (classes naming the tokens are resolved
+/// again) and to every app loaded later, from its first frame. Returns why
+/// the text is no JSON object (nothing changes), or `NULL`.
 ///
 /// # Safety
 ///

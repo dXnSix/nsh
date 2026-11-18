@@ -1,0 +1,55 @@
+{
+  "name": "Declared",
+  "cssVars": {
+    "theme": {
+      "radius-card": "12px",
+      "font-body": "Inter, system-ui, sans-serif",
+      "text-title": "20px",
+      "text-title--line-height": "1.25",
+      "text-title--font-weight": "650",
+      "duration-fast": "150ms",
+      "ease-snappy": "cubic-bezier(0.2, 0, 0, 1)",
+      "ease-exit": "ease-in",
+      "label-ok": "OK",
+      "motion": true,
+      "shadow-raised": "0 1px 2px #0000001a, 0 1px 3px #0000000f",
+      "background-image-hero": "linear-gradient(90deg, #7c3aed, #db2777)"
+    },
+    "light": {
+      "surface": "#ffffff",
+      "ink": "#111827",
+      "card": "var(--surface)",
+      "text-title--letter-spacing": "-0.2px"
+    },
+    "dark": {
+      "surface": "#111827",
+      "ink": "#f9fafb",
+      "text-title--letter-spacing": "0px"
+    }
+  },
+  "tokens": {
+    "surface": { "kind": "color", "path": "colors.surface", "doc": "Cards and popovers." },
+    "ink": { "kind": "color", "path": "colors.ink", "doc": "Text." },
+    "card": { "kind": "color", "path": "colors.card" },
+    "radius-card": { "kind": "radius", "path": "radius.card", "doc": "A card's corners." },
+    "font-body": { "kind": "font", "path": "fonts.body" },
+    "text-title": { "kind": "typography", "path": "type.title", "doc": "Titles." },
+    "duration-fast": { "kind": "duration", "path": "motion.fast" },
+    "ease-snappy": { "kind": "easing" },
+    "ease-exit": { "kind": "easing" },
+    "label-ok": { "kind": "string", "doc": "The confirm button's label." },
+    "motion": { "kind": "boolean" },
+    "shadow-raised": { "kind": "shadow", "path": "shadows.raised" },
+    "background-image-hero": { "kind": "gradient", "path": "gradients.hero" }
+  },
+  "roles": { "popover": "surface" },
+  "modifiers": {
+    "contrast": {
+      "default": "high",
+      "contexts": {
+        "normal": {},
+        "high": { "light": { "ink": "#000000" }, "dark": { "ink": "#ffffff" } }
+      }
+    }
+  }
+}

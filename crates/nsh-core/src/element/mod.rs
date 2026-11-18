@@ -23,8 +23,9 @@
 //! (`#[derive(Event)]`); their JS face (`nsh-js`) and TypeScript
 //! declarations ([`declarations`]) are made from them. In JS a component is one host node:
 //! the root of its expansion. The app's `class` is appended to the root's
-//! styles and its `style` stays the root's inline style. Colors have a
-//! light and a dark value each ([`AdaptiveColor`]; the design [`Tokens`]).
+//! styles and its `style` stays the root's inline style. A style's color
+//! may have a light and a dark value ([`AdaptiveColor`]); the design
+//! [`Tokens`] have one value each, the active theme document's.
 //!
 //! Node ids: JS allocates even ids, the core odd ones for the nodes it
 //! expands, so both stay dense. How the core runs components:
@@ -77,9 +78,20 @@ mod style;
 mod system;
 pub(crate) mod task;
 pub mod theme;
-pub mod theme_file;
-mod theme_modifiers;
+mod theme_checks;
+pub mod theme_convert;
+#[cfg(test)]
+mod theme_format_describe;
+#[cfg(test)]
+mod theme_format_layers;
+#[cfg(test)]
+mod theme_format_roles;
+#[cfg(test)]
+mod theme_format_signals;
+#[cfg(test)]
+mod theme_format_store;
 mod theme_scope;
+pub(crate) mod theme_values;
 mod token_info;
 mod token_keys;
 pub mod tokens;
@@ -118,6 +130,8 @@ pub use nsh_macros::{
     Event, JsObject, PropEnum, Props, asset, assets, class, class_extension, component, interface,
     methods, module, native_components, native_module, theme_keys,
 };
+/// The theme format's types the runtime takes and gives (`nsh-theme`).
+pub use nsh_theme::{Diagnostic, Patch, RoleDeclaration, ThemeDocument, ValueType};
 
 // The core's parts of `nsh_base`'s navigation and dialogs.
 #[doc(hidden)]
@@ -212,17 +226,18 @@ pub use self::{
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
     task::{Answer, ClipboardImage, ClipboardItem, DialogAnswer, DialogCloser, ImageSize, Task},
-    theme::{Declarations, Declared, TokenKind},
-    theme_modifiers::{ModifierAxis, ThemeModifiers},
     theme_scope::{
-        ModifierContext, ScopeModifiers, ScopeTheme, ThemeScope, ThemeScopeElement,
-        ThemeScopeProps, theme_scope,
+        ModifierContext, ScopeModifiers, ThemeScope, ThemeScopeElement, ThemeScopeProps,
+        theme_scope,
+    },
+    theme_values::{
+        Blur, BlurKind, Border, PatchValues, TransitionToken, Typography, token_ts_type,
     },
     token_info::TokenInfo,
     token_keys::{TokenError, TokenKey, TokenValue},
     tokens::{
-        AnyRole, CubicBezier, FONT_MONO, FONT_SANS, FontRole, NumberRole, Role, RoleKind, RoleSpec,
-        RoleValue, ThemeTokens, Token, TokenOverrides, TokenSource, Tokens, Typography, role,
+        CubicBezier, FONT_MONO, FONT_SANS, FontRole, ModifierAxis, NumberRole, Role, RoleSpec,
+        RoleValue, Token, Tokens, role,
     },
     ts_alias::TsAlias,
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},

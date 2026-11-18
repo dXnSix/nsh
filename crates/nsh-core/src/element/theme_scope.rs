@@ -1,99 +1,109 @@
-//! [`ThemeScope`]: a view that shows itself and the views in it in an
-//! appearance of its own, with design tokens of its own, or both, whatever
-//! the surface shows (a dark sidebar beside a light page, a card with its
-//! own `primary`).
+//! [`ThemeScope`]: a view that shows itself and the views in it in a color
+//! scheme of its own, with modifier contexts and overrides of its own, or
+//! both, whatever the surface shows (a dark sidebar beside a light page, a
+//! card with its own `primary`).
 //!
-//! The core resolves both by node (`core/classes.rs`): the appearance
-//! (`Core::dark_at`: `dark:` variants, theme tokens' classes and the
-//! adaptive styles of Rust components pick the scope's side with nothing
-//! running) and the tokens (`Core::classes_at`: a class list that reads a
-//! token the scope changes is parsed with the scope's values, once). What
-//! reads them in code reads the nearest scope's: [`super::dark`],
-//! [`super::color`], [`super::tokens`], [`super::token`] and typed keys
-//! ([`super::TokenKey::get`]) through the context a scope provides to what it renders, TS's `colorScheme()` and
+//! The core resolves both by node (`core/classes.rs`): the color scheme
+//! (`Core::dark_at`: `dark:` variants and the adaptive styles of Rust
+//! components pick the scope's side with nothing running) and the tokens
+//! (`Core::classes_at`: a class list that reads a token the scope changes is
+//! parsed with the scope's values, once). What reads them in code reads the
+//! nearest scope's: [`super::dark`], [`super::color`], [`super::tokens`],
+//! [`super::token`] and typed keys ([`super::TokenKey::get`]) through the
+//! context a scope provides to what it renders, TS's `colorScheme()` and
 //! `token()` through `nsh-js`'s (`components.rs`).
 //!
-//! A scope's tokens are its `theme`'s values over the tokens around it,
-//! made here ([`ScopeTheme::within`]) and given to the core whole
-//! (`Prop::ScopeTokens`): when the tokens around it change they are made
-//! again.
+//! A scope's tokens are the same stack as the surface's
+//! (`nsh_theme::resolve`): its `modifiers` picks over the selection around
+//! it, its `theme` patch appended after every patch around it (the app's,
+//! the host's, outer scopes'), references resolved once for the subtree.
+//! They are made here and given to the core whole (`Prop::ScopeTokens`):
+//! when the tokens around the scope change they are made again.
 
 use std::sync::Arc;
 
 use crate::{
     JsonValue,
     element::{
-        JsHost, JsIn, JsOwned, JsValue, Memo, NoEvent, PropError, Tokens, TsTypes, computed,
-        provide_context, reactive::with_data, use_context,
+        JsHost, JsIn, JsOwned, JsValue, Memo, NoEvent, Patch, PropError, Tokens, TsTypes, computed,
+        provide_context, reactive::with_data, tokens::ThemeLayers, use_context,
     },
     platform::{Appearance, ColorScheme},
     prelude::*,
 };
 
-/// The design tokens a [`ThemeScope`] sets: a theme file (TS's `theme`,
-/// shadcn's `cssVars`), or tokens made in Rust. A scope sets values of
-/// tokens the theme around it has; it adds no names.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ScopeTheme {
-    /// A theme file, as `updateTheme` takes one: read by the app's UI
-    /// sets, a `var()` it does not set naming the tokens around the scope.
-    File(Arc<str>),
-    /// Tokens.
-    Tokens(Arc<Tokens>),
-}
-
-impl ScopeTheme {
-    /// The theme file `json`.
-    pub fn file(json: impl Into<Arc<str>>) -> Self {
-        Self::File(json.into())
-    }
-
-    /// The tokens a scope with this theme draws with: its values over
-    /// `around`, the tokens around the scope. What it cannot set (a value
-    /// that does not read, a name `around` lacks or has as another kind)
-    /// is left out with a warning.
-    fn within(&self, around: &Arc<Tokens>) -> Arc<Tokens> {
-        let (tokens, left_out) = match self {
-            ScopeTheme::Tokens(tokens) => {
-                let (tokens, unknown) = (**tokens).clone().within(around);
-                let said = unknown
-                    .iter()
-                    .map(|name| super::tokens::scope_left_out(name, around))
-                    .collect();
-                (tokens, said)
+/// The tokens a scope with picks `picks` and patch `patch` draws with,
+/// around `around`: the same stack, its picks over the selection around it
+/// and its patch after every patch around it, references resolved once.
+/// A pick of a modifier or context the document lacks, and a patch entry it
+/// refuses, are left out and returned as diagnostics.
+pub(crate) fn scoped(
+    around: &Arc<Tokens>,
+    picks: Option<&ScopeModifiers>,
+    patch: Option<Patch>,
+) -> (Arc<Tokens>, Vec<nsh_theme::Diagnostic>) {
+    let Some(layers) = around.layers() else {
+        return (around.clone(), Vec::new());
+    };
+    let document = layers.document.clone();
+    let mut selection = layers.selection.clone();
+    let mut said = Vec::new();
+    for (name, context) in picks.iter().flat_map(|picks| picks.0.iter()) {
+        match super::theme::unknown_pick(&document, name, context) {
+            Some(diagnostic) => said.push(diagnostic),
+            None => {
+                selection.set(&**name, &**context);
             }
-            ScopeTheme::File(json) => {
-                let read = with_data(|d| d.ambient.theme_tokens())
-                    .and_then(|theme| theme.scoped(around, json));
-                match read {
-                    Some(Ok(read)) => read,
-                    Some(Err(e)) => {
-                        log::warn!("ThemeScope: {e}");
-                        return around.clone();
-                    }
-                    None => {
-                        log::warn!("ThemeScope: no UI set reads theme files");
-                        return around.clone();
-                    }
-                }
-            }
-        };
-        for what in left_out {
-            log::warn!("ThemeScope: {what}, ignored");
         }
-        Arc::new(tokens)
     }
+    let mut patches = layers.patches.clone();
+    let patched = patch.is_some();
+    if let Some(patch) = patch {
+        said.extend(patch.check(&document));
+        patches.push(Arc::new(patch));
+    }
+    let (mut tokens, resolved) = Tokens::resolve_layers(Arc::new(ThemeLayers {
+        document,
+        selection,
+        patches,
+        roles: layers.roles.clone(),
+    }));
+    said.extend(
+        resolved
+            .diagnostics
+            .iter()
+            .filter(|d| d.code != nsh_theme::code::REFERENCE_MISSING)
+            .cloned(),
+    );
+    // What the role checks find of the scope's patch: what they find of
+    // the stack around it was said where that was installed (checked with
+    // the scope's values, which a patch changes and never removes).
+    if patched {
+        let around_said = around.check_roles(&resolved);
+        said.extend(
+            tokens
+                .check_roles(&resolved)
+                .into_iter()
+                .filter(|d| !around_said.contains(d)),
+        );
+    }
+    tokens.set_themed(around.is_themed());
+    (Arc::new(tokens), said)
 }
 
-impl From<Tokens> for ScopeTheme {
-    fn from(tokens: Tokens) -> Self {
-        Self::Tokens(Arc::new(tokens))
-    }
-}
-
-impl From<Arc<Tokens>> for ScopeTheme {
-    fn from(tokens: Arc<Tokens>) -> Self {
-        Self::Tokens(tokens)
+impl Tokens {
+    /// The tokens a [`ThemeScope`] with picks `picks` and patch `patch`
+    /// draws with inside these, as the core makes them: the same stack,
+    /// its picks over the selection and its patch after every patch,
+    /// references resolved once (TS's `ThemeScope` in `nsh-js`). What it
+    /// leaves out is returned as diagnostics. Tokens made of no document
+    /// are the scope's as they are.
+    pub fn scoped(
+        self: &Arc<Self>,
+        picks: Option<&ScopeModifiers>,
+        patch: Option<Patch>,
+    ) -> (Arc<Tokens>, Vec<nsh_theme::Diagnostic>) {
+        scoped(self, picks, patch)
     }
 }
 
@@ -179,27 +189,24 @@ impl JsValue for ScopeModifiers {
     }
 }
 
-/// In TS a theme file's object (`Theme`, as `setTheme` takes it).
-impl JsValue for ScopeTheme {
+/// In TS a theme patch's object (`ThemePatch`, as `updateTheme` takes
+/// one): `{ values?, roles? }`. What it cannot read is logged and left out.
+impl JsValue for Patch {
     fn ts_type(_types: &mut TsTypes) -> String {
-        "Theme".into()
+        "ThemePatch".into()
     }
 
     fn from_js(value: JsIn<'_>) -> Result<Self, PropError> {
         let json = JsonValue::from_js(value)?;
         if !json.is_object() {
-            return Err(PropError::expected("a theme", &json));
+            return Err(PropError::expected("a theme patch", &json));
         }
-        Ok(Self::File(json.to_string().into()))
+        Ok(super::theme::read_patch(&json.to_string()).0)
     }
 
     fn to_js<'a>(&self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError> {
-        let json = match self {
-            ScopeTheme::File(json) => json.to_string(),
-            ScopeTheme::Tokens(tokens) => super::theme_file::write(tokens),
-        };
-        let json: JsonValue =
-            serde_json::from_str(&json).map_err(|e| PropError(format!("a theme: {e}")))?;
+        let json: JsonValue = serde_json::from_str(&nsh_theme::write_patch(self))
+            .map_err(|e| PropError(format!("a theme patch: {e}")))?;
         json.to_js(host)
     }
 }
@@ -207,23 +214,24 @@ impl JsValue for ScopeTheme {
 /// The props of a [`ThemeScope`].
 #[derive(Debug, Clone, PartialEq, Props)]
 pub struct ThemeScopeProps {
-    /// The appearance the scope and what is in it are shown in, whatever
-    /// the app's or the system's: `"light"` or `"dark"`. Left out, the
-    /// scope is shown as the view around it.
+    /// The color scheme the scope and what is in it are shown in, whatever
+    /// the app's or the system's: `"light"` or `"dark"`. It drives `dark:`
+    /// variants, `colorScheme()`, adaptive style values and platform
+    /// controls, never token values: a scope shows the theme's dark values
+    /// by also picking the theme's light/dark modifier in `modifiers`. Left
+    /// out, the scope is shown as the view around it.
     #[prop(default)]
     pub appearance: Prop<Option<ColorScheme>>,
-    /// The design tokens the scope and what is in it are drawn with: a
-    /// theme file (`{ cssVars: { light: { primary: "#7c3aed" } } }`, as
-    /// `updateTheme` takes one) whose values are set over the tokens around
-    /// the scope. It sets tokens the app's theme has: a name it lacks is
-    /// left out with a warning. Left out, the scope is drawn with the
-    /// tokens around it.
+    /// Overrides of the scope (`{ values: { primary: "#7c3aed" } }`, a
+    /// patch as `updateTheme` takes one): a layer above every override
+    /// around it (the app's, the host's, outer scopes'). It sets tokens the
+    /// active document declares: an entry it refuses is left out with a
+    /// warning. Left out, the scope is drawn with the overrides around it.
     #[prop(default)]
-    pub theme: Prop<Option<ScopeTheme>>,
+    pub theme: Prop<Option<Patch>>,
     /// The contexts the scope picks of the theme's modifiers
-    /// (`{ brand: "forest" }`), under its `theme`: the tokens their contexts
-    /// set take those contexts' values in the scope. A modifier or context
-    /// the theme has not is left out with a warning.
+    /// (`{ brand: "forest" }`), over the picks around it. A modifier or
+    /// context the theme has not is left out with a warning.
     #[prop(default)]
     pub modifiers: Prop<Option<ScopeModifiers>>,
     /// What the scope holds.
@@ -277,15 +285,15 @@ impl ScopeTokens {
 /// `primary`, a theme's preview beside the app. It is a view: its `class`
 /// and `style` lay it out and draw it.
 ///
-/// In it, everything that follows the appearance follows the scope's:
-/// `dark:` classes, the classes of theme tokens (`bg-background`), the
-/// theme colors of components, `colorScheme()` and `token()`, and the
-/// platform's own controls (a text input's keyboard and menus). With a
-/// `theme`, the classes of theme tokens, the components' theme and
-/// `token()` take the scope's values for the tokens it sets, and the app's
-/// for the others. Scopes nest: an inner one starts from the outer one's.
-/// Without `appearance` and `theme` a scope is shown as the view around
-/// it.
+/// In it, everything that follows the color scheme follows the scope's
+/// `appearance`: `dark:` classes, adaptive style values, `colorScheme()`
+/// and the platform's own controls (a text input's keyboard and menus).
+/// Token values follow its `modifiers` and `theme`: the classes of theme
+/// tokens (`bg-background`), the components' theme and `token()` take the
+/// scope's values, resolved once for the subtree. A scope shows the
+/// theme's dark values by picking the theme's light/dark modifier. Scopes
+/// nest: an inner one starts from the outer one's. Without `appearance`,
+/// `modifiers` and `theme` a scope is shown as the view around it.
 ///
 /// As in CSS, what a view inherited stays what it was: a scope's root sets
 /// its own background and text color (`bg-background text-foreground`).
@@ -307,29 +315,30 @@ pub fn ThemeScope(props: ThemeScopeProps, _cx: Scope<NoEvent>) -> impl IntoEleme
         Some(ColorScheme::Light) => false,
         None => outer.map_or_else(super::ambient::surface_dark, |scope| scope.0.get()),
     });
-    // Its tokens: its theme's values over those around it (made again
-    // when either changes), else the ones around it.
+    // Its tokens: the stack around it with its picks and its patch (made
+    // again when either changes), else the ones around it.
     let around = use_context::<ScopeTokens>();
     let theme = props.theme;
     let modifiers = props.modifiers;
+    // What it said, logged once each while it lives.
+    let logged = std::rc::Rc::new(std::cell::RefCell::new(rustc_hash::FxHashSet::default()));
     let own = computed(move || {
         let (theme, modifiers) = (theme.get(), modifiers.get());
         if theme.is_none() && modifiers.is_none() {
             return None;
         }
-        let mut around = around.map_or_else(super::ambient::surface_tokens, |scope| scope.0.get());
-        // Its modifiers' contexts first, its theme over them.
-        if let Some(modifiers) = modifiers {
-            let (picked, said) = around.picked(&modifiers.0);
-            for what in said {
-                log::warn!("ThemeScope: {what}, ignored");
-            }
-            around = Arc::new(picked);
-        }
-        Some(match theme {
-            Some(theme) => theme.within(&around),
-            None => around,
-        })
+        let around = around.map_or_else(super::ambient::surface_tokens, |scope| scope.0.get());
+        let (tokens, said) = scoped(&around, modifiers.as_ref(), theme);
+        let fresh: Vec<_> = said
+            .into_iter()
+            .filter(|d| {
+                logged
+                    .borrow_mut()
+                    .insert(format!("{} {}: {}", d.code, d.pointer, d.message))
+            })
+            .collect();
+        super::theme::report(&fresh);
+        Some(tokens)
     });
     let tokens = computed(move || {
         own.get().unwrap_or_else(|| {

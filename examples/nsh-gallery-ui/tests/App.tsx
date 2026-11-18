@@ -1,8 +1,15 @@
 import { mount, signal, Text, View } from "nsh";
-import { colorScheme, setColorScheme } from "nsh";
-import { Button, Card, colors, Segmented, Toggle } from "..";
+import { colorScheme, setColorScheme, setModifier } from "nsh";
+import { Button, Card, colors, followColorScheme, Segmented, Toggle } from "..";
+
+/** Shows `scheme`, and the theme's values for it (its `colorMode` modifier). */
+function show(scheme: "light" | "dark") {
+  setColorScheme(scheme);
+  setModifier("colorMode", scheme);
+}
 
 function App() {
+  followColorScheme();
   const presses = signal(0);
   const checked = signal(false);
   const mode = signal("first");
@@ -15,7 +22,7 @@ function App() {
       <Segmented options={[{ value: "first", label: "First" }, { value: "second", label: "Second" }]} value={mode()} onChange={(value) => mode.set(value)} />
       <Text>{`Selected ${mode()}`}</Text>
       <Card title="Shared card"><Text>Inside the shared inset</Text></Card>
-      <Button label="Change appearance" onPress={() => setColorScheme(colorScheme() === "dark" ? "light" : "dark")} />
+      <Button label="Change appearance" onPress={() => show(colorScheme() === "dark" ? "light" : "dark")} />
     </View>
   );
 }

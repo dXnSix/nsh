@@ -1,0 +1,6 @@
+{
+  "tokens": {
+    "gutter": { "kind": "number", "value": 16, "path": "type-scale.gutter" },
+    "lead": { "kind": "number", "value": 20, "path": "typeScale.lead" }
+  }
+}

@@ -289,23 +289,23 @@
 - **The host's theme overrides**: a host that embeds one app in several branded host apps overrides the app's theme
   tokens (brand colors, `radius`, ...) at run time: Rust `AppView::set_theme_overrides(Option<&str>)` (AppKit, GTK,
   Win32; GPUI's takes `cx` as well; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java
-  `NshView.setThemeOverrides`. The value is a theme file in the format of `nsh.json`'s `"theme"` (shadcn's `cssVars`:
-  `theme`, `light` and `dark` sections, values as CSS writes them; `components.md` "The theme"). The SDK checks on
-  the calling thread that it is JSON (`nsh_core::element::theme_file::check`): text that is not is an error (Swift
-  throws `NshError`, Java an `IllegalArgumentException`, C returns it) that changes nothing. The file goes to the
-  engine whole (`EngineControl::set_theme_overrides`, `Message::ThemeOverrides`), and the core reads it with the
-  app's UI set (`Core::set_host_theme`: `Registry::token_overrides_from`, `nsh/base`'s being the core's
-  `theme_file::overrides`) against the UI set's default tokens (`nsh/base`'s default theme), keeping only the tokens
-  the file sets (a `var()` it names and does not set is the default theme's token). They become host tokens (`Core::set_host_tokens`;
-  `EngineControl::set_tokens(None)` clears them): they win over the app's tokens of the same names in both
-  appearances, the app's others stay (`Tokens::over`), and classes naming the changed tokens (`bg-primary`,
-  `rounded-(--radius)`) are resolved again at once, as are Rust components reading `theme()`. Each platform keeps
-  the file on its surface and starts every engine with it (`Engine::start_with`), so they are in the first frame of
-  every app loaded later, a development reload included; `None` / `nil` / `null` gives the app its own theme back. A
-  token takes both appearances: one the file gives only in `light` (or `theme`) is that color in dark mode too, as
-  in a theme file, so an override that differs in dark mode names it in `dark`. GPUI's `AppView::set_theme` /
-  `set_theme_json` (below) give a whole theme instead, the default's where the file is silent; GPUI's surface keeps
-  the two apart and sends the overrides over the theme (`Tokens::over`), so each stays when the other changes.
+  `NshView.setThemeOverrides`. The value is a theme patch (`docs/dev/theme-format.md` section 8):
+  `{ "values": { token: value }, "roles": { role: token } }`, each value of its token's value type in the format's
+  forms (`"#e11d48"`, `16`) or a reference (`"{blue-9}"`). The SDK checks on the calling thread that it is a JSON
+  object: text that is no JSON object is an error (Swift throws `NshError`, Java an `IllegalArgumentException`, C returns it) that changes
+  nothing. The patch goes to the engine whole (`EngineControl::set_theme_overrides`, the same layer as `EngineControl::set_tokens`) and
+  is the host's layer of the stack (section 9, layer 4): over the document's values, the contexts the app picks and
+  the app's own overrides (`themeOverrides`, `updateTheme`), under nothing but a `ThemeScope`'s patch, with
+  references resolved after it. So an override holds in every context, light and dark alike, and an override of a
+  primitive reaches every token that refers to it. A patch never adds a token: it is checked against the active
+  document (`Patch::check`), and a value for a name the document does not declare, or one that does not fit its
+  token, is logged and left out, and applies again under a document that declares it. Classes naming the changed
+  tokens (`bg-primary`, `rounded-(--radius)`) are resolved again at once, as are Rust components reading `theme()`.
+  Each platform keeps the patch on its surface and starts every engine with it (`Engine::start_with`), so it is in
+  the first frame of every app loaded later, a development reload included; `None` / `nil` / `null` clears the
+  host's layer and gives the app its own theme back. GPUI's `AppView::set_theme_json` (below) gives a whole theme
+  document instead; GPUI's surface keeps the two apart and sends the overrides over the document, so
+  each stays when the other changes.
 - **The iOS SDK** (`crates/xtask/src/ios.rs`): per platform slice (device, simulator, Catalyst) a static
   `NativeShell.framework` whose binary is `nsh-platform-ios` with feature `embed` (built by `cargo rustc --crate-type
   staticlib`, so the hosts never build or export it) merged by `libtool` with the Swift module, compiled with library
@@ -363,23 +363,20 @@ NSH draws (`src/layers.rs`).
 - **Overlays.** The surface draws only inside its bounds and takes the mouse only on its hitbox: GPUI Kit's dialogs,
   sheets, popovers and notifications (drawn by `Root` above the content) cover it and take the input, while its app
   keeps running.
-- **The host's theme in NSH.** `AppView::set_theme(Some(theme), cx)` gives the surface a `nsh_base::Theme`
-  (re-exported as `nsh_platform_gpui::Theme`) and `set_theme_json(json, cx)` one from a theme file (shadcn's
-  `cssVars`, as `nsh.json`'s `"theme"`: `components.md` "The theme"): the app
-  renders with its tokens instead of its own theme's (`Core::set_host_tokens`, which win until cleared with
-  `None`), and the surface is drawn on its `background`. The app's classes naming its tokens (`bg-primary`,
-  `bg-sidebar`, `rounded-(--radius)`; every token of the theme, the host's own names too) restyle with it;
-  tokens it lacks keep the app's values. It applies at once and to every app loaded later, in their
-  first frame (the surface starts engines with `Engine::start_with`, sending the theme before the start).
+- **The host's theme in NSH.** `AppView::set_theme_json(Some(json), cx)` makes a theme document
+  (`docs/dev/theme-format.md`, as `nsh.json`'s `"theme"`) the app's active one (`EngineControl::set_theme_document`; `None`
+  gives the app its built-in document back), and `set_theme_overrides(Some(patch), cx)` puts a theme patch in the
+  host's layer, as above. The surface keeps both and sends them to every engine at start, so apps loaded later have
+  them in their first frame, and it is drawn on the resolved `background` role. Classes naming the app's tokens
+  (`bg-primary`, `bg-sidebar`, `rounded-(--radius)`) restyle with them.
   `set_appearance(Appearance::Light | Dark, cx)` is the host's mode, standing in for the system's (`System` follows
   the window again); an app that sets its own appearance still wins, as over the system's. The example's
-  `src/theme.rs` maps GPUI Kit's active `Theme` onto shadcn's tokens: the current mode's colors as GPUI Kit resolved
-  them, each set on the token of the same role (`Theme::set_color`: `background`, `primary`, `muted-foreground`,
-  `border`, `ring`, ...) for both appearances, its radius on `radius` and its font families on `font-sans` /
-  `font-mono` (`set_number`, `set_font`), so NSH's components match GPUI Kit's widgets. It runs again on every
-  change, a mode switch included (`cx.observe_global::<Theme>`), so one appearance's values are always the shown
-  mode's. The example's `themes/violet.json` is the host's own GPUI Kit theme, loaded into GPUI Kit's
-  `ThemeRegistry`; the embedded app takes it on through this mapping.
+  `src/theme.rs` (`host_patch`) turns GPUI Kit's active `Theme` into a host patch: the current mode's colors as GPUI
+  Kit resolved them, each on the token of the same role (`background`, `primary`, `muted-foreground`, `border`,
+  `ring`, ...), and its radius on `radius`, so NSH's components match GPUI Kit's widgets. A patch never adds a token,
+  so GPUI Kit's fonts are not passed (nsh-base's default document declares none). It is sent again on every change, a
+  mode switch included (`cx.observe_global::<Theme>`). The example's `themes/violet.json` is the host's own GPUI Kit
+  theme, loaded into GPUI Kit's `ThemeRegistry`; the embedded app takes it on through this patch.
 - **From NSH to the host.** The app talks to the embedding app through its channel (`AppView::host()`, "The host
   channel" above: launch parameters, events, calls and posts); through the native components the latter registers
   (`AppView::register_component`): their events and commands, as on the other platforms; and through the functions

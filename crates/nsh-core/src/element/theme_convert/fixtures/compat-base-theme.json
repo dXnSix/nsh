@@ -1,0 +1,13 @@
+{
+  "cssVars": {
+    "theme": {
+      "radius-card": "14px"
+    },
+    "light": {
+      "up": "#138a5a"
+    },
+    "dark": {
+      "up": "#45d49a"
+    }
+  }
+}

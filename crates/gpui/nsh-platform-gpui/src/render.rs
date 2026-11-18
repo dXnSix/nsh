@@ -39,8 +39,8 @@ use std::rc::Rc;
 
 use gpui::{
     App, Bounds, ContentMask, Corners, Edges, Element, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, LayoutId, PaintQuad, Pixels, Point,
-    Window, point, px, size,
+    HitboxBehavior, Hsla, InspectorElementId, LayoutId, PaintQuad, Pixels, Point, Window, point,
+    px, size,
 };
 use nsh_core::{Color, Points};
 
@@ -823,13 +823,9 @@ impl Element for SurfaceElement {
         let start = std::time::Instant::now();
         let surface = self.surface.clone();
         let dark = crate::system::dark(&surface);
-        // Embedded with a theme, the surface is drawn on the host's
-        // background (`Theme::of` reads it through `role::BACKGROUND`).
-        let background = match &*surface.host_theme.borrow() {
-            Some(theme) if dark => theme.background.dark.into(),
-            Some(theme) => theme.background.light.into(),
-            None => crate::system::window_background(&surface),
-        };
+        // With a theme of its own (the app's, a UI set's, the embedding
+        // app's), the surface is drawn on its resolved `background` role.
+        let background = surface.background();
         if background.0 & 0xff != 0 && !surface.transparent.get() {
             window.paint_quad(gpui::fill(bounds, hsla(background)));
         }

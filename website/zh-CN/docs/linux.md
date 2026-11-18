@@ -110,7 +110,7 @@ fn main() -> gtk::glib::ExitCode {
 }
 ```
 
-`Root::tokens` 为根组件设置[主题](./rust.md#主题)，`Root::app_id` 设置保存其数据所用的 id。`nsh build` 写出的 TSX bundle
+`Root::theme(json)` 为根组件设置[主题](./rust.md#主题)（一份主题文档），`Root::app_id` 设置保存其数据所用的 id。`nsh build` 写出的 TSX bundle
 也加载到同一种视图中，`asset_base` 设为它的 `assets` 目录：
 
 ```rust
@@ -137,7 +137,7 @@ view.load(Bundle::source(code).into());
 
 `AppView::set_locale(Some(locale))` 和 `AppView::set_font_scale(Some(scale))` 用你的应用的语言和文字大小代替系统的设置（`None` 恢复跟随系统）：`locale()`、`Intl`、`fontScale()` 和文字立即跟随（[设备与环境](./device-and-environment.md#在嵌入它的应用中)）。
 
-`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
+`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：一个主题补丁 `{ "values": { token: value }, "roles": { role: token } }`，形状与 [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) 接受的相同。对应用主题声明的 token，其值覆盖应用的主题、它选中的上下文（浅色和深色相同）以及应用自己的覆盖，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 清除它并恢复应用自己的主题；不是 JSON 对象的文本返回错误，不做任何改动）。主题没有声明的名字或不符合其 token 类型的值会被略去并记录日志（[主题覆盖](./ios.md#主题覆盖)）。
 
 ### 多个窗口共享数据
 

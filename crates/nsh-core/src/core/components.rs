@@ -13,6 +13,7 @@
 
 use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
 
+use nsh_theme::{Diagnostic, Patch, Selection, ThemeDocument};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{Core, Key, Kind, NO_KEY, views::Anchor};
@@ -27,6 +28,7 @@ use crate::{
         caught,
         responder::ResponderEl,
         services::FetchFailure,
+        tokens::{RoleTable, ThemeLayers},
         view,
         virtual_list::{self, RowFn, SeparatorFn, VirtualListEl},
     },
@@ -34,6 +36,15 @@ use crate::{
     list_diff::ListDiff,
     tailwind::ClassList,
 };
+
+/// Whether `a` and `b` are the same document (the same `Arc`, or none).
+fn same_document(a: Option<&Arc<ThemeDocument>>, b: Option<&Arc<ThemeDocument>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
 
 /// Lowered styles kept for reuse (many elements have the same styles);
 /// cleared when full.
@@ -601,6 +612,61 @@ struct SpeechSession {
     control: Option<Box<dyn crate::speech::SpeechControl>>,
 }
 
+/// The surface's theme (`docs/dev/theme-format.md`, the layer table): what
+/// [`Core::install_theme`] resolves, once per turn of theme actions.
+#[derive(Default)]
+pub(super) struct ThemeState {
+    /// The app's built-in document ([`Root::theme`], `nsh.json`'s).
+    builtin: Option<Arc<ThemeDocument>>,
+    /// The document the app activated while it runs (`set_theme`).
+    runtime: Option<Arc<ThemeDocument>>,
+    /// The UI sets' document: the first a set registers, else a fallback.
+    sets: Option<Arc<ThemeDocument>>,
+    /// Whether [`Self::sets`] is a set's own document (not a fallback).
+    sets_own: bool,
+    /// The modifier contexts picked.
+    selection: Selection,
+    /// The app's one patch: `themeOverrides`' entries, then every update.
+    app: Arc<Patch>,
+    /// The embedding app's patch, over the app's.
+    host: Option<Arc<Patch>>,
+    /// The roles the layers' mappings are checked and resolved against:
+    /// the core's own and the served sets' declarations, and Tailwind's
+    /// patterns, collected when the sets are given.
+    roles: Arc<RoleTable>,
+    /// The last resolve, and the document it resolved.
+    resolved: Arc<nsh_theme::Resolved>,
+    resolved_document: Option<Arc<ThemeDocument>>,
+    /// What changed in the last install: what classes, JS and the hosts
+    /// were handed.
+    changes: nsh_theme::Changes,
+    /// The diagnostics of resolving logged for the document resolved (each
+    /// once per load).
+    logged: FxHashSet<String>,
+    /// Something changed since the last install.
+    pending: bool,
+}
+
+impl ThemeState {
+    /// The active document: the app's (set while it runs, else built in),
+    /// else the sets'.
+    fn active(&self) -> Option<&Arc<ThemeDocument>> {
+        self.runtime
+            .as_ref()
+            .or(self.builtin.as_ref())
+            .or(self.sets.as_ref())
+    }
+
+    /// Whether the app has a theme of its own ([`Tokens::is_themed`]).
+    fn themed(&self) -> bool {
+        self.runtime.is_some()
+            || self.builtin.is_some()
+            || (self.sets.is_some() && self.sets_own)
+            || !self.app.is_empty()
+            || self.host.is_some()
+    }
+}
+
 /// The core's component state.
 pub(super) struct Components {
     pub(super) web_evaluations: super::web_evaluation::Evaluations,
@@ -611,19 +677,9 @@ pub(super) struct Components {
     specs: FxHashMap<&'static str, Arc<ComponentSpec>>,
     /// The design tokens drawn with.
     pub(super) tokens: Arc<Tokens>,
-    /// The app's tokens (a UI set's defaults, `nsh.json`'s theme, a Rust
-    /// app's root): drawn with while the embedding app sets none
-    /// ([`Core::set_host_tokens`]).
-    app_tokens: Arc<Tokens>,
-    /// The app's theme: its tokens as last set whole (a UI set's defaults,
-    /// `nsh.json`'s theme, `setTheme`, `set_tokens`), which
-    /// [`Core::reset_tokens`] puts tokens back to.
-    file_tokens: Arc<Tokens>,
-    /// The UI set's default tokens: drawn with others, the app has a theme
-    /// of its own ([`Tokens::is_themed`]); `None`: no set reads themes.
-    default_tokens: Option<Arc<Tokens>>,
-    /// The embedding app's tokens: win over [`Self::app_tokens`].
-    host_tokens: Option<Arc<Tokens>>,
+    /// The surface's theme: the active document, the selection, the app's
+    /// patch and the host's, which [`Core::install_theme`] resolves.
+    pub(super) theme: ThemeState,
     /// Boxed: making a view (or applying its patches) takes its instance
     /// out of the map and back.
     pub(super) instances: FxHashMap<NodeId, Box<Instance>>,
@@ -823,10 +879,7 @@ impl Default for Components {
             registry: Registry::default(),
             specs: FxHashMap::default(),
             tokens: Arc::new(Tokens::default()),
-            app_tokens: Arc::new(Tokens::default()),
-            file_tokens: Arc::new(Tokens::default()),
-            default_tokens: None,
-            host_tokens: None,
+            theme: ThemeState::default(),
             instances: FxHashMap::default(),
             owners: FxHashMap::default(),
             release_generation: 0,
@@ -930,7 +983,9 @@ impl Components {
             .runtime
             .set_app_url(components.url_schemes.address.clone());
         components.runtime.set_environment(components.environment);
-        components.runtime.set_tokens(components.tokens.clone());
+        components
+            .runtime
+            .set_tokens(components.tokens.clone(), None, true);
         components
     }
 
@@ -999,158 +1054,203 @@ fn same(a: &Option<std::rc::Rc<ClassList>>, b: &Option<std::rc::Rc<ClassList>>) 
 
 impl<M: TextEngine> Core<M> {
     /// The components this core can render (from `nsh-base` and the
-    /// like), and the design tokens their sets bring
-    /// ([`Registry::tokens_from`]); set before the first op. Runs the
-    /// sets' setup functions ([`Registry::setup`]).
+    /// like), and the theme document their sets bring
+    /// ([`Registry::theme_document`], [`Registry::fallback_theme_document`]):
+    /// the active one while the app has none of its own. Set before the
+    /// first op. Runs the sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
-        if let Some(Ok((tokens, _))) = registry.tokens(None) {
-            self.components.default_tokens = Some(Arc::new(tokens.clone()));
-            self.set_tokens(tokens);
-        }
+        self.take_sets_document(&registry);
+        self.take_sets_roles(&registry);
         {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
         }
-        let typed = registry.has_declarations();
         self.components.registry = registry;
-        self.components
-            .runtime
-            .set_theme_tokens(self.theme_tokens());
-        // The tokens were sent before the registry was in place: an app whose
-        // sets declare tokens has a theme of its own (`Tokens::is_themed`).
-        if typed {
-            self.tokens_changed();
+        self.install_theme();
+    }
+
+    /// The document `registry`'s sets make active, logging the ones it
+    /// leaves unused (`document-unused`).
+    fn take_sets_document(&mut self, registry: &Registry) {
+        let (document, unused) = registry.theme_document_of_sets();
+        crate::element::theme::report(&unused);
+        let state = &mut self.components.theme;
+        state.sets_own = !registry.theme_documents().is_empty();
+        if !same_document(state.sets.as_ref(), document.as_ref()) {
+            state.sets = document;
+            state.pending = true;
+        }
+    }
+
+    /// The roles `registry`'s sets declare, with the core's own: what the
+    /// theme's mappings are checked and resolved against from the next
+    /// install on. A role two of them declare with different value types
+    /// logs `role-conflict`, and the first is kept.
+    fn take_sets_roles(&mut self, registry: &Registry) {
+        let table = RoleTable::of(registry.role_specs(), registry.role_sets());
+        let state = &mut self.components.theme;
+        if *state.roles != table {
+            state.roles = Arc::new(table);
+            state.pending = true;
         }
     }
 
     /// Replaces the components of a running core with `registry`, a
     /// superset of what it had (a UI set registered after the app started:
     /// a web runtime's late `nsh_part_*`). What is mounted from then on may
-    /// use the new components; the tokens stay the app's, and only the
-    /// setup functions the old sets did not bring run.
+    /// use the new components; only the setup functions the old sets did
+    /// not bring run. A set's document becomes the sets' document only
+    /// while they had none.
     pub fn extend_components(&mut self, registry: Registry) {
         {
             let _entered = self.components.runtime.enter();
             registry.run_setups_not_in(&self.components.registry);
         }
+        if self.components.theme.sets.is_none() {
+            self.take_sets_document(&registry);
+        }
+        self.take_sets_roles(&registry);
         self.components.registry = registry;
-        self.components
-            .runtime
-            .set_theme_tokens(self.theme_tokens());
+        self.install_theme();
     }
 
-    /// The app's theme file (`nsh.json`, `setTheme`, a Rust app's
-    /// [`Root::theme`]; `uiTheme` on the root), which the UI set that reads
-    /// themes makes tokens of. What it cannot read is left out and the rest
-    /// applies, so a bundle made by a newer NSH keeps its theme here.
+    /// The app's built-in theme document and overrides ([`Root::theme`],
+    /// [`Root::theme_overrides`], `nsh.json`'s `"theme"` and
+    /// `"themeOverrides"`): the document is active over the sets' from the
+    /// next turn on, and the overrides are the first entries of the app's
+    /// one patch, replacing what it had. Returns (and logs) their
+    /// diagnostics. A document refused whole (`not-a-document`,
+    /// `legacy-format`) is not taken.
+    pub fn set_app_theme(
+        &mut self,
+        document: Option<&str>,
+        overrides: Option<&str>,
+    ) -> Vec<Diagnostic> {
+        let mut said = Vec::new();
+        let document = document.and_then(|json| {
+            let (document, diagnostics) = crate::element::theme::read_document(json);
+            said.extend(diagnostics);
+            document.map(Arc::new)
+        });
+        let overrides = overrides.map(|json| {
+            let (patch, diagnostics) = crate::element::theme::read_patch(json);
+            said.extend(diagnostics);
+            Arc::new(patch)
+        });
+        self.take_app_theme(document, overrides);
+        said
+    }
+
+    /// [`Core::set_app_theme`] of a document and overrides read already (a
+    /// script runtime's setup, `Prop::UiAppTheme`); `None` leaves that part
+    /// as it is.
+    pub(crate) fn take_app_theme(
+        &mut self,
+        document: Option<Arc<ThemeDocument>>,
+        overrides: Option<Arc<Patch>>,
+    ) {
+        let state = &mut self.components.theme;
+        if let Some(document) = document {
+            state.builtin = Some(document);
+            state.pending = true;
+        }
+        if let Some(overrides) = overrides {
+            state.app = overrides;
+            state.pending = true;
+        }
+    }
+
+    /// Activates theme document `json` as the app's (TS: `setTheme`, Rust:
+    /// [`crate::element::set_theme`]); `None`: the app's built-in document
+    /// again, else the sets'. Returns (and logs) the read diagnostics. A
+    /// text refused whole keeps the active document. Applies with the turn's
+    /// other theme actions ([`Core::install_theme`]).
+    pub fn set_theme(&mut self, json: Option<&str>) -> Vec<Diagnostic> {
+        let Some(json) = json else {
+            self.activate(None);
+            return Vec::new();
+        };
+        let (document, diagnostics) = crate::element::theme::read_document(json);
+        if let Some(document) = document {
+            self.activate(Some(Arc::new(document)));
+        }
+        diagnostics
+    }
+
+    /// `uiTheme` on the root (`nsh`'s `setTheme`): [`Core::set_theme`].
     pub fn set_ui_theme(&mut self, json: &str) {
-        match self.components.registry.tokens(Some(json)) {
-            Some(Ok((tokens, left_out))) => {
-                for what in left_out {
-                    log::warn!("theme: {what}, ignored");
-                }
-                // The contexts the app picked stay picked.
-                let tokens = tokens.with_picks_of(&self.components.app_tokens);
-                self.set_tokens(tokens);
-            }
-            Some(Err(e)) => log::warn!("theme: {e}"),
-            None => log::warn!("theme: no UI set reads themes"),
+        self.set_theme(Some(json));
+    }
+
+    /// Makes `document` the app's document while it runs (`None`: none,
+    /// so the built-in document, else the sets', is active again; TS's
+    /// `setTheme`, `Prop::UiThemeDocument`, the embedding app's
+    /// `EngineControl::set_theme_document`). Applies with the turn's other
+    /// theme actions.
+    pub fn activate(&mut self, document: Option<Arc<ThemeDocument>>) {
+        let state = &mut self.components.theme;
+        state.runtime = document;
+        state.pending = true;
+    }
+
+    /// Merges `patch` into the app's one patch, a later entry replacing an
+    /// earlier one for the same token or role. What the active document
+    /// refuses of it is logged (and kept, for a document that declares it).
+    pub(crate) fn update_tokens(&mut self, patch: Patch) {
+        if patch.is_empty() {
+            return;
         }
-    }
-
-    /// The app's design tokens; it is drawn with them unless the
-    /// embedding app set its own ([`Core::set_host_tokens`]). They are its
-    /// theme from now on: what [`Core::reset_tokens`] goes back to.
-    pub fn set_tokens(&mut self, tokens: Tokens) {
-        let tokens = Arc::new(tokens);
-        self.components.file_tokens = tokens.clone();
-        self.components.app_tokens = tokens;
-        self.tokens_changed();
-    }
-
-    /// Changes some of the app's design tokens: those of `tokens` take
-    /// their values, the others stay. Applied in order, so two changes in
-    /// one turn compose.
-    pub(crate) fn update_tokens(&mut self, tokens: Tokens) {
-        self.components.app_tokens = Arc::new(self.components.app_tokens.updated_by(&tokens));
-        self.tokens_changed();
-    }
-
-    /// The tokens that `names` name as a theme file names them: under
-    /// declared tokens a role's name is the token it is mapped onto
-    /// (`TokenProvider::token_name`).
-    pub(super) fn theme_file_names(&self, mut names: Vec<Box<str>>) -> Vec<Box<str>> {
-        if let Some(provider) = self.components.registry.token_provider() {
-            for name in &mut names {
-                let token = provider.token_name(name);
-                if *token != **name {
-                    *name = token.into();
-                }
-            }
+        if let Some(document) = self.components.theme.active() {
+            crate::element::theme::report(&patch.check(document));
         }
-        names
+        let state = &mut self.components.theme;
+        Arc::make_mut(&mut state.app).merge(&patch);
+        state.pending = true;
     }
 
-    /// Gives the theme's modifier `name` the context `context`: the tokens
-    /// its contexts set take their values (`ThemeModifiers::tokens`), in the
-    /// app's tokens and in its theme's, which a reset goes back to. A name or
-    /// context the theme has not is logged.
+    /// Picks context `context` of the active document's modifier `name`,
+    /// from the next install on. A modifier or context the document lacks
+    /// is logged (`unknown-modifier`, `unknown-context`) and changes
+    /// nothing.
     pub(crate) fn set_modifier(&mut self, name: &str, context: &str) {
-        let pick = |tokens: &Tokens| -> Result<Option<Tokens>, String> {
-            let Some(modifiers) = tokens.modifiers() else {
-                return Ok(None);
-            };
-            Ok(Some(modifiers.select(name, context)?.apply(tokens)))
+        let state = &mut self.components.theme;
+        let Some(document) = state.active() else {
+            return crate::element::theme::report(&[nsh_theme::Diagnostic::warning(
+                nsh_theme::code::UNKNOWN_MODIFIER,
+                "",
+                format!("No theme is active: the modifier `{name}` is not picked."),
+            )]);
         };
-        match pick(&self.components.app_tokens) {
-            Ok(Some(tokens)) => self.components.app_tokens = Arc::new(tokens),
-            Ok(None) => return log::warn!("setModifier: the theme has no modifiers"),
-            Err(e) => return log::warn!("setModifier: {e}"),
+        if let Some(said) = crate::element::theme::unknown_pick(document, name, context) {
+            return crate::element::theme::report(&[said]);
         }
-        if let Ok(Some(tokens)) = pick(&self.components.file_tokens) {
-            self.components.file_tokens = Arc::new(tokens);
+        if state.selection.get(name) != Some(context) {
+            state.selection.set(name, context);
+            state.pending = true;
         }
-        self.tokens_changed();
     }
 
-    /// Puts the app's tokens `names` (`None`: every one) back to its
-    /// theme's ([`Core::set_tokens`]); a name the theme lacks is removed.
+    /// Removes `names` (`None`: every entry) from the app's one patch, each
+    /// as a token and as a role: what they set goes back to the layer
+    /// below. A reset removes overrides; it never copies values.
     pub(crate) fn reset_tokens(&mut self, names: Option<&[Box<str>]>) {
-        let file = &self.components.file_tokens;
-        self.components.app_tokens = match names {
-            None => file.clone(),
+        let state = &mut self.components.theme;
+        match names {
+            None => {
+                if state.app.is_empty() {
+                    return;
+                }
+                state.app = Arc::new(Patch::new());
+            }
             Some(names) => {
-                let mut tokens = (*self.components.app_tokens).clone();
+                let app = Arc::make_mut(&mut state.app);
                 for name in names {
-                    tokens.copy_named(file, name);
+                    app.remove_value(name);
+                    app.remove_role(name);
                 }
-                Arc::new(tokens)
             }
-        };
-        self.tokens_changed();
-    }
-
-    /// `uiThemeUpdate` on the root (`nsh`'s `updateTheme`): the tokens a
-    /// theme file sets change, read by the UI set
-    /// ([`Registry::token_overrides_from`]) against the tokens drawn with
-    /// now; what it cannot read is left out and keeps its value.
-    pub(super) fn update_ui_theme(&mut self, json: &str) {
-        let provider = self.components.registry.token_provider();
-        let Some(read) = provider.as_ref().and_then(|p| {
-            p.updated_left_out(json, &self.components.tokens, &self.components.app_tokens)
-        }) else {
-            return log::warn!("theme: no UI set reads theme changes");
-        };
-        match read {
-            Ok((tokens, left_out)) => {
-                for what in left_out {
-                    log::warn!("theme: {what}, ignored");
-                }
-                self.components.app_tokens = Arc::new(tokens);
-                self.tokens_changed();
-            }
-            Err(e) => log::warn!("theme: {e}"),
         }
+        state.pending = true;
     }
 
     /// The app's translations ([`crate::i18n`]): what `t!` and TS's `t`
@@ -1211,92 +1311,129 @@ impl<M: TextEngine> Core<M> {
         std::mem::take(&mut self.components.main_thread)
     }
 
-    /// The embedding app's design tokens (`None`: the app's again): an app
-    /// embedded in a native app looks like it, whatever the app sets.
-    pub fn set_host_tokens(&mut self, tokens: Option<Tokens>) {
-        self.components.host_tokens = tokens.map(Arc::new);
-        self.tokens_changed();
-    }
-
-    /// The embedding app's theme overrides (`None`: the app's own theme
-    /// again): a theme file whose tokens win over the app's of the same
-    /// names, read by the UI set that reads themes
-    /// ([`Registry::token_overrides_from`], else the core's
-    /// [`crate::element::theme_file::overrides`]) against the UI set's
-    /// default tokens, so a `var()` it does not set names the default
-    /// theme's token. What it cannot read is left out; text that is no JSON
-    /// changes nothing.
-    pub fn set_host_theme(&mut self, json: Option<&str>) {
-        let Some(json) = json else {
-            return self.set_host_tokens(None);
-        };
-        let provider = self.components.registry.token_provider();
-        let defaults = match provider.as_ref().map(|p| p.read(None)) {
-            Some(Ok((tokens, _))) => tokens,
-            _ => Tokens::default(),
-        };
-        let read = provider
-            .as_ref()
-            .and_then(|p| p.overrides(json, &defaults))
-            .unwrap_or_else(|| crate::element::theme_file::overrides(json, &defaults));
-        match read {
-            Ok((tokens, left_out)) => {
-                for what in left_out {
-                    log::warn!("theme overrides: {what}, ignored");
-                }
-                self.set_host_tokens(Some(tokens));
-            }
-            Err(e) => log::warn!("theme overrides: {e}"),
+    /// The embedding app's overrides (`None`: none): a patch over the
+    /// app's, so an app embedded in a native app looks like it. Applies
+    /// with the turn's other theme actions.
+    pub fn set_host_patch(&mut self, patch: Option<Patch>) {
+        if let (Some(patch), Some(document)) = (&patch, self.components.theme.active()) {
+            crate::element::theme::report(&patch.check(document));
         }
+        let state = &mut self.components.theme;
+        state.host = patch.map(Arc::new);
+        state.pending = true;
     }
 
-    /// What [`Core::tokens`] become when the root's `uiTheme` (the app's
-    /// theme file) is set, with the embedding app's tokens of now: JS reads
-    /// them in the turn that sends the theme, before it reaches the core.
-    pub fn theme_tokens(&self) -> crate::element::ThemeTokens {
-        crate::element::ThemeTokens::new(
-            self.components.registry.token_provider(),
-            self.components.host_tokens.clone(),
-        )
+    /// [`Core::set_host_patch`] of patch text `json` (`None`: none).
+    /// Returns (and logs) its read diagnostics; text that is no patch
+    /// gives an empty one.
+    pub fn set_host_theme(&mut self, json: Option<&str>) -> Vec<Diagnostic> {
+        let Some(json) = json else {
+            self.set_host_patch(None);
+            return Vec::new();
+        };
+        let (patch, diagnostics) = crate::element::theme::read_patch(json);
+        self.set_host_patch(Some(patch));
+        diagnostics
     }
 
-    /// The design tokens the app is drawn with now: the app's, under the
-    /// embedding app's. A new value (not the same `Arc`) when they change.
+    /// The design tokens the app is drawn with now. A new value (not the
+    /// same `Arc`) when they change.
     pub fn tokens(&self) -> &Arc<Tokens> {
         &self.components.tokens
     }
 
-    /// The tokens drawn with now: a signal of the surface, so only the
-    /// bindings that read them run again, and only when they changed.
-    fn tokens_changed(&mut self) {
-        let mut tokens = match &self.components.host_tokens {
-            // The app's own tokens the host's do not have stay.
-            Some(host) => Arc::new(host.over(&self.components.app_tokens)),
-            None => self.components.app_tokens.clone(),
-        };
-        // Whether the app has a theme of its own, which the platforms'
-        // controls take their colors from only then.
-        // An app whose sets or theme file declare tokens has a theme of its
-        // own, its design system's.
-        let themed = self.components.registry.has_declarations()
-            || tokens.declarations().is_some()
-            || match &self.components.default_tokens {
-                Some(default) => *tokens != **default,
-                None => !tokens.is_empty(),
-            };
-        if tokens.is_themed() != themed {
-            Arc::make_mut(&mut tokens).set_themed(themed);
+    /// What the last theme install changed: the token names whose resolved
+    /// values changed and the role names whose resolved token or value did
+    /// (`nsh_theme::Resolved::changed`), as classes, JS and the hosts were
+    /// handed it.
+    pub fn theme_changes(&self) -> &nsh_theme::Changes {
+        &self.components.theme.changes
+    }
+
+    /// Resolves the theme when a theme action changed it since the last
+    /// time: once per turn, whatever the number of actions. The values
+    /// that changed reach the typed store, the readers of those tokens,
+    /// the classes that read them and the platforms' own controls.
+    /// Whether the tokens changed. An engine calls it before it hands a
+    /// script runtime its first tokens, so the theme input it was given
+    /// before the start (the host's patch) is in them.
+    pub fn install_theme(&mut self) -> bool {
+        if !std::mem::take(&mut self.components.theme.pending) {
+            return false;
         }
-        if *tokens == *self.components.tokens && themed == self.components.tokens.is_themed() {
-            self.components.tokens = tokens;
-            return;
+        let state = &mut self.components.theme;
+        let document = state
+            .active()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(ThemeDocument::new()));
+        // Another document: the picks it has stay, the others go, its
+        // diagnostics are its own, and what of the overrides it refuses is
+        // said (and kept, for a document that declares it).
+        if !same_document(state.resolved_document.as_ref(), Some(&document)) {
+            crate::element::theme::keep_picks(&mut state.selection, &document);
+            state.logged.clear();
+            state.resolved_document = Some(document.clone());
+            let mut refused = state.app.check(&document);
+            if let Some(host) = &state.host {
+                refused.extend(host.check(&document));
+            }
+            crate::element::theme::report(&refused);
         }
+        let mut patches = vec![state.app.clone()];
+        patches.extend(state.host.clone());
+        let layers = Arc::new(ThemeLayers {
+            document,
+            selection: state.selection.clone(),
+            patches,
+            roles: state.roles.clone(),
+        });
+        let resolved = Arc::new(nsh_theme::resolve(
+            &layers.document,
+            &layers.selection,
+            &layers.patch_refs(),
+        ));
+        let mut changes = resolved.changed(&state.resolved);
+        let mut tokens =
+            Tokens::from_resolved(&resolved, layers, Some((&self.components.tokens, &changes)));
+        // The roles as the declarations type them (`resolve_role`): a
+        // wrong-typed mapping over a good one changes nothing.
+        let (roles, roles_moved) = tokens.changed_roles(&self.components.tokens, &changes.tokens);
+        changes.roles = roles;
+        // A missing reference was said when the document or the patch was
+        // read; a cycle the layers form, and what the role checks find
+        // (every channel comes here), are said once per document.
+        let checked = tokens.check_roles(&resolved);
+        let fresh: Vec<Diagnostic> = resolved
+            .diagnostics
+            .iter()
+            .filter(|d| d.code != nsh_theme::code::REFERENCE_MISSING)
+            .chain(&checked)
+            .filter(|d| {
+                state
+                    .logged
+                    .insert(format!("{} {}: {}", d.code, d.pointer, d.message))
+            })
+            .cloned()
+            .collect();
+        crate::element::theme::report(&fresh);
+        tokens.set_themed(state.themed());
+        state.resolved = resolved;
+        state.changes = changes;
+        let tokens = Arc::new(tokens);
+        let same = *tokens == *self.components.tokens
+            && tokens.is_themed() == self.components.tokens.is_themed();
         {
             let _entered = self.components.runtime.enter();
             self.components.tokens = tokens;
-            self.components
-                .runtime
-                .set_tokens(self.components.tokens.clone());
+            let changed = &self.components.theme.changes.tokens;
+            self.components.runtime.set_tokens(
+                self.components.tokens.clone(),
+                Some(changed.as_slice()),
+                roles_moved,
+            );
+        }
+        if same {
+            return false;
         }
         // The platform's own controls (menus, Android's alerts) take their
         // colors from them.
@@ -1311,6 +1448,7 @@ impl<M: TextEngine> Core<M> {
             .map(|f| crate::style::FontFamily::new(&f));
         self.set_default_font(font);
         self.class_tokens_changed();
+        true
     }
 
     /// Mounts a Rust app's root component as the content of the root view;
@@ -1318,6 +1456,9 @@ impl<M: TextEngine> Core<M> {
     pub fn mount_root(&mut self, root: &Root) {
         if let Some(setting) = root.status_bar_ref() {
             self.components.status_bars.set_base(setting);
+        }
+        if root.theme_ref().is_some() || root.theme_overrides_ref().is_some() {
+            self.set_app_theme(root.theme_ref(), root.theme_overrides_ref());
         }
         let _entered = self.components.runtime.enter();
         let Some(id) = self.make_component(root.element(), |_, _| {}) else {
@@ -2386,8 +2527,12 @@ impl<M: TextEngine> Core<M> {
         for action in self.components.executor.take_actions() {
             self.apply_action(action);
         }
+        // The theme actions among them (a pick made while a view was built)
+        // resolve once; what reads the tokens they change follows in this
+        // commit.
+        let installed = self.install_theme();
         if self.components.dirty.is_empty() {
-            return false;
+            return installed;
         }
         while let Some(host) = self.components.dirty.pop() {
             // A view JS made waits to be in the tree (under what places it):
@@ -6345,9 +6490,9 @@ impl<M: TextEngine> Core<M> {
             Action::Hint(overlay) => self.hint_due(overlay),
             Action::Frame(answer) => self.wait_frame(answer),
             Action::Appearance(appearance) => self.set_appearance(appearance),
-            Action::Tokens(tokens) => self.set_tokens(tokens),
-            Action::UpdateTokens(tokens) => self.update_tokens(tokens),
-            Action::ResetTokens(names) => self.reset_tokens(Some(&names)),
+            Action::Theme(document) => self.activate(document),
+            Action::UpdateTokens(patch) => self.update_tokens(patch),
+            Action::ResetTokens(names) => self.reset_tokens(names.as_deref()),
             Action::SetModifier(name, context) => self.set_modifier(&name, &context),
             Action::Translations(translations) => self.set_translations(translations),
             Action::Locale(locale) => self.components.locale_request = Some(locale),
@@ -7889,6 +8034,9 @@ impl<M: TextEngine> Core<M> {
         for action in self.components.executor.take_actions() {
             self.apply_action(action);
         }
+        // The theme actions among them (and those applied just before)
+        // resolve once.
+        self.install_theme();
     }
 
     /// An event the component on `host` emitted: to the component whose
@@ -8028,4 +8176,25 @@ fn row_position(
 /// decodes).
 fn pixels(n: f64) -> crate::geometry::DevicePixels {
     crate::geometry::DevicePixels(n.round() as i32)
+}
+
+/// Handing a core values without a document: for the core's tests, which
+/// make tokens of values ([`Tokens::to_document`]).
+#[cfg(test)]
+impl<M: TextEngine> Core<M> {
+    /// Activates a document of `tokens`' values as the app's, at once.
+    pub(crate) fn set_test_tokens(&mut self, tokens: Tokens) {
+        self.activate(Some(Arc::new(tokens.to_document())));
+        self.install_theme();
+    }
+
+    /// The reactive runtime of the components that run once.
+    pub(crate) fn test_runtime(&self) -> &crate::element::Runtime {
+        &self.components.runtime
+    }
+
+    /// The app's one patch.
+    pub(crate) fn app_patch(&self) -> &Patch {
+        &self.components.theme.app
+    }
 }

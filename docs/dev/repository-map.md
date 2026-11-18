@@ -41,8 +41,10 @@ crates/
                        docs/dev/rich-editor.md),
                        the popups on the core's overlays (`Popover`, `HoverCard`, `Menu` / `ContextMenu` / `MenuItem` / `MenuSeparator` / `Submenu`,
                        `Tooltip`, `Sheet`; presented per device: docs/dev/components.md "Popups"), written in Rust (the navigation and `Dialog` in `nsh-js`); JS face and declarations made from their specs;
-                       the theme (`theme.rs`: shadcn/ui's tokens and their defaults, `neutral`, read from shadcn's `cssVars` theme
-                       files, which the core keeps as design tokens and no component of `nsh-base` draws with)
+                       the theme (`theme.rs`: shadcn/ui's tokens as roles, and `default-theme.json`, shadcn's `neutral` as the
+                       fallback theme document, its dark values in the `colorMode` modifier; docs/dev/theme-format.md)
+  nsh-theme/           The theme document (docs/dev/theme-format.md): its model, reading with diagnostics, writing, editing,
+                       layering (`resolve`: tokens, picked contexts, patches, references once), role checks; serde and serde_json only
   nsh-macros/          `#[component]`, derives of Rust components (`Props`, `PropEnum`, `Event`, `JsObject`), `#[methods]`, `#[module]`, `#[class]`,
                        `#[native_module("…")]` (an app crate's UI set, which `rust_app.rs`'s generated code calls),
                        `#[native_components(<platform>)]` (an app crate's native components, which the generated hosts register), `Styled`'s spacing methods;
@@ -135,7 +137,7 @@ crates/
                        the development runtime over `sdb reverse` / `sdb forward` (docs/dev/tizen.md)
   nsh-ios-host/        Development host app (Catalyst / iOS simulator); connects to a dev server or runs a local bundle
   nsh-ios-app/         Release runner: the executable of iOS apps built by `nsh package`
-  nsh-cli/             The `nsh` command line (a binary): init / build / test / check / dev / run / package; keygen /
+  nsh-cli/             The `nsh` command line (a binary): init / build / test / check / dev / run / package / theme; keygen /
                        certify / publish / verify / revoke; apps with Rust components of their own (`rust_app.rs`: each crate
                        nsh.json `"rust"` names, one or a list, has a `#[native_module("…")]` fn; a generated workspace in `.nsh/rust`
                        with a `describe` program, which prints the sets as data for the CLI to bundle, compile and declare with, the

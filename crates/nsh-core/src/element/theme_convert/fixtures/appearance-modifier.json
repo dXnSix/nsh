@@ -1,0 +1,41 @@
+{
+  "name": "Appearance contexts",
+  "cssVars": {
+    "theme": {
+      "radius": "8px",
+      "radius-card": "var(--radius)"
+    },
+    "light": {
+      "surface": "#ffffff",
+      "ink": "#111827",
+      "accent": "#2563eb",
+      "on-accent": "var(--surface)",
+      "ring": "var(--accent)",
+      "accent-soft": "color-mix(in srgb, var(--accent) 20%, transparent)",
+      "gap": "0.75rem"
+    },
+    "dark": {
+      "surface": "#0a0a0a",
+      "ink": "#f9fafb",
+      "accent": "#60a5fa",
+      "gap": "14px"
+    }
+  },
+  "modifiers": {
+    "brand": {
+      "default": "ocean",
+      "contexts": {
+        "ocean": {},
+        "forest": { "light": { "accent": "#16a34a" }, "dark": { "accent": "#4ade80" } },
+        "mono": { "theme": { "accent": "#525252" } }
+      }
+    },
+    "density": {
+      "default": "comfortable",
+      "contexts": {
+        "comfortable": {},
+        "compact": { "theme": { "radius": "4px" }, "light": { "gap": "8px" }, "dark": { "gap": "10px" } }
+      }
+    }
+  }
+}

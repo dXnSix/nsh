@@ -299,11 +299,14 @@ walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and k
 | [`Toast`, `ToastStack`, `ToastManager`](../elements/toast.md) | `toast()`, `toast_stack()`, `ToastManager` | Unstyled toasts: a semantic root, a stack of layers, their lifecycle. |
 | `statusBar` on pages and dialogs | `.status_bar(..)` | The status bar while a page or dialog is up. See [Status bar](#status-bar). |
 
-In Rust, `theme()` reads the app's theme as design tokens (`theme().primary`, `theme().radius`), the same tokens
-TSX's [theme classes](../docs/tailwind.md#theme-tokens) use: shadcn's 31 colors, `radius`, `font-sans` and
-`font-mono`, each read through the role of its name, made once per change of the tokens. A shadcn app changes some of
-its tokens with `update_tokens(tokens)`, tokens by name, and `reset_tokens(names)` puts them back; an app's
-[theme document](../docs/rust.md#theme-documents-and-typed-keys) takes the default theme's place.
+In Rust, `theme()` reads the app's theme (`theme().primary`, `theme().radius`), the same tokens TSX's
+[theme classes](../docs/tailwind.md#theme-tokens) use: shadcn's 31 colors, `radius`, `font-sans` and `font-mono`, one
+value each (an `Hsla`, `radius` in points), each read through the role of its name. What reads it runs again when one
+of its roles changes. `nsh/base`'s default theme is a [theme document](../docs/rust.md#theme-documents-and-typed-keys),
+shadcn's `neutral`, light by default, its dark values the `dark` context of its `colorMode` modifier
+(`set_modifier("colorMode", "dark")` shows them); it is the theme of an app whose own theme and UI sets have none.
+An app changes some of its tokens with `update_tokens(patch)`, tokens by name, and `reset_tokens(names)` puts them
+back; an app's theme document takes the default theme's place whole.
 
 ### Theme roles
 
@@ -333,19 +336,28 @@ and reads the token of that name unless the theme maps it onto another token:
 | `font-mono` | `theme().font_mono` |
 
 `selection`, `success`, `warning`, `info`, `highlight`, `diff-added`, `diff-deleted` and the `syntax-*` roles have no
-token in the default theme: each part draws its own color until the theme has a token of that name (`"warning": "#b45309"` in its `cssVars`) or maps the role onto one
-of its own (a theme document's or a theme file's `"roles": { "warning": "caution" }`). The parts draw `highlight` and a diff's tints translucent; the token is the solid color.
+token in the default theme: each part draws its own color until the theme document has a token of that name
+(`"warning": { "kind": "color", "value": "#b45309" }` in its `tokens`) or maps the role onto one of its own (its
+`"roles": { "warning": "caution" }`, or the overrides' `"roles"`). The parts draw `highlight` and a diff's tints
+translucent; the token is the solid color.
 
-A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. TSX reads a role with
-[`role()`](./nsh.md#role) from `nsh`. In Rust, a role is a
-constant, an `nsh_core::element::Role`: the ones above are in `nsh_base::role` (`role::POPOVER.name()` is
-`"popover"`, `role::RADIUS` reads a number, `role::FONT_SANS` a font family). `Tokens::with_role` maps a role onto a
-token (`tokens.with_role(role::POPOVER, "surface-overlay")`), which `tokens.role(role::POPOVER)` then reads. A crate
-with components of its own declares the roles they draw with the same way
-(`pub const BANNER: Role = Role::new("banner");`): a role is its name, whoever declares it.
-Without a mapping every role reads the token of its own name, so a shadcn theme draws as it always did. The platforms'
-controls take the theme's colors only when the app has a theme of its own (`Tokens::is_themed`, which the core sets);
-an app on the default theme keeps the system's alert colors.
+The roles resolve in the active theme document alone, as any library's do: a document that neither maps one of the
+other roles nor has a token of its name draws that color transparent and `radius` as 0, never the default theme's
+value. A theme with names of its own maps every role it wants drawn.
+
+A role is no token: it reads the token the theme maps it onto, else the token of its name, and a class reads it the
+same way (`bg-popover` draws `surface-overlay` under `"roles": { "popover": "surface-overlay" }`; [Theme
+tokens](../docs/tailwind.md#theme-tokens)), so a role that resolves to no token is no class. TSX reads a role with
+[`role()`](./nsh.md#role) from `nsh`. In Rust, a role is a constant of a kind, an `nsh_core::element::Role`: the
+ones above are in `nsh_base::role` (`role::POPOVER.name()` is `"popover"`; the colors are `Role`s, which read an
+`Hsla`, `role::RADIUS` a `NumberRole`, `role::FONT_SANS` and `role::FONT_MONO` `FontRole`s), and `role::all()` lists
+their declarations, 48 of them, none required, which `nsh/base`'s registry registers. `role(role::POPOVER)` reads one
+where it is used, and `tokens().role(role::POPOVER)` from tokens in hand: the token the theme maps it onto, else the
+one of its name. A mapping onto a token of another kind than the role reads is reported and left out. A crate with
+components of its own declares the roles they draw with in `nsh_core::roles!` (`pub BANNER: Role = "banner"`), with
+their kinds: a role is its name, whoever declares it. The platforms' controls take the theme's colors only when the
+app has a theme of its own (`Tokens::is_themed`, which the core sets); an app on the default theme keeps the system's
+alert colors.
 
 A registered [theme document](../docs/rust.md#theme-documents-and-typed-keys) maps roles onto its own tokens (its `"roles"`), and
 `theme()`'s fields then read those tokens: with a design system that maps `role::POPOVER` onto `surface-overlay`,

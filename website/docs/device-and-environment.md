@@ -156,11 +156,11 @@ const palette = computed(() =>
 </View>
 ```
 
-Rust components also take their colors from the theme, which has light and dark values (`nsh.json` `"theme"`, see [Building with Rust](./rust.md)), so they switch with the system as well. To match the status bar to your background, give your pages and dialogs a [`statusBar`](../modules/nsh-base.md#status-bar), or the app one in `nsh.json`.
+Rust components take their colors from the theme (`nsh.json` `"theme"`, see [Theme](./rust.md#theme)), whose token values the appearance never changes: a theme keeps its dark values in a modifier, `colorMode`, so an app that follows the system picks its `dark` context with the appearance (`effect(|| set_modifier("colorMode", if dark() { "dark" } else { "light" }))` in the root; TSX: `effect(() => setModifier("colorMode", colorScheme()))`), and the components switch with it. To match the status bar to your background, give your pages and dialogs a [`statusBar`](../modules/nsh-base.md#status-bar), or the app one in `nsh.json`.
 
 ### An app with its own appearance
 
-An app that is always dark (or always light) says so in `nsh.json`, and `dark()` and `colorScheme()`, adaptive colors, `dark:` classes, the theme, the status bar's default style and alerts follow it from the first frame (packaged apps also launch in it):
+An app that is always dark (or always light) says so in `nsh.json`, and `dark()` and `colorScheme()`, adaptive colors, `dark:` classes, the status bar's default style and alerts follow it from the first frame (packaged apps also launch in it); the theme shows its dark values when its `colorMode` modifier's default is `dark`, or the app picks that context:
 
 ```json
 { "appearance": "dark" }
@@ -197,7 +197,7 @@ import { colorScheme, setColorScheme } from "nsh";
 
 ### A part of the app in its own appearance
 
-`ThemeScope` (Rust: `theme_scope()`) is a view that shows itself and everything in it light or dark whatever the app shows: a dark sidebar beside a light page, a light document in a dark editor. In it `dark()` and `colorScheme()`, adaptive colors, `dark:` classes, the theme's colors and `token()` follow the scope, and so do the platform's own controls in it on iOS, macOS and the web, the tab bar on Android, and the scroll indicators the desktop backends draw:
+`ThemeScope` (Rust: `theme_scope()`) is a view that shows itself and everything in it light or dark whatever the app shows: a dark sidebar beside a light page, a light document in a dark editor. In it `dark()` and `colorScheme()`, adaptive colors and `dark:` classes follow the scope (the theme's colors and `token()` show its dark values when the scope also picks them, `modifiers={{ colorMode: "dark" }}`), and so do the platform's own controls in it on iOS, macOS and the web, the tab bar on Android, and the scroll indicators the desktop backends draw:
 
 ```rust tabs
 use nsh_core::prelude::*;

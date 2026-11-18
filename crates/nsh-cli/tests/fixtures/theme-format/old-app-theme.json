@@ -1,0 +1,6 @@
+{
+  "cssVars": {
+    "light": { "primary": "#e11d48" },
+    "dark": { "primary": "#fb7185" }
+  }
+}

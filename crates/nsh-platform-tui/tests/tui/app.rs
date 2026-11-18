@@ -650,12 +650,10 @@ fn Primary() -> impl IntoElement {
 
 #[test]
 fn a_rust_roots_theme_tokens_color_its_views() {
-    let red = nsh_core::color::rgb(0xd43a4a);
-    let mut tokens = nsh_core::element::Tokens::default();
-    tokens.set_color("primary", red.into());
+    let theme = r##"{ "tokens": { "primary": { "kind": "color", "value": "#d43a4a" } } }"##;
     let (mut view, rx) = surface();
     let mut terminal = Terminal::new(TestBackend::new(20, 2)).unwrap();
-    view.load(App::Rust(Root::new::<Primary>(|| ()).tokens(tokens)))
+    view.load(App::Rust(Root::new::<Primary>(|| ()).theme(theme)))
         .unwrap();
     draw_until(&mut view, &mut terminal, &rx, "Brand");
     // The tokens' red is the accent of its hue; the default theme's

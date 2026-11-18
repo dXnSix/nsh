@@ -156,11 +156,11 @@ const palette = computed(() =>
 </View>
 ```
 
-Rust 组件也从主题中取色，主题为每种颜色提供浅色和深色两个值（`nsh.json` 的 `"theme"`，见[用 Rust 开发](./rust.md)），所以它们也会随系统切换。要让状态栏与背景相配，为页面和对话框设置 [`statusBar`](../modules/nsh-base.md#status-bar)，或在 `nsh.json` 中为应用设置。
+Rust 组件从主题中取色（`nsh.json` 的 `"theme"`，见[主题](./rust.md#主题)），外观从不改变主题的令牌值：主题把深色值放在修饰器 `colorMode` 中，所以跟随系统的应用要随外观选择它的 `dark` 上下文（在根组件中 `effect(|| set_modifier("colorMode", if dark() { "dark" } else { "light" }))`；TSX：`effect(() => setModifier("colorMode", colorScheme()))`），组件随之切换。要让状态栏与背景相配，为页面和对话框设置 [`statusBar`](../modules/nsh-base.md#status-bar)，或在 `nsh.json` 中为应用设置。
 
 ### 应用自己的外观
 
-始终使用深色（或始终使用浅色）的应用在 `nsh.json` 中声明，`dark()` 和 `colorScheme()`、自适应颜色、`dark:` 类、主题、状态栏的默认样式和提示框从第一帧起就跟随它（打包后的应用启动时也是这个外观）：
+始终使用深色（或始终使用浅色）的应用在 `nsh.json` 中声明，`dark()` 和 `colorScheme()`、自适应颜色、`dark:` 类、状态栏的默认样式和提示框从第一帧起就跟随它（打包后的应用启动时也是这个外观）；主题的 `colorMode` 修饰器默认为 `dark`，或应用选择了该上下文时，主题才显示深色值：
 
 ```json
 { "appearance": "dark" }
@@ -197,7 +197,7 @@ import { colorScheme, setColorScheme } from "nsh";
 
 ### 应用的一部分使用自己的外观
 
-`ThemeScope`（Rust：`theme_scope()`）是一个视图，无论应用显示什么外观，它自身及其中的一切都以浅色或深色显示：浅色页面旁的深色侧边栏，深色编辑器中的浅色文档。在其中，`dark()` 和 `colorScheme()`、自适应颜色、`dark:` 类、主题的颜色和 `token()` 都跟随作用域；在 iOS、macOS 和 Web 上，其中的平台控件也跟随它，Android 上其中的标签栏同样如此，桌面后端绘制的滚动指示器同样如此：
+`ThemeScope`（Rust：`theme_scope()`）是一个视图，无论应用显示什么外观，它自身及其中的一切都以浅色或深色显示：浅色页面旁的深色侧边栏，深色编辑器中的浅色文档。在其中，`dark()` 和 `colorScheme()`、自适应颜色和 `dark:` 类都跟随作用域（作用域同时选择主题的深色值时，即 `modifiers={{ colorMode: "dark" }}`，主题的颜色和 `token()` 才显示深色值）；在 iOS、macOS 和 Web 上，其中的平台控件也跟随它，Android 上其中的标签栏同样如此，桌面后端绘制的滚动指示器同样如此：
 
 ```rust tabs
 use nsh_core::prelude::*;

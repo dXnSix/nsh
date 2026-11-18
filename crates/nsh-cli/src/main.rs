@@ -31,6 +31,9 @@ mod test_host;
 mod test_ios;
 mod test_tizen;
 mod test_web;
+mod theme;
+#[cfg(test)]
+mod theme_format;
 mod tizen;
 mod tizen_web;
 mod ui;
@@ -234,6 +237,12 @@ enum Command {
         /// Further arguments for `tsc` (after `--`).
         #[arg(last = true)]
         args: Vec<String>,
+    },
+    /// Convert old themes to the theme format, and check theme documents
+    /// and patches.
+    Theme {
+        #[command(subcommand)]
+        action: theme::ThemeAction,
     },
     /// Run an app in this system’s native host with hot reload.
     Dev {
@@ -662,6 +671,7 @@ impl Command {
             | Command::Keygen { .. }
             | Command::Update { .. }
             | Command::Component { .. }
+            | Command::Theme { .. }
             | Command::UpdateManifest { .. }
             | Command::Certify { .. }
             | Command::Verify { .. }
@@ -703,6 +713,8 @@ fn main() -> ExitCode {
     ui::exit_if_stopped();
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        // Its diagnostics said why.
+        Err(e) if e.downcast_ref::<theme::Reported>().is_some() => ExitCode::FAILURE,
         Err(e) => {
             ui::report(&e);
             ExitCode::FAILURE
@@ -973,6 +985,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             split,
         } => build::build(&entry, &out, release, split),
         Command::Check { entry, tsc, args } => check::check(&entry, tsc.as_deref(), &args),
+        Command::Theme { action } => theme::run(action),
         Command::Test {
             path,
             entry,

@@ -22,6 +22,7 @@ import toggleSound from "./sounds/toggle.wav";
 import warningSound from "./sounds/warning.wav";
 import { type DemoEntry, nav, shownDemo } from "./nav";
 import { field, fieldLook, fieldSize, fieldText } from "../nsh-gallery-ui/demo";
+import { followColorScheme } from "../nsh-gallery-ui";
 import { alpha, Appear, Banner, colors, desktop, focusedSection, focusRing, header, hovered, IconTile, isDark, lazy, Logo, menuItemLabel, menuItemLook, radius, PageHeader, Press, scrollbarTheme, SIDEBAR, sidebarOpen, TERMINAL_COLUMN, TERMINAL_GAP, TERMINAL_ROW, terminal, SoundToggle, ThemeToggle, ToolButton, DirectionToggle, demoDirection, rtl, appearance, setAppearance, type Appearance, segmentedLook, menuPopup } from "./ui";
 
 // Loaded once, ahead of the first press: a sound plays within a frame then.
@@ -908,6 +909,8 @@ async function confirmQuit() {
 }
 
 function App() {
+  // The theme's dark values with the dark appearance, the system's included.
+  followColorScheme();
   rememberDemo();
   quitWithConfirmation();
   // Every scroll view and list draws the gallery's bar.

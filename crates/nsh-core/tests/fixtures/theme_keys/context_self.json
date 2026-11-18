@@ -1,0 +1,7 @@
+{
+  "tokens": { "space-3": { "kind": "number", "value": 12 } },
+  "modifiers": {
+    "density": { "default": "regular", "contexts": { "regular": {}, "self": { "space-3": 8 } } }
+  },
+  "resolutionOrder": ["density"]
+}

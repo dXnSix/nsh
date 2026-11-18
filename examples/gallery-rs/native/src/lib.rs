@@ -9,7 +9,7 @@ mod nav;
 mod shell;
 mod ui;
 
-use nsh_core::prelude::*;
+use nsh_core::{element::set_modifier, prelude::*};
 
 use crate::ui::{colors, desktop};
 
@@ -22,9 +22,12 @@ fn native(registry: &mut Registry) {
 /// The gallery, in the gallery's design for the system's appearance: on
 /// phones a native stack of its index and the screens pushed on it; in wide
 /// windows a sidebar of the demos and the selected one beside it; the demo
-/// open when it last ran opens again.
+/// open when it last ran opens again. The theme's `colorMode` modifier
+/// follows the appearance, so `nsh_base`'s components show the theme's dark
+/// values with it: the appearance itself changes no token.
 #[component]
 pub fn Gallery() -> impl IntoElement {
+    effect(|| set_modifier("colorMode", if dark() { "dark" } else { "light" }));
     shell::restore();
     view()
         .flex_1()

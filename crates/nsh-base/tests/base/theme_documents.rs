@@ -1,32 +1,31 @@
-//! `nsh_base::Theme` reads each field through its role: without a document
-//! the token of the role's name (shadcn's), under an app's registered theme
-//! document the token the document maps the role onto, and shadcn's tokens
-//! no document has the default theme's. `theme()` makes one theme per change
-//! of the tokens.
+//! `nsh_base::Theme` reads each field through its role in the active
+//! document alone: nsh-base's default document when nothing else is
+//! active, under a design system's registered document the token the
+//! document maps the role onto, and nothing (transparent) for a role that
+//! document neither maps nor has a token of. `theme()` makes one theme per
+//! change of its roles.
 
 use std::time::Duration;
 
-use nsh_base::{Theme, theme};
+use nsh_base::theme;
 use nsh_core::{
     Color, Size,
-    element::{Registry, Root, Tokens},
+    element::{Patch, PatchValues, Registry, Root, set_modifier},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
 use nsh_testing::Headless;
 
-fn hex(c: AdaptiveColor) -> String {
-    format!("#{:08x}", Color::from(c.light).0)
+fn hex(c: nsh_core::Hsla) -> String {
+    format!("#{:08x}", Color::from(c).0)
 }
 
 fn start<C: Component<Props = ()>>(ui_sets: Vec<Registry>) -> Headless {
-    let mut config = EngineConfig {
+    let config = EngineConfig {
         viewport: Size::new(px(390.0), px(844.0)),
+        ui_sets,
         ..EngineConfig::new(Root::of::<C>())
     };
-    if !ui_sets.is_empty() {
-        config.ui_sets = ui_sets;
-    }
     let mut app = Headless::start(config).unwrap();
     app.first_render().unwrap();
     app
@@ -37,8 +36,8 @@ fn start<C: Component<Props = ()>>(ui_sets: Vec<Registry>) -> Headless {
 #[component]
 fn Updates() -> impl IntoElement {
     set_timeout(Duration::from_millis(50), || {
-        let mut change = Tokens::default();
-        change.set_color("primary", AdaptiveColor::rgb(0x123456, 0x123456));
+        let change = Patch::new();
+        let change = change.value("primary", AdaptiveColor::rgb(0x123456, 0x123456).light);
         update_tokens(change);
     });
     text(move || {
@@ -51,16 +50,18 @@ fn Updates() -> impl IntoElement {
     })
 }
 
+/// Under nsh-base's default document (its fallback, active as no other
+/// document is), an edit of `primary` reaches `theme()`, which is one theme
+/// per change.
 #[test]
 fn theme_is_made_once_per_change_and_follows_the_tokens() {
-    let mut app = start::<Updates>(Vec::new());
+    let mut app = start::<Updates>(vec![nsh_base::registry()]);
     app.wait_for("text:primary #123456ff same true").unwrap();
 }
 
 /// A design system's document mapping `popover` onto its `surface-overlay`.
 const DS: &str = r##"{
-    "cssVars": { "theme": { "surface-overlay": "#0a0b0c" } },
-    "tokens": { "surface-overlay": { "kind": "color" } },
+    "tokens": { "surface-overlay": { "kind": "color", "value": "#0a0b0c" } },
     "roles": { "popover": "surface-overlay" }
 }"##;
 
@@ -73,32 +74,37 @@ fn Fields() -> impl IntoElement {
 }
 
 /// Under a registered document, `theme()` reads the tokens its roles are
-/// mapped onto, and shadcn's tokens no document has are the default
-/// theme's.
+/// mapped onto, and a role the document neither maps nor has a token of
+/// reads nothing: transparent, not the default theme's (nsh-base's roles
+/// resolve in the active document alone).
 #[test]
 fn under_a_document_theme_reads_its_roles() {
     let mut ds = Registry::new();
     ds.theme_document(DS);
     let mut app = start::<Fields>(vec![nsh_base::registry(), ds]);
-    app.wait_for(&format!(
-        "text:popover #0a0b0cff primary {}",
-        hex(Theme::default().primary)
-    ))
-    .unwrap();
+    app.wait_for("text:popover #0a0b0cff primary #00000000")
+        .unwrap();
 }
 
-/// A radius with a dark value of its own: `theme().radius` is its value in
-/// the appearance shown, and follows the appearance.
+/// A radius with a dark value of its own, in the document's `colorMode`
+/// modifier: `theme().radius` is its value in the context picked, and
+/// follows a pick.
 const RADII: &str = r##"{
-    "cssVars": { "light": { "corner": "8px" }, "dark": { "corner": "12px" } },
-    "tokens": { "corner": { "kind": "number" } },
+    "tokens": { "corner": { "kind": "number", "value": 8 } },
+    "modifiers": {
+        "colorMode": {
+            "default": "light",
+            "contexts": { "light": {}, "dark": { "corner": 12 } }
+        }
+    },
+    "resolutionOrder": ["colorMode"],
     "roles": { "radius": "corner" }
 }"##;
 
 #[component]
 fn Radius() -> impl IntoElement {
     set_timeout(Duration::from_millis(50), || {
-        set_color_scheme(nsh_core::platform::Appearance::Dark)
+        set_modifier("colorMode", "dark")
     });
     text(move || format!("radius {}", theme().radius.0))
 }

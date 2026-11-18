@@ -52,16 +52,21 @@ pub(crate) struct NshPlugin {
     pub(crate) split: bool,
 }
 
-/// The `"tailwind"`, `"theme"`, `"appearance"` and `"statusBar"` of the
-/// app's `nsh.json`.
+/// The `"tailwind"`, `"theme"`, `"themeOverrides"`, `"appearance"` and
+/// `"statusBar"` of the app's `nsh.json`.
 #[derive(Debug, Default)]
 pub(crate) struct ThemeSetup {
     /// The Tailwind theme as JSON, for the runtime (`None`: the default).
     pub(crate) json: Option<String>,
     /// Parsed, to check classes at build time.
     pub(crate) theme: nsh_core::tailwind::Theme,
-    /// The theme of the Rust components (a gpui-kit theme file), checked.
+    /// The app's theme for the runtime (`setup.ui`): `{ "document": …,
+    /// "overrides": … }`, its theme document and its override patch as
+    /// written, each `null` when it ships none (`bundle::AppTheme`).
     pub(crate) ui: Option<String>,
+    /// The diagnostics of the app's theme and overrides, which the build
+    /// warns of.
+    pub(crate) theme_warnings: Vec<String>,
     /// `"appearance"`: `"light"` or `"dark"` (`None`: the system's).
     pub(crate) appearance: Option<&'static str>,
     /// `"statusBar"`, checked, as JSON: the status bar's default.
@@ -74,6 +79,13 @@ pub(crate) struct ThemeSetup {
     /// of its own the entry imports first ([`APP_MODULE`]).
     pub(crate) app: String,
 }
+
+/// The module that hands the runtime the app's Tailwind theme, its theme
+/// (`setup.ui`), appearance and status bar (`setup`), imported first by
+/// the entry, so that it runs before any other module's code: a token read
+/// at the top level of a module the entry imports reads the app's theme.
+pub(crate) const SETUP_MODULE: &str = "virtual:nsh-setup";
+const SETUP_ID: &str = "\0nsh-setup";
 
 /// The module that hands the runtime the app's information (`appInfo()`),
 /// imported first by the entry, before the modules that may read it.
@@ -339,13 +351,11 @@ fn image_module(
 }
 
 impl NshPlugin {
-    /// The entry's first statement, giving the renderer the app's themes,
-    /// appearance and status bar.
+    /// The entry's first statements: the imports of the modules that give
+    /// the renderer the app's themes, appearance and status bar
+    /// ([`SETUP_MODULE`]), its information and its translations, before
+    /// any other module's code runs.
     fn prologue(&self) -> Option<String> {
-        let json = |v: &Option<String>| match v {
-            Some(json) => serde_json::Value::String(json.clone()).to_string(),
-            None => "null".to_owned(),
-        };
         let setup = &self.tailwind;
         let app = (!setup.app.is_empty()).then(|| format!("import {APP_MODULE:?};\n"));
         let i18n = setup
@@ -356,23 +366,38 @@ impl NshPlugin {
             (None, None) => None,
             (app, i18n) => Some(app.unwrap_or_default() + &i18n.unwrap_or_default()),
         };
-        let call = (setup.json.is_some()
+        let call = self
+            .setup_call()
+            .is_some()
+            .then(|| format!("import {SETUP_MODULE:?};\n"));
+        match (call, i18n) {
+            (None, None) => None,
+            (call, i18n) => Some(call.unwrap_or_default() + &i18n.unwrap_or_default()),
+        }
+    }
+
+    /// The runtime's `setup` of the app's Tailwind theme, its theme
+    /// (`{ document, overrides }`), appearance and status bar, which
+    /// [`SETUP_MODULE`] runs; `None` when the app has none of them.
+    fn setup_call(&self) -> Option<String> {
+        let json = |v: &Option<String>| match v {
+            Some(json) => serde_json::Value::String(json.clone()).to_string(),
+            None => "null".to_owned(),
+        };
+        let setup = &self.tailwind;
+        (setup.json.is_some()
             || setup.ui.is_some()
             || setup.appearance.is_some()
             || setup.status_bar.is_some())
         .then(|| {
             format!(
-                "_$setup({}, {}, {}, {});",
+                "setup({}, {}, {}, {});",
                 json(&setup.json),
                 json(&setup.ui),
                 json(&setup.appearance.map(str::to_owned)),
                 json(&setup.status_bar)
             )
-        });
-        match (i18n, call) {
-            (None, None) => None,
-            (i18n, call) => Some(i18n.unwrap_or_default() + &call.unwrap_or_default()),
-        }
+        })
     }
 
     /// Records `message` as the build's error (shown as it is).
@@ -514,6 +539,9 @@ impl Plugin for NshPlugin {
         if spec == APP_MODULE && !self.tailwind.app.is_empty() {
             return Ok(Some(HookResolveIdOutput::from_id(APP_ID)));
         }
+        if spec == SETUP_MODULE && self.setup_call().is_some() {
+            return Ok(Some(HookResolveIdOutput::from_id(SETUP_ID)));
+        }
         if self.modules.contains(spec) {
             // Hot factories keep external import() expressions. Preloading
             // their namespaces would turn an optional native API into an
@@ -596,6 +624,16 @@ impl Plugin for NshPlugin {
                 "import {{ i18n }} from \"nsh:rt\";\ni18n({});",
                 serde_json::Value::String(json.clone())
             );
+            return Ok(Some(HookLoadOutput {
+                code: code.into(),
+                module_type: Some(ModuleType::Js),
+                ..Default::default()
+            }));
+        }
+        if args.id == SETUP_ID
+            && let Some(call) = self.setup_call()
+        {
+            let code = format!("import {{ setup }} from \"nsh:rt\";\n{call}");
             return Ok(Some(HookLoadOutput {
                 code: code.into(),
                 module_type: Some(ModuleType::Js),

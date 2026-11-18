@@ -628,7 +628,7 @@ pub fn Slider(props: SliderProps, cx: Scope<SliderEvent>) -> impl IntoElement {
                     // terminal marks no Adjustable view's focus itself.
                     .child(text(SLIDER_THUMB).text_color(move || {
                         if focused.get() == Some(which) && !disabled.get() {
-                            terminal::ACCENT.into()
+                            terminal::ACCENT
                         } else {
                             crate::theme::theme().foreground
                         }
@@ -860,7 +860,7 @@ fn terminal_slider(
             .when(ctl.axis == Axis::Horizontal, |t| t.number_of_lines(1u32))
             .text_overflow(nsh_core::EllipsizeMode::Clip)
             .text_color(move || match at {
-                1 => terminal::ACCENT.into(),
+                1 => terminal::ACCENT,
                 _ => crate::theme::theme().muted_foreground,
             })
     };

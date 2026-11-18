@@ -63,18 +63,28 @@ thread_local! {
 const TURN_TIME: Duration = Duration::from_secs(2);
 
 /// The tint of a surface's alerts and action sheets for its design tokens
-/// ([`nsh_core::Command::Tokens`]): the theme's [`role::PRIMARY`] when the
-/// app has a theme of its own (the core says so: `Tokens::is_themed`), else
-/// `None` (the system's).
+/// ([`nsh_core::Command::Tokens`]) when the app has a theme of its own (the
+/// core says so: `Tokens::is_themed`), else `None` (the system's): the
+/// current value of [`role::PRIMARY`], in whatever context the app picked
+/// (`colorMode`'s `light` or `dark`), in both the light and the dark slot.
+/// A `primary` that resolves to nothing is the default theme's light one,
+/// in both.
 ///
 /// [`role::PRIMARY`]: nsh_core::element::role::PRIMARY
 pub(crate) fn alert_tint(
     tokens: &nsh_core::element::Tokens,
 ) -> Option<nsh_core::element::AdaptiveColor> {
-    tokens
+    if !tokens.is_themed() {
+        return None;
+    }
+    let primary = tokens
         .role(nsh_core::element::role::PRIMARY)
-        .filter(|_| tokens.is_themed())
+        .unwrap_or_else(|| nsh_core::Color(PRIMARY_LIGHT).into());
+    Some(nsh_core::element::AdaptiveColor::new(primary, primary))
 }
+
+/// The default theme's light `primary` (`nsh-base`'s, neutral), as RGBA.
+const PRIMARY_LIGHT: u32 = 0x1717_17ff;
 
 /// The appearance the app asked for (`Unspecified`: the system's).
 pub(crate) fn appearance() -> UIUserInterfaceStyle {
@@ -902,24 +912,53 @@ pub(crate) fn accessibility_focus(view: &UIView) {
 
 #[cfg(test)]
 mod tests {
+    use nsh_core::{Color, element::Tokens};
+
     use super::alert_tint;
 
-    /// A surface's alert tint comes from its own tokens alone (each
-    /// `Mounter` keeps its own): a themed surface tints with its `primary`,
-    /// one without a theme keeps the system's.
+    /// The tokens of theme document `json`, under its modifiers' defaults,
+    /// and whether the app has a theme of its own.
+    fn tokens_of(json: &str, themed: bool) -> Tokens {
+        let document = nsh_theme::read(json).document;
+        let (mut tokens, _) = Tokens::resolve(
+            std::sync::Arc::new(document),
+            Default::default(),
+            Vec::new(),
+        );
+        tokens.set_themed(themed);
+        tokens
+    }
+
+    /// A theme whose `primary` maps onto `brand`, dark by default.
+    const BRAND: &str = r##"{
+        "tokens": { "brand": { "kind": "color", "value": "#123456" } },
+        "modifiers": { "colorMode": { "default": "dark", "contexts": {
+            "light": {}, "dark": { "brand": "#654321" } } } },
+        "resolutionOrder": ["colorMode"],
+        "roles": { "primary": "brand" }
+    }"##;
+
+    /// The tint (light, dark) as RGBA.
+    fn rgba(tint: nsh_core::element::AdaptiveColor) -> (u32, u32) {
+        (Color::from(tint.light).0, Color::from(tint.dark).0)
+    }
+
+    /// A themed surface tints with `primary`'s current value, in the
+    /// context picked, in both slots.
     #[test]
-    fn a_surfaces_alert_tint_comes_from_its_own_tokens() {
-        let plain = nsh_base::tokens_of(None).unwrap();
-        let mut themed = plain.clone();
-        let ink = plain.color("foreground").unwrap();
-        themed.set_color("primary", ink);
-        // The core marks the tokens of an app with a theme of its own.
-        themed.set_themed(true);
+    fn the_alert_tint_is_primary_s_current_value_in_both_slots() {
+        let tint = alert_tint(&tokens_of(BRAND, true)).map(rgba);
+        assert_eq!(tint, Some((0x654321ff, 0x654321ff)));
+    }
 
-        let a = alert_tint(&themed);
-        let b = alert_tint(&plain);
-
-        assert_eq!(a, Some(ink));
-        assert_eq!(b, None);
+    /// A `primary` that resolves to nothing tints with the default theme's
+    /// light one, in both slots; a surface without a theme of its own
+    /// keeps the system's.
+    #[test]
+    fn an_unresolved_primary_tints_with_its_light_default_and_no_theme_with_none() {
+        let gray = r##"{ "tokens": { "gray": { "kind": "color", "value": "#808080" } } }"##;
+        let tint = alert_tint(&tokens_of(gray, true)).map(rgba);
+        assert_eq!(tint, Some((0x171717ff, 0x171717ff)));
+        assert_eq!(alert_tint(&tokens_of(BRAND, false)), None);
     }
 }

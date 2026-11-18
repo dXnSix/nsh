@@ -77,9 +77,11 @@ mod window;
 // Windows of GPUI's test platform, which `shot` turns on.
 #[cfg(all(test, feature = "shot"))]
 mod tests;
+#[cfg(test)]
+mod theme_format_tests;
 
 pub use gpui;
-pub use nsh_base::{Theme, ThemeError};
+pub use nsh_base::ThemeError;
 pub use nsh_core::{
     desktop::WindowBackend,
     element::{AdaptiveColor, Color, Hsla, Rgba},

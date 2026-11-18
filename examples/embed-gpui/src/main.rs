@@ -4,8 +4,9 @@
 //!
 //! The window is GPUI Kit's (its `Root`, a sidebar, buttons, an input, a
 //! dialog); the two panes of the resizable split are [`AppView`]s, each
-//! running its own NSH engine. The host's theme reaches them on every
-//! change ([`theme::nsh_theme`], `observe_global::<Theme>`), Tab moves
+//! running its own NSH engine. The host's theme reaches them as a theme
+//! patch on every change ([`theme::host_patch`],
+//! `observe_global::<Theme>`), Tab moves
 //! through the host's widgets and the surfaces' fields alike, GPUI Kit's
 //! dialogs and notifications draw above the surfaces, closing a pane
 //! drops its view, which stops its engine, and the apps' watchlist and
@@ -169,10 +170,12 @@ impl Shell {
 
     fn apply_theme(&mut self, cx: &mut Context<Self>) {
         let theme = cx.theme();
-        let (nsh_theme, appearance) = (theme::nsh_theme(theme), theme::appearance(theme.mode));
+        let (patch, appearance) = (theme::host_patch(theme), theme::appearance(theme.mode));
         for view in self.panes.iter().filter_map(|p| p.view.clone()) {
             view.update(cx, |view, cx| {
-                view.set_theme(Some(nsh_theme.clone()), cx);
+                if let Err(err) = view.set_theme_overrides(Some(&patch), cx) {
+                    log::error!("the host's theme: {err}");
+                }
                 view.set_appearance(appearance, cx);
             });
         }
@@ -205,7 +208,7 @@ impl Shell {
 
     /// Switches to the themes registered from `themes/violet.json` (a GPUI
     /// Kit theme file, in GPUI Kit's registry), or back to GPUI Kit's
-    /// default; the surfaces follow ([`theme::nsh_theme`]).
+    /// default; the surfaces follow ([`theme::host_patch`]).
     fn set_violet(&mut self, violet: bool, window: &mut Window, cx: &mut Context<Self>) {
         let registry = gpui_kit::component::ThemeRegistry::global(cx);
         let (light, dark) = if violet {
@@ -606,10 +609,12 @@ fn open_app(path: &Path, window: &mut Window, cx: &mut App) -> Option<Entity<App
         std::rc::Rc::new(watchlist::Watchlist::make),
     );
     let theme = cx.theme();
-    let (nsh_theme, appearance) = (theme::nsh_theme(theme), theme::appearance(theme.mode));
+    let (patch, appearance) = (theme::host_patch(theme), theme::appearance(theme.mode));
     view.update(cx, |view, cx| {
         // Before the app starts: its first frame is in the host's theme.
-        view.set_theme(Some(nsh_theme), cx);
+        if let Err(err) = view.set_theme_overrides(Some(&patch), cx) {
+            log::error!("the host's theme: {err}");
+        }
         view.set_appearance(appearance, cx);
         view.on_error(|message| log::error!("embedded app: {message}"));
         view.load(NshApp::Js(bundle));

@@ -776,15 +776,71 @@ fn checkout_version(dir: &Path) -> anyhow::Result<String> {
     bail!("{}: no [workspace.package] version", manifest.display())
 }
 
+/// One of `nsh.json`'s theme members, `"theme"` or `"themeOverrides"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ThemeMember {
+    /// Where it is, as its warnings name it: its path as `nsh.json` gives
+    /// it, or `nsh.json#/theme` for one inline.
+    place: String,
+    /// Its file: the one `nsh.json` names, or the inline member written to
+    /// the workspace.
+    path: PathBuf,
+    /// Whether the runners get it: a theme document (not one of the old
+    /// format, nor no JSON object), or a patch that is a JSON
+    /// object (`nsh_bundler::read_app_theme`).
+    shipped: bool,
+}
+
+impl ThemeMember {
+    /// `nsh.json`'s member `key` of the app in `dir`, an inline one written
+    /// to `workspace` as `file`. `Err`: the file it names isn't there.
+    fn of(
+        dir: &Path,
+        config: &serde_json::Value,
+        workspace: &Path,
+        key: &str,
+        file: &str,
+    ) -> anyhow::Result<Option<ThemeMember>> {
+        Ok(match config.get(key) {
+            None => None,
+            Some(serde_json::Value::String(name)) => Some(ThemeMember {
+                place: name.clone(),
+                path: dunce::canonicalize(dir.join(name))
+                    .with_context(|| format!("nsh.json: {key}: no {name}"))?,
+                shipped: true,
+            }),
+            Some(inline) => {
+                let path = workspace.join(file);
+                write(&path, &inline.to_string())?;
+                Some(ThemeMember {
+                    place: format!("nsh.json#/{key}"),
+                    path,
+                    shipped: true,
+                })
+            }
+        })
+    }
+
+    /// `(place, text)`, as `nsh_bundler::read_app_theme` takes it.
+    fn read(&self) -> anyhow::Result<(String, String)> {
+        let text = fs::read_to_string(&self.path)
+            .with_context(|| format!("read {}", self.path.display()))?;
+        Ok((self.place.clone(), text))
+    }
+}
+
 /// The root component of a Rust app (`nsh.json` `"root"`), as the
 /// generated runners make it ([`root_fn`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RootConfig {
     /// Its path in the app's crate (`App`, `shell::Gallery`).
     component: String,
-    /// The theme's JSON file (`nsh.json` `"theme"`: a file, or its content
-    /// written to the workspace), compiled into the runners.
-    theme: Option<PathBuf>,
+    /// The app's theme document (`nsh.json` `"theme"`), compiled into the
+    /// runners (`Root::theme`) when it is one.
+    theme: Option<ThemeMember>,
+    /// The app's override patch (`nsh.json` `"themeOverrides"`), compiled
+    /// into the runners (`Root::theme_overrides`) when it is one.
+    theme_overrides: Option<ThemeMember>,
     /// `"light"` / `"dark"`; `None`: the system's.
     appearance: Option<String>,
     /// The app's id (`nsh.json` `"id"`), which names where it keeps its
@@ -1031,8 +1087,8 @@ fn toml_string(line: &str, key: &str) -> Option<String> {
 }
 
 /// The `"root"` of the app's `config` (its `nsh.json`, in `dir`) with its
-/// `"theme"`, `"appearance"` and `"statusBar"`.
-fn root_config(
+/// `"theme"`, `"themeOverrides"`, `"appearance"` and `"statusBar"`.
+pub(crate) fn root_config(
     dir: &Path,
     config: &serde_json::Value,
     workspace: &Path,
@@ -1052,25 +1108,31 @@ fn root_config(
     if !component.split("::").all(ident) {
         bail!("nsh.json: \"root\": {component:?} is not a Rust path (`App`, `shell::Gallery`)");
     }
-    let theme = match config.get("theme") {
-        None => None,
-        Some(serde_json::Value::String(file)) => Some(
-            dunce::canonicalize(dir.join(file))
-                .with_context(|| format!("nsh.json: theme: no {file}"))?,
-        ),
-        Some(inline) => {
-            let path = workspace.join("theme.json");
-            write(&path, &inline.to_string())?;
-            Some(path)
-        }
-    };
-    // What the theme leaves out is warned of once the app's sets are
-    // described ([`theme_warnings`]): the tokens their theme documents
-    // declare decide its names.
-    if let Some(theme) = &theme {
-        let json = fs::read_to_string(theme)?;
-        nsh_core::element::theme_file::check(&json)
-            .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
+    // Read as a TSX app's are (`nsh_bundler::read_app_theme`): a theme of
+    // the old format, or no document, is not given to the root. What the
+    // members say is warned of once the app's sets are described
+    // ([`theme_warnings`]).
+    let mut theme = ThemeMember::of(dir, config, workspace, "theme", "theme.json")?;
+    let mut theme_overrides = ThemeMember::of(
+        dir,
+        config,
+        workspace,
+        "themeOverrides",
+        "theme-overrides.json",
+    )?;
+    let texts = (
+        theme.as_ref().map(ThemeMember::read).transpose()?,
+        theme_overrides
+            .as_ref()
+            .map(ThemeMember::read)
+            .transpose()?,
+    );
+    let read = nsh_bundler::read_app_theme(texts.0.as_ref(), texts.1.as_ref(), &[]);
+    if let Some(theme) = &mut theme {
+        theme.shipped = read.document.is_some();
+    }
+    if let Some(overrides) = &mut theme_overrides {
+        overrides.shipped = read.overrides.is_some();
     }
     let appearance = match config.get("appearance").and_then(|a| a.as_str()) {
         None | Some("system") => None,
@@ -1144,6 +1206,7 @@ fn root_config(
     Ok(RootConfig {
         component,
         theme,
+        theme_overrides,
         appearance,
         app_id: crate::package::app_id(&dir.join("nsh.json")).ok(),
         status_bar,
@@ -1864,11 +1927,9 @@ impl RustApp {
             }
         };
         let sets = read_description(&text, &self.crates, &what)?;
-        if let Some(theme) = self.root.as_ref().and_then(|r| r.theme.as_deref()) {
-            for what in theme_warnings(&fs::read_to_string(theme)?, &sets)? {
-                crate::ui::warn(format_args!(
-                    "nsh.json: theme: {what}, ignored (one of a newer NSH, or a typo)"
-                ));
+        if let Some(root) = &self.root {
+            for warning in theme_warnings(root, &sets)? {
+                crate::ui::warn(warning);
             }
         }
         Ok(sets)
@@ -3594,7 +3655,7 @@ impl RustApp {
         )
     }
 
-    /// `app_root()`, a Rust app's root (`nsh.json` `"root"`, `"theme"`,
+    /// `app_root()`, a Rust app's root (`nsh.json` `"root"`, `"theme"`, `"themeOverrides"`,
     /// `"appearance"`, `"statusBar"`: a component of the first crate `"rust"` lists), for
     /// the generated code, under `cfg`.
     fn root_fn(&self, cfg: &str, root: &RootConfig) -> String {
@@ -3625,18 +3686,24 @@ fn set_fn(krate: &AppCrate) -> String {
 }
 
 /// `app_root()`, a Rust app's root (`nsh.json` `"root"`, `"theme"`,
-/// `"appearance"`, `"statusBar"`, `"id"`, `"schemes"`, `"window"`,
+/// `"themeOverrides"`, `"appearance"`, `"statusBar"`, `"id"`, `"schemes"`, `"window"`,
 /// `"capabilities"`) in the crate the generated code links as `krate`, under
 /// `cfg`.
-fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
+pub(crate) fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     let mut make = format!(
         "nsh_core::element::Root::of::<{krate}::{}>()",
         root.component
     );
-    if let Some(theme) = &root.theme {
+    if let Some(theme) = root.theme.as_ref().filter(|t| t.shipped) {
         make.push_str(&format!(
             "\n        .theme(include_str!({:?}))",
-            theme.to_string_lossy()
+            theme.path.to_string_lossy()
+        ));
+    }
+    if let Some(overrides) = root.theme_overrides.as_ref().filter(|t| t.shipped) {
+        make.push_str(&format!(
+            "\n        .theme_overrides(include_str!({:?}))",
+            overrides.path.to_string_lossy()
         ));
     }
     if let Some(id) = &root.app_id {
@@ -3725,29 +3792,21 @@ fn stamp(program: &Path) -> anyhow::Result<String> {
     Ok(format!("{}:{}", metadata.len(), modified.as_nanos()))
 }
 
-/// What `nsh.json`'s theme `json` leaves out, which the CLI warns of: read
-/// by the tokens the theme documents of `sets`, or the file itself, declare
-/// (a name nothing declares, a value of another kind), else as `nsh/base`
-/// reads it (a value it cannot read).
-fn theme_warnings(json: &str, sets: &[SetDescription]) -> anyhow::Result<Vec<String>> {
-    let documents = nsh_core::element::description::declarations(sets)
-        .map_err(|e| anyhow::anyhow!("the app's theme documents: {e}"))?;
-    let declared = documents.or_else(|| {
-        nsh_core::element::theme_file::declares(json).then(nsh_core::element::Declarations::default)
-    });
-    let (_, ignored) = match declared {
-        Some(declared) => declared.read(Some(json)),
-        None => nsh_base::Theme::from_json_lenient(json)
-            .map(|(theme, mut ignored)| {
-                let (tokens, said) =
-                    nsh_core::element::theme_file::with_modifiers(json, theme.into_tokens());
-                ignored.extend(said);
-                (tokens, ignored)
-            })
-            .map_err(|e| e.0),
-    }
-    .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
-    Ok(ignored)
+/// What the app's theme members (`root`'s `"theme"` and `"themeOverrides"`)
+/// say, which the CLI warns of: read with nsh-theme as a TSX app's are
+/// (`nsh_bundler::read_app_theme`), against the UI sets `sets`' documents
+/// and roles, each warning naming its file and JSON pointer.
+pub(crate) fn theme_warnings(
+    root: &RootConfig,
+    sets: &[SetDescription],
+) -> anyhow::Result<Vec<String>> {
+    let theme = root.theme.as_ref().map(ThemeMember::read).transpose()?;
+    let overrides = root
+        .theme_overrides
+        .as_ref()
+        .map(ThemeMember::read)
+        .transpose()?;
+    Ok(nsh_bundler::read_app_theme(theme.as_ref(), overrides.as_ref(), sets).warnings)
 }
 
 /// The sets of `crates` (`what` the steps call them) in `text`, the output
@@ -4148,6 +4207,7 @@ mod tests {
             let root = RootConfig {
                 component: "App".into(),
                 theme: None,
+                theme_overrides: None,
                 appearance: None,
                 app_id: None,
                 status_bar: None,
@@ -4405,7 +4465,16 @@ mod tests {
             "app_native",
             &super::RootConfig {
                 component: "App".into(),
-                theme: Some("/app/theme.json".into()),
+                theme: Some(super::ThemeMember {
+                    place: "theme.json".into(),
+                    path: "/app/theme.json".into(),
+                    shipped: true,
+                }),
+                theme_overrides: Some(super::ThemeMember {
+                    place: "nsh.json#/themeOverrides".into(),
+                    path: "/app/.nsh/rust/theme-overrides.json".into(),
+                    shipped: true,
+                }),
                 appearance: Some("dark".into()),
                 app_id: Some("com.example.app".into()),
                 status_bar: Some(r#"{"foreground":"light","hidden":false}"#.into()),
@@ -4420,7 +4489,8 @@ mod tests {
         for line in [
             "#[cfg(x)]\nfn app_root() -> nsh_core::element::Root {",
             "nsh_core::element::Root::of::<app_native::App>()",
-            "include_str!(\"/app/theme.json\")",
+            ".theme(include_str!(\"/app/theme.json\"))",
+            ".theme_overrides(include_str!(\"/app/.nsh/rust/theme-overrides.json\"))",
             ".appearance(nsh_core::element::Appearance::Dark)",
             ".app_id(\"com.example.app\")",
             ".url_schemes([\"myapp\"])",
@@ -4483,6 +4553,7 @@ mod tests {
             Some(super::RootConfig {
                 component: "App".into(),
                 theme: None,
+                theme_overrides: None,
                 appearance: None,
                 app_id: None,
                 status_bar: None,
@@ -4976,6 +5047,7 @@ mod tests {
         app.root = Some(super::RootConfig {
             component: "App".into(),
             theme: None,
+            theme_overrides: None,
             appearance: None,
             app_id: None,
             status_bar: None,
@@ -5652,6 +5724,7 @@ panic = \"abort\"
             Some(super::RootConfig {
                 component: "shell::Home".into(),
                 theme: None,
+                theme_overrides: None,
                 appearance: None,
                 app_id: None,
                 status_bar: None,
@@ -5985,16 +6058,30 @@ panic = \"abort\"
         }
     }
 
-    /// A Rust app's theme reaches its root as the theme file
-    /// (`Root::theme`), which the engine reads with the UI set's reader, at
-    /// every place the generated code makes the root.
+    /// A Rust app's theme reaches its root as the theme document
+    /// (`Root::theme`) and the overrides (`Root::theme_overrides`), which
+    /// the core reads with nsh-theme, at every place the generated code
+    /// makes the root.
     mod root_theme {
         use super::*;
+        use crate::rust_app::ThemeMember;
 
-        fn root(theme: Option<&str>) -> RootConfig {
+        pub(in super::super) fn member(path: &str) -> ThemeMember {
+            ThemeMember {
+                place: "theme.json".into(),
+                path: path.into(),
+                shipped: true,
+            }
+        }
+
+        pub(in super::super) fn root(
+            theme: Option<ThemeMember>,
+            overrides: Option<ThemeMember>,
+        ) -> RootConfig {
             RootConfig {
                 component: "App".into(),
-                theme: theme.map(Into::into),
+                theme,
+                theme_overrides: overrides,
                 appearance: None,
                 app_id: None,
                 status_bar: None,
@@ -6007,14 +6094,18 @@ panic = \"abort\"
 
         #[test]
         fn the_root_takes_the_theme_file() {
-            let code = super::super::root_fn("", "app_native", &root(Some("/app/theme.json")));
+            let code = super::super::root_fn(
+                "",
+                "app_native",
+                &root(Some(member("/app/theme.json")), None),
+            );
             assert!(
                 code.contains(".theme(include_str!(\"/app/theme.json\"))"),
                 "{code}"
             );
             assert!(!code.contains(".tokens("), "{code}");
-            assert!(!code.contains("Theme::from_json"), "{code}");
-            let code = super::super::root_fn("", "app_native", &root(None));
+            assert!(!code.contains(".theme_overrides("), "{code}");
+            let code = super::super::root_fn("", "app_native", &root(None, None));
             assert!(!code.contains(".theme("), "{code}");
         }
 
@@ -6024,10 +6115,14 @@ panic = \"abort\"
         fn every_generated_root_takes_the_theme_file() {
             let dir = std::env::temp_dir().join(format!("nsh-root-theme-{}", std::process::id()));
             let theme = dir.join("theme.json");
+            let overrides = dir.join("overrides.json");
             let app = app(
                 &dir,
                 &[("app-native", dir.join("native"))],
-                Some(root(Some(&theme.to_string_lossy()))),
+                Some(root(
+                    Some(member(&theme.to_string_lossy())),
+                    Some(member(&overrides.to_string_lossy())),
+                )),
             );
             app.write_workspace().unwrap();
             let mut roots = 0;
@@ -6042,7 +6137,11 @@ panic = \"abort\"
                         if code.contains("fn app_root()") {
                             roots += 1;
                             assert!(code.contains(".theme(include_str!("), "{}", path.display());
-                            assert!(!code.contains("Theme::from_json"), "{}", path.display());
+                            assert!(
+                                code.contains(".theme_overrides(include_str!("),
+                                "{}",
+                                path.display()
+                            );
                         }
                     }
                 }
@@ -6051,64 +6150,120 @@ panic = \"abort\"
             let _ = std::fs::remove_dir_all(&dir);
         }
 
-        /// `cargo run`'s binary gives the root `nsh.json`'s theme.
+        /// `cargo run`'s binary gives the root `nsh.json`'s theme and
+        /// overrides.
         #[test]
         fn the_cargo_run_template_reads_the_theme() {
             let main = include_str!("templates/rust/main.rs");
             assert!(main.contains("root = root.theme(theme);"), "{main}");
-            assert!(main.contains("config.get(\"theme\")"), "{main}");
+            assert!(
+                main.contains("root = root.theme_overrides(overrides);"),
+                "{main}"
+            );
+            assert!(main.contains("member(\"theme\")"), "{main}");
+            assert!(main.contains("member(\"themeOverrides\")"), "{main}");
         }
     }
 
-    /// Under the app's theme documents, `nsh.json`'s theme is checked by
-    /// the tokens they declare: a name nothing declares is warned of.
+    /// The app's theme members are checked by the described sets: the
+    /// active document's tokens and the sets' roles.
     mod declared_theme {
         use nsh_core::element::{Registry, description::SetDescription};
 
+        use super::root_theme::root;
+        use crate::rust_app::ThemeMember;
+
         const DS: &str = r##"{
-            "cssVars": { "theme": { "surface-overlay": "#111111" } },
-            "tokens": { "surface-overlay": { "kind": "color" } },
+            "tokens": { "surface-overlay": { "kind": "color", "value": "#111111" } },
             "roles": { "popover": "surface-overlay" }
         }"##;
 
-        /// Under documents: names nothing declares; a `var()` of a declared
-        /// token is no warning.
+        /// The warnings of a root whose `theme.json` is `theme` and whose
+        /// `overrides.json` is `overrides`, under `sets`.
+        fn warned(
+            theme: Option<&str>,
+            overrides: Option<&str>,
+            sets: &[SetDescription],
+        ) -> Vec<String> {
+            static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "nsh-rust-theme-warnings-{}-{call}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let member = |file: &str, text: Option<&str>| {
+                text.map(|text| {
+                    std::fs::write(dir.join(file), text).unwrap();
+                    ThemeMember {
+                        place: file.into(),
+                        path: dir.join(file),
+                        shipped: true,
+                    }
+                })
+            };
+            let root = root(
+                member("theme.json", theme),
+                member("overrides.json", overrides),
+            );
+            let warned = super::super::theme_warnings(&root, sets).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            warned
+        }
+
+        /// The overrides are checked by the sets' document: a name it
+        /// doesn't declare is warned of.
         #[test]
         fn a_theme_is_checked_by_the_described_documents() {
             let mut registry = Registry::ui_set("ds/native");
             registry.theme_document(DS);
             let sets = [SetDescription::from(&registry)];
-            let json = r##"{ "cssVars": { "light": { "surface-overlay": "#333333", "brand": "#000000", "popover": "var(--surface-overlay)" } } }"##;
-            let warned = super::super::theme_warnings(json, &sets).unwrap();
-            assert_eq!(
-                warned,
-                [
-                    "`brand`: no theme document declares it",
-                    "`popover`: the token its role is mapped onto, `surface-overlay`, is set too"
-                ]
+            let warned = warned(
+                None,
+                Some(r##"{ "values": { "surface-overlay": "#333333", "brand": "#000000" } }"##),
+                &sets,
+            );
+            assert_eq!(warned.len(), 1, "{warned:?}");
+            assert!(
+                warned[0].starts_with("overrides.json#/values/brand: undeclared-token: "),
+                "{warned:?}"
             );
         }
 
-        /// A theme file that declares its own tokens is checked by them.
+        /// A theme document of the app's own replaces the sets': the
+        /// overrides are checked by its tokens.
         #[test]
         fn a_theme_that_declares_its_tokens_is_checked_by_them() {
-            let set = SetDescription::from(&Registry::ui_set("app/native"));
-            let json = r##"{ "cssVars": { "light": { "page": "#ffffff", "brand": "#000000" } },
-                             "tokens": { "page": { "kind": "color" } } }"##;
-            let warned = super::super::theme_warnings(json, &[set]).unwrap();
-            assert_eq!(warned, ["`brand`: no theme document declares it"]);
+            let mut registry = Registry::ui_set("ds/native");
+            registry.theme_document(DS);
+            let sets = [SetDescription::from(&registry)];
+            let warned = warned(
+                Some(r##"{ "tokens": { "page": { "kind": "color", "value": "#ffffff" } } }"##),
+                Some(r##"{ "values": { "page": "#fafafa", "surface-overlay": "#000000" } }"##),
+                &sets,
+            );
+            assert_eq!(warned.len(), 1, "{warned:?}");
+            assert!(
+                warned[0].starts_with("overrides.json#/values/surface-overlay: undeclared-token: "),
+                "{warned:?}"
+            );
         }
 
-        /// Without declared tokens, what `nsh/base` leaves out, as before.
+        /// Without a document of its own or a set's, `nsh/base`'s fallback
+        /// is the active one; a bad value is warned of where it is.
         #[test]
         fn without_declared_tokens_nsh_base_reads_it() {
-            let set = SetDescription::from(&Registry::ui_set("app/native"));
-            let warned = super::super::theme_warnings(
-                r##"{ "cssVars": { "light": { "brand": "#zz" } } }"##,
-                &[set],
-            )
-            .unwrap();
-            assert_eq!(warned, ["`brand`: #zz is no color"]);
+            let base: SetDescription = nsh_base::registry().into();
+            let warned = warned(
+                None,
+                Some(r##"{ "values": { "primary": "#zz" } }"##),
+                &[base],
+            );
+            assert_eq!(warned.len(), 1, "{warned:?}");
+            assert!(
+                warned[0].starts_with("overrides.json#/values/primary: bad-value: "),
+                "{warned:?}"
+            );
         }
     }
 }

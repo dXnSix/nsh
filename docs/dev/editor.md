@@ -384,7 +384,7 @@ them, the app restores them. `folding={false}` removes the markers and the folds
 
 ## Parts and their defaults
 
-The defaults are the theme's tokens (`crate::theme()`), so a theme and the dark appearance reach them; a part's
+The defaults are the theme's tokens (`crate::theme()`), so a theme and its modifiers' contexts (its dark values among them) reach them; a part's
 `classes` come after its own styles, its `styles` over its classes.
 
 | Part | Default |

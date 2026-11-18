@@ -1,6 +1,6 @@
 // Internal design tokens and finishes shared by gallery and website demos.
 import type { AnimatedValue, Tokens, ViewStyle } from "nsh";
-import { createAnimatedValue, effect, reduceMotion, token } from "nsh";
+import { createAnimatedValue, effect, modifiers, reduceMotion, setModifier, token } from "nsh";
 import { Easing } from "nsh";
 import { colorScheme } from "nsh";
 import { platform } from "nsh";
@@ -31,6 +31,21 @@ export const wholeRows = (points: number) => (terminal ? Math.round(points / TER
 
 /** Whether the shared example UI shows its dark palette (reactive: reading it subscribes). */
 export const isDark = () => colorScheme() !== "light";
+
+/**
+ * Keeps the theme's light/dark modifier (`colorMode`, `theme.json`) in step
+ * with the appearance shown, the system's included: the appearance itself
+ * changes no token (`docs/dev/theme-format.md`), so the palette's dark
+ * values are that modifier's `dark` context. Call it once in the app's root
+ * component; a theme without the modifier is left alone.
+ */
+export function followColorScheme() {
+  effect(() => {
+    const scheme = colorScheme();
+    const colorMode = modifiers().find((m) => m.name === "colorMode");
+    if (colorMode && colorMode.selected !== scheme && colorMode.contexts.includes(scheme)) setModifier("colorMode", scheme);
+  });
+}
 
 /**
  * An object with `dark`'s keys whose getters read `dark` or `light` by the

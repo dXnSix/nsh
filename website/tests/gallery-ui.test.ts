@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { inlineGalleryUi } from '../src/lib/inline-gallery-ui';
-import { galleryUiCss } from '../../examples/nsh-gallery-ui/css.js';
+import { galleryUiCss, resolvedTokens } from '../../examples/nsh-gallery-ui/css.js';
 
 const root = join(import.meta.dir, '../..');
 const shared = join(root, 'examples/nsh-gallery-ui');
@@ -17,7 +17,7 @@ const realSources = Object.fromEntries([
 
 test('shared UI imports keep module scopes, aliases, re-exports and live token reads', () => {
   const sources = {
-    'examples/nsh-gallery-ui/theme.json': '{"cssVars":{}}',
+    'examples/nsh-gallery-ui/theme.json': '{"tokens":{}}',
     'website/demos/palette.ts': 'export { current as ui } from "../../examples/nsh-gallery-ui/palette";',
     'examples/nsh-gallery-ui/palette.ts': [
       'import { token as readToken } from "nsh";',
@@ -119,13 +119,32 @@ test('a demo with only native NSH imports stays as written', () => {
 test('HTML and native examples share complete palettes and surface finishes', () => {
   const theme = JSON.parse(readFileSync(join(shared, 'theme.json'), 'utf8'));
   const finishes = JSON.parse(readFileSync(join(shared, 'finishes.json'), 'utf8'));
-  expect(Object.keys(theme.cssVars.light).sort()).toEqual(Object.keys(theme.cssVars.dark).sort());
+  // A theme document: its dark values are its `colorMode` modifier's `dark`
+  // context, over tokens it declares.
+  const colorMode = theme.modifiers.colorMode;
+  expect(colorMode.default).toBe('light');
+  expect(colorMode.contexts.light).toEqual({});
+  for (const name of Object.keys(colorMode.contexts.dark)) expect(theme.tokens[name]).toBeDefined();
   expect(Object.keys(finishes.light).sort()).toEqual(Object.keys(finishes.dark).sort());
+  const dark = resolvedTokens(theme, 'dark');
+  const light = resolvedTokens(theme, 'light');
+  expect(light.background).toBe(theme.tokens.background.value);
+  expect(dark.background).toBe(colorMode.contexts.dark.background);
+  // References resolve after the context: `card-foreground` is `{foreground}`.
+  expect(theme.tokens['card-foreground'].value).toBe('{foreground}');
+  expect(dark['card-foreground']).toBe(colorMode.contexts.dark.foreground);
+  expect(light['card-foreground']).toBe(theme.tokens.foreground.value);
   const css = galleryUiCss(theme, finishes);
-  expect(css).toContain(`--nsh-gallery-background: ${theme.cssVars.dark.background};`);
-  expect(css).toContain(`--nsh-gallery-background: ${theme.cssVars.light.background};`);
+  expect(css).toContain(`--nsh-gallery-background: ${dark.background};`);
+  expect(css).toContain(`--nsh-gallery-background: ${light.background};`);
+  expect(css).toContain(`--nsh-gallery-card-foreground: ${dark.foreground};`);
+  expect(css).toContain(`--nsh-gallery-radius-card: ${theme.tokens['radius-card'].value}px;`);
   expect(css).toContain(`--nsh-gallery-finish-card-box-shadow: ${finishes.dark.card.boxShadow};`);
   expect(css).toContain(`--nsh-gallery-finish-card-box-shadow: ${finishes.light.card.boxShadow};`);
+  // Each appearance declares every token.
+  for (const block of css.split(/\n(?=html\.light)/)) {
+    for (const name of Object.keys(theme.tokens)) expect(block).toContain(`--nsh-gallery-${name}: `);
+  }
   const defined = new Set([...css.matchAll(/(--nsh-gallery-[\w-]+):/g)].map((match) => match[1]));
   for (const reference of css.matchAll(/var\((--nsh-gallery-[\w-]+)/g)) {
     expect(defined.has(reference[1])).toBe(true);

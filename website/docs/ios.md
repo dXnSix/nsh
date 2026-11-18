@@ -226,7 +226,7 @@ The complete sample, a UIKit app that shows an NSH app below its own native head
 | `grantCapabilities(_ json: String?) throws` | The most the apps loaded from now on may do, as JSON in the form of `nsh.json`'s `capabilities`; `nil` grants what each app declares. Throws `NshError` for invalid JSON. |
 | `locale: Locale?` | The app's language and region in place of the user's: `Intl`, `locale()` and the components follow it at once, and the apps loaded later start in it. `nil` follows the system's. |
 | `fontScale: CGFloat?` | The text size in place of Dynamic Type's (1 is the default): texts and inputs are laid out again at it and `fontScale()` reads it, at once and for the apps loaded later; lengths keep their size. `nil` follows the system's. |
-| `setThemeOverrides(_ json: String?) throws` | The host's brand over the app's [theme](./tailwind.md#theme-tokens): a theme file in the format of `nsh.json`'s `"theme"`. Its tokens win over the app's of the same names, in light and dark mode, and the app's others stay. Applies at once and to the apps loaded later; `nil` gives the app its own theme back. Throws `NshError` for a file that does not parse. |
+| `setThemeOverrides(_ json: String?) throws` | The host's brand over the app's [theme](./tailwind.md#theme-tokens): a theme patch, `{ "values": { token: value }, "roles": { role: token } }`, as [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) takes one. Its values win over the app's theme, its contexts (light and dark) and its own overrides, for tokens the app's theme declares; the app's others stay. Applies at once and to the apps loaded later; `nil` clears it and gives the app its own theme back. Throws `NshError` for text that is no JSON object. |
 | `registerFont(_ data: Data) throws` | Registers a font file (TrueType, OpenType, WOFF or WOFF2) the host ships. Apps name its family in `fontFamily` and do not bundle the file. A font registered before a load is in that app's first frame; one registered while an app runs is used from the next layout. Throws `NshError` when `data` is not a font. |
 | `storageDirectory: URL?` | Where the apps loaded from now on keep their [storage](../modules/nsh.md#storage); `nil`: `Library/Application Support/nsh/<app id>`, by the app's own id. |
 | `cacheOptions: NshCacheOptions` | Where the apps loaded from now on keep their caches, the [images they download](./images-and-assets.md#kept-on-disk), and how much each keeps: `location` `.system` (`Library/Caches/nsh`, each app in `<app id>`), `.directory(URL)` or `.off`; `images` `.default` (256 MB), `.maxSize(megabytes:)` or `.off`. |
@@ -337,26 +337,30 @@ replaced or removed (`nil`). Desktop and web apps are not embedded, so they have
 
 ## Theme overrides
 
-One app embedded in several branded host apps takes each host's brand: the host gives the tokens its brand changes,
-as a theme file in the format of `nsh.json`'s `"theme"` (shadcn/ui's `cssVars`, values as CSS writes them). They win
-over the app's tokens of the same names; the app's other tokens stay. Give a token its dark-mode value under `dark`
-(one set only under `light` or `theme` is that color in both modes):
+One app embedded in several branded host apps takes each host's brand: the host gives the tokens its brand changes as
+a theme patch, `{ "values": { token: value }, "roles": { role: token } }`, the shape
+[`updateTheme`](../modules/nsh.md#updatetheme-resettheme) takes. Each value is of its token's type in the theme's
+forms (a color `"#e11d48"`, a number in points `16`) or a reference to another token (`"{blue-9}"`), and `roles` maps a
+role onto one of the theme's tokens. The patch is the host's layer: it wins over the app's theme, over the contexts
+the app picks (an override is the same in light and dark) and over the app's own overrides, and references resolve
+after it, so an override of a palette color reaches every token that refers to it. A patch never adds a token: a name
+the app's active theme does not declare, or a value that does not fit its token, is left out and logged
+([Theme](./rust.md#theme) has the format; the repository's `docs/dev/theme-format.md` states it in full).
 
 ```swift
 try app.setThemeOverrides("""
-{ "cssVars": {
-    "theme": { "radius": "0.75rem" },
-    "light": { "primary": "#e11d48", "primary-foreground": "#ffffff" },
-    "dark": { "primary": "#fb7185", "primary-foreground": "#1c1917" }
+{ "values": {
+    "radius": 12,
+    "primary": "#e11d48",
+    "primary-foreground": "#ffffff"
 } }
 """)
 try app.loadBundle(at: url)
 ```
 
 Call it before or after loading: classes such as `bg-primary` and `rounded-(--radius)` restyle at once, and every app
-loaded later starts with the overrides in its first frame. `setThemeOverrides(nil)` gives the app its own theme back.
-The app reads the file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's
-value of that token.
+loaded later starts with the overrides in its first frame. `setThemeOverrides(nil)` clears the host's layer and gives
+the app its own theme back.
 
 ## Links the app opens
 

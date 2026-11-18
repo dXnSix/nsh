@@ -326,15 +326,15 @@ fn theme_tokens() {
     let s = styled("bg-primary text-muted-foreground border border-border rounded-(--radius)");
     assert_eq!(
         s.view.background_color,
-        Color::from(ui.color("primary").unwrap().light)
+        Color::from(ui.color("primary").unwrap())
     );
     assert_eq!(
         s.text.color,
-        Some(Color::from(ui.color("muted-foreground").unwrap().light))
+        Some(Color::from(ui.color("muted-foreground").unwrap()))
     );
     assert_eq!(
         s.view.borders.colors[0],
-        Color::from(ui.color("border").unwrap().light)
+        Color::from(ui.color("border").unwrap())
     );
     assert_eq!(s.view.border_radius, px(ui.number("radius").unwrap()));
     let (s, _) = styled_with(
@@ -345,21 +345,21 @@ fn theme_tokens() {
     );
     assert_eq!(
         s.view.background_color,
-        Color::from(ui.color("primary").unwrap().dark)
+        Color::from(ui.color("primary").unwrap())
     );
     assert_eq!(
         s.text.color,
-        Some(Color::from(ui.color("muted-foreground").unwrap().dark))
+        Some(Color::from(ui.color("muted-foreground").unwrap()))
     );
     // Opacity modifiers, longer prefixes, variants, the long form.
     let s = styled("bg-primary/50 border-t-2 border-t-ring");
     assert_eq!(
         s.view.background_color,
-        Color::from(ui.color("primary").unwrap().light).with_alpha(0.5)
+        Color::from(ui.color("primary").unwrap()).with_alpha(0.5)
     );
     assert_eq!(
         s.view.borders.colors[0],
-        Color::from(ui.color("ring").unwrap().light)
+        Color::from(ui.color("ring").unwrap())
     );
     // Parts and props: shadows, rings, gradients, the caret, placeholders.
     let (s, props) = styled_with(
@@ -370,42 +370,40 @@ fn theme_tokens() {
     );
     assert_eq!(
         props.caret_color,
-        Some(Color::from(ui.color("primary").unwrap().light))
+        Some(Color::from(ui.color("primary").unwrap()))
     );
     assert_eq!(
         props.placeholder_color,
-        Some(Color::from(ui.color("muted-foreground").unwrap().light))
+        Some(Color::from(ui.color("muted-foreground").unwrap()))
     );
     let e = s.view.effects.as_ref().unwrap();
     assert!(
         e.box_shadows
             .iter()
-            .any(|l| l.color == Color::from(ui.color("ring").unwrap().light))
+            .any(|l| l.color == Color::from(ui.color("ring").unwrap()))
     );
     // The shadow's color keeps each layer's alpha.
     assert!(
         e.box_shadows
             .iter()
-            .any(|l| l.color.0 >> 8 == Color::from(ui.color("primary").unwrap().light).0 >> 8)
+            .any(|l| l.color.0 >> 8 == Color::from(ui.color("primary").unwrap()).0 >> 8)
     );
     let g = &e.background_images[0];
-    assert_eq!(
-        g.stops[0].color,
-        Color::from(ui.color("primary").unwrap().light)
-    );
+    assert_eq!(g.stops[0].color, Color::from(ui.color("primary").unwrap()));
     let accent = ui.color("accent").unwrap();
-    assert_eq!(g.stops.last().unwrap().color, Color::from(accent.light));
+    assert_eq!(g.stops.last().unwrap().color, Color::from(accent));
     let (s, _) = styled_with("dark:bg-accent", dark, (390.0, 844.0), 0);
-    assert_eq!(s.view.background_color, Color::from(accent.dark));
-    let s = styled("text-(length:--body-size) rounded-(--radius-lg)");
+    assert_eq!(s.view.background_color, Color::from(accent));
+    let s = styled("text-(length:--body-size) rounded-(--radius-panel)");
     assert_eq!(s.text.font_size, Some(px(ui.number("body-size").unwrap())));
-    assert_eq!(s.view.border_radius, px(ui.number("radius-lg").unwrap()));
+    assert_eq!(s.view.border_radius, px(ui.number("radius-panel").unwrap()));
     // Later utilities still win, in both appearances.
     let (s, _) = styled_with("bg-primary bg-red-500", dark, (390.0, 844.0), 0);
     assert_eq!(s.view.background_color, Color(0xfb2c_36ff));
+    // One rule of the token's value: the appearance is no dependency.
     let list = parse(&themed(), "bg-primary p-4");
     assert_ne!(list.deps() & deps::THEME, 0);
-    assert_ne!(list.deps() & deps::DARK, 0);
+    assert_eq!(list.deps() & deps::DARK, 0);
     assert_eq!(parse(&themed(), "bg-red-500").deps() & deps::THEME, 0);
     // Names that are no token, and variables there are not.
     let list = parse(&themed(), "bg-nope text-(--nope) w-primary");
@@ -413,7 +411,7 @@ fn theme_tokens() {
 }
 
 #[test]
-fn tailwind_colors_win_over_tokens_and_tokens_come_from_the_theme() {
+fn tailwind_config_colors_and_theme_tokens_make_classes() {
     let mut theme = Theme::from_json(r##"{ "colors": { "primary": "#ff0000" } }"##).unwrap();
     let mut ui = crate::element::Tokens::default();
     ui.set_number("radius-card", 10.0);
@@ -459,11 +457,11 @@ fn tailwind_colors_win_over_tokens_and_tokens_come_from_the_theme() {
         apply("bg-chart-up", false).view.background_color,
         Color(0x00ff_00ff)
     );
+    // A token has one value, whatever the appearance.
     assert_eq!(
         apply("bg-chart-up", true).view.background_color,
-        Color(0x0088_00ff)
+        Color(0x00ff_00ff)
     );
-    // A color set in one mode only is used in both.
     let s = apply("border border-chart-grid rounded-(--radius-card)", true);
     assert_eq!(s.view.borders.colors[0], Color(0x0000_ffff));
     assert_eq!(s.view.border_radius, px(10.0));
@@ -953,7 +951,10 @@ fn transitions_and_animations() {
 #[test]
 fn duration_easing_and_typography_tokens_make_classes() {
     let mut tokens = ui_theme();
-    tokens.set_number("duration-fast", 120.0);
+    tokens.insert(
+        "duration-fast",
+        crate::element::Token::Duration(std::time::Duration::from_millis(120)),
+    );
     tokens.set_easing(
         "ease-snappy",
         crate::element::CubicBezier([0.2, 0.0, 0.0, 1.0]),
@@ -961,8 +962,9 @@ fn duration_easing_and_typography_tokens_make_classes() {
     tokens.set_typography(
         "text-title",
         crate::element::Typography {
+            font_family: None,
             size: crate::geometry::Points(24.0),
-            line_height: Some(1.25),
+            line_height: Some(crate::LineHeight::Multiple(1.25)),
             letter_spacing: Some(crate::geometry::Points(-0.5)),
             font_weight: Some(650.0),
         },
@@ -1000,14 +1002,7 @@ fn duration_easing_and_typography_tokens_make_classes() {
     assert_eq!(s.text.font_weight, Some(650));
     assert_eq!(s.text.line_height_multiple, Some(1.25));
     assert_eq!(s.text.letter_spacing, Some(px(-0.5)));
-    for part in [
-        "text-title",
-        "text-title--line-height",
-        "text-title--letter-spacing",
-        "text-title--font-weight",
-    ] {
-        assert!(list.reads_token(part), "{part}");
-    }
+    assert!(list.reads_token("text-title"));
     // A size token without parts sets the size alone.
     tokens.set_number("text-caption", 11.0);
     theme.set_tokens(&tokens);
@@ -2219,9 +2214,7 @@ fn svg_paint_utilities_follow_tailwind_css() {
     let s = styled("stroke-primary");
     assert_eq!(
         s.paint.stroke,
-        Some(SvgPaint::Color(Color::from(
-            ui.color("primary").unwrap().light
-        )))
+        Some(SvgPaint::Color(Color::from(ui.color("primary").unwrap())))
     );
 }
 
@@ -2373,7 +2366,7 @@ mod text_color_opacity {
         let ui = ui_theme();
         for dark in [false, true] {
             let primary = ui.color("primary").unwrap();
-            let primary = Color::from(if dark { primary.dark } else { primary.light });
+            let primary = Color::from(primary);
             let half = primary.with_alpha(0.5);
             assert_eq!(text_color("text-primary", dark), Some(primary), "{dark}");
             assert_eq!(text_color("text-primary/50", dark), Some(half), "{dark}");
@@ -2415,8 +2408,8 @@ mod text_color_opacity {
 }
 
 /// Number tokens of Tailwind 4's namespaces are named classes
-/// (`radius-card`: `rounded-card`), resolved by name, which Tailwind's own
-/// names keep winning over.
+/// (`radius-card`: `rounded-card`), resolved through their roles, and win
+/// over Tailwind's own names, as Tailwind 4's `@theme` does (TW-OVERRIDE).
 mod token_namespaces {
     use super::*;
 
@@ -2533,61 +2526,18 @@ mod token_namespaces {
         assert_eq!(s.view.border_radius, px(14.0));
     }
 
+    /// `radius-lg` and `spacing-4` are the theme's: `rounded-lg` and `p-4`
+    /// read them, not Tailwind's values.
     #[test]
-    fn tailwinds_own_names_keep_winning() {
-        let t = tokens();
-        // `radius-lg` and `spacing-4` exist, but `rounded-lg` and `p-4` stay
-        // Tailwind's.
+    fn the_themes_names_win_over_tailwinds() {
+        same("rounded-lg p-4", "rounded-[99px] p-[99px]");
+        same("rounded-t-lg mt-4", "rounded-t-[99px] mt-[99px]");
+        // Without them, Tailwind's.
+        let plain = style(&crate::element::Tokens::default(), "rounded-lg", false);
+        assert_eq!(plain.view.border_radius, px(8.0));
         assert_eq!(
-            format!("{:?}", style(&t, "rounded-lg p-4", false)),
-            format!(
-                "{:?}",
-                style(&crate::element::Tokens::default(), "rounded-lg p-4", false)
-            )
-        );
-        let mut theme = Theme::default();
-        theme.set_tokens(&t);
-        let shadowed = theme.shadowed_tokens();
-        let (_, radius) = shadowed.iter().find(|(t, _)| t == "radius-lg").unwrap();
-        assert!(radius.contains(&"rounded-lg".to_owned()), "{radius:?}");
-        assert!(radius.contains(&"rounded-t-lg".to_owned()), "{radius:?}");
-        let (_, spacing) = shadowed.iter().find(|(t, _)| t == "spacing-4").unwrap();
-        assert!(spacing.contains(&"p-4".to_owned()) && spacing.contains(&"w-4".to_owned()));
-        // Tokens whose classes are all theirs are not listed.
-        assert!(
-            !shadowed
-                .iter()
-                .any(|(t, _)| t == "radius-card" || t == "spacing-gutter")
-        );
-    }
-
-    /// `spacing-md` makes `p-md` the token's, while `max-w-md` stays
-    /// Tailwind's container width: that one is listed.
-    #[test]
-    fn a_partly_shadowed_token_lists_the_classes_that_stay_tailwinds() {
-        let mut t = tokens();
-        t.set_number("spacing-md", 7.0);
-        same_with(&t, "p-md", "p-[7px]");
-        let mut theme = Theme::default();
-        theme.set_tokens(&t);
-        let shadowed = theme.shadowed_tokens();
-        let (_, classes) = shadowed.iter().find(|(t, _)| t == "spacing-md").unwrap();
-        assert!(classes.contains(&"max-w-md".to_owned()), "{classes:?}");
-        assert!(!classes.contains(&"p-md".to_owned()), "{classes:?}");
-    }
-
-    /// A size `text-card` beside the color `card`: `text-card` stays the
-    /// color, and the token is listed.
-    #[test]
-    fn a_text_size_hidden_by_a_color_is_listed() {
-        let mut t = tokens();
-        t.set_number("text-card", 30.0);
-        let mut theme = Theme::default();
-        theme.set_tokens(&t);
-        let shadowed = theme.shadowed_tokens();
-        assert!(
-            shadowed.contains(&("text-card".to_owned(), vec!["text-card".to_owned()])),
-            "{shadowed:?}"
+            style(&tokens(), "rounded-lg", false).view.border_radius,
+            px(99.0)
         );
     }
 
@@ -2598,20 +2548,6 @@ mod token_namespaces {
         let mut t = tokens();
         t.set_number("spacing-shadow-card", 5.0);
         same_with(&t, "inset-shadow-card", "inset-shadow-[color:#ffffffff]");
-    }
-
-    /// A weight a theme file sets is a number token, so its class works.
-    #[test]
-    fn a_theme_files_weight_is_a_named_class() {
-        let (t, ignored) = crate::element::theme_file::parse(
-            r#"{ "cssVars": { "theme": { "font-weight-strong": "650", "font-display": "Pacifico", "radius-card": "14px" } } }"#,
-            &crate::element::Tokens::default(),
-        )
-        .unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        assert_eq!(t.number("font-weight-strong"), Some(650.0));
-        assert_eq!(t.font("font-display").map(|f| &**f), Some("Pacifico"));
-        same_with(&t, "font-strong", "font-[650]");
     }
 
     /// Named classes depend on the theme, so the class cache parses them
@@ -2643,171 +2579,11 @@ mod token_namespaces {
     }
 }
 
-/// Number tokens with a value per appearance: `Tokens::number_in`, a theme
-/// file's `cssVars.dark` numbers, and the classes naming them in each
-/// appearance; a number with one value is as it was.
-mod number_per_appearance {
-    use super::*;
-    use crate::element::{Tokens, theme_file};
-
-    fn file(json: &str) -> Tokens {
-        let (tokens, ignored) = theme_file::parse(json, &Tokens::default()).unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        tokens
-    }
-
-    /// The style `classes` give with `tokens` in the appearance `dark`.
-    fn style(tokens: &Tokens, classes: &str, dark: bool) -> Style {
-        let mut theme = Theme::default();
-        theme.set_tokens(tokens);
-        let list = parse(&theme, classes);
-        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
-        let mut style = Style::default();
-        let group = |_: &str| 0;
-        let context = Context {
-            env: ClassEnvironment {
-                dark,
-                ..Default::default()
-            },
-            window: crate::geometry::size_pt(390.0, 844.0),
-            rtl: false,
-            states: 0,
-            position: 0,
-            group: &group,
-        };
-        list.apply(
-            &context,
-            &theme,
-            &mut style,
-            &mut ClassProps::default(),
-            |_| {},
-        );
-        style
-    }
-
-    #[test]
-    fn a_number_reads_its_dark_value_in_the_dark_appearance() {
-        let mut t = Tokens::default();
-        t.set_number("radius", 10.0);
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(10.0), Some(10.0))
-        );
-        t.set_dark_number("radius", 12.0);
-        assert_eq!(t.number("radius"), Some(10.0));
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(10.0), Some(12.0))
-        );
-        // Setting the number sets it in both again.
-        t.set_number("radius", 8.0);
-        assert_eq!(t.number_in("radius", true), Some(8.0));
-        assert_eq!(t.number_in("nothing", true), None);
-    }
-
-    #[test]
-    fn over_carries_dark_values_and_a_number_without_one_takes_both() {
-        let mut base = Tokens::default();
-        base.set_number("radius", 10.0);
-        base.set_dark_number("radius", 12.0);
-        base.set_number("gap", 4.0);
-        base.set_dark_number("gap", 6.0);
-        let mut top = Tokens::default();
-        top.set_number("radius", 20.0);
-        let t = top.over(&base);
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(20.0), Some(20.0))
-        );
-        assert_eq!(t.number_in("gap", true), Some(6.0));
-        let mut top = Tokens::default();
-        top.set_number("gap", 5.0);
-        top.set_dark_number("gap", 7.0);
-        let t = top.over(&base);
-        assert_eq!(
-            (t.number_in("gap", false), t.number_in("gap", true)),
-            (Some(5.0), Some(7.0))
-        );
-        // Put back from another set of tokens, the dark value comes too.
-        let mut copy = Tokens::default();
-        copy.copy_named(&base, "gap");
-        assert_eq!(copy.number_in("gap", true), Some(6.0));
-    }
-
-    #[test]
-    fn a_theme_files_dark_number_is_its_dark_value() {
-        let t = file(
-            r#"{ "cssVars": { "theme": { "radius": "10px", "gap": "4px" },
-                "light": { "radius-card": "14px" }, "dark": { "radius": "12px", "radius-card": "6px", "only-dark": "3px" } } }"#,
-        );
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(10.0), Some(12.0))
-        );
-        assert_eq!(
-            (
-                t.number_in("radius-card", false),
-                t.number_in("radius-card", true)
-            ),
-            (Some(14.0), Some(6.0))
-        );
-        // One value: no dark value of its own, as before.
-        assert_eq!(t.number_in("gap", true), Some(4.0));
-        assert_eq!(t.dark_numbers().filter(|(n, _)| *n == "gap").count(), 0);
-        // Given in the dark appearance only, it is both's, as a color is.
-        assert_eq!(
-            (
-                t.number_in("only-dark", false),
-                t.number_in("only-dark", true)
-            ),
-            (Some(3.0), Some(3.0))
-        );
-        // A weight too.
-        let t = file(
-            r#"{ "cssVars": { "light": { "font-weight-strong": "500" }, "dark": { "font-weight-strong": "700" } } }"#,
-        );
-        assert_eq!(
-            (
-                t.number_in("font-weight-strong", false),
-                t.number_in("font-weight-strong", true)
-            ),
-            (Some(500.0), Some(700.0))
-        );
-    }
-
-    #[test]
-    fn classes_naming_a_number_follow_the_appearance() {
-        let t = file(
-            r#"{ "cssVars": { "light": { "radius-card": "14px", "gap": "4px" }, "dark": { "radius-card": "6px" } } }"#,
-        );
-        for classes in ["rounded-(--radius-card)", "rounded-card"] {
-            assert_eq!(
-                style(&t, classes, false).view.border_radius,
-                px(14.0),
-                "{classes}"
-            );
-            assert_eq!(
-                style(&t, classes, true).view.border_radius,
-                px(6.0),
-                "{classes}"
-            );
-        }
-        // A number with one value is the same in both.
-        assert_eq!(
-            format!("{:?}", style(&t, "p-(--gap)", true)),
-            format!("{:?}", style(&t, "p-(--gap)", false))
-        );
-        let mut theme = Theme::default();
-        theme.set_tokens(&t);
-        assert_ne!(parse(&theme, "rounded-card").deps() & deps::THEME, 0);
-    }
-}
-
 /// Shadow design tokens: `Tokens`' shadows, a theme file's `shadow-*`
 /// box shadows per appearance, and the classes naming them.
 mod shadow_tokens {
     use super::*;
-    use crate::element::{AdaptiveShadow, Token, Tokens, theme_file};
+    use crate::element::{AdaptiveShadow, Token, Tokens};
 
     fn layer(y: f32, rgba: u32) -> crate::BoxShadow {
         crate::BoxShadow {
@@ -2860,8 +2636,8 @@ mod shadow_tokens {
     fn tokens_hold_shadows_by_name() {
         let mut t = Tokens::default();
         t.set_shadow("shadow-raised", raised());
-        assert_eq!(t.shadow("shadow-raised"), Some(&raised()));
-        assert_eq!(t.get("shadow-raised"), Some(Token::Shadow(raised())));
+        assert_eq!(t.shadow("shadow-raised"), Some(&raised().light));
+        assert_eq!(t.get("shadow-raised"), Some(Token::Shadow(raised().light)));
         let mut top = Tokens::default();
         top.set_shadow("shadow-flat", [layer(0.0, 0)]);
         let t = top.over(&t);
@@ -2871,53 +2647,31 @@ mod shadow_tokens {
     }
 
     #[test]
-    fn a_theme_files_shadows_are_read_per_appearance() {
-        let (t, ignored) = theme_file::parse(
-            r#"{ "cssVars": {
-                "theme": { "shadow-sm": "0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10)",
-                           "shadow-color": "hsl(0 0% 0%)", "shadow-opacity": "0.1", "shadow-offset-x": "0" },
-                "light": { "shadow-raised": "0 1px 2px #0000001a" },
-                "dark": { "shadow-raised": "0 2px 4px #ffffff33" } } }"#,
-            &Tokens::default(),
-        )
-        .unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        assert_eq!(t.shadow("shadow-raised"), Some(&raised()));
-        assert_eq!(t.shadow("shadow-sm").map(|s| s.light.len()), Some(2));
-        // shadcn's other `shadow-*` names stay what they were.
-        assert!(t.color("shadow-color").is_some());
-        assert_eq!(t.number("shadow-opacity"), Some(0.1));
-        assert_eq!(t.number("shadow-offset-x"), Some(0.0));
-        assert!(t.shadow("shadow-color").is_none());
-    }
-
-    #[test]
-    fn a_shadow_token_is_its_class_and_follows_the_appearance() {
+    fn a_shadow_token_is_its_class_and_wins_over_tailwinds() {
         let mut t = crate::element::tokens::sample();
         t.set_shadow("shadow-raised", raised());
+        // One value, whatever the appearance.
         for classes in ["shadow-raised", "shadow-(--shadow-raised)"] {
-            assert_eq!(
-                shadows(&t, classes, false),
-                [layer(1.0, 0x0000_001a)],
-                "{classes}"
-            );
-            assert_eq!(
-                shadows(&t, classes, true),
-                [layer(2.0, 0xffff_ff33)],
-                "{classes}"
-            );
+            for dark in [false, true] {
+                assert_eq!(
+                    shadows(&t, classes, dark),
+                    [layer(1.0, 0x0000_001a)],
+                    "{classes}"
+                );
+            }
         }
         let mut theme = Theme::default();
         theme.set_tokens(&t);
         assert!(parse(&theme, "hover:shadow-raised").unknown().is_empty());
         assert_ne!(parse(&theme, "shadow-raised").deps() & deps::THEME, 0);
-        // Tailwind's own size keeps its meaning.
+        // A theme's `shadow-sm` is the class `shadow-sm`, not Tailwind's.
         t.set_shadow("shadow-sm", [layer(9.0, 0xff00_00ff)]);
-        assert_eq!(
+        assert_eq!(shadows(&t, "shadow-sm", false), [layer(9.0, 0xff00_00ff)]);
+        assert_ne!(
             shadows(&t, "shadow-sm", false),
             shadows(&Tokens::default(), "shadow-sm", false)
         );
-        // A theme's `shadow-sm`, which Tailwind's keeps, is read by name.
+        // And by its variable.
         let mut sized = Tokens::default();
         sized.set_shadow("shadow-sm", [layer(9.0, 0xff00_00ff)]);
         assert_eq!(
@@ -2995,14 +2749,14 @@ mod namespaced_numbers_lookup {
         assert_eq!(unknown(&t, "rounded-card p-gutter"), 0);
     }
 
-    /// A number with a dark value alone is a class where only the dark
-    /// one is read (`dark:`).
+    /// A number has one value: its classes are classes under `dark:` as
+    /// anywhere.
     #[test]
-    fn a_dark_only_namespaced_number_makes_its_dark_classes() {
+    fn a_namespaced_number_makes_its_dark_classes() {
         let mut t = plain();
         assert_eq!(unknown(&t, "dark:rounded-card"), 1);
-        t.set_dark_number("radius-card", 16.0);
-        assert_eq!(unknown(&t, "dark:rounded-card"), 0);
+        t.set_number("radius-card", 14.0);
+        assert_eq!(unknown(&t, "dark:rounded-card hover:rounded-card"), 0);
     }
 
     #[test]
@@ -3121,11 +2875,6 @@ mod tokens_by_name {
         let number = change(|t| t.set_number("radius-card", 20.0));
         assert!(list("rounded-card").reads(&number));
         assert!(!list("rounded-(--radius) bg-card").reads(&number));
-        // A dark value alone, which the tokens before did not have.
-        let dark = change(|t| t.set_dark_number("radius", 4.0));
-        assert_ne!(dark, TokenChange::All);
-        assert!(list("rounded-(--radius)").reads(&dark));
-        assert!(!list("rounded-card").reads(&dark));
         let font = change(|t| t.set_font("font-sans", "Geist"));
         assert!(list("font-sans").reads(&font) && !list("bg-brand").reads(&font));
         let shadow = change(|t| {
@@ -3157,8 +2906,9 @@ mod tokens_by_name {
     }
 }
 
-/// A variable in a class names a theme role: `bg-(--popover)` is the token
-/// the theme maps `popover` onto, where no token has that name.
+/// A class reads a theme role: `bg-(--popover)` and `bg-popover` are the
+/// token the theme maps `popover` onto, else the token of that name
+/// (TW-ROLES, ROLE-READ).
 mod role_variables {
     use std::rc::Rc;
 
@@ -3177,7 +2927,6 @@ mod role_variables {
         t.set_color("caution", AdaptiveColor::rgb(0xb45309, 0xfbbf24));
         t.set_color("ink", AdaptiveColor::rgb(0x0a0a0a, 0xfafafa));
         t.set_number("corner", 6.0);
-        t.set_dark_number("corner", 8.0);
         t.set_font("font-code", "Berkeley Mono");
         t.with_roles([(POPOVER, "overlay"), (WARNING, "caution")])
             .with_roles([(RADIUS, "corner")])
@@ -3250,47 +2999,46 @@ mod role_variables {
                 );
             }
         }
-        // Each appearance has the token's value in it.
-        assert_ne!(
+        // One value, whatever the appearance.
+        assert_eq!(
             style(&t, "bg-(--popover)", false),
             style(&t, "bg-(--popover)", true)
         );
-        assert_ne!(
+        assert_eq!(
             style(&t, "rounded-(--radius)", false),
             style(&t, "rounded-(--radius)", true)
         );
     }
 
     #[test]
-    fn a_token_of_the_name_is_read_before_the_role() {
-        // The theme has a token `popover` and maps the role elsewhere: the
-        // variable is the token's name, as it is without roles.
+    fn the_role_is_read_before_a_token_of_its_name() {
+        // The theme has a token `popover` and maps the role onto `overlay`:
+        // the variable and the bare class read the role's mapping.
         let mut t = brand();
         t.set_color("popover", AdaptiveColor::rgb(0xff0000, 0x00ff00));
-        assert_eq!(
-            style(&t, "bg-(--popover)", false),
-            style(&t, "bg-popover", false)
-        );
-        assert_ne!(
-            style(&t, "bg-(--popover)", false),
-            style(&t, "bg-overlay", false)
-        );
-        assert!(list(&t, "bg-(--popover)").reads_token("popover"));
-        assert!(!list(&t, "bg-(--popover)").reads_token("overlay"));
+        for class in ["bg-(--popover)", "bg-popover"] {
+            assert_eq!(
+                style(&t, class, false),
+                style(&t, "bg-overlay", false),
+                "{class}"
+            );
+            let l = list(&t, class);
+            assert!(l.reads_token("overlay") && !l.reads_token("popover"));
+        }
     }
 
+    /// A theme mapping a namespaced role onto a token of another type: the
+    /// mapping is left out, and the role reads the token of its own name.
     #[test]
-    fn a_gradient_token_of_the_name_is_read_before_the_role() {
-        // A gradient is a token too: its name is the variable's, whatever
-        // a role of that name is mapped onto.
-        let hero = crate::element::AdaptiveGradient::parse("linear-gradient(#000, #fff)").unwrap();
-        let mut t = brand();
-        t.set_gradient("background-image-hero", hero);
-        let t = t.with_roles([(
-            Role::<AdaptiveColor>::new("background-image-hero"),
-            "overlay",
-        )]);
-        let l = list(&t, "bg-(image:--background-image-hero)");
+    fn a_mapping_onto_another_type_leaves_the_role_its_own_token() {
+        let t = super::super::theme_format_classes::resolved(
+            r##"{ "tokens": {
+                "background-image-hero": { "kind": "gradient", "value": { "type": "linear",
+                    "angle": 90, "stops": [{ "color": "#000000" }, { "color": "#ffffff" }] } },
+                "overlay": { "kind": "color", "value": "#fafafa" } },
+              "roles": { "background-image-hero": "overlay" } }"##,
+        );
+        let l = list(&t, "bg-hero bg-(image:--background-image-hero)");
         assert!(l.reads_token("background-image-hero") && !l.reads_token("overlay"));
         assert_eq!(
             style(&t, "bg-(image:--background-image-hero)", false),
@@ -3299,16 +3047,30 @@ mod role_variables {
     }
 
     #[test]
-    fn a_bare_class_names_no_role() {
-        let theme = theme(&brand());
-        for class in ["bg-popover", "text-warning", "rounded-radius"] {
-            assert_eq!(parse(&theme, class).unknown().len(), 1, "{class}");
+    fn a_bare_class_reads_its_role() {
+        let t = brand();
+        for dark in [false, true] {
+            for (role, token) in [
+                ("bg-popover", "bg-overlay"),
+                ("text-warning", "text-caution"),
+                ("border-warning/50", "border-caution/50"),
+                ("font-mono", "font-(family-name:--font-code)"),
+            ] {
+                assert_eq!(
+                    style(&t, role, dark),
+                    style(&t, token, dark),
+                    "{role} dark: {dark}"
+                );
+            }
         }
+        // `rounded-radius` reads the role `radius-radius`, which nothing
+        // serves, and `radius` is no color.
+        assert_eq!(parse(&theme(&t), "rounded-radius").unknown().len(), 1);
     }
 
     #[test]
     fn a_role_nothing_maps_and_one_mapped_onto_no_token_are_unknown() {
-        let t = brand().with_roles([(Role::<AdaptiveColor>::new("accent"), "missing")]);
+        let t = brand().with_roles([(Role::<crate::color::Hsla>::new("accent"), "missing")]);
         let theme = theme(&t);
         for class in ["bg-(--success)", "bg-(--accent)", "rounded-(--success)"] {
             assert_eq!(parse(&theme, class).unknown().len(), 1, "{class}");
@@ -3337,25 +3099,30 @@ mod role_variables {
     }
 
     #[test]
-    fn a_change_of_the_roles_mapped_resolves_every_class() {
+    fn a_change_of_a_mapping_resolves_the_classes_reading_the_role() {
         let mut tailwind = Tailwind::new();
         tailwind.set_tokens(&brand());
         let role = tailwind.classes("bg-(--popover)");
-        let plain = tailwind.classes("p-2 bg-ink");
+        let bare = tailwind.classes("bg-popover");
+        let other = tailwind.classes("p-2 bg-(--warning)");
         assert_eq!(tailwind.set_tokens(&brand()), None);
         // The same tokens, `popover` played by another of them.
         let next = brand().with_roles([(POPOVER, "ink")]);
         let changed = tailwind.set_tokens(&next).expect("a change");
-        assert_eq!(changed, TokenChange::All);
-        assert!(role.reads(&changed) && plain.reads(&changed));
+        assert!(matches!(changed, TokenChange::Values(_)), "{changed:?}");
+        assert!(role.reads(&changed) && bare.reads(&changed));
+        assert!(!other.reads(&changed));
+        assert!(Rc::ptr_eq(&other, &tailwind.classes("p-2 bg-(--warning)")));
         let now = tailwind.classes("bg-(--popover)");
         assert!(now.reads_token("ink") && !now.reads_token("overlay"));
-        // A scope with other roles differs in every class, one with the
-        // same roles in what its values change.
-        assert_eq!(
-            tailwind.difference(&ClassTokens::new(&brand())),
-            TokenChange::All
+        // A scope mapping the role elsewhere differs in the classes that
+        // read it, and one with other values in what those change.
+        let difference = tailwind.difference(&ClassTokens::new(&brand()));
+        assert!(
+            matches!(difference, TokenChange::Values(_)),
+            "{difference:?}"
         );
+        assert!(now.reads(&difference) && !other.reads(&difference));
         let mut scope = next.clone();
         scope.set_color("ink", AdaptiveColor::rgb(0x111111, 0xeeeeee));
         let difference = tailwind.difference(&ClassTokens::new(&scope));
@@ -3371,7 +3138,7 @@ mod gradient_tokens {
     use super::*;
     use crate::{
         effects::{Gradient, GradientKind},
-        element::{AdaptiveColor, AdaptiveGradient, Token, Tokens, theme_file},
+        element::{AdaptiveColor, AdaptiveGradient, Token, Tokens},
     };
 
     fn css(css: &str) -> Vec<Gradient> {
@@ -3430,10 +3197,10 @@ mod gradient_tokens {
     #[test]
     fn tokens_hold_gradients_by_name() {
         let t = themed();
-        assert_eq!(t.gradient("background-image-hero"), Some(&hero()));
+        assert_eq!(t.gradient("background-image-hero"), Some(&hero().light[0]));
         assert_eq!(
             t.get("background-image-hero"),
-            Some(Token::Gradient(hero()))
+            Some(Token::Gradient(hero().light[0].clone()))
         );
         let mut top = Tokens::default();
         top.set_gradient(
@@ -3474,56 +3241,18 @@ mod gradient_tokens {
     }
 
     #[test]
-    fn a_theme_files_gradients_are_read_per_appearance() {
-        let mut base = Tokens::default();
-        base.set_color("accent", AdaptiveColor::rgb(0x0000ff, 0x00ffff));
-        let (t, ignored) = theme_file::parse(
-            r##"{ "cssVars": {
-                "theme": { "primary": "#171717",
-                           "background-image-scrim": "linear-gradient(to top, #000000cc, #00000000)",
-                           "background-image-brand": "linear-gradient(to right, var(--primary), var(--accent))",
-                           "background-image-photo": "url(/hero.jpg)",
-                           "background-image-none": "none" },
-                "light": { "background-image-hero": "linear-gradient(135deg, #7c3aed, #db2777)" },
-                "dark": { "primary": "#fafafa",
-                          "background-image-hero": "linear-gradient(135deg, #a78bfa, #f472b6)" } } }"##,
-            &base,
-        )
-        .unwrap();
-        assert_eq!(ignored, Vec::<String>::new());
-        assert_eq!(t.gradient("background-image-hero"), Some(&hero()));
-        // One value for both appearances.
-        let scrim = t.gradient("background-image-scrim").unwrap();
-        assert_eq!(scrim.light, scrim.dark);
-        // A `var()` in a stop is the theme's color in each appearance: the
-        // file's `primary`, the base's `accent`.
-        let brand = t.gradient("background-image-brand").unwrap();
-        let colors = |g: &[Gradient]| g[0].stops.iter().map(|s| s.color.0).collect::<Vec<_>>();
-        assert_eq!(colors(&brand.light), [0x1717_17ff, 0x0000_ffff]);
-        assert_eq!(colors(&brand.dark), [0xfafa_faff, 0x00ff_ffff]);
-        // What is no gradient is read as before: no token.
-        assert_eq!(t.get("background-image-photo"), None);
-        assert_eq!(t.get("background-image-none"), None);
-        // Written back, it reads as the same tokens.
-        let (again, _) = theme_file::parse(&theme_file::write(&t), &Tokens::default()).unwrap();
-        assert_eq!(
-            again.gradient("background-image-hero"),
-            t.gradient("background-image-hero")
-        );
-    }
-
-    #[test]
     fn a_gradient_token_is_the_class_of_its_name() {
         let t = themed();
         let (light, unknown) = drawn(&t, "bg-hero", false);
         assert!(unknown.is_empty(), "{unknown:?}");
         assert_eq!(light, hero().light.to_vec());
+        // One value, whatever the appearance.
         let (dark, _) = drawn(&t, "bg-hero", true);
-        assert_eq!(dark, hero().dark.to_vec());
+        assert_eq!(dark, hero().light.to_vec());
         // By its variable, as an image.
         let (by_variable, unknown) = drawn(&t, "bg-(image:--background-image-hero)", true);
         assert!(unknown.is_empty(), "{unknown:?}");
-        assert_eq!(by_variable, hero().dark.to_vec());
+        assert_eq!(by_variable, hero().light.to_vec());
         // Under a variant.
         let (_, unknown) = drawn(&t, "hover:bg-hero dark:bg-hero", false);
         assert!(unknown.is_empty(), "{unknown:?}");
@@ -3541,38 +3270,23 @@ mod gradient_tokens {
     }
 
     #[test]
-    fn a_color_and_tailwinds_own_classes_come_first() {
+    fn a_color_comes_first_and_the_theme_over_tailwinds_own() {
         let mut t = themed();
         // A color `hero` is what `bg-hero` means; the gradient is hidden.
         t.set_color("hero", AdaptiveColor::rgb(0xff0000, 0xff0000));
-        // So is one named as a palette color or a utility of Tailwind's.
-        t.set_gradient("background-image-black", hero());
-        t.set_gradient("background-image-none", hero());
-        let (images, unknown) = drawn(&t, "bg-hero bg-black bg-none", false);
+        let (images, unknown) = drawn(&t, "bg-hero", false);
         assert!(unknown.is_empty(), "{unknown:?}");
         assert_eq!(images, Vec::new());
-        // The build says which tokens are hidden, and by which class.
-        let mut theme = Theme::default();
-        theme.set_tokens(&t);
-        let hidden = theme.tokens().shadowed(&theme);
-        assert_eq!(
-            hidden,
-            [
-                (
-                    "background-image-black".to_owned(),
-                    vec!["bg-black".to_owned()]
-                ),
-                (
-                    "background-image-hero".to_owned(),
-                    vec!["bg-hero".to_owned()]
-                ),
-                (
-                    "background-image-none".to_owned(),
-                    vec!["bg-none".to_owned()]
-                ),
-            ]
-        );
-        // Both are still read by their variable.
+        // One named as a palette color or a utility of Tailwind's is the
+        // theme's (TW-OVERRIDE).
+        t.set_gradient("background-image-black", hero());
+        t.set_gradient("background-image-none", hero());
+        for class in ["bg-black", "bg-none"] {
+            let (images, unknown) = drawn(&t, class, false);
+            assert!(unknown.is_empty(), "{unknown:?}");
+            assert_eq!(images, hero().light.to_vec(), "{class}");
+        }
+        // And by its variable.
         let (images, _) = drawn(&t, "bg-(image:--background-image-black)", false);
         assert_eq!(images, hero().light.to_vec());
     }

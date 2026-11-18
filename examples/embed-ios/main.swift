@@ -132,15 +132,17 @@ final class EmbedController: UIViewController, NshScrollWatcher {
         app.send("message", ["text": "Hello from UIKit at \(time)"])
     }
 
-    /// The host's brand over the app's theme: the tokens it sets win, light and
-    /// dark, the app's others stay; `nil` gives the app its own theme back.
+    /// The host's brand over the app's theme, a theme patch: the values it sets
+    /// win for tokens the theme declares (nsh/base's here), in every context the
+    /// app picks, light and dark; the app's others stay; `nil` gives the app its
+    /// own theme back.
     @objc private func toggleBrand() {
         branded.toggle()
         let brand = """
-            { "cssVars": {
-                "theme": { "radius": "1rem" },
-                "light": { "primary": "#e11d48", "primary-foreground": "#ffffff" },
-                "dark": { "primary": "#fb7185", "primary-foreground": "#1c1917" }
+            { "values": {
+                "radius": 16,
+                "primary": "#e11d48",
+                "primary-foreground": "#ffffff"
             } }
             """
         do {

@@ -274,15 +274,20 @@ public final class NshAppView: UIView {
         }
     }
 
-    /// Overrides the app's theme with the host's: a theme file of shadcn/ui's
-    /// (`{ "cssVars": { "theme": { … }, "light": { … }, "dark": { … } } }`,
-    /// values as CSS writes them, the format of `nsh.json`'s `"theme"`). Its
-    /// tokens win over the app's of the same names, in light and dark mode;
-    /// the app's others stay, so a branded host sets only what its brand
-    /// changes (`primary`, `radius`, ...). Call it before or after loading:
-    /// it applies at once (classes such as `bg-primary` are resolved again)
-    /// and to every app loaded later, from its first frame. `nil` gives the
-    /// app its own theme back. Throws why the file does not parse; the
+    /// Overrides the app's theme with the host's: a theme patch,
+    /// `{ "values": { token: value }, "roles": { role: token } }`
+    /// (`docs/dev/theme-format.md`, section 8, as `updateTheme` takes one),
+    /// the host layer above the app's theme and its own overrides. Its values
+    /// and role mappings win in every context the app picks (`colorMode`'s
+    /// `light` and `dark` alike); the app's other tokens stay, so a branded
+    /// host sets only what its brand changes (`primary`, `radius`, ...). A
+    /// host that themes both modes sends the other mode's values when its
+    /// mode changes. Each call replaces the whole layer. A name the app's
+    /// theme does not declare, or a value that does not fit its token, is
+    /// logged and left out. Call it before or after loading: it applies at
+    /// once (classes such as `bg-primary` are resolved again) and to every
+    /// app loaded later, from its first frame. `nil` clears it, giving the
+    /// app its own theme back. Throws why the text is no JSON object; the
     /// overrides then stay as they were.
     public func setThemeOverrides(_ json: String?) throws {
         try check(nsh_app_set_theme_overrides(app, json))

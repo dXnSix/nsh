@@ -175,15 +175,13 @@ import "./fonts/Inter-Bold.ttf";
 
 ## 应用的默认字体
 
-主题的 `font-sans` 是应用的字体：没有设置自己字体族的文字都用它绘制，Rust 组件和 TSX 都一样，就像网页使用 Tailwind 的 `--font-sans`。`font-mono` 是等宽字体，用于 `font-mono` 类和 `TextView` 中的代码。在应用的主题（`nsh.json` 的 `"theme"`，[用 Rust 开发](./rust.md#主题)）中设置它们，并像上文那样发布字体文件：
+主题的 `font-sans` 是应用的字体：没有设置自己字体族的文字都用它绘制，Rust 组件和 TSX 都一样，就像网页使用 Tailwind 的 `--font-sans`。`font-mono` 是等宽字体，用于 `font-mono` 类和 `TextView` 中的代码。把它们设为应用主题文档 `tokens` 中的 `font` 令牌（`nsh.json` 的 `"theme"`，[用 Rust 开发](./rust.md#主题)），或者在应用运行时用补丁覆盖主题中的值（Rust 中用 `update_tokens`，TSX 中用 `updateTheme`），并像上文那样发布字体文件：
 
 ```json
 {
-  "cssVars": {
-    "theme": {
-      "font-sans": "Inter, sans-serif",
-      "font-mono": "JetBrains Mono, monospace"
-    }
+  "tokens": {
+    "font-sans": { "kind": "font", "value": "Inter, sans-serif" },
+    "font-mono": { "kind": "font", "value": "JetBrains Mono, monospace" }
   }
 }
 ```

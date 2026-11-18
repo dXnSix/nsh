@@ -111,7 +111,7 @@ top right corner (no language label, no row kept for them); tables at 14 in line
 (each cell its right and bottom ones, the grid the top and left ones), the header row on `muted` with
 13 pt muted text; a rule 1 pt with 1.6 em above and below; images rounded 8; footnotes at 13, muted. Colors are
 shadcn/ui's tokens of the theme (`nsh_base::theme()`: `foreground`, `muted-foreground`, `border`, `muted`, `primary`
-for links and footnote references), read in bindings, so a theme or the appearance changes them natively; alerts
+for links and footnote references), read in bindings, so a theme or a pick of its modifiers' contexts (its dark values) changes them natively; alerts
 take GitHub's alert colors (note blue, tip green, important violet, warning amber, light and dark), a caution the
 theme's `destructive`. Everything is the
 app's to override: `classes` (Tailwind, applied after the part's own styles, so they win) and `styles` (inline, over

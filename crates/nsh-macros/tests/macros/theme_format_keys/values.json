@@ -1,0 +1,24 @@
+{
+  "name": "Every value type",
+  "tokens": {
+    "surface-app": { "kind": "color", "value": "#fcfcfc", "path": "surface.app", "doc": "The app's background." },
+    "space/3": { "kind": "number", "value": 12 },
+    "font-inter": { "kind": "font", "value": "Inter, system-ui, sans-serif", "path": "font.inter" },
+    "label-confirm": { "kind": "string", "value": "OK", "path": "label.confirm" },
+    "motion-reduced": { "kind": "boolean", "value": false, "path": "motion.reduced" },
+    "duration-fast": { "kind": "duration", "value": "150ms", "path": "motion.duration.fast" },
+    "ease-standard": { "kind": "easing", "value": [0.2, 0, 0, 1], "path": "motion.ease.standard" },
+    "ease-exit": { "kind": "easing", "value": "ease-in", "path": "motion.ease.exit" },
+    "text-title": { "kind": "typography", "value": { "fontSize": 20, "fontWeight": 600, "lineHeight": 1.2 }, "path": "text.title" },
+    "shadow-card": { "kind": "shadow", "value": [{ "color": "#0000001a", "y": 1, "blur": 3 }], "path": "shadow.card" },
+    "gradient-hero": {
+      "kind": "gradient",
+      "value": { "type": "linear", "angle": 135, "stops": [{ "color": "#0090ff", "position": 0 }, { "color": "#00a2c7", "position": 1 }] },
+      "path": "gradient.hero"
+    },
+    "blur-glass": { "kind": "blur", "value": { "type": "background", "radius": 16 }, "path": "blur.glass" },
+    "border-card": { "kind": "border", "value": { "color": "#e8e8e8", "width": 1, "style": "solid" }, "path": "border.card" },
+    "motion-press": { "kind": "transition", "value": { "duration": "100ms", "easing": [0.2, 0, 0, 1] }, "path": "motion.press" },
+    "Surface Raised": { "kind": "color", "value": "{surface-app}" }
+  }
+}

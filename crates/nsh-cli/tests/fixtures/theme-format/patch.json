@@ -1,0 +1,4 @@
+{
+  "values": { "brand": "#654321", "nope": 1, "corner": "wide" },
+  "roles": { "radius": "brand" }
+}

@@ -253,14 +253,20 @@ function Feed() {
 function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
-The design token `name` of the app's theme (`"theme"` in `nsh.json`, over shadcn/ui's tokens) in the appearance shown:
-a color as `#rrggbbaa`, a length as a number of points, a font as its family name, a shadow as its CSS `box-shadow`
-layers, a gradient as its CSS `background-image`. Names are the theme's CSS variables
-without `--` (`primary`, `muted-foreground`, `radius`, `font-mono`, and the app's own, such as `up`). Reading it is
-reactive: a component, memo or effect that reads a token runs again when the theme or the appearance changes. In a
-[`ThemeScope`](#themescope) it is the scope's value and appearance.
-`Tokens` lists the app's tokens with their types; NSH writes it into `.nsh/types/nsh/tokens.d.ts` from the theme. For
-classes, name the tokens directly (`bg-primary`, `rounded-(--radius)`): [Theme tokens](../docs/tailwind.md#theme-tokens).
+The design token `name` of the app's active theme document (`"theme"` in `nsh.json`, else the UI sets'), with its
+references resolved and the [modifier](#setmodifier-modifier-modifiers) contexts picked applied, in the theme
+format's canonical form: a color as `#rrggbb` (`#rrggbbaa` below full opacity), a number, a font family list, a
+string, a boolean, a duration as `"150ms"`, an easing as it was written (a keyword such as `"ease-in"`, or its four
+control points, `[0.42, 0, 1, 1]`), and a text style, shadow, gradient, blur, border or transition as an object of its
+members, those at their default left out (`{ fontSize: 14, fontWeight: 400, lineHeight: "20px" }`). A name the
+document lacks is `undefined`. Reading it is reactive: a component, memo or effect that reads a token runs again when
+that token's value changes, and a change of another token runs nothing of it. The appearance changes no token: a
+theme keeps its dark values in a modifier (`colorMode`), which the app picks. In a [`ThemeScope`](#themescope) it is
+the scope's value. `token()` reads what the core resolved, the app's document and overrides from the start, a read at
+a module's top level included.
+`Tokens` lists the app's tokens with their types; NSH writes it into `.nsh/types/nsh/tokens.d.ts` from the active
+document. For classes, name the tokens directly (`bg-primary`, `rounded-(--radius)`):
+[Theme tokens](../docs/tailwind.md#theme-tokens).
 
 ```tsx
 import { effect, token } from "nsh";
@@ -274,10 +280,11 @@ effect(() => console.log("primary is", token("primary"), "radius", token("radius
 function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
 ```
 
-What the theme role `name` draws with in the appearance shown, as [`token()`](#token) gives a token: the token the
-app's theme maps the role onto (a theme document's `"roles"`), else the token of the role's name, else `undefined`.
-A role is what a part of the UI is for (`popover`, `border`, `warning`), whatever an app's design system calls the
-token: a component written against roles is themed by any of them. Reading it is reactive, as `token()` is.
+What the theme role `name` draws with, as [`token()`](#token) gives a token: the token the app's overrides or its
+active document map the role onto (`"roles"`), else the token of the role's name, else `undefined`. A mapping onto a
+token of a type the role does not read is left out, and the role reads the layer below. A role is what a part of the
+UI is for (`popover`, `border`, `warning`), whatever an app's design system calls the token: a component written
+against roles is themed by any of them. Reading it is reactive, as `token()` is, and follows a new mapping too.
 
 `Roles` lists the roles the app's UI sets draw with (`nsh/base`'s: [Theme roles](./nsh-base.md#theme-roles)), each
 with what it reads; NSH writes it into `.nsh/types/nsh/roles.d.ts`. A role the theme has no token for is
@@ -290,121 +297,119 @@ import { role } from "nsh";
 <View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
 ```
 
-A class reads a role as a variable: `bg-(--popover)` is the token the theme maps `popover` onto, where the theme has
-no token of that name ([Theme tokens](../docs/tailwind.md#theme-tokens)). Rust reads a role by its constant:
-`theme().tokens().role(nsh_base::role::POPOVER)`.
+A class reads a role too: `bg-popover` and `bg-(--popover)` draw the token the theme maps `popover` onto, else the
+token `popover` ([Theme tokens](../docs/tailwind.md#theme-tokens)). Rust reads a role by its constant, reactive as
+`role()` is: `role(nsh_base::role::POPOVER)` (`nsh_core::element::role`).
 
 ## setTheme
 
 ```ts
-function setTheme(theme: Theme | null): void;
+function setTheme(theme: Theme | null): ThemeDiagnostic[];
 
 interface Theme {
-  cssVars: {
-    theme?: Record<string, string | number>;
-    light?: Record<string, string | number>;
-    dark?: Record<string, string | number>;
-  };
-  roles?: Record<string, string>;
+  $schema?: string;
+  name?: string;
   tokens?: Record<string, TokenDeclaration>;
-  modifiers?: Record<string, { default: string; contexts: Record<string, Partial<Theme["cssVars"]>> }>;
+  modifiers?: Record<string, ThemeModifierDeclaration>;
+  resolutionOrder?: string[];
+  roles?: Record<string, string>;
 }
 
-interface TokenDeclaration {
-  kind:
-    | "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow"
-    | "gradient" | "string" | "boolean" | "duration" | "easing" | "typography";
-  path?: string;
-  doc?: string;
+/** One per value type: `{ kind: "color", value: "#0090ff" }`, `{ kind: "number", value: 12 }`, … */
+type TokenDeclaration = {
+  [K in TokenKind]: { kind: K; value: TokenKindValues[K] | `{${string}}`; path?: string; doc?: string };
+}[TokenKind];
+
+type TokenKind =
+  | "color" | "number" | "font" | "string" | "boolean" | "duration" | "easing"
+  | "typography" | "shadow" | "gradient" | "blur" | "border" | "transition";
+
+interface ThemeModifierDeclaration {
+  default: string;
+  contexts: Record<string, Record<string, unknown>>;
+}
+
+interface ThemeDiagnostic {
+  severity: "error" | "warning";
+  code: ThemeDiagnosticCode; // "bad-value", "undeclared-token", "role-type", "legacy-format", …
+  pointer: string; // a JSON pointer into what was given: "/tokens/brand"
+  message: string;
 }
 ```
 
-Makes `theme` the app's theme while it runs, in place of `"theme"` in `nsh.json`: a theme of the same format, over
-shadcn/ui's tokens as the one in `nsh.json` is. It applies at once: `token()` reads the new tokens right after the call,
-and the classes naming tokens, `nsh/base` and Rust components' `theme()` follow with the next frame, in both
-appearances. An embedding app's [theme overrides](../docs/tailwind.md#theme-tokens) still win over it. `null` gives
-back the theme the app was built with. Each context the app picked with [`setModifier`](#setmodifier-modifier-modifiers)
-stays picked where the new theme has it, as it does when a hot reload reads the theme file again.
+Makes theme document `theme` the app's while it runs, in place of `"theme"` in `nsh.json` (else the UI sets'). A
+document is the theme format NSH reads everywhere: each token with its value type (`kind`) and its value or a
+reference to another token (`"{blue-9}"`), the modifiers whose contexts change values, the order they apply in
+(`resolutionOrder`), and the roles mapped onto its tokens ([Theme](../docs/rust.md#theme)). Documents are never
+merged: a token only the old one had is gone. The core applies it with the turn's other theme writes, resolving
+once: `token()`, the classes naming tokens, `nsh/base` and Rust components' `theme()` read the new tokens in the
+frame after the turn, and a read in the same turn still gives the values before it. The app's
+overrides ([`updateTheme`](#updatetheme-resettheme), `"themeOverrides"` in `nsh.json`) stay, those for names the new
+document lacks left out while it is active, and an embedding app's [theme overrides](../docs/tailwind.md#theme-tokens)
+still win over it. Each context the app picked with [`setModifier`](#setmodifier-modifier-modifiers) stays picked where
+the new document has it. `null` gives back the document the app was built with.
 
-`roles` maps theme roles onto the theme's tokens by name: `roles: { popover: "surface" }` has everything that draws
-with `popover` (`nsh/base`'s popovers, [`role("popover")`](#role)) draw with the token `surface`, and follow it when
-it changes, where `"popover": "var(--surface)"` would copy its color once. It is how an app names its tokens its own
-way. A role mapped onto a name that is no token of the theme, and under [declared tokens](../docs/rust.md#theme-documents-and-typed-keys) a role
-a theme document already maps, is refused as a value that cannot be read is; a role's name no UI set has is a build warning.
-`updateTheme` adds to the roles mapped.
-
-`tokens` declares the theme's tokens: what each holds (`kind`), its place in the designer's tree (`path`) and its doc
-(`tokens: { "radius-card": { kind: "radius", path: "radius.card" } }`). A theme that declares its tokens is read by
-them, each value as its token's kind, and replaces the default theme: a name it does not declare is left out
-([Theme documents](../docs/rust.md#theme-documents-and-typed-keys)). An `updateTheme` may declare tokens of its own
-beside the app's.
-
-The theme is read whole: when a value cannot be read (a color NSH does not know, such as `#zz`, `lab()` or
-`rgb(255 0 0)garbage`, a `var()`
-that names no color, or a value that is no color in one appearance where the other's is), `setTheme` throws a
-`TypeError` that names each one, and the theme shown stays. Values of no kind a token has, such as a letter spacing in
-`em`, are left out as they are from `nsh.json`'s. Build the new theme from the app's own, so the tokens its classes name keep a value
-(`bg-up` when `up` is in `nsh.json`'s theme), and change what differs. Rust: `set_tokens(theme.into())` of an
-`nsh_base::Theme` ([Theme tokens](../docs/tailwind.md#theme-tokens)).
+A bad entry (a value that does not fit its type, such as `"#zz"` for a color, a reference to no token, a role mapped
+onto no token) is left out, and the rest of the document is active. `setTheme` returns what it left out, with the role
+checks (a role mapped onto a token of another type), as `ThemeDiagnostic`s, and logs each. A value that is no document,
+or a theme of the old `cssVars` format (`legacy-format`: `nsh theme convert` converts it), is never activated: the
+active document stays, and `setTheme` returns that one diagnostic. Anything but an object or `null` throws a
+`TypeError`. Rust: `set_theme(Some(json))` ([Theme](../docs/rust.md#theme)).
 
 ```tsx
 import { setTheme } from "nsh";
-import theme from "./theme.json"; // the file `"theme"` in nsh.json names
+import theme from "./theme.json"; // the document `"theme"` in nsh.json names
 
-// The app's theme with another primary color.
+// The app's document with another primary color.
 function brand(color: string) {
-  const { light, dark } = theme.cssVars;
-  setTheme({ cssVars: { ...theme.cssVars, light: { ...light, primary: color }, dark: { ...dark, primary: color } } });
+  const said = setTheme({ ...theme, tokens: { ...theme.tokens, primary: { kind: "color", value: color } } });
+  for (const d of said) console.warn(`${d.code} ${d.pointer}: ${d.message}`);
 }
 
 brand("#e11d48");
-setTheme(null); // the app's theme again
+setTheme(null); // the app's document again
 ```
 
 ## updateTheme, resetTheme
 
 ```ts
-function updateTheme(theme: ThemeChange): void;
+function updateTheme(patch: ThemePatch): ThemeDiagnostic[];
 function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
 
-interface ThemeChange {
-  cssVars?: Theme["cssVars"];
-  roles?: Theme["roles"];
-  tokens?: Theme["tokens"];
-  modifiers?: Record<string, { default?: string; contexts?: Record<string, Partial<Theme["cssVars"]>> }>;
+interface ThemePatch {
+  values?: { [N in keyof Tokens]?: Tokens[N] | `{${string}}` };
+  roles?: Record<string, string>;
 }
 ```
 
-`updateTheme` changes the tokens `theme` sets while the app runs and keeps the others, where `setTheme` replaces them
-all. `theme` has the format of `setTheme`'s and is read the same way: whole, or not at all (a value NSH cannot read
-throws a `TypeError` naming it, and no token changes). `token()` reads the new values right after the call, and the
-classes naming the tokens, `nsh/base` and Rust components' `theme()` follow with the next frame. Two updates in a row
-both take, the later over the earlier. A `var(--name)` naming a token the update does not set is that token's value
-shown now, and a value of no kind a token has is left out, so that token keeps its value. An embedding app's
-[theme overrides](../docs/tailwind.md#theme-tokens) still win.
+`updateTheme` merges theme patch `patch` into the app's overrides while it runs: `values` sets tokens by name, each
+to a value of the token's type or a reference, and `roles` maps roles onto tokens. A later entry replaces an earlier
+one for the same token or role, a value the document refuses included (a patch is kept as given, so it then reads
+the layer below); the others stay. The app has one patch: `"themeOverrides"` in `nsh.json`, then every
+`updateTheme` merged into it in call order. Overrides win over the contexts picked, and references resolve after them,
+so an override of a primitive (`gray-1`) reaches every token that refers to it. As with `setTheme`, `token()`, the
+classes naming the tokens, `nsh/base` and Rust components' `theme()` read the new values in the frame after the
+turn. An embedding app's [theme overrides](../docs/tailwind.md#theme-tokens) still win.
 
-An update changes the theme's [modifiers](#setmodifier-modifier-modifiers) too, which is how an editor shows an edit
-of a context while the app runs. A modifier it names takes the values its contexts give over the ones they have, the
-contexts it adds and the `default` it names; one the theme lacks is added after the theme's, whole (a `default` and
-two or more contexts). The contexts picked stay picked, and a context picked now shows its new values at once. A
-token a context sets takes the update's `cssVars` value as its own, under the contexts: a context picked still sets
-it, and the new value shows once no context does.
+A patch never adds a token: a value for a name the active document does not declare (`undeclared-token`), or one that
+does not fit the token's type (`bad-value`), is left out, and applies again once a document that declares it is
+active. A role mapped onto a token of a type it does not read (`role-type`) is left out, and the role reads the layer
+below. `updateTheme` returns what it left out as `ThemeDiagnostic`s, and logs each; anything but an object throws a
+`TypeError`.
 
-`resetTheme` puts the tokens `names` back to their values in the app's theme, `nsh.json`'s or the one `setTheme` set;
-without names, every token. A name the theme does not have is removed. The tokens it does not name stay as they are.
-Under [declared tokens](../docs/rust.md#theme-documents-and-typed-keys) a role's name names the token the role is mapped onto, as it does in
-a theme file.
-Rust: `update_tokens` and `reset_tokens` ([Theme](../docs/rust.md#theme)).
+`resetTheme` removes the tokens and roles `names` from the app's patch, so they read the layer below again: the context
+picked, else the document; without names, it empties the patch, `"themeOverrides"`' entries included. A reset never
+copies values. Rust: `update_tokens` and `reset_tokens` ([Theme](../docs/rust.md#theme)).
 
 ```tsx
 import { resetTheme, updateTheme } from "nsh";
 
-// One brand color, light and dark; the rest of the theme stays.
-updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
-resetTheme(["primary"]); // the app's primary again
+// One brand color; the rest of the theme stays.
+const said = updateTheme({ values: { primary: "#e11d48" } });
+resetTheme(["primary"]); // the document's primary again
 
-// The forest brand's accent, edited while the app runs.
-updateTheme({ modifiers: { brand: { contexts: { forest: { light: { accent: "#15803d" } } } } } });
+// The popover drawn with another of the document's tokens.
+updateTheme({ roles: { popover: "surface-overlay" } });
 ```
 
 ## tokens
@@ -418,62 +423,56 @@ const tokens: {
   entries(): TokenInfo[];
 };
 
-interface TokenValue { kind: TokenKind; light: string | number; dark: string | number }
-interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string; owner?: string }
+interface TokenValue<K extends TokenKind = TokenKind> { kind: K; value: TokenKindValues[K] }
+interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string }
 ```
 
 The app's design tokens as a dictionary, for code that does not know their names ahead: an editor, a tool, an agent.
-`tokens.get("radius-card")` is the token with its kind and its value in each appearance
-(`{ kind: "radius", light: 12, dark: 12 }`; a color as `#rrggbbaa`, a font as its family, shadows, gradients and an
-easing as CSS, a duration in milliseconds, a string, a boolean, and a text style as its size with its parts:
-`{ size: 24, lineHeight: 1.25, fontWeight: 650 }`).
-A token's kind is the one its theme declares (`radius`, `spacing`, …), else the kind it is kept as (`color`,
-`number`, `font`, `shadow`, `gradient`). `tokens.kind(name)` gives the kind alone, `tokens.names()` every token's name,
-sorted (`tokens.names({ kind: "radius" })`, `tokens.names({ prefix: "colors-" })`), and `tokens.entries()` every token
-with its kind and, when a theme declares it, its path, doc and owner. All four are reactive: `get` follows its token,
-as [`token()`](#token) does, and the others follow tokens added, removed or given another kind. NSH writes each token's
-kind into `.nsh/types/nsh/tokens.d.ts` (`interface TokenKinds`), so `tokens.get("radius-card").light` is a `number`.
-Rust: `tokens().get_as::<V>(name)`, `kind_name`, `infos` and `value_json` of `Tokens`.
+`tokens.get("radius-card")` is the token with its value type and its value as [`token()`](#token) gives it
+(`{ kind: "number", value: 12 }`). `tokens.kind(name)` gives the value type alone, `tokens.names()` every token's name,
+sorted (`tokens.names({ kind: "color" })`, `tokens.names({ prefix: "gray-" })`), and `tokens.entries()` every token
+with its value type and, when the document gives them, its `path` and `doc`. All four are reactive: `get` follows its
+token, as `token()` does, and the others follow another document's names and types. NSH writes each token's value
+type into `.nsh/types/nsh/tokens.d.ts` (`interface TokenKinds`), so `tokens.get("radius-card").value` is a `number`.
+Rust: `tokens().value(name)`, `kind_name`, `infos` and `value_json` of `Tokens`.
 
 ## setModifier, modifier, modifiers
 
 ```ts
 function setModifier<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void;
 function modifier<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined;
-function modifiers(): ModifierAxis[];
+function modifiers(): ModifierAxes[];
 
-interface ModifierAxis {
-  name: string;
-  contexts: string[];
-  default: string;
+interface ModifierAxis<K extends keyof ThemeModifiers = keyof ThemeModifiers> {
+  name: K;
+  contexts: ThemeModifiers[K][];
+  default: ThemeModifiers[K];
+  selected: ThemeModifiers[K];
 }
+// One axis per modifier, each with its own contexts (strings without `.nsh/types`).
+type ModifierAxes = { [K in keyof ThemeModifiers]: ModifierAxis<K> }[keyof ThemeModifiers];
 ```
 
-A theme's `modifiers` are its other modes (a brand, a density, a contrast), precomputed: each modifier names its
-`default` and its `contexts`, each context the part of `cssVars` it changes. The theme's tokens are its `cssVars` with
-each modifier's picked context over them, in the file's order (a later modifier wins on a token two change); at first
-each modifier's default.
+A document's `modifiers` are its modes (light and dark, a brand, a density, a contrast): each names its `default` and
+its `contexts`, each context the token values it changes. `resolutionOrder` lists them in the order their picked
+contexts apply, a later one winning on a token two change; at first each shows its default.
 
 ```json
 "modifiers": {
-  "brand": {
-    "default": "ocean",
-    "contexts": {
-      "ocean": {},
-      "forest": { "light": { "accent": "#16a34a" }, "dark": { "accent": "#4ade80" } }
-    }
-  }
-}
+  "colorMode": { "default": "light", "contexts": { "light": {}, "dark": { "gray-1": "#111111" } } },
+  "brand": { "default": "ocean", "contexts": { "ocean": {}, "forest": { "accent": "{green-9}" } } }
+},
+"resolutionOrder": ["colorMode", "brand"]
 ```
 
-`setModifier("brand", "forest")` picks a context while the app runs: `token()` reads its tokens right after the call,
-and classes naming tokens, `nsh/base` and Rust components follow with the next frame. A modifier or context the theme
-does not have throws a `TypeError` naming it. `modifier("brand")` is the context the modifier has now, and
-`modifiers()` lists every modifier with its contexts and default; both are reactive. A context sets only tokens the
-theme has, each as its kind, and two or more contexts make a modifier. NSH writes the modifiers' types into
-`.nsh/types/nsh/modifiers.d.ts`, so `setModifier("brand", "jungle")` is a type error. A modifier's entry has
-`default` and `contexts`, and a context `theme`, `light` and `dark`: another member is said and left out, as is a
-section a theme has not (a theme's are `cssVars`, `tokens`, `modifiers` and `roles`).
+`setModifier("brand", "forest")` picks a context while the app runs, with the turn's other theme writes: `token()`,
+classes naming tokens, `nsh/base` and Rust components read its values in the frame after the turn. The appearance is no
+modifier of its own: an app that switches it with [`setColorScheme`](#setcolorscheme) picks its document's light/dark
+modifier too, to show the dark values. A modifier the active document lacks, or a context its modifier lacks, throws
+a `TypeError` naming it, and nothing changes; the document is the one active in this turn, a `setTheme` just before
+included. `modifier("brand")` is the context the modifier shows now, and `modifiers()` lists every modifier in
+`resolutionOrder` with its contexts, its default and the context it shows (`selected`); both are reactive. NSH writes
+the modifiers' types into `.nsh/types/nsh/modifiers.d.ts`, so `setModifier("brand", "jungle")` is a type error.
 Rust: `set_modifier`, `modifier` and `modifiers` ([Theme documents](../docs/rust.md#theme-documents-and-typed-keys)).
 
 ## appInfo
@@ -1308,7 +1307,7 @@ effect(() => {
 function setColorScheme(scheme: "light" | "dark" | "system"): void;
 ```
 
-Shows the app in `scheme` whatever the system's appearance, at once: `colorScheme()`, `dark:` classes, the components' theme and the platform's controls (alerts, the status bar's default style) follow it; `"system"` follows the system again. `nsh.json` `"appearance"` sets it from the start. Rust: `set_color_scheme(Appearance::Dark)` (`Appearance::Light`, `Appearance::System`).
+Shows the app in `scheme` whatever the system's appearance, at once: `colorScheme()`, `dark:` classes and the platform's controls (alerts, the status bar's default style) follow it, and the theme's dark values show when the app also picks its document's light/dark modifier ([`setModifier`](#setmodifier-modifier-modifiers)); `"system"` follows the system again. `nsh.json` `"appearance"` sets it from the start. Rust: `set_color_scheme(Appearance::Dark)` (`Appearance::Light`, `Appearance::System`).
 
 ### ThemeScope
 
@@ -1318,8 +1317,8 @@ const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
 interface ThemeScopeProps {
   /** `"light"` or `"dark"`; left out, the scope is shown as the view around it. */
   appearance?: "light" | "dark";
-  /** A theme file whose values are set over the tokens around the scope; left out, the scope is drawn with those. */
-  theme?: Theme;
+  /** A theme patch over the tokens around the scope; left out, the scope is drawn with those. */
+  theme?: ThemePatch;
   /** Contexts of the theme's modifiers picked in the scope (`{ brand: "forest" }`), under its `theme`. */
   modifiers?: { [M in keyof ThemeModifiers]?: ThemeModifiers[M] };
   children?: JSX.Element;
@@ -1327,15 +1326,15 @@ interface ThemeScopeProps {
 }
 ```
 
-A view that shows itself and everything in it in an appearance of its own, with design tokens of its own, or both, whatever the app's and the system's: a dark sidebar beside a light page, a card with its own `primary`, a theme's preview beside the app. It is a view, so its `class` and `style` lay it out and draw it.
+A view that shows itself and everything in it in an appearance of its own, with modifier contexts and design tokens of its own, or all of them, whatever the app's and the system's: a dark sidebar beside a light page, a card with its own `primary`, a theme's preview beside the app. It is a view, so its `class` and `style` lay it out and draw it.
 
-In a scope, everything that follows the appearance follows the scope's: `dark:` classes, the classes of theme tokens (`bg-background`), the theme colors of components, [`colorScheme()`](#colorscheme) and [`token()`](#token). The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the tab bar on Android and the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it.
+In a scope, everything that follows the appearance follows the scope's: `dark:` classes, [`colorScheme()`](#colorscheme) and the adaptive colors of components. The platform's own controls in it follow too on iOS, macOS and the web (a text input's keyboard and menus, web views, form controls), and so do the tab bar on Android and the scroll indicators the desktop backends draw. Scopes nest: the nearest one with an `appearance` decides, and a scope without one is shown as the view around it. The appearance changes no token: to show the theme's dark values, a scope also picks the theme's light/dark modifier (`modifiers={{ colorMode: "dark" }}`).
 
-With a `theme` (a theme file, as [`updateTheme`](#updatetheme-resettheme) takes one), the classes of theme tokens, the components' theme and [`token()`](#token) take the scope's values for the tokens it sets, in each appearance, and the app's for the others; a `var()` it does not set itself names the tokens around the scope. A scope sets tokens the app's theme has: a name the theme lacks is left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's values, and a change of the app's theme reaches every token a scope leaves alone.
+A scope's tokens are the app's stack, resolved again for what it renders: its `modifiers` picks over the contexts picked around it, its `theme` patch (`{ values, roles }`, as [`updateTheme`](#updatetheme-resettheme) takes one) after every patch around it, references last. The classes of theme tokens, the components' theme, [`token()`](#token) and [`role()`](#role) take the scope's values. A patch sets tokens the active document has, and a patch that only maps a role reaches what reads the role; a name the document lacks, a value that does not fit and a role mapped onto a token of another type are left out with a warning, so the classes that exist are the same everywhere. A scope inside another starts from the outer one's tokens, and a change of the app's theme reaches every token a scope leaves alone.
 
-With `modifiers` the scope picks contexts of the theme's [modifiers](#setmodifier-modifier-modifiers) for itself: in it the tokens of `{ brand: "forest" }` are the forest context's, its `theme` set over them, and `modifier("brand")` says `forest`. A modifier it does not name keeps the context around it, so `setModifier("density", "compact")` reaches into the scope and one inside it adds its own picks to the outer one's. A modifier or context the theme has not is left out with a warning; the types of `.nsh/types/nsh/modifiers.d.ts` make it a type error. A scope's `theme` sets values only: a `modifiers` section in it is left out with a warning that points to the prop.
+With `modifiers` the scope picks contexts of the theme's [modifiers](#setmodifier-modifier-modifiers) for itself: in it the tokens of `{ brand: "forest" }` are the forest context's, its `theme` set over them, and `modifier("brand")` says `forest`. A modifier it does not name keeps the context around it, so `setModifier("density", "compact")` reaches into the scope and one inside it adds its own picks to the outer one's. A modifier or context the theme has not is left out with a warning; the types of `.nsh/types/nsh/modifiers.d.ts` make it a type error.
 
-As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(ScopeTheme::file(json)))`, or `ScopeTheme::from(tokens)` for tokens made in Rust, `.modifiers(Some(ScopeModifiers::from(Brand::Forest)))` with a `theme_keys!` modifier's enum (`.and(Density::Compact)` for another), or `ScopeModifiers::new([("brand", "forest")])` by name; `dark()`, `color()`, `tokens()`, `token()` and a typed key's `get()` answer for the scope around the binding that reads them.
+As in CSS, a color a view inherited stays what it was: a scope sets its own background and text color. Menus, alerts and sheets the platform draws are the app's, also when a view in a scope opens them. Rust: `theme_scope().appearance(ColorScheme::Dark).child(…)` and `.theme(Some(Patch::new().value("primary", color)))` (a `Patch` of `nsh_core::element`, with `PatchValues`), `.modifiers(Some(ScopeModifiers::from(Brand::Forest)))` with a `theme_keys!` modifier's enum (`.and(Density::Compact)` for another), or `ScopeModifiers::new([("brand", "forest")])` by name; `dark()`, `color()`, `tokens()`, `token()` and a typed key's `get()` answer for the scope around the binding that reads them.
 
 ```rust tabs
 view().flex_row().flex_1().child(
@@ -1358,7 +1357,7 @@ import { ThemeScope, View } from "nsh";
 
 ```tsx
 // A plan's card in its own brand color: `bg-primary` and `token("primary")` in it are the scope's.
-<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+<ThemeScope theme={{ values: { primary: "#7c3aed" } }}>
   <View class="rounded-(--radius) bg-primary p-4">
     <Text class="text-primary-foreground">Upgrade</Text>
   </View>

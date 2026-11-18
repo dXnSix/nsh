@@ -283,8 +283,9 @@ grouping decision.
 
 Application UI should not contain raw hex, `rgb()`/`rgba()`, or `hsl()` colors, or palette classes such as
 `bg-zinc-100`. Resolve colors from the theme by semantic role. If the required role does not exist, define it in the
-app's theme file ([Theme tokens](./tailwind.md#theme-tokens): `"up": "#16a34a"` in its `light` and `dark` makes
-`text-up`, `bg-up/30`, `token("up")` in TSX and `theme().color("up")` in Rust) rather than embedding a palette value
+app's theme document ([Theme tokens](./tailwind.md#theme-tokens): a token `"up": { "kind": "color", "value": "#16a34a" }`,
+with its dark value in the `colorMode` modifier's `dark` context, makes `text-up`, `bg-up/30`, `token("up")` in TSX
+and `tokens().color("up")` in Rust) rather than embedding a palette value
 at the call site. Raw colors belong only inside theme definitions or in audited data/raster content whose color is itself the data.
 
 ### Radius, spacing, and density

@@ -39,11 +39,15 @@ public final class MainActivity extends Activity {
     /** The app's scroll view while it is there. */
     private NshScrollHandle scroll;
 
-    /** The host's brand: the tokens it sets win over the app's, light and dark. */
-    private static final String BRAND = "{ \"cssVars\": {"
-            + " \"theme\": { \"radius\": \"1rem\" },"
-            + " \"light\": { \"primary\": \"#e11d48\", \"primary-foreground\": \"#ffffff\" },"
-            + " \"dark\": { \"primary\": \"#fb7185\", \"primary-foreground\": \"#1c1917\" } } }";
+    /**
+     * The host's brand, a theme patch: the values it sets win over the app's
+     * theme for tokens the theme declares (nsh/base's here), in every context
+     * the app picks, light and dark.
+     */
+    private static final String BRAND = "{ \"values\": {"
+            + " \"radius\": 16,"
+            + " \"primary\": \"#e11d48\","
+            + " \"primary-foreground\": \"#ffffff\" } }";
 
     @Override
     protected void onCreate(Bundle state) {

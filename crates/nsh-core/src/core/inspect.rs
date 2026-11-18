@@ -1200,8 +1200,8 @@ mod override_tests {
         let before = shown(&c, 2).0.background_color;
         assert_eq!(shown(&c, 4).0.background_color, before);
         let mut tokens = crate::element::tokens::sample();
-        tokens.set_color("primary", crate::Color(0x0000_ffff).into());
-        c.set_tokens(tokens);
+        tokens.set_color("primary", crate::Color(0x0000_ffff));
+        c.set_test_tokens(tokens);
         c.commit();
         for id in [2, 4] {
             let now = shown(&c, id).0.background_color;

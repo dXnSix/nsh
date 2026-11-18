@@ -724,8 +724,8 @@ fn colors(s: TerminalStyle) -> (Option<AdaptiveColor>, Option<AdaptiveColor>) {
     }
     let theme = theme();
     (
-        Some(bg.unwrap_or(theme.background)),
-        Some(fg.unwrap_or(theme.foreground)),
+        Some(bg.unwrap_or(theme.background.into())),
+        Some(fg.unwrap_or(theme.foreground.into())),
     )
 }
 

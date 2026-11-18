@@ -16,11 +16,11 @@
 
 use serde_json::{Map, Value, json};
 
-use super::Registry;
+use super::{Registry, RoleDeclaration};
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 6;
+pub const FORMAT: u32 = 7;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -110,11 +110,13 @@ pub struct SetDescription {
     /// The exports TS sees without a doc comment ([`Registry::undocumented`]),
     /// which the toolchain warns of.
     pub undocumented: Vec<String>,
-    /// The theme documents it registers ([`Registry::theme_document`]),
-    /// as written.
-    pub theme_documents: Vec<String>,
-    /// The roles its components draw with ([`Registry::roles`]).
-    pub roles: Vec<RoleDescription>,
+    /// The theme documents it registers, as written: its own
+    /// ([`Registry::theme_document`]), then its fallbacks
+    /// ([`Registry::fallback_theme_document`]), marked.
+    pub theme_documents: Vec<ThemeDocumentDescription>,
+    /// The roles its components draw with ([`Registry::roles`]): their
+    /// declarations, with value type, doc and `required`.
+    pub roles: Vec<RoleDeclaration>,
     /// The class extensions it registers ([`Registry::class_extension`]):
     /// the methods `.nsh/types` adds to its classes' other declarations.
     pub class_extensions: Vec<ClassExtensionDescription>,
@@ -170,35 +172,43 @@ impl ClassExtensionDescription {
     }
 }
 
-/// A role a set lists ([`Registry::roles`]), as data: what the toolchain
-/// types TS's `role()` from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RoleDescription {
-    /// Its name (`popover`).
-    pub name: String,
-    /// What it reads ([`super::RoleKind::name`]).
-    pub kind: String,
-    /// Its doc comment ([`super::RoleSpec::doc_text`]).
-    pub doc: String,
+/// A theme document a set registers, as data: its text as written, and
+/// whether it is a fallback ([`Registry::fallback_theme_document`]), active
+/// only when no set registers a document of its own.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThemeDocumentDescription {
+    /// The document as written.
+    pub json: String,
+    /// Whether it is a fallback document.
+    pub fallback: bool,
+}
+
+impl ThemeDocumentDescription {
+    /// The document `json`, a fallback or not.
+    pub fn new(json: impl Into<String>, fallback: bool) -> Self {
+        Self {
+            json: json.into(),
+            fallback,
+        }
+    }
 }
 
 /// The roles `sets` list and the core's own ([`super::role::all`]), each
-/// once, by name: every role TS's `role()` may name. `Err` names a role
-/// two sets list reading different kinds.
-pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDescription>, String> {
+/// once, by name, as declared: every role TS's `role()` may name. `Err`
+/// names a role two sets list reading different value types.
+pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDeclaration>, String> {
     let core = super::role::all();
-    let own = core.iter().map(|spec| RoleDescription {
-        name: spec.role.name().to_owned(),
-        kind: spec.role.kind().name().to_owned(),
-        doc: spec.doc_text(),
-    });
-    let mut out: Vec<RoleDescription> = Vec::new();
-    for role in own.chain(sets.iter().flat_map(|s| s.roles.iter().cloned())) {
+    let mut out: Vec<RoleDeclaration> = Vec::new();
+    for role in core
+        .into_iter()
+        .chain(sets.iter().flat_map(|s| s.roles.iter().cloned()))
+    {
         match out.iter().find(|r| r.name == role.name) {
-            Some(listed) if listed.kind != role.kind => {
+            Some(listed) if listed.value_type != role.value_type => {
                 return Err(format!(
                     "the role `{}` is listed reading {} and {}",
-                    role.name, listed.kind, role.kind
+                    role.name, listed.value_type, role.value_type
                 ));
             }
             Some(_) => {}
@@ -209,21 +219,56 @@ pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDescription>, String> {
     Ok(out)
 }
 
-/// The tokens the theme documents `sets` describe declare, merged as
-/// [`Registry::merged`] merges them: `Ok(None)` when they register none,
-/// `Err` when a document says what it cannot, or two declare one token
-/// name or map one role. How the toolchain reads `nsh.json`'s theme as the
-/// core does ([`super::Declarations::read`]) and types `token()`.
-pub fn declarations(sets: &[SetDescription]) -> Result<Option<super::Declarations>, String> {
-    let mut out = super::Declarations::default();
-    let mut any = false;
-    for set in sets {
-        for document in &set.theme_documents {
-            out.add_document(&set.specifier, document)?;
-            any = true;
+/// The document `sets` make active when the app has none of its own, as
+/// the core takes it ([`Registry::theme_document_of_sets`]): the first a set
+/// registers, else the first fallback, read, with its diagnostics and a
+/// `document-unused` warning of each other set's own. Documents are never
+/// merged. How the toolchain reads the theme the core will draw with.
+pub fn theme_document(
+    sets: &[SetDescription],
+) -> (Option<nsh_theme::ThemeDocument>, Vec<nsh_theme::Diagnostic>) {
+    let of = |fallback: bool| {
+        sets.iter().flat_map(move |set| {
+            set.theme_documents
+                .iter()
+                .filter(move |d| d.fallback == fallback)
+                .map(move |d| (set.specifier.as_str(), d.json.as_str()))
+        })
+    };
+    let mut documents = of(false);
+    let mut said = Vec::new();
+    let mut active = None;
+    for (owner, text) in documents.by_ref() {
+        let read = nsh_theme::read(text);
+        let refused = super::theme::refused(&read.diagnostics);
+        said.extend(read.diagnostics);
+        if !refused {
+            active = Some((owner, read.document));
+            break;
         }
     }
-    Ok(any.then_some(out))
+    if active.is_none() {
+        for (owner, text) in of(true) {
+            let read = nsh_theme::read(text);
+            let refused = super::theme::refused(&read.diagnostics);
+            said.extend(read.diagnostics);
+            if !refused {
+                active = Some((owner, read.document));
+                break;
+            }
+        }
+    }
+    for (owner, _) in documents {
+        said.push(nsh_theme::Diagnostic::warning(
+            nsh_theme::code::DOCUMENT_UNUSED,
+            "",
+            format!(
+                "The theme document of {owner} is unused: {} registers the active one.",
+                active.as_ref().map_or("another set", |(a, _)| *a)
+            ),
+        ));
+    }
+    (active.map(|(_, document)| document), said)
 }
 
 impl SetDescription {
@@ -284,18 +329,16 @@ impl SetDescription {
             undocumented: registry.undocumented(),
             theme_documents: registry
                 .theme_documents()
-                .iter()
-                .map(|(_, json)| (*json).to_owned())
+                .into_iter()
+                .map(|(_, json)| ThemeDocumentDescription::new(json, false))
+                .chain(
+                    registry
+                        .fallback_theme_documents()
+                        .into_iter()
+                        .map(|(_, json)| ThemeDocumentDescription::new(json, true)),
+                )
                 .collect(),
-            roles: registry
-                .role_specs()
-                .iter()
-                .map(|spec| RoleDescription {
-                    name: spec.role.name().to_owned(),
-                    kind: spec.role.kind().name().to_owned(),
-                    doc: spec.doc_text(),
-                })
-                .collect(),
+            roles: registry.role_specs().to_vec(),
             class_extensions: ClassExtensionDescription::of(registry),
             class_types: registry
                 .class_specs()
@@ -334,11 +377,15 @@ impl SetDescription {
                 "source": a.source,
             })).collect::<Vec<_>>(),
             "undocumented": self.undocumented,
-            "theme_documents": self.theme_documents,
+            "theme_documents": self.theme_documents.iter().map(|d| json!({
+                "json": d.json,
+                "fallback": d.fallback,
+            })).collect::<Vec<_>>(),
             "roles": self.roles.iter().map(|r| json!({
                 "name": r.name,
-                "kind": r.kind,
+                "kind": r.value_type.name(),
                 "doc": r.doc,
+                "required": r.required,
             })).collect::<Vec<_>>(),
             "classExtensions": self.class_extensions.iter().map(|e| json!({
                 "class": e.class,
@@ -401,7 +448,18 @@ impl SetDescription {
             native_values: strings(set, "native_values", &at)?,
             assets,
             undocumented: strings(set, "undocumented", &at)?,
-            theme_documents: strings(set, "theme_documents", &at)?,
+            theme_documents: array(set, "theme_documents", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, d)| {
+                    let at = format!("{at}.theme_documents[{i}]");
+                    let d = object(d, &at)?;
+                    Ok(ThemeDocumentDescription::new(
+                        string(d, "json", &at)?,
+                        boolean(d, "fallback", &at)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
             roles: array(set, "roles", &at)?
                 .iter()
                 .enumerate()
@@ -409,13 +467,18 @@ impl SetDescription {
                     let at = format!("{at}.roles[{i}]");
                     let r = object(r, &at)?;
                     let kind = string(r, "kind", &at)?;
-                    if super::RoleKind::from_name(&kind).is_none() {
-                        return Err(format!("{at}.kind: unknown kind {kind:?}"));
-                    }
-                    Ok(RoleDescription {
-                        name: string(r, "name", &at)?,
-                        kind,
-                        doc: string(r, "doc", &at)?,
+                    let value_type = super::ValueType::from_name(&kind)
+                        .ok_or_else(|| format!("{at}.kind: unknown kind {kind:?}"))?;
+                    let doc = match r.get("doc") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(doc)) => Some(doc.clone()),
+                        Some(_) => return Err(format!("{at}.doc: not a string")),
+                    };
+                    let declaration = RoleDeclaration::new(string(r, "name", &at)?, value_type)
+                        .with_required(boolean(r, "required", &at)?);
+                    Ok(match doc {
+                        Some(doc) => declaration.with_doc(doc),
+                        None => declaration,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?,
@@ -549,6 +612,13 @@ fn string(object: &Map<String, Value>, key: &str, at: &str) -> Result<String, St
         .ok_or_else(|| format!("{at}: no string {key}"))
 }
 
+fn boolean(object: &Map<String, Value>, key: &str, at: &str) -> Result<bool, String> {
+    object
+        .get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| format!("{at}: no boolean {key}"))
+}
+
 fn array<'v>(object: &'v Map<String, Value>, key: &str, at: &str) -> Result<&'v [Value], String> {
     object
         .get(key)
@@ -669,20 +739,18 @@ mod tests {
 }
 
 /// Theme documents as data: the description carries each set's documents
-/// as written, and the toolchain merges them as the registry does.
+/// as written, and the toolchain takes the first as the core does.
 #[cfg(test)]
 mod theme_documents {
     use super::*;
-    use crate::element::{TokenKind, role};
 
     const DS: &str = r##"{
-        "cssVars": { "light": { "surface-overlay": "#111111" }, "theme": { "radius-card": "14px", "font-body": "Inter" } },
         "tokens": {
-            "surface-overlay": { "kind": "color", "doc": "Popovers." },
-            "radius-card": { "kind": "radius", "doc": "Cards." },
-            "font-body": { "kind": "font" }
+            "surface-overlay": { "kind": "color", "value": "#111111", "doc": "Popovers." },
+            "radius-card": { "kind": "number", "value": 14, "doc": "Cards." },
+            "font-body": { "kind": "font", "value": "Inter" }
         },
-        "roles": { "popover": "surface-overlay", "card": "surface-overlay" }
+        "roles": { "popover": "surface-overlay" }
     }"##;
 
     fn set(specifier: &'static str, json: &'static str) -> SetDescription {
@@ -702,63 +770,26 @@ mod theme_documents {
         assert!(text.contains(&format), "{text}");
         let read = Description::from_json(&text).unwrap();
         assert_eq!(read, doc);
-        assert_eq!(read.sets[0].theme_documents, [DS]);
+        assert_eq!(
+            read.sets[0].theme_documents,
+            [ThemeDocumentDescription::new(DS, false)]
+        );
         // The format before is refused, as every other.
         let before = format!("\"format\":{}", FORMAT - 1);
         assert!(Description::from_json(&text.replace(&format, &before)).is_err());
     }
 
     #[test]
-    fn the_toolchain_merges_the_documents_as_the_registry_does() {
-        let declared = declarations(&[set("ds/native", DS)]).unwrap().unwrap();
-        let (tokens, ignored) = declared
-            .read(Some(
-                r##"{ "cssVars": { "light": { "popover": "#333333", "brand": "#000000" } } }"##,
-            ))
-            .unwrap();
-        assert_eq!(ignored, ["`brand`: no theme document declares it"]);
-        assert_eq!(
-            tokens
-                .color("surface-overlay")
-                .map(|c| crate::Color::from(c.light)),
-            Some(crate::Color::from(crate::color::rgb(0x333333)))
-        );
-        assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
-        assert_eq!(tokens.mapped("card"), Some("surface-overlay"));
-        let names: Vec<_> = declared
-            .tokens()
-            .into_iter()
-            .map(|(n, d)| (n, d.kind, &*d.doc))
-            .collect();
-        assert_eq!(
-            names,
-            [
-                ("font-body", TokenKind::Font, ""),
-                ("radius-card", TokenKind::Radius, "Cards."),
-                ("surface-overlay", TokenKind::Color, "Popovers."),
-            ]
-        );
-        // No document: none; two declaring one name, or mapping one role: an
-        // error naming both.
-        assert!(
-            declarations(&[SetDescription::from(&Registry::ui_set("x/native"))])
-                .unwrap()
-                .is_none()
-        );
-        let clash = r##"{ "cssVars": { "light": { "surface-overlay": "#222222" } },
-                          "tokens": { "surface-overlay": { "kind": "color" } } }"##;
-        let err = declarations(&[set("ds/native", DS), set("app/native", clash)]).unwrap_err();
-        assert!(
-            err.contains("declared by both ds/native and app/native"),
-            "{err}"
-        );
-        let role_clash = r##"{ "cssVars": { "light": { "panel": "#222222" } },
-                               "tokens": { "panel": { "kind": "color" } }, "roles": { "popover": "panel" } }"##;
-        let err = declarations(&[set("ds/native", DS), set("app/native", role_clash)]).unwrap_err();
-        assert!(
-            err.contains("the role `popover` is mapped by both"),
-            "{err}"
-        );
+    fn the_toolchain_takes_the_first_document_as_the_core_does() {
+        let other = r##"{ "tokens": { "panel": { "kind": "color", "value": "#222222" } } }"##;
+        let (document, said) = theme_document(&[set("ds/native", DS), set("app/native", other)]);
+        let document = document.unwrap();
+        assert!(document.token("surface-overlay").is_some());
+        assert!(document.token("panel").is_none());
+        let codes: Vec<_> = said.iter().map(|d| d.code).collect();
+        assert_eq!(codes, [nsh_theme::code::DOCUMENT_UNUSED]);
+        let (none, _) = theme_document(&[SetDescription::from(&Registry::ui_set("x/native"))]);
+        assert!(none.is_none());
     }
 }
 
@@ -767,7 +798,7 @@ mod theme_documents {
 #[cfg(test)]
 mod set_roles {
     use super::*;
-    use crate::element::{NumberRole, Role, RoleSpec, role};
+    use crate::element::{NumberRole, Role, role};
 
     #[allow(unreachable_pub, reason = "as a UI set's crate writes its roles")]
     mod kit {
@@ -796,17 +827,11 @@ mod set_roles {
         assert_eq!(
             described.roles,
             [
-                RoleDescription {
-                    name: "banner".into(),
-                    kind: "color".into(),
-                    // The doc's lines joined, without the line naming it.
-                    doc: "A banner's surface, whatever the app calls it.".into(),
-                },
-                RoleDescription {
-                    name: "chip-radius".into(),
-                    kind: "number".into(),
-                    doc: "How round a chip is.".into(),
-                },
+                // The doc's lines joined, without the line naming it.
+                RoleDeclaration::new("banner", crate::element::ValueType::Color)
+                    .with_doc("A banner's surface, whatever the app calls it."),
+                RoleDeclaration::new("chip-radius", crate::element::ValueType::Number)
+                    .with_doc("How round a chip is."),
             ]
         );
         // The constants are what they were: a role is its name.
@@ -824,7 +849,7 @@ mod set_roles {
             SetDescription::of(&registry).unwrap().roles
         );
         // A kind the reader does not know is refused.
-        let wrong = json.replace("\"kind\":\"number\"", "\"kind\":\"shadow\"");
+        let wrong = json.replace("\"kind\":\"number\"", "\"kind\":\"nope\"");
         let error = Description::from_json(&wrong).unwrap_err();
         assert!(error.contains("unknown kind"), "{error}");
     }
@@ -834,8 +859,8 @@ mod set_roles {
         let mut other = Registry::ui_set("test/other");
         // A role two sets list is one role.
         other.roles([
-            RoleSpec::new(kit::BANNER, " Another set's words for it.\n"),
-            RoleSpec::new(role::POPOVER, ""),
+            kit::BANNER.declaration(" Another set's words for it.\n", false),
+            role::POPOVER.declaration("", false),
         ]);
         let sets = [
             SetDescription::of(&set()).unwrap(),
@@ -860,20 +885,23 @@ mod set_roles {
             ]
         );
         let of = |name: &str| all.iter().find(|r| r.name == name).unwrap();
-        assert_eq!(of("font-sans").kind, "font");
+        assert_eq!(of("font-sans").value_type, crate::element::ValueType::Font);
         // The first to list a role documents it: the core, then the sets
         // in order.
-        assert_eq!(of("popover").doc, "Popovers, menus, tooltips, alerts.");
         assert_eq!(
-            of("banner").doc,
-            "A banner's surface, whatever the app calls it."
+            of("popover").doc.as_deref(),
+            Some("Popovers, menus, tooltips, alerts.")
+        );
+        assert_eq!(
+            of("banner").doc.as_deref(),
+            Some("A banner's surface, whatever the app calls it.")
         );
     }
 
     #[test]
     fn a_role_listed_with_two_kinds_is_refused() {
         let mut other = Registry::ui_set("test/other");
-        other.roles([RoleSpec::new(NumberRole::new("banner"), "")]);
+        other.roles([NumberRole::new("banner").declaration("", false)]);
         let sets = [
             SetDescription::of(&set()).unwrap(),
             SetDescription::of(&other).unwrap(),
@@ -883,11 +911,15 @@ mod set_roles {
             error,
             "the role `banner` is listed reading color and number"
         );
-        // Merged for a host, the same clash panics, as two types claiming
-        // one token do.
+        // Merged for a host, the clash is logged (`role-conflict`) and the
+        // first listing kept: a registration never panics.
         let sets = [set(), other];
-        let clash =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Registry::merged(&sets)));
-        assert!(clash.is_err());
+        let merged = Registry::merged(&sets);
+        let banner = merged
+            .role_specs()
+            .iter()
+            .find(|r| r.name == "banner")
+            .unwrap();
+        assert_eq!(banner.value_type, crate::element::ValueType::Color);
     }
 }

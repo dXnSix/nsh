@@ -79,37 +79,39 @@ test("the browser reports no system wakes", () => {
   assert.equal(env.modules["nsh/device"].wakeCount(), 0);
 });
 
-test("setTheme hands the theme to the engine and reads the tokens again once it took", () => {
+test("setTheme and updateTheme hand the theme to the engine and return its diagnostics", () => {
   const calls = [];
-  const theme = { cssVars: { light: { brand: "#e11d48" } } };
+  const said = [{ severity: "error", code: "bad-value", pointer: "/values/brand", message: "`brand`: #zz is no color" }];
+  const document = { tokens: { brand: { kind: "color", value: "#e11d48" } } };
+  const patch = { values: { brand: "#zz" } };
   const { env, writes } = environment((op, args) => {
     calls.push([op, args]);
-    if (op === 406 && args[0]?.cssVars?.light?.brand === "#zz") throw new TypeError("setTheme: `brand`: #zz is no color");
+    if (op === 406 && args[0] === 12) throw new TypeError("setTheme: expected a theme document (an object) or null");
+    if (op === 406) return [];
+    if (op === 409) return said;
   });
-  env.api.setTheme(theme);
-  env.api.setTheme(null);
-  assert.deepEqual(calls, [[406, [theme]], [406, [null]]]);
-  // One write of the tokens' version per theme taken.
-  assert.deepEqual(writes, [1, 2]);
-  // The engine's refusal reaches the app, and what read a token stays.
-  assert.throws(() => env.api.setTheme({ cssVars: { light: { brand: "#zz" } } }), TypeError);
-  assert.deepEqual(writes, [1, 2]);
+  assert.deepEqual(env.api.setTheme(document), []);
+  assert.deepEqual(env.api.setTheme(null), []);
+  assert.deepEqual(env.api.updateTheme(patch), said);
+  assert.deepEqual(calls, [[406, [document]], [406, [null]], [409, [patch]]]);
+  // The core applies them with the turn's ops: what read a token follows
+  // once the engine hands the tokens on (`changedTokens`), not before.
+  assert.deepEqual(writes, []);
+  // The engine's refusal reaches the app.
+  assert.throws(() => env.api.setTheme(12), TypeError);
 });
 
-test("updateTheme and resetTheme hand their values to the engine and read the tokens again once they took", () => {
+test("resetTheme hands the names to the engine", () => {
   const calls = [];
-  const theme = { cssVars: { light: { brand: "#e11d48" } } };
   const { env, writes } = environment((op, args) => {
     calls.push([op, args]);
-    if (op === 409 && args[0]?.cssVars?.light?.brand === "#zz") throw new TypeError("updateTheme: `brand`: #zz is no color");
+    if (op === 410 && typeof args[0] === "string") throw new TypeError("resetTheme: expected token names (string[]) or nothing");
   });
-  env.api.updateTheme(theme);
-  env.api.resetTheme(["brand"]);
+  assert.equal(env.api.resetTheme(["brand"]), undefined);
   env.api.resetTheme();
-  assert.deepEqual(calls, [[409, [theme]], [410, [["brand"]]], [410, [undefined]]]);
-  assert.deepEqual(writes, [1, 2, 3]);
-  assert.throws(() => env.api.updateTheme({ cssVars: { light: { brand: "#zz" } } }), TypeError);
-  assert.deepEqual(writes, [1, 2, 3]);
+  assert.deepEqual(calls, [[410, [["brand"]]], [410, [undefined]]]);
+  assert.deepEqual(writes, []);
+  assert.throws(() => env.api.resetTheme("brand"), TypeError);
 });
 
 test("setModifier hands the context to the engine, and modifier and modifiers read what it keeps", () => {
@@ -118,34 +120,74 @@ test("setModifier hands the context to the engine, and modifier and modifiers re
     calls.push([op, args]);
     if (op === 415 && args[1] === "jungle") throw new TypeError("setModifier: the modifier `brand` has no context `jungle`");
     if (op === 416) return "forest";
-    if (op === 417) return JSON.stringify([{ name: "brand", contexts: ["ocean", "forest"], default: "ocean" }]);
+    if (op === 417) return JSON.stringify([{ name: "brand", contexts: ["ocean", "forest"], default: "ocean", selected: "forest" }]);
   });
   env.api.setModifier("brand", "forest");
-  assert.deepEqual(writes, [1]);
+  assert.deepEqual(writes, []);
   assert.equal(env.api.modifier("brand"), "forest");
-  assert.deepEqual(env.api.modifiers(), [{ name: "brand", contexts: ["ocean", "forest"], default: "ocean" }]);
+  assert.deepEqual(env.api.modifiers(), [{ name: "brand", contexts: ["ocean", "forest"], default: "ocean", selected: "forest" }]);
   assert.deepEqual(calls, [[415, ["brand", "forest"]], [416, ["brand"]], [417, []]]);
   assert.throws(() => env.api.setModifier("brand", "jungle"), TypeError);
-  assert.deepEqual(writes, [1]);
+  assert.deepEqual(writes, []);
+});
+
+test("setup hands the app's theme to the engine as the bundle ships it", () => {
+  const calls = [];
+  const { env } = environment((op, args) => calls.push([op, args]));
+  const theme = JSON.stringify({ document: { tokens: { brand: { kind: "color", value: "#e11d48" } } }, overrides: null });
+  env.setup(null, theme, null, null);
+  assert.deepEqual(calls, [[403, [theme]]]);
+});
+
+test("what read a token runs again only when that token changed, as the engine says", () => {
+  // Signals that record who read them (`reads`) and which were written.
+  let reads = null;
+  const written = new Set();
+  const { env } = environment(op => (op === 417 || op === 420 ? "[]" : undefined), {
+    signal(value) {
+      const read = () => { reads?.add(read); return value; };
+      read.set = next => { written.add(read); value = next; };
+      read.update = update => read.set(update(value));
+      return read;
+    },
+  });
+  const tracked = fn => { reads = new Set(); fn(); const out = reads; reads = null; return out; };
+  const a = tracked(() => env.api.token("a")), b = tracked(() => env.api.role("b"));
+  const listed = tracked(() => env.api.tokens.names()), picked = tracked(() => env.api.modifiers());
+  const ran = signals => [...signals].some(signal => written.has(signal));
+  const change = changes => { written.clear(); env.changedTokens(JSON.stringify(changes)); return [ran(a), ran(b), ran(listed), ran(picked)]; };
+  // `a`'s value changed (and names nothing read).
+  assert.deepEqual(change({ names: ["a", "c"], whole: false, shape: false }), [true, false, false, false]);
+  // A role's name changes with the token it resolves to.
+  assert.deepEqual(change({ names: ["b"], whole: false, shape: false }), [false, true, false, false]);
+  // The modifiers or the names changed: what lists them runs.
+  assert.deepEqual(change({ names: [], whole: false, shape: true }), [false, false, true, true]);
+  // Roles mapped anew, or most of the names read: every reader.
+  assert.deepEqual(change({ names: [], whole: true, shape: false }), [true, true, false, false]);
+  assert.deepEqual(change({ names: ["a", "b"], whole: false, shape: false }), [true, true, false, false]);
+  // No word of what changed: everything.
+  written.clear();
+  env.changedTokens();
+  assert.deepEqual([ran(a), ran(b), ran(listed), ran(picked)], [true, true, true, true]);
 });
 
 test("tokens.* reads the token dictionary from the engine", () => {
   const calls = [];
   const { env } = environment((op, args) => {
     calls.push([op, args]);
-    if (op === 418) return JSON.stringify(args[0] === "radius-card" ? { kind: "radius", light: 12, dark: 12 } : null);
-    if (op === 419) return JSON.stringify(args[0] === "radius-card" ? "radius" : null);
+    if (op === 418) return JSON.stringify(args[0] === "radius-card" ? { kind: "number", value: 12 } : null);
+    if (op === 419) return JSON.stringify(args[0] === "radius-card" ? "number" : null);
     if (op === 420) return JSON.stringify(["radius-card"]);
-    if (op === 421) return JSON.stringify([{ name: "radius-card", kind: "radius" }]);
+    if (op === 421) return JSON.stringify([{ name: "radius-card", kind: "number" }]);
   });
-  assert.deepEqual(env.api.tokens.get("radius-card"), { kind: "radius", light: 12, dark: 12 });
+  assert.deepEqual(env.api.tokens.get("radius-card"), { kind: "number", value: 12 });
   assert.equal(env.api.tokens.get("nothing"), undefined);
-  assert.equal(env.api.tokens.kind("radius-card"), "radius");
+  assert.equal(env.api.tokens.kind("radius-card"), "number");
   assert.equal(env.api.tokens.kind("nothing"), undefined);
-  assert.deepEqual(env.api.tokens.names({ kind: "radius" }), ["radius-card"]);
-  assert.deepEqual(env.api.tokens.entries(), [{ name: "radius-card", kind: "radius" }]);
+  assert.deepEqual(env.api.tokens.names({ kind: "number" }), ["radius-card"]);
+  assert.deepEqual(env.api.tokens.entries(), [{ name: "radius-card", kind: "number" }]);
   assert.deepEqual(calls.map(([op]) => op), [418, 418, 419, 419, 420, 421]);
-  assert.deepEqual(calls[4][1], [{ kind: "radius" }, null]);
+  assert.deepEqual(calls[4][1], [{ kind: "number" }, null]);
 });
 
 test("the lifecycle is the engine's", () => {
@@ -261,7 +303,7 @@ test("what a ThemeScope renders reads the scope's appearance and tokens", () => 
   // A scope with a theme: the engine makes its tokens over the surface's,
   // a scope in it over those, and `token()` names the nearest scope's.
   asked.length = 0;
-  const violet = { cssVars: { light: { up: "#7c3aed" } } }, pink = { cssVars: { light: { up: "#db2777" } } };
+  const violet = { values: { up: "#7c3aed" } }, pink = { values: { up: "#db2777" } };
   env.inScope({ theme: violet }, () => { read(); env.inScope({}, read); env.inScope({ theme: pink }, read); });
   assert.deepEqual(made, [[4, violet, null, null], [6, pink, 1048580, null]]);
   assert.deepEqual(asked.map(args => args[2]), [1048580, 1048580, 1048582]);

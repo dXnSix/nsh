@@ -18,12 +18,19 @@
   `nsh/jsx-runtime.d.ts` (where `jsxImportSource` finds `JSX`: no intrinsic elements, so every tag is checked as the
   component it names and generic ones are inferred: `native-pipeline.md`), `nsh/globals.d.ts` (console, timers,
   frames, the web APIs and the control flow components `If` / `Each`), and from the bundler `nsh/assets.d.ts` (what
-  image and font imports give) and `nsh/tokens.d.ts` (`nsh_bundler::tokens_declaration_of`: `interface Tokens` of
-  `nsh`, every design token of the app's theme, `nsh.json` `"theme"` over the default, by name with its type, which
-  types `token()`, with `interface TokenKinds`, each token's kind, which types `tokens.get`; under the tokens the app's theme documents or theme file declare their names, typed by kind with
-  their docs (`components.md` "Theme documents and typed keys"); a theme that does not parse gives the default's names, and the build reports it), `nsh/modifiers.d.ts` (`nsh_bundler::modifiers_declaration`: `interface ThemeModifiers` of `nsh`, the theme's modifiers each with the union of its contexts) and `nsh/roles.d.ts`
-  (`nsh_bundler::roles_declaration`: `interface Roles` of `nsh`, the roles the UI sets list and the core's own,
-  `description::roles`, by name with what each reads and its doc, which types `role()`). Each file declares its own names; the `import type` lines between them are worked out
+  image and font imports give), and the three theme files, built from the active theme document
+  (`theme-format.md`: the app's `nsh.json` `"theme"`, else the first a UI set registers, else the fallback, under
+  `"themeOverrides"`; `nsh_bundler::app_theme`) and the sets' role declarations: `nsh/tokens.d.ts`
+  (`nsh_bundler::tokens_declaration`: `interface Tokens` of `nsh`, each token by name with its TS value type (`nsh_core::element::token_ts_type`: the canonical JSON form
+  `token()` gives, compounds as objects of their members, durations as `` `${number}ms` ``) and its
+  doc as a comment, which types `token()`, with `interface TokenKinds`, each token's value type, which types
+  `tokens.get`), `nsh/modifiers.d.ts` (`nsh_bundler::modifiers_declaration`: `interface ThemeModifiers` of `nsh`, each
+  modifier with its contexts as a union of string literals) and `nsh/roles.d.ts` (`nsh_bundler::roles_declaration`:
+  `interface Roles` of `nsh`, the roles the UI sets register and the core's own, `description::roles`, each with its
+  TS value type and its doc, which says whether it is required, which types `role()`). `nsh init` and every command
+  that writes them print the theme's diagnostics (`init::theme_types`), each naming its file and JSON pointer; a theme
+  member the build cannot read (a missing file) is printed too, and the types are then the sets' document's. Each
+  file declares its own names; the `import type` lines between them are worked out
   from the names each uses. Next to them nsh writes `.nsh/tsconfig.json` (`nsh_bundler::TSCONFIG_BASE`): the
   compiler options mapping `nsh` and `nsh/*` there (`jsxImportSource: "nsh"`, no DOM library, `ESNext.Disposable`)
   and the globals, assets and tokens files; the `tsconfig.json` `nsh init` writes (`nsh_bundler::TSCONFIG`) only extends it
@@ -82,6 +89,20 @@ when it has a `tsconfig.json` (`check::has_typescript`: its test files'), which 
 written for it. Updating TypeScript is a change of the version
 and the integrities (`npm view @typescript/typescript-<os>-<arch>@<version> dist.integrity`). The distribution
 (`cargo xtask dist`) does not ship the compiler: it is 24 MB per platform and most runs of `nsh` never check types.
+
+### `nsh theme`
+
+`crates/nsh-cli/src/theme.rs` (user docs: `website/docs/cli.md`, "nsh theme") calls the theme format's one
+implementation and restates none of its rules (`theme-format.md`, sections 11 and 12). `nsh theme convert <OLD>
+[--over <BASE>] [-o <NEW>]` is nsh-core's converter (`theme_convert::convert`; `--over nsh/base` names nsh-base's old
+default, `theme_convert::OLD_DEFAULT`): it writes the document either way and exits 1 on an error diagnostic.
+`nsh theme check <FILE> [--app <DIR>]` reads a document, resolves it at its defaults and its references under every
+combination of one context per modifier, and checks its roles against the core's role table
+(`Tokens::resolve_with_roles`: the core's roles, the UI sets' and Tailwind's patterns); `--app` describes the app's
+Rust crates for their sets' roles. With `--patch` (which needs `--app`) `FILE` is an override patch, checked against
+the app's active document. Each diagnostic prints as `<severity> <code> <pointer>: <message>`, and the command exits 1
+on any error or `role-unmapped`, else 0. The tests are `crates/nsh-cli/tests/cli/theme_format.rs`, with their
+fixtures in `crates/nsh-cli/tests/fixtures/theme-format/`.
 
 ## Project files
 
@@ -149,7 +170,8 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
   are cleared by the next owner. All cooperating commands use the same cache directory. A listener
   outside this mechanism (including an older CLI) given by `--port` produces a bind error naming the port; `--port 0`
   asks the OS for a free port. The control files stay local to the machine.
-- Imported source directories and theme files outside the entry directory are watched too, using the last
+- Imported source directories and theme files (`nsh.json`'s `"theme"` and `"themeOverrides"`) outside the entry
+  directory are watched too, using the last
   successful bundle's dependencies. The gallery and website demos share `examples/nsh-gallery-ui`; saving one of
   its components or its theme rebuilds the app as saving a file inside the app does.
 - Bytecode version negotiation: the client reports `BYTECODE_VERSION` in its handshake; on a mismatch the server sends JS source instead
@@ -997,9 +1019,12 @@ program that describes them, builds the hosts and runners with them, and does ev
     `nsh_core::element::description::Description` (format `FORMAT`, the nsh-core version that wrote it, then per crate in
     `"rust"`'s order its specifier, exports with their kinds, TypeScript declarations, re-exported runtime values and
     types, the values nsh-js makes for it, the files it ships, the exports TS sees without a doc comment, which
-    `nsh` warns of as it writes `.nsh/types`, and the theme documents it registers, `theme_documents`, as written,
-    which the bundler and `nsh` read with `description::declarations`; and the roles it lists, `roles` (`Registry::roles`: name, kind and doc of every role
-    its components draw with, mapped or not), which `description::roles` merges with the core's own; and its class
+    `nsh` warns of as it writes `.nsh/types`, and the theme documents it registers, `theme_documents` (`{ json,
+    fallback }`: each as written, its own `Registry::theme_document`s, then its `fallback_theme_document`s, marked),
+    of which the bundler and `nsh` take the active one as the core does with `description::theme_document`; and the
+    roles it registers, `roles` (`Registry::roles`: each `RoleDeclaration`'s name, value type, doc and `required`, of
+    every role its components draw with, mapped or not), which `description::roles` merges with the core's own. Format
+    7; a description of another format, 6 included, is refused, naming both; and its class
     extensions, `classExtensions` (`ClassExtensionDescription`: the class's name, Rust type and type parameters, the
     method lines and the extension's Rust type), which `.nsh/types` adds to the class's other declarations, with the
     Rust type of each class it exports, `classTypes`);
@@ -1085,7 +1110,11 @@ program that describes them, builds the hosts and runners with them, and does ev
   (`RustApp::wait_after`).
 - **Rust apps.** With `"root": "<path in the crate>"` in `nsh.json` (in the first crate `"rust"` lists), the app's
   directory resolves to its `nsh.json` (`entry::resolve`; a named `App.tsx` stays the TSX entry), and the app runs with
-  no JS: `rust_app::RootConfig` (with `"theme"`, `"appearance"`, `"statusBar"` and `"id"`) adds the members `rust-linux`,
+  no JS: `rust_app::RootConfig` (with `"theme"`, `"themeOverrides"`, `"appearance"`, `"statusBar"` and `"id"`; the
+  generated `app_root()` passes the theme document to `Root::theme` and the overrides to `Root::theme_overrides`,
+  each `include_str!` of its file, an inline member written to the workspace first, and neither when nsh-theme
+  refuses it: a theme in the old format, or no JSON object; what the members say is warned of once the crates are
+  described, `rust_app::theme_warnings`) adds the members `rust-linux`,
   `rust-macos`, `rust-windows`, `rust-ios` (each the platform's release runner library without its feature `js`, whose
   `run_rust` mounts the generated `app_root()`), `rust-android` (`nsh::ui_sets!` and `nsh::main!`,
   `nsh-platform-android` without `js`; the APK's manifest gets the `com.longbridge.nsh.RUST` meta-data `AppActivity`

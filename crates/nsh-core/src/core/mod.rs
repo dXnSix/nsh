@@ -25,7 +25,7 @@ mod slots;
 mod sticky;
 mod terminal_layout;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod touch;
 mod views;
 mod watch;
@@ -3212,6 +3212,9 @@ impl<M: TextEngine> Core<M> {
     /// Finishes a turn: rebuilds text, runs layout, updates lists and
     /// returns the mount items, or `None` when nothing changed.
     pub fn commit(&mut self) -> Option<MountBatch> {
+        // The theme actions of the ops applied since the last commit resolve
+        // once, before anything renders with the tokens.
+        self.install_theme();
         // The downloads' file work and deadlines: their events and
         // commands go out with this commit.
         self.poll_downloads();
@@ -5907,8 +5910,16 @@ impl<M: TextEngine> Core<M> {
                 self.set_ui_theme(&json);
                 return Ok(());
             }
-            Prop::UiThemeUpdate(json) => {
-                self.update_ui_theme(&json);
+            Prop::UiThemeUpdate(patch) => {
+                self.update_tokens(Arc::unwrap_or_clone(patch));
+                return Ok(());
+            }
+            Prop::UiThemeDocument(document) => {
+                self.activate(document);
+                return Ok(());
+            }
+            Prop::UiAppTheme(document, overrides) => {
+                self.take_app_theme(document, overrides);
                 return Ok(());
             }
             Prop::UiModifier(name, context) => {
@@ -5916,7 +5927,6 @@ impl<M: TextEngine> Core<M> {
                 return Ok(());
             }
             Prop::UiThemeReset(names) => {
-                let names = names.map(|names| self.theme_file_names(names));
                 self.reset_tokens(names.as_deref());
                 return Ok(());
             }

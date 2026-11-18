@@ -1,35 +1,36 @@
 {
-  "cssVars": {
-    "light": { "colors-backgrounds-primary": "#ffffff", "ink": "#101010" },
-    "dark": { "colors-backgrounds-primary": "#0b0b0f", "ink": "#f0f0f0" },
-    "theme": {
-      "radius-card": "12px",
-      "spacing-gutter": "16px",
-      "font-weight-strong": 650,
-      "font-body": "Inter",
-      "shadow-raised": "0 1px 2px #0000001a"
-    }
-  },
   "tokens": {
-    "colors-backgrounds-primary": { "kind": "color", "path": "colors.backgrounds.primary", "doc": "The page's background." },
-    "ink": { "kind": "color" },
-    "radius-card": { "kind": "radius", "path": "radius.card" },
-    "spacing-gutter": { "kind": "spacing", "path": "type-scale.gutter" },
-    "font-weight-strong": { "kind": "weight", "path": "type.strong" },
-    "font-body": { "kind": "font", "path": "type.body.family" },
-    "shadow-raised": { "kind": "shadow", "path": "effects.2xl.raised" }
+    "colors-backgrounds-primary": { "kind": "color", "value": "#ffffff", "path": "colors.backgrounds.primary", "doc": "The page's background." },
+    "ink": { "kind": "color", "value": "#101010" },
+    "radius-card": { "kind": "number", "value": 12, "path": "radius.card" },
+    "spacing-gutter": { "kind": "number", "value": 16, "path": "type-scale.gutter" },
+    "font-weight-strong": { "kind": "number", "value": 650, "path": "type.strong" },
+    "font-body": { "kind": "font", "value": "Inter", "path": "type.body.family" },
+    "shadow-raised": { "kind": "shadow", "value": [{ "color": "#0000001a", "y": 1, "blur": 2 }], "path": "effects.2xl.raised" },
+    "ink.brand.forest": { "kind": "color", "value": "#16a34a" },
+    "ink.high-contrast.on": { "kind": "color", "value": "#000000" }
   },
   "modifiers": {
+    "colorMode": {
+      "default": "light",
+      "contexts": {
+        "light": {},
+        "dark": {
+          "colors-backgrounds-primary": "#0b0b0f",
+          "ink": "#f0f0f0",
+          "ink.brand.forest": "#4ade80",
+          "ink.high-contrast.on": "#ffffff"
+        }
+      }
+    },
     "brand": {
       "default": "ocean",
-      "contexts": {
-        "ocean": {},
-        "forest": { "light": { "ink": "#16a34a" }, "dark": { "ink": "#4ade80" } }
-      }
+      "contexts": { "ocean": {}, "forest": { "ink": "{ink.brand.forest}" } }
     },
     "high-contrast": {
       "default": "off",
-      "contexts": { "off": {}, "on": { "light": { "ink": "#000000" }, "dark": { "ink": "#ffffff" } } }
+      "contexts": { "off": {}, "on": { "ink": "{ink.high-contrast.on}" } }
     }
-  }
+  },
+  "resolutionOrder": ["colorMode", "brand", "high-contrast"]
 }

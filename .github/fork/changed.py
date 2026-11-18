@@ -44,7 +44,9 @@ def upstream(name):
 
 
 def areas():
-    core = upstream("core.yml")
+    # The fork's own crates the core job tests (`fork-ci.yml`'s `PACKAGES`),
+    # which upstream's `core.yml` doesn't list.
+    core = upstream("core.yml") + ["crates/nsh-theme/**"]
     gpui = upstream("gpui.yml") + core
     rust_app = upstream("rust-app.yml")
     android = core + ["crates/nsh-platform-android/**", "crates/xtask/**"]

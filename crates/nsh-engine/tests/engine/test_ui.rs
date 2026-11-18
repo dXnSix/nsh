@@ -39,7 +39,7 @@ pub(crate) fn TokenSwatch() -> impl IntoElement {
     text(|| {
         let up = tokens()
             .color("up")
-            .map(|c| nsh_core::Color::from(c.light).0 >> 8);
+            .map(|c| nsh_core::Color::from(c).0 >> 8);
         format!("swatch {:06x}", up.unwrap_or(0))
     })
 }
@@ -106,21 +106,25 @@ fn colors(variant: ButtonVariant) -> (AdaptiveColor, AdaptiveColor, AdaptiveColo
     match variant {
         // shadcn's buttons: the role's color, 90% (80%) of it pressed.
         ButtonVariant::Primary => (
-            theme.primary,
-            theme.primary.opacity(0.9),
-            theme.primary_foreground,
+            theme.primary.into(),
+            theme.primary.opacity(0.9).into(),
+            theme.primary_foreground.into(),
         ),
         ButtonVariant::Secondary => (
-            theme.secondary,
-            theme.secondary.opacity(0.8),
-            theme.secondary_foreground,
+            theme.secondary.into(),
+            theme.secondary.opacity(0.8).into(),
+            theme.secondary_foreground.into(),
         ),
         ButtonVariant::Danger => (
-            theme.destructive,
-            theme.destructive.opacity(0.9),
+            theme.destructive.into(),
+            theme.destructive.opacity(0.9).into(),
             AdaptiveColor::rgb(0xffffff, 0xffffff),
         ),
-        ButtonVariant::Plain => (AdaptiveColor::TRANSPARENT, theme.accent, theme.foreground),
+        ButtonVariant::Plain => (
+            AdaptiveColor::TRANSPARENT,
+            theme.accent.into(),
+            theme.foreground.into(),
+        ),
     }
 }
 

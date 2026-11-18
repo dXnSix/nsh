@@ -157,7 +157,8 @@ In Rust:
   `nsh.json`'s `"root": "App"` names it, and `nsh run` mounts it. `signal(0_u32)` makes a value that changes over time.
 - **`text(move || format!(…, count.get()))`** binds the text to the signal: when `count` changes, NSH runs this
   closure again and updates this one text, nothing else. Styles take closures the same way:
-  `.bg(move || theme().primary)` follows the theme into dark mode.
+  `.bg(move || theme().primary)` follows every change of the theme, its dark values included once the app picks
+  them ([Dark mode](./device-and-environment.md#dark-mode)).
 - **`.on_press(..)`** makes the view answer presses; `.active(|s| s.opacity(0.6))` is its style while pressed, applied
   natively. The button is the app's own: NSH provides the primitives and the capabilities, and the app draws its UI
   from them.
@@ -179,7 +180,8 @@ In TSX:
 - **`class`** takes [Tailwind](./tailwind.md) classes; `style={{ … }}` takes an object of camelCase style
   properties, with numbers in points. `bg-background`, `bg-primary`, `text-primary-foreground` and
   `rounded-(--radius)` name the tokens of the app's theme ([Theme tokens](./tailwind.md#theme-tokens)): they follow
-  dark mode by themselves, and `"theme"` in `nsh.json` restyles them.
+  every change of the theme (its dark values once the app picks its `colorMode` modifier,
+  [Dark mode](./device-and-environment.md#dark-mode)), and `"theme"` in `nsh.json` restyles them.
 - **`mount(App)`** renders the component into the app's surface.
 
 > [!IMPORTANT]

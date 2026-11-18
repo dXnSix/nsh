@@ -13,7 +13,7 @@ use gpui::{
     App as GpuiApp, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, Styled, Window, prelude::FluentBuilder as _,
 };
-use nsh_base::{Theme, ThemeError};
+use nsh_base::ThemeError;
 use nsh_core::platform::{Appearance, Lifecycle, Locale, TimeZone};
 use nsh_engine::{
     App, AppError, Bundle, ColorScheme, EngineConfig, Environment, Idiom, Limits, Root,
@@ -304,9 +304,9 @@ pub enum CloseRequest {
 /// - The view is [`Focusable`] and a tab stop: Tab moves the window's
 ///   focus into it (and through its text fields), and on out of it after
 ///   the last one. A press on it focuses it.
-/// - [`AppView::set_theme`] / [`AppView::set_theme_json`] give the app the
-///   embedding app's theme (gpui-kit's theme format),
-///   [`AppView::set_theme_overrides`] only the tokens it names, and
+/// - [`AppView::set_theme_json`] gives the app the embedding app's theme
+///   document, [`AppView::set_theme_overrides`] a patch of only the tokens
+///   it names (GPUI Kit's current colors, say), and
 ///   [`AppView::set_appearance`] its light or dark mode.
 /// - What the app tells the embedding app goes through the native
 ///   components the latter registers ([`AppView::register_component`]):
@@ -321,11 +321,11 @@ pub enum CloseRequest {
 ///
 /// Most methods take `&self` and can be called through `view.read(cx)`:
 /// they hand work to the engine thread, whose next frame redraws the view.
-/// [`AppView::set_theme`], [`AppView::set_theme_json`] and
-/// [`AppView::set_appearance`] also change what the main thread draws (the
-/// surface's background, its light or dark environment) without waiting
-/// for the engine, so they take `cx` to redraw at once: call them through
-/// `view.update(cx, |view, cx| …)`.
+/// [`AppView::set_theme_json`], [`AppView::set_theme_overrides`] and
+/// [`AppView::set_appearance`] take `cx` to flush what they hand the engine
+/// at once, and the last also changes what the main thread draws (its
+/// light or dark environment) without waiting for the engine: call them
+/// through `view.update(cx, |view, cx| …)`.
 ///
 /// In a running GPUI app (`gpui_platform::application().run(|cx| …)` with the
 /// feature `platform`, or the app a platform of the host's own runs):
@@ -567,46 +567,48 @@ impl AppView {
         self.surface.stop();
     }
 
-    /// Gives the app the embedding app's theme: the components of the UI
-    /// sets (`nsh/base`, an app's own) render with it instead of the app's own
-    /// (`nsh.json` `"theme"`), and the surface is drawn on its
-    /// `background`. `None` gives the app its own theme back. It applies
-    /// at once to what runs and to every app loaded later, from its first
-    /// frame on.
-    pub fn set_theme(&self, theme: Option<Theme>, cx: &mut GpuiApp) {
-        *self.surface.host_theme.borrow_mut() = theme;
-        self.surface.host_tokens_changed();
-        self.surface.invalidate();
+    /// Gives the app the embedding app's theme document
+    /// (`docs/dev/theme-format.md`): the engine activates it as the app's
+    /// own, over its built-in one (`nsh.json`'s `"theme"`), as the app's
+    /// `setTheme` does, so the components of the UI sets and the classes
+    /// naming its tokens (`bg-primary`) render with it, and the surface is
+    /// drawn on its `background` role. The overrides (the app's, and the
+    /// host layer of [`AppView::set_theme_overrides`]) stay over it, and the app's own
+    /// `setTheme` replaces it. `None` gives the app its built-in document
+    /// back. It applies at once to what runs and to every app loaded later,
+    /// from its first frame on. Fails, changing nothing, on a text refused
+    /// whole: no document (`not-a-document`) or one of the old format
+    /// (`legacy-format`); other entries the document refuses are logged
+    /// (`nsh::theme`) and left out.
+    pub fn set_theme_json(&self, json: Option<&str>, cx: &mut GpuiApp) -> Result<(), ThemeError> {
+        let document = self.surface.host_theme.borrow_mut().set_document(json)?;
+        self.surface.control(|c| c.set_theme_document(document));
         crate::rt::flush(cx);
-    }
-
-    /// [`AppView::set_theme`] with a theme file of shadcn/ui's
-    /// (`{ "cssVars": { "theme": { … }, "light": { … }, "dark": { … } } }`,
-    /// values as CSS writes them), over `nsh/base`'s default theme.
-    pub fn set_theme_json(&self, json: &str, cx: &mut GpuiApp) -> Result<(), ThemeError> {
-        let theme = Theme::from_json(json)?;
-        self.set_theme(Some(theme), cx);
         Ok(())
     }
 
-    /// The embedding app's theme overrides: a theme file of shadcn/ui's
-    /// (`{ "cssVars": { "theme": { … }, "light": { … }, "dark": { … } } }`,
-    /// values as CSS writes them, as `nsh.json`'s `"theme"`), whose tokens
-    /// win over the app's of the same names, light and dark, while the
-    /// app's others stay (a brand's `primary` and `radius`). Classes naming
-    /// them (`bg-primary`) are resolved again at once, and every app loaded
-    /// later starts with them. With a theme of the embedding app's
-    /// ([`AppView::set_theme`]) they win over that one's tokens instead;
-    /// each stays when the other changes. `None` gives the app its own
-    /// theme back. Fails, changing nothing, on a file that does not parse.
+    /// The embedding app's theme overrides: a theme patch,
+    /// `{ "values": { token → value }, "roles": { role → token } }`
+    /// (`docs/dev/theme-format.md`, section 8), the engine's host layer
+    /// above the app's own overrides. Its values and role mappings win over
+    /// the app's theme (or the host's document, [`AppView::set_theme_json`])
+    /// while the rest of it stays (a brand's `primary` and `radius`), in
+    /// every context the app picks (`colorMode`'s `light` and `dark` alike):
+    /// a host that themes both modes sends the other mode's values when its
+    /// mode changes. Each call replaces the whole layer, and `None` clears
+    /// it, giving the app its own theme back. Classes naming them
+    /// (`bg-primary`) are resolved again at once, and every app loaded later
+    /// starts with them. An entry the active document refuses (a token it
+    /// does not declare, a value of the wrong type) is logged (`nsh::theme`)
+    /// and left out. Fails, changing nothing, on text that is no patch (no
+    /// JSON, or no JSON object).
     pub fn set_theme_overrides(
         &self,
         json: Option<&str>,
         cx: &mut GpuiApp,
     ) -> Result<(), ThemeError> {
-        let tokens = json.map(nsh_base::theme_overrides).transpose()?;
-        *self.surface.host_overrides.borrow_mut() = tokens;
-        self.surface.host_tokens_changed();
+        let patch = self.surface.host_theme.borrow_mut().set_patch(json)?;
+        self.surface.control(|c| c.set_tokens(patch));
         crate::rt::flush(cx);
         Ok(())
     }

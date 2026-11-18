@@ -135,9 +135,10 @@ Every other key is optional; a TSX app may also leave out the four. A TSX app's 
 | `features` | string[] | `package` | Native features the release runner always keeps (built locally when the app has Rust crates, or packages for this machine's OS with `cargo` installed), e.g. `["plot"]`: those only its Rust code or a computed import needs. `package` otherwise leaves out the ones its bundle never reaches (`shader`, `editor`, `plot`, …) and prints why. |
 | `icon` | string \| object | `package`, `run` | A square PNG, ideally 1024×1024, relative to `nsh.json`, or one per platform (`{ "macos": "…", "windows": "…" }`, [Packaging](./packaging.md#icons)). |
 | `tailwind` | object | every build | Extends the Tailwind theme your `class` strings resolve against ([Tailwind](./tailwind.md#theme)). |
-| `appearance` | string | every build, `package` | `"light"`, `"dark"` or `"system"` (the default): an app that is always light or dark says so here. `colorScheme()`, `dark:` classes, the components' theme and the platform's controls follow it from the start ([Device and environment](./device-and-environment.md#dark-mode)). |
+| `appearance` | string | every build, `package` | `"light"`, `"dark"` or `"system"` (the default): an app that is always light or dark says so here. `colorScheme()`, `dark:` classes and the platform's controls follow it from the start; the theme's token values do when the app picks its theme's `colorMode` modifier with it ([Device and environment](./device-and-environment.md#dark-mode)). |
 | `locales` | string[] | every build | The languages the app formats numbers and dates in besides English (`["de", "zh-CN"]`), whose data its bundle carries. Default: the languages of its translations in `locales/` ([I18n](./i18n.md#numbers-and-dates)). |
-| `theme` | string or object | every build | The app's design tokens (shadcn/ui's `cssVars`, over the default `neutral` theme), which token classes, `token()` and Rust components draw with: a theme file's path relative to `nsh.json`, or the theme inline ([Building with Rust](./rust.md#theme), [Theme tokens](./tailwind.md#theme-tokens)). |
+| `theme` | string or object | every build | The app's theme document: its tokens, the modifiers that change them (light and dark among them) and the roles the components read, mapped onto its tokens. Token classes, `token()`, `role()` and Rust components draw with it. It replaces the UI sets' theme and the default whole. A path relative to `nsh.json`, or the document inline ([Building with Rust](./rust.md#theme), [Theme tokens](./tailwind.md#theme-tokens)). A theme of the old format, or one that is no JSON object, is not shipped: the build warns, and the app draws with its UI sets' theme. |
+| `themeOverrides` | string or object | every build | Values and role mappings over the active theme document (the app's `theme`, else its UI sets'): `{ "values": { "<token>": <value> }, "roles": { "<role>": "<token>" } }`. A path relative to `nsh.json`, or inline. It never adds a token; `updateTheme()` and Rust's `update_tokens` layer after it. |
 | `statusBar` | object | every build, `package` | The status bar's default under every page and dialog (iOS and Android): `{ "foreground": "auto" \| "light" \| "dark", "hidden": boolean }`, both optional. Packaged iOS apps show it from the launch screen on ([Status bar](../modules/nsh-base.md#status-bar)). |
 | `capabilities` | object | every build | What the app may reach outside its VM: network hosts, web view hosts, the status bar, windows of its own ([Sandbox and capabilities](./sandbox-and-capabilities.md)). |
 | `window` | object | every build, `package` | The main window's launch settings on the desktops, which it has from its first frame: `title`, `defaultSize`, `minSize`, `titleBar`, `backdrop` and the other options and attributes of a window, as `nsh/desktop`'s `WindowOptions` spells them (`{ "defaultSize": { "width": 1100, "height": 720 }, "titleBar": { "style": "hidden" } }`), and `defaultVisible` (`false`: it starts hidden, as a tray app's) ([The main window](../modules/nsh-desktop.md#the-main-window)). |
@@ -193,7 +194,7 @@ NSH does not need `node_modules`. Instead, every command that builds the app (`i
 }
 ```
 
-`.nsh/tsconfig.json` points the `nsh` imports and your app's crates to `.nsh/types`, includes the globals, asset and token declarations, and sets the compiler options NSH apps use (`lib`, `jsx`, `strict`, ...). NSH keeps it current: when a new version adds a library or a path, your app has it with the next build, and your `tsconfig.json` stays as you wrote it. Options you add to `tsconfig.json` apply over NSH's.
+`.nsh/tsconfig.json` points the `nsh` imports and your app's crates to `.nsh/types`, includes the globals, asset and theme declarations, and sets the compiler options NSH apps use (`lib`, `jsx`, `strict`, ...). NSH keeps it current: when a new version adds a library or a path, your app has it with the next build, and your `tsconfig.json` stays as you wrote it. Options you add to `tsconfig.json` apply over NSH's.
 
 | File in `.nsh/types/nsh/` | Declares |
 |---|---|
@@ -202,8 +203,9 @@ NSH does not need `node_modules`. Instead, every command that builds the app (`i
 | `jsx-runtime.d.ts` | The JSX runtime TypeScript resolves through `jsxImportSource` (the `JSX` namespace) |
 | `globals.d.ts` | `If` and `Each`; `console`, timers, `requestAnimationFrame`, `fetch` and the other [global APIs](../modules/globals.md) |
 | `assets.d.ts` | What importing an image or font gives |
-| `tokens.d.ts` | `Tokens`: the app's design tokens, from its `"theme"`, which type [`token()`](../modules/nsh.md#token) |
-| `roles.d.ts` | `Roles`: the theme roles its UI sets draw with, which type [`role()`](../modules/nsh.md#role) |
+| `tokens.d.ts` | `Tokens`: the tokens of the app's active theme document (its `"theme"`, else its UI sets'), each with its type and doc, which type [`token()`](../modules/nsh.md#token) |
+| `modifiers.d.ts` | `ThemeModifiers`: the active theme document's modifiers, each with its contexts |
+| `roles.d.ts` | `Roles`: the theme roles its UI sets draw with, each with its type and whether a theme must map it, which type [`role()`](../modules/nsh.md#role) |
 | `mobile.d.ts`, `desktop.d.ts` | One file per module (`nsh/mobile`, `nsh/desktop`) |
 | `base.d.ts` | `nsh/base` |
 

@@ -1,12 +1,16 @@
 //! Some of the app's design tokens changed or put back while it runs:
 //! `update_tokens` / `reset_tokens` in Rust, `updateTheme` / `resetTheme`
-//! in TS, over the theme the app has as a whole (`nsh.json`'s, `setTheme`'s).
+//! in TS, a patch over the active document (`nsh.json`'s, `setTheme`'s).
 
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use nsh_base::{Theme, theme};
-use nsh_core::{ApproxTextEngine, Color, MountBatch, MountItem, Size, element::Root, prelude::*};
+use nsh_base::theme;
+use nsh_core::{
+    ApproxTextEngine, Color, Hsla, MountBatch, MountItem, Size,
+    element::{Patch, PatchValues, Root},
+    prelude::*,
+};
 use nsh_engine::{App, Engine, EngineConfig, Environment};
 
 use crate::ChannelSink;
@@ -45,48 +49,45 @@ fn texts(batches: &[MountBatch]) -> Vec<&str> {
 const UPDATE_THEME: &str = r##"import { mount, resetTheme, setTheme, signal, Text, token, updateTheme, View } from "nsh";
 
 const status = signal("start");
-const both = () => `${token("brand")} ${token("accent")}`;
 const steps = [
   () => {
-    updateTheme({ cssVars: { light: { brand: "#00ff00" } } });
-    return `one ${both()}`;
+    updateTheme({ values: { brand: "#00ff00" } });
+    return "one";
   },
   () => {
-    updateTheme({ cssVars: { light: { brand: "#0000ff", accent: "#ff0000" } } });
-    updateTheme({ cssVars: { light: { brand: "#ffff00" } } });
-    return `two ${both()}`;
+    updateTheme({ values: { brand: "#0000ff", accent: "#ff0000" } });
+    updateTheme({ values: { brand: "#ffff00" } });
+    return "two";
   },
   () => {
-    try {
-      updateTheme({ cssVars: { light: { brand: "#00ffff", accent: "#zz" } } });
-      return "taken";
-    } catch (e) {
-      return `${e.name}: ${e.message}; kept ${both()}`;
-    }
+    // A value that doesn't fit is said; it still replaces the earlier
+    // entry for its name (the patch is kept as given), so `accent` reads
+    // the document's. The rest takes.
+    const said = updateTheme({ values: { brand: "#00ffff", accent: "#zz" } });
+    return `${said.map((d) => `${d.code} ${d.pointer}`).join(", ")}; took`;
   },
   () => {
-    // A value of no kind a token has is left out: the token keeps its value.
-    updateTheme({ cssVars: { theme: { "radius-card": "auto" } } });
+    updateTheme({ values: { "radius-card": "auto" } });
     return `kept ${token("radius-card")}`;
   },
   () => {
-    // A `var()` it does not set names the token shown now.
-    updateTheme({ cssVars: { light: { accent: "var(--brand)" } } });
-    return `var ${both()}`;
+    // A reference resolves after the layers: it follows its target.
+    updateTheme({ values: { accent: "{brand}" } });
+    return "ref";
   },
   () => {
     resetTheme(["brand"]);
-    return `reset ${both()}`;
+    return "reset";
   },
   () => {
     resetTheme();
-    return `all ${both()}`;
+    return "all";
   },
   () => {
-    setTheme({ cssVars: { light: { brand: "#abcdef" } } });
-    updateTheme({ cssVars: { light: { brand: "#fedcba" } } });
+    setTheme({ tokens: { brand: { kind: "color", value: "#abcdef" } } });
+    updateTheme({ values: { brand: "#fedcba" } });
     resetTheme(["brand"]);
-    return `set ${token("brand")}`;
+    return "set";
   },
   () => {
     try {
@@ -102,41 +103,43 @@ steps.forEach((step, i) => setTimeout(() => status.set(step()), 100 * (i + 1)));
 mount(() => (
   <View>
     <View class="h-4 bg-brand" />
-    <Text>{status()}</Text>
+    <Text>{`${status()} | ${token("brand")} ${token("accent")}`}</Text>
   </View>
 ));
 "##;
 
 /// `updateTheme` changes the tokens it sets and keeps the others; two in a
-/// row compose; one with a value NSH cannot read throws a `TypeError` and
-/// changes nothing, and one it leaves out keeps its value; a `var()`
-/// names the token shown now; `resetTheme` puts the named tokens (or all) back to the
-/// theme's, `nsh.json`'s or the one `setTheme` set. `token()` reads each
-/// change at once, and the classes naming the tokens follow.
+/// row compose, the later entry winning; an entry that doesn't fit is
+/// returned, and replaces the earlier one for its name, while the rest
+/// takes; a reference follows its target; `resetTheme` removes the named
+/// tokens (or all) from the app's patch, so they read the document again,
+/// `nsh.json`'s or the one `setTheme` set. The turn's writes resolve once:
+/// `token()` and the classes naming the tokens follow within the frame.
 #[test]
 fn update_theme_and_reset_theme_change_some_tokens_while_it_runs() {
-    let config = r##"{ "theme": { "cssVars": { "theme": { "radius-card": "14px" }, "light": { "brand": "#123456", "accent": "#222222" } } } }"##;
+    let config = r##"{ "theme": { "tokens": {
+        "radius-card": { "kind": "number", "value": 14 },
+        "brand": { "kind": "color", "value": "#123456" },
+        "accent": { "kind": "color", "value": "#222222" } } } }"##;
     let (_engine, rx) =
         crate::components::start_with(UPDATE_THEME, Environment::default(), None, Some(config));
+    let error = "TypeError: resetTheme: expected token names (string[]) or nothing";
     let batches = crate::components::until(&rx, |b| {
-        crate::components::shows(
-            b,
-            "TypeError: resetTheme: expected token names (string[]) or nothing",
-        )
+        crate::components::shows(b, &format!("{error} | #abcdef undefined"))
     });
     assert_eq!(
         texts(&batches),
         [
-            "start",
-            "one #00ff00ff #222222ff",
-            "two #ffff00ff #ff0000ff",
-            "TypeError: updateTheme: `accent`: #zz is no color; kept #ffff00ff #ff0000ff",
-            "kept 14",
-            "var #ffff00ff #ffff00ff",
-            "reset #123456ff #ffff00ff",
-            "all #123456ff #222222ff",
-            "set #abcdefff",
-            "TypeError: resetTheme: expected token names (string[]) or nothing",
+            "start | #123456 #222222",
+            "one | #00ff00 #222222",
+            "two | #ffff00 #ff0000",
+            "bad-value /values/accent; took | #00ffff #222222",
+            "kept 14 | #00ffff #222222",
+            "ref | #00ffff #00ffff",
+            "reset | #123456 #123456",
+            "all | #123456 #222222",
+            "set | #abcdef undefined",
+            &format!("{error} | #abcdef undefined"),
         ]
     );
     assert_eq!(
@@ -145,6 +148,7 @@ fn update_theme_and_reset_theme_change_some_tokens_while_it_runs() {
             Color(0x123456ff),
             Color(0x00ff00ff),
             Color(0xffff00ff),
+            Color(0x00ffffff),
             Color(0x123456ff),
             Color(0xabcdefff),
         ]
@@ -155,11 +159,7 @@ fn update_theme_and_reset_theme_change_some_tokens_while_it_runs() {
 /// back, while it runs.
 #[component]
 fn Steps() -> impl IntoElement {
-    let primary = |hex: u32| {
-        let mut tokens = nsh_core::element::Tokens::default();
-        tokens.set_color("primary", rgb(hex).into());
-        tokens
-    };
+    let primary = |hex: u32| Patch::new().value("primary", Hsla::from(rgb(hex)));
     set_timeout(Duration::from_millis(100), move || {
         update_tokens(primary(0x00ff00));
         update_tokens(primary(0xff0000));
@@ -173,12 +173,10 @@ fn Steps() -> impl IntoElement {
 /// UI set's default.
 #[test]
 fn a_rust_app_updates_and_resets_its_tokens() {
-    let app_theme = Theme::from_json(r##"{ "cssVars": { "light": { "primary": "#0000ff" } } }"##)
-        .unwrap()
-        .into_tokens();
+    let app_theme = r##"{ "tokens": { "primary": { "kind": "color", "value": "#0000ff" } } }"##;
     let (tx, rx) = crossbeam_channel::unbounded();
     let config = EngineConfig {
-        app: App::Rust(Root::new::<Steps>(|| ()).tokens(app_theme)),
+        app: App::Rust(Root::new::<Steps>(|| ()).theme(app_theme)),
         viewport: Size::new(px(390.0), px(844.0)),
         trace: false,
         content_culling: false,

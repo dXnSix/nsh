@@ -1,9 +1,9 @@
 //! The status roles (`success`, `warning`, `info`, `highlight`): what an
 //! `Editor`'s warning and info diagnostics and its search matches, and a
 //! `TextView`'s alerts and marked text draw with. Each keeps its own color
-//! while the theme has no token for its role, takes the token of the
-//! role's name or the one the theme maps the role onto, and follows a
-//! change of it.
+//! while the app's theme document has no token for its role, takes the
+//! token of the role's name or the one the theme maps the role onto, and
+//! follows a change of it.
 
 use std::{
     sync::{Arc, Mutex},
@@ -11,7 +11,6 @@ use std::{
 };
 
 use nsh_base::{
-    Theme,
     editor::{
         EditorDiagnostic, EditorDiagnosticSeverity, EditorPosition, EditorRange, EditorSearch,
         editor,
@@ -20,12 +19,14 @@ use nsh_base::{
 };
 use nsh_core::{
     Color, MountItem, Size,
-    element::{Root, Tokens},
+    element::{Patch, PatchValues, Root},
     platform::{Idiom, Os},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
 use nsh_testing::{Headless, Screen};
+
+use crate::app_theme::{Add, default_with};
 
 /// The colors the components draw on their own, light and dark.
 const WARNING: AdaptiveColor = AdaptiveColor::rgb(0xd97706, 0xfbbf24);
@@ -93,14 +94,19 @@ fn Harness() -> impl IntoElement {
         .child(text("Ready"))
 }
 
-/// The harness drawn with `tokens` (`None`: nsh-base's default theme).
-fn start<C: Component<Props = ()>>(tokens: Option<Tokens>) -> Headless {
-    let root = match tokens {
-        Some(tokens) => Root::of::<C>().tokens(tokens),
-        None => Root::of::<C>(),
-    };
+/// The harness drawn with the app's theme document `theme` (`None`:
+/// nsh-base's default theme) and its overrides `overrides`.
+fn start<C: Component<Props = ()>>(theme: Option<String>, overrides: Option<Patch>) -> Headless {
+    let mut root = Root::of::<C>();
+    if let Some(theme) = theme {
+        root = root.theme(theme);
+    }
+    if let Some(overrides) = overrides {
+        root = root.theme_overrides(nsh_theme::write_patch(&overrides));
+    }
     let mut config = EngineConfig {
         viewport: Size::new(px(800.0), px(900.0)),
+        ui_sets: vec![nsh_base::registry()],
         ..EngineConfig::new(root)
     };
     config.environment.os = Os::Linux;
@@ -160,7 +166,7 @@ fn search_draws(app: &mut Headless, color: Color) {
 
 #[test]
 fn without_a_token_each_part_draws_its_own_color() {
-    let mut app = start::<Harness>(None);
+    let mut app = start::<Harness>(None, None);
     assert_eq!(
         drawn(app.screen()),
         colors([WARNING, INFO, NOTE, TIP, IMPORTANT, ALERT_WARNING, MARK])
@@ -170,12 +176,16 @@ fn without_a_token_each_part_draws_its_own_color() {
 
 #[test]
 fn a_theme_with_the_roles_tokens_colors_each_part() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("success", GREEN);
-    tokens.set_color("warning", AMBER);
-    tokens.set_color("info", BLUE);
-    tokens.set_color("highlight", PINK);
-    let mut app = start::<Harness>(Some(tokens));
+    let theme = default_with(
+        &[
+            ("success", Add::Color(GREEN)),
+            ("warning", Add::Color(AMBER)),
+            ("info", Add::Color(BLUE)),
+            ("highlight", Add::Color(PINK)),
+        ],
+        &[],
+    );
+    let mut app = start::<Harness>(Some(theme), None);
     // The editor's and the text view's warnings are the one color now, as
     // are their marks; an important alert has no role.
     assert_eq!(
@@ -187,29 +197,33 @@ fn a_theme_with_the_roles_tokens_colors_each_part() {
 
 #[test]
 fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("status-caution", AMBER);
-    tokens.set_color("status-positive", GREEN);
-    // The token of the role's own name is not read while it is mapped.
-    tokens.set_color("warning", PINK);
-    let tokens = tokens
-        .with_role(role::WARNING, "status-caution")
-        .with_role(role::SUCCESS, "status-positive");
-    let app = start::<Harness>(Some(tokens));
+    let theme = default_with(
+        &[
+            ("status-caution", Add::Color(AMBER)),
+            ("status-positive", Add::Color(GREEN)),
+            // The token of the role's own name is not read while it is
+            // mapped.
+            ("warning", Add::Color(PINK)),
+        ],
+        // One mapped by the document, one by the app's overrides.
+        &[(role::WARNING.name(), "status-caution")],
+    );
+    let overrides = Patch::new().role(role::SUCCESS.name(), "status-positive");
+    let app = start::<Harness>(Some(theme), Some(overrides));
     assert_eq!(
         drawn(app.screen()),
         colors([AMBER, INFO, NOTE, GREEN, IMPORTANT, AMBER, MARK])
     );
 }
 
-/// The harness, which gives the theme a `warning` and a `highlight` after
-/// its first frames.
+/// The harness, which gives the theme's `warning` and `highlight` other
+/// values after its first frames.
 #[component]
 fn Changes() -> impl IntoElement {
     set_timeout(Duration::from_millis(100), || {
-        let mut tokens = Tokens::default();
-        tokens.set_color("warning", AMBER);
-        tokens.set_color("highlight", PINK);
+        let tokens = Patch::new();
+        let tokens = tokens.value("warning", AMBER.light);
+        let tokens = tokens.value("highlight", PINK.light);
         update_tokens(tokens);
     });
     harness()
@@ -217,7 +231,15 @@ fn Changes() -> impl IntoElement {
 
 #[test]
 fn the_parts_follow_a_change_of_the_tokens() {
-    let mut app = start::<Changes>(None);
+    // The editor's own colors at first, declared by the app's theme.
+    let theme = default_with(
+        &[
+            ("warning", Add::Color(WARNING)),
+            ("highlight", Add::Color(MATCH)),
+        ],
+        &[],
+    );
+    let mut app = start::<Changes>(Some(theme), None);
     let now = colors([AMBER, INFO, NOTE, TIP, IMPORTANT, AMBER, PINK]);
     app.wait_until("the theme's colors", Duration::from_secs(5), move |s| {
         drawn(s) == now

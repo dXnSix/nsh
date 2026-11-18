@@ -192,17 +192,26 @@ fn Features(props: FeaturesProps) -> impl IntoElement {
         .child(text("Ready"))
 }
 
-fn start_features(doc: Value, editable: bool) -> Headless {
+/// The features' editor session of `doc`.
+fn features_session(doc: &Value) -> EditorSession {
     let schema = feature_schema();
     let plugins = starter::plugins(&schema);
-    let doc = schema.node_from_json(&doc).unwrap();
+    let doc = schema.node_from_json(doc).unwrap();
     let state =
         EditorState::create(EditorStateConfig::new(schema).doc(doc).plugins(plugins)).unwrap();
-    let session = EditorSession::new(state, NodeViews::new());
+    EditorSession::new(state, NodeViews::new())
+}
+
+fn start_features(doc: Value, editable: bool) -> Headless {
     let mut config = EngineConfig {
         viewport: Size::new(px(800.0), px(900.0)),
+        // nsh-base's theme, which has the `muted` its code blocks' class
+        // names.
+        ui_sets: vec![nsh_base::registry()],
+        // The session is made in the engine, so its keymaps are the
+        // platform's the engine says (Linux's), not the machine's.
         ..EngineConfig::new(Root::new::<Features>(move || FeaturesProps {
-            session: Some(session.clone()),
+            session: Some(features_session(&doc)),
             editable,
         }))
     };
