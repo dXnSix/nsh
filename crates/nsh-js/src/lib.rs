@@ -58,6 +58,8 @@ mod standard;
 #[cfg(test)]
 mod start_task;
 mod state;
+#[cfg(test)]
+mod theme_in_calls;
 mod timers;
 mod touch;
 mod web;

@@ -737,6 +737,11 @@ set_theme(None); // `nsh.json`'s again
 - A synchronous `#[module]` function does the same with `cx.update_tokens(..)`, `cx.reset_tokens(..)`,
   `cx.reset_all_tokens()`, `cx.set_modifier(..)` and `cx.set_theme(..)` of its `ModuleCx`. TSX:
   [`updateTheme` and `resetTheme`](../modules/nsh.md#updatetheme-resettheme).
+- Inside any synchronous call from JS (a `#[class]` member, a class extension's method, a module function),
+  `set_modifier`, `set_color_scheme`, `update_tokens`, `reset_tokens` and `reset_all_tokens` go with the ops of the
+  call's turn, after what JS sent before the call, as TSX's `setModifier` and `updateTheme` do: a builder method
+  that picks the app's theme context before `mount` is in the first frame. `set_theme` goes through a module
+  function's `cx.set_theme(..)` or TSX's `setTheme`.
 
 ### Theme documents and typed keys
 

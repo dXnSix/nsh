@@ -26,6 +26,8 @@ mod sticky;
 mod terminal_layout;
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod theme_in_calls;
 mod touch;
 mod views;
 mod watch;

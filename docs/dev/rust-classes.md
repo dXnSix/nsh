@@ -240,6 +240,15 @@ For that, two choices of the first version change:
   work; `false` in a synchronous call from JS. The JS host registers itself per VM (`CallTasks`,
   `register_call_tasks`: `nsh-js`'s callbacks' table, the web player's bindings) so `start_task` finds the VM in a
   call; with two VMs in calls at once (one's JS calling the other's Rust) it starts none.
+- **Theme writes in a call**: `set_modifier`, `set_color_scheme`, `update_tokens`, `reset_tokens` and
+  `reset_all_tokens` (`element/ambient.rs` `write_theme`) are actions of the executor where the reactive runtime is
+  entered; inside a synchronous call from JS, where it is not, they go through the same `CallTasks` of the VM
+  (`push_op`) as the root's op JS's own write sends (`Prop::UiModifier`, `Prop::Appearance`, `Prop::UiThemeUpdate`,
+  `Prop::UiThemeReset`), after what JS sent before the call. The core applies them with the turn's ops before the
+  turn's commit, so a class extension that picks a theme context before `mount` (a framework's `addTheme`) is in
+  the first frame; a task the call starts would first run only after it. Outside both they panic as before.
+  `set_theme` stays out: JS's `setTheme` also keeps the VM's view of the active document (`turn_document`, the
+  base document), which an op alone would not.
 - **The VM's own state**: `sys.locals.get::<T: Local>()` is one `T` per VM, made on first use and closed
   (`Local::close`) when the VM goes, before its callbacks are released (`process`'s children).
 - **Getters of a module**: `#[getter]` on a function without JS parameters makes it a property of the module's

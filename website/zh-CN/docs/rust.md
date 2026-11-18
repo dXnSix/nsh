@@ -654,6 +654,10 @@ set_theme(None); // 恢复 `nsh.json` 的
 - `set_theme(Some(json))` 返回它无法使用的文档内容。不是主题文档的文本会被拒绝，主题保持不变。另一个主题保留它具有的已选修饰器上下文，以及覆盖。
 - 同步的 `#[module]` 函数可以用其 `ModuleCx` 的 `cx.update_tokens(..)`、`cx.reset_tokens(..)`、`cx.reset_all_tokens()`、
   `cx.set_modifier(..)` 和 `cx.set_theme(..)` 做同样的事。TSX：[`updateTheme` 和 `resetTheme`](../modules/nsh.md#updatetheme-resettheme)。
+- 在任何来自 JS 的同步调用中（`#[class]` 成员、类扩展的方法、模块函数），`set_modifier`、`set_color_scheme`、`update_tokens`、
+  `reset_tokens` 和 `reset_all_tokens` 随该调用所在轮次的操作一起发送，排在 JS 在调用之前发送的内容之后，与 TSX 的 `setModifier` 和
+  `updateTheme` 一样：在 `mount` 之前选择应用主题上下文的构建器方法会出现在第一帧中。`set_theme` 则通过模块函数的 `cx.set_theme(..)`
+  或 TSX 的 `setTheme`。
 
 ### 主题文档与类型化键
 

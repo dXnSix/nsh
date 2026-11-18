@@ -413,17 +413,15 @@ impl CallbackHandle for BrowserCallback {
         Some(owned(value.clone()))
     }
 }
-/// Starts core tasks from inside a synchronous call from the realm
-/// (`nsh_core::element::start_task`), as `CallCx::start` does.
+/// Hands the core ops from inside a synchronous call from the realm:
+/// core tasks (`nsh_core::element::start_task`, as `CallCx::start` does)
+/// and Rust's theme writes (`set_modifier`, as the realm's `setModifier`).
 impl nsh_core::element::CallTasks for Bindings {
     fn in_call(&self) -> bool {
         !self.stopped.get() && !self.frames.borrow().is_empty()
     }
-    fn start_task(&self, task: TaskStart) {
-        self.ops.borrow_mut().push(Op::Rust(RustOp {
-            call: 0,
-            run: RustCall::Task(task),
-        }));
+    fn push_op(&self, op: Op) {
+        self.ops.borrow_mut().push(op);
     }
 }
 impl JsHost for Bindings {
