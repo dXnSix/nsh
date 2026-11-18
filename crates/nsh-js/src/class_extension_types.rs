@@ -317,7 +317,7 @@ fn a_set_declaring_the_class_and_the_extension_lists_them_once() {
 
 #[test]
 fn a_description_carries_its_extensions_through_json() {
-    assert_eq!(FORMAT, 6);
+    assert_eq!(FORMAT, 7);
     let description = Description::of(&[app_set(), i18n_set()]);
     assert!(description.sets[0].class_extensions.is_empty());
     let extensions = &description.sets[1].class_extensions;
