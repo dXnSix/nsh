@@ -79,6 +79,8 @@ final class Mounter {
      * its message, its buttons and a destructive action, each light then dark ARGB (0: the system's).
      */
     final int[] dialogColors = new int[10];
+    /** The alerts shown and not answered yet, by dialog id: what {@link SystemUi#closeDialog} takes back. */
+    final SparseArray<android.app.AlertDialog> dialogs = new SparseArray<>();
     /** The status bar the app asked for last (style, hidden), applied again when the appearance changes. */
     private int barStyle = -1;
     private boolean barHidden;
@@ -116,6 +118,12 @@ final class Mounter {
             View v = views.valueAt(i);
             if (v instanceof ComponentBox && ((ComponentBox) v).component instanceof TabBarComponent) {
                 ((TabBarComponent) ((ComponentBox) v).component).appearanceChanged();
+            }
+            if (v instanceof ComponentBox && ((ComponentBox) v).component instanceof SwitchComponent) {
+                ((SwitchComponent) ((ComponentBox) v).component).appearanceChanged();
+            }
+            if (v instanceof ComponentBox && ((ComponentBox) v).component instanceof DateTimePickerComponent) {
+                ((DateTimePickerComponent) ((ComponentBox) v).component).appearanceChanged();
             }
             if (v instanceof StackBox.ScreenBox) ((StackBox.ScreenBox) v).appearanceChanged();
         }
@@ -303,6 +311,8 @@ final class Mounter {
         this.density = host.getResources().getDisplayMetrics().density;
         this.images = images;
         components.put(TabBarComponent.NAME, c -> new TabBarComponent(context, c, () -> nightAt(c.id())));
+        components.put(SwitchComponent.NAME, c -> new SwitchComponent(context, c, () -> nightAt(c.id())));
+        components.put(DateTimePickerComponent.NAME, c -> new DateTimePickerComponent(context, c, () -> nightAt(c.id())));
         images.redirects = (base, location) -> Native.mediaRedirect(handle(), base, location);
         images.inline = uri -> {
             long handle = handle();
@@ -1315,7 +1325,7 @@ final class Mounter {
         ValueAnimator a = ValueAnimator.ofFloat(0, 1);
         a.setDuration((long) fx.transitionDuration);
         a.setStartDelay((long) fx.transitionDelay);
-        a.setInterpolator(Effects.interpolator(fx.transitionEasing));
+        a.setInterpolator(fx.transitionInterpolator());
         Dynamic now = new Dynamic();
         a.addUpdateListener(animation -> {
             float t = (float) animation.getAnimatedValue();
@@ -2495,6 +2505,9 @@ final class Mounter {
                 SystemUi.dialog(this, dialog, title, message, cancelable, sheet, texts, styles);
                 break;
             }
+            case 60:
+                SystemUi.closeDialog(this, b.getInt());
+                break;
             case 14: {
                 boolean block = b.getInt() != 0;
                 clearJsResponder();
@@ -2665,6 +2678,19 @@ final class Mounter {
                 Share.show(context, request);
                 break;
             }
+            case 59: {
+                // `encode.rs` `Command::AuthSession`: the request, the page, the callback scheme, ephemeral.
+                int request = b.getInt();
+                String url = (String) objects[b.getInt()];
+                String scheme = (String) objects[b.getInt()];
+                boolean ephemeral = b.getInt() != 0;
+                AuthSession.open(context, this, request, url, scheme, ephemeral);
+                break;
+            }
+            case 61:
+                // `encode.rs` `Command::CloseAuthSession`: the request the app closed.
+                AuthSession.close(b.getInt());
+                break;
             case 26: {
                 int request = b.getInt();
                 String url = (String) objects[b.getInt()];

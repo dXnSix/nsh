@@ -2131,14 +2131,6 @@ struct WindowElement {
     view: gpui::WeakEntity<WindowView>,
 }
 
-impl IntoElement for WindowElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for WindowElement {
     type RequestLayoutState = ();
     type PrepaintState = Hitbox;

@@ -347,6 +347,10 @@ Things that were found the hard way. Read the section of the area you change bef
   content rect within the view that started it: started from an editor's sink (a sliver at the caret) it sat on the
   caret whatever the rect said, over the selection's start handle, and took that handle's touches; it starts from the
   root view (`InputBox.openEditMenu`).
+- **Android, API levels and lint**: hosts that compile the Java runtime run Android Lint over it (NewApi,
+  WrongConstant), while NSH's own build runs only javac. A class or helper reached only behind `SDK_INT >= N` carries
+  `@TargetApi(N)`, as `Backdrop` does; a guard lint cannot see through (a helper that returns the check) is written at
+  the call site; an `int` setter typed with another class's constants takes those constants.
 - **Android, JNI**: cache classes and method ids in `JNI_OnLoad`; wrap every call from the (permanently attached) engine thread in
   a local frame (`java::with_env`), or local references pile up.
 - **Android, text**: `StaticLayout` ignores `maxLines` without an ellipsis (clip mode counts lines itself and the view clips);
@@ -371,6 +375,12 @@ Things that were found the hard way. Read the section of the area you change bef
   of its position, so a view moved by a fractional offset each frame blurs its shadows again every frame (on the GPU,
   each into a new render target, slow on PowerVR). `StackBox`'s push / pop slides move by whole pixels; going back to
   the gallery's index ran at about half the frame rate before (#519).
+- **Android, hidden views lose their display lists**: HWUI drops the display list of a RenderNode no longer drawn,
+  and `setVisibility` tells every view under the one that changes, whose background `Drawable.setVisible` calls
+  `invalidateSelf`. A whole screen hidden and shown again therefore records all of its views again (22–36 ms for the
+  gallery's index on a Pixel 10 Pro). `StackBox` keeps drawing the screen a pop reveals at alpha 0 while it is
+  `INVISIBLE` (which still keeps it out of touches, accessibility and focus), and `Decor.setVisible` does not
+  invalidate (#519).
 - **Android, opacity animations and outer box shadows**: at alpha < 1 with overlapping rendering (the default) HWUI composites the view into an offscreen buffer clipped to its bounds, cutting the outer box shadows the `Decor` draws outside them: the shadow vanishes for the whole animation and pops back when it ends. Decor-bearing views therefore report `hasOverlappingRendering() == false` while they carry outer shadows (the alpha then applies per draw op and the shadow fades with the content), at the cost of overlapping content inside such a view blending imprecisely while it fades.
 - **Android, JNI event maps intern their keys from a fixed list** (`Java_com_longbridge_nsh_Native_eventMap`): a new payload key must be
   added there or it is dropped silently.

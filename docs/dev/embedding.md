@@ -6,7 +6,8 @@
   `ios` / `macos` `infoPlist` keys and `entitlements` (`crates/nsh-cli/src/apple.rs`: JSON as property list values,
   the keys NSH sets refused with what to set instead; `MinimumOSVersion` / `LSMinimumSystemVersion` are the runtime's
   minimum, `IOS_MINIMUM` / `MACOS_MINIMUM`, which an app may raise but not lower (checked when `nsh.json` is read;
-  `actool` compiles the iOS icon for the version declared); device builds check entitlements against the profile,
+  `actool` compiles the iOS icon, and `ios.launchScreen`'s color and image named in `UILaunchScreen`, for the version
+  declared); device builds check entitlements against the profile,
   which keeps the app's values in place of its own). iOS: `.app`, `.ipa` with `--sign <identity>
   --profile <file.mobileprovision>` (entitlements come from the profile; icons are compiled by `actool` into `Assets.car`).
   Android: an APK assembled without Gradle (`aapt2 link`, native libraries stored uncompressed and 16 KB ZIP aligned, `apksigner`;
@@ -395,11 +396,13 @@ NSH draws (`src/layers.rs`).
   view runs, as `NshAppView.limits` and `NshView.setLimits` on iOS and Android: `Limits::default()` (an app embedded
   in another app) unless set; the development host `nsh-gpui-host` runs apps on its own, with `Limits::standalone()`
   (`sandbox.md`).
-- **Storage.** Each app keeps its `Storage` in `<data dir>/<app id>/storage.json`, which the engine picks
-  (`EngineConfig::data_dir`, `app_dir_name(App::app_id())`, `default` without a valid id): the id travels with the app
+- **Storage.** Each app keeps its `Storage` in `storage.json` of its data directory, which the engine picks
+  (`EngineConfig::data_dir` as it is, else `<EngineConfig::support_dir>/<app_dir_name(App::app_id())>`, `default`
+  without a valid id): the id travels with the app
   (`app.json` next to a bundle, written by `nsh build` / `nsh package`; the dev server's bundle message; a verified
-  package's id; `Root::app_id` in Rust apps' generated code). Platforms only give the data dir: the system's
-  (`nsh_engine::data_dir()`) on the desktops (`AppOptions::data_dir` to change it), `Application Support/nsh` on iOS,
+  package's id; `Root::app_id` in Rust apps' generated code). Platforms only give the support dir: the system's
+  (`nsh_engine::support_dir()`) on the desktops, where `AppOptions::data_dir` names one app's directory instead (the
+  release runners set it from `nsh.json` `dataDir`, the development hosts from `--data-dir`), `Application Support/nsh` on iOS,
   `filesDir/nsh` on Android. `AppOptions::storage`, `NshAppView.storageDirectory` and `NshView.setStorageDirectory`
   override one app's place; all from the next load.
 - **Notifications.** The process's notifications (`nsh`'s `Notifications`) belong to the embedding app unless it

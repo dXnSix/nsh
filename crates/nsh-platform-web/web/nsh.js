@@ -161,6 +161,9 @@ function tooLarge(width, height) {
   return `this browser cannot make a ${width} × ${height} pixel canvas (${width * height} pixels): it is over the browser's canvas size limit`;
 }
 
+/** A listener that does nothing: a blocking `wheel` listener's presence. */
+const noop = () => {};
+
 /** Whether `src` is on the page's origin. */
 function sameOrigin(src) {
   try {
@@ -305,8 +308,11 @@ img.nsh-fill { pointer-events: none; }
 .nsh-fit-none { object-fit: none; }
 .nsh-spacer { position: absolute; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none; visibility: hidden; }
 /* Over the style's \`overflow: clip\`. */
-.nsh-scroll.nsh-ox.nsh-ox { overflow-x: auto; overflow-y: hidden; }
-.nsh-scroll.nsh-oy.nsh-oy { overflow-x: hidden; overflow-y: auto; }
+/* A one-axis scroll view keeps only its own axis's overscroll: a swipe
+   across it (vertical over a horizontal one, as over an editor's text
+   inside its vertical scroll) scrolls the scroll view around it. */
+.nsh-scroll.nsh-ox.nsh-ox { overflow-x: auto; overflow-y: hidden; overscroll-behavior-y: auto; }
+.nsh-scroll.nsh-oy.nsh-oy { overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: auto; }
 .nsh-scroll.nsh-oxy.nsh-oxy { overflow: auto; }
 .nsh-scroll.nsh-onone.nsh-onone { overflow: hidden; }
 .nsh-scroll.nsh-zoom.nsh-zoom { touch-action: none; }
@@ -350,6 +356,12 @@ img.nsh-fill { pointer-events: none; }
    backdrop below and the views' own classes override it. */
 .nsh-root > .nsh-viewport { position: fixed; inset: 0; width: auto; height: auto; margin: 0; }
 .nsh-viewport { touch-action: none; border: 0; padding: 0; overflow: visible; color: inherit; background-color: transparent; }
+/* Anchored overlays over the window (overlays: "viewport", syncFloats) are popovers in the top layer too, at their
+   frames in the root moved by where the root is in the window (--nsh-float-x / -y, placeFloats). The second rule
+   undoes the popover's own box where the view's classes say nothing. */
+.nsh-root > .nsh-float { position: fixed; inset: auto; margin: var(--nsh-float-y, 0px) 0 0 var(--nsh-float-x, 0px);
+  touch-action: none; }
+:where(.nsh-float) { border: 0; padding: 0; overflow: visible; color: inherit; background-color: transparent; }
 .nsh-dialog-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.35); display: flex;
   align-items: center; justify-content: center; z-index: 1000; }
 .nsh-dialog { width: 270px; border-radius: 14px; background: rgba(245,245,245,.97); color: #000; text-align: center;
@@ -357,7 +369,7 @@ img.nsh-fill { pointer-events: none; }
 .nsh-dialog h3 { font-size: 17px; font-weight: 600; margin: 18px 16px 4px; }
 .nsh-dialog p { margin: 0 16px 18px; }
 .nsh-dialog button { display: block; width: 100%; border: 0; border-top: 0.5px solid rgba(0,0,0,.2); background: none;
-  font: 17px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #007aff; padding: 11px; cursor: pointer; }
+  font: 17px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #007aff; padding: 11px; cursor: default; }
 /* Dialogs on desktop browsers: the in-surface cards of the Linux and macOS backends. */
 .nsh-desktop .nsh-dialog-backdrop { background: rgba(0,0,0,.4); }
 .nsh-desktop .nsh-dialog { width: min(340px, calc(100% - 64px)); border-radius: 12px; padding: 20px; text-align: left;
@@ -400,7 +412,7 @@ img.nsh-fill { pointer-events: none; }
 .nsh-sheet > div { border-radius: 14px; background: rgba(245,245,245,.97); color: #000; overflow: hidden; text-align: center; }
 .nsh-sheet .nsh-sheet-head { padding: 12px 16px; color: #8a8a8e; border-bottom: 0.5px solid rgba(0,0,0,.2); }
 .nsh-sheet .nsh-sheet-head b { display: block; font-weight: 600; }
-.nsh-sheet button { display: block; width: 100%; border: 0; background: none; padding: 16px; cursor: pointer;
+.nsh-sheet button { display: block; width: 100%; border: 0; background: none; padding: 16px; cursor: default;
   font: 19px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #007aff; }
 .nsh-sheet button + button { border-top: 0.5px solid rgba(0,0,0,.2); }
 .nsh-sheet button.cancel { font-weight: 600; }
@@ -450,7 +462,7 @@ img.nsh-fill { pointer-events: none; }
   border-left: 3px solid #ff6b6b; border-radius: 10px; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
 .nsh-error-copy { float: right; position: sticky; top: 0; margin: 0 0 6px 10px; border: 0; border-radius: 6px;
   background: rgba(255,255,255,.12); color: #fff; font: 600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  padding: 4px 12px; cursor: pointer; }
+  padding: 4px 12px; cursor: default; }
 .nsh-error-copy:hover { background: rgba(255,255,255,.2); }
 `;
 
@@ -551,6 +563,39 @@ function regional(locale) {
     // A tag the browser does not take: the region's.
   }
   return known;
+}
+
+/** The characters of `text` as `maxLength` counts them: Unicode code
+ * points (an emoji is one, though a JS string holds two units for it). */
+function charLength(text) {
+  let n = 0;
+  for (const _ of text) n++;
+  return n;
+}
+
+let graphemes;
+
+/** The longest prefix of `text` of at most `max` characters
+ * ({@link charLength}) that ends between user-perceived characters, as the
+ * core's `clip_chars` cuts: a letter with its accent or an emoji with its
+ * skin tone goes in whole or not at all. */
+function clipChars(text, max) {
+  if (max <= 0) return "";
+  if (text.length <= max || charLength(text) <= max) return text;
+  graphemes ??= typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+  // Without `Intl.Segmenter`, between code points.
+  const parts = graphemes ? graphemes.segment(text) : text;
+  let used = 0;
+  let end = 0;
+  for (const part of parts) {
+    const segment = typeof part === "string" ? part : part.segment;
+    used += charLength(segment);
+    if (used > max) break;
+    end += segment.length;
+  }
+  return text.slice(0, end);
 }
 
 /**
@@ -1109,6 +1154,12 @@ class Player {
     this.viewportDialogs = options.dialogs === "viewport" && typeof HTMLElement.prototype.showPopover === "function";
     if (options.dialogs === "viewport" && !this.viewportDialogs) {
       console.warn("[nsh] this browser has no popovers: dialogs cover the player, not the window");
+    }
+    // Anchored overlays (popovers, menus, tooltips, a select's list) over
+    // the whole window rather than inside the container (`syncFloats`).
+    this.viewportOverlays = options.overlays === "viewport" && typeof HTMLElement.prototype.showPopover === "function";
+    if (options.overlays === "viewport" && !this.viewportOverlays) {
+      console.warn("[nsh] this browser has no popovers: overlays stay inside the player, not over the window");
     }
     // Host events sent before the app runs (`begin`).
     this.hostEvents = [];
@@ -1804,6 +1855,11 @@ class Player {
     } finally {
       this.starting = false;
     }
+    // The new engine's overlays go over the window too.
+    if (this.viewportOverlays) {
+      this.floatArea = null;
+      this.placeFloats();
+    }
     if (!deferEvents) this.startedApp();
   }
 
@@ -1889,6 +1945,8 @@ class Player {
     this.frameLayers?.clear();
     if (this.viewportDialogs) this.dialogs = [];
     this.viewportObserver?.disconnect();
+    for (const el of this.floats ?? []) this.sinkFloat(el);
+    this.floats = [];
     this.fileOperations.clear();
     for (const id of [...this.requests.keys()]) this.fetchCancel(id);
     for (const id of [...this.websockets.keys()]) this.websocketCancel(id);
@@ -2019,6 +2077,7 @@ class Player {
     this.size = [width, height];
     this.call((w) => w.nsh_resize(width, height));
     this.environmentChanged();
+    if (this.viewportOverlays) this.placeFloats();
     for (const el of this.views.values()) if (el._kind === "modal" && el.isConnected && !el._leaving) this.placeModal(el);
   }
 
@@ -2065,6 +2124,7 @@ class Player {
     this.safeProbe = document.createElement("div");
     this.safeProbe.className = "nsh-probe";
     document.body.append(this.safeProbe);
+    if (this.viewportOverlays) this.installFloats();
   }
 
   /** The page's insets covered by system UI, where they overlap the root
@@ -2238,6 +2298,7 @@ class Player {
     if (this.readingHosts?.size) this.orderReading();
     this.focusAfterBatch();
     if (this.relating?.size) this.linkRelations();
+    if (this.viewportOverlays) this.syncFloats();
   }
 
   /** The DOM id of view `id`: unique on the page, beside other players. */
@@ -5457,8 +5518,8 @@ class Player {
     field.setAttribute("autocorrect", correct ? "on" : "off");
     if (config.autoComplete != null) field.setAttribute("autocomplete", config.autoComplete);
     else field.removeAttribute("autocomplete");
-    if (config.maxLength != null) field.maxLength = config.maxLength;
-    else field.removeAttribute("maxlength");
+    field._maxLength = config.maxLength ?? null;
+    this.fieldLimit(field);
     el._config = config;
     field.classList.toggle("nsh-ph", !!config.placeholderColor);
     // A built-in bar of the app's takes the textarea's indicator's place.
@@ -5471,6 +5532,7 @@ class Player {
   }
 
   wireInput(el, field) {
+    field.addEventListener("beforeinput", (e) => this.beforeInput(field, e));
     field.addEventListener("input", () => this.textChanged(el, field));
     field.addEventListener("scroll", () => this.inputScrolled(el, field), { passive: true });
     if (typeof ResizeObserver === "function") {
@@ -5482,6 +5544,7 @@ class Player {
     // characters chosen).
     field.addEventListener("compositionstart", (e) => {
       field._composing = true;
+      this.fieldLimit(field);
       this.compositionChanged(el, field, e.data ?? "");
     });
     field.addEventListener("compositionupdate", (e) => this.compositionChanged(el, field, e.data ?? ""));
@@ -5542,7 +5605,44 @@ class Player {
     this.call((w) => w.nsh_input_scroll(el._id, ...now));
   }
 
+  /** `field`'s `maxlength` for its `maxLength`: the browser counts UTF-16
+   * units, `maxLength` characters ({@link charLength}), so the limit is the
+   * units the text has plus one per character of room left, set again
+   * after each edit. An input method's composition, whose text the page
+   * cannot cut, stays within `maxLength` characters that way: a character
+   * of one unit leaves the limit as it was, one of two (an emoji) raises it
+   * by one. */
+  fieldLimit(field) {
+    const max = field._maxLength;
+    if (max == null) {
+      field.removeAttribute("maxlength");
+      return;
+    }
+    const value = field.value;
+    field.maxLength = value.length + Math.max(0, max - charLength(value));
+  }
+
+  /** Before the user's insertion of known text (typing, a paste, a drop, the
+   * app's `insertText`) into `field`: its `maxlength` takes exactly what of
+   * that text fits by characters ({@link clipChars}), so the browser cuts
+   * it there itself, keeping its own undo. */
+  beforeInput(field, e) {
+    const max = field._maxLength;
+    if (max == null || !e.inputType?.startsWith("insert")) return;
+    const text = e.inputType === "insertCompositionText" ? null : e.data ?? e.dataTransfer?.getData("text/plain") ?? null;
+    if (text == null) {
+      this.fieldLimit(field);
+      return;
+    }
+    const value = field.value;
+    const start = field.selectionStart ?? value.length;
+    const end = field.selectionEnd ?? start;
+    const kept = value.slice(0, start) + value.slice(end);
+    field.maxLength = kept.length + clipChars(text, max - charLength(kept)).length;
+  }
+
   textChanged(el, field) {
+    this.fieldLimit(field);
     this.inputScrolled(el, field);
     if (field.value === field._known) return;
     field._known = field.value;
@@ -5657,7 +5757,12 @@ class Player {
       return;
     }
     field._known = text;
-    if (field.value !== text) field.value = text;
+    if (field.value !== text) {
+      // The app's value is never cut to `maxLength`, as on every platform
+      // (the browser's `maxlength` limits only the user's edits).
+      field.value = text;
+      this.fieldLimit(field);
+    }
   }
 
   op_ic([, id, x, y, w, h]) {
@@ -6585,6 +6690,134 @@ class Player {
     el.style.transformOrigin = scaled ? "0 0" : "";
   }
 
+  // Overlays over the window ------------------------------------------
+
+  /** `overlays: "viewport"`: follows where the root is in the window, which
+   * the page's scrolling and layout move, and the presses on the page
+   * around it. */
+  installFloats() {
+    const moved = () => this.placeFloats();
+    // Any scroll view of the page around the container moves it: a
+    // capturing listener hears them all. The app's own scroll views move
+    // nothing of it, and their scrolling is a hot path: left alone.
+    addEventListener("scroll", (e) => {
+      if (!(e.target instanceof Node && this.root.contains(e.target))) moved();
+    }, { capture: true, passive: true });
+    addEventListener("resize", moved);
+    // The on-screen keyboard shrinks the visual viewport only.
+    visualViewport?.addEventListener("resize", moved);
+    // What is above the container on the page changing size moves it
+    // without a scroll.
+    new ResizeObserver(moved).observe(document.documentElement);
+    document.addEventListener("pointerdown", (e) => this.pressAround(e), true);
+    this.placeFloats();
+  }
+
+  /**
+   * Anchored overlays drawn over the window (`overlays: "viewport"`): the
+   * root's children from its first overlay placed against an anchor on
+   * (the core puts the overlays above the root's own views, in the order
+   * they stack) are manual popovers in the browser's top layer, so the
+   * container's clipping, stacking and transforms leave them whole. Each
+   * stays where it is in the root, so its events, focus and `inert` are as
+   * before; the overlays shown after it are lifted with it, to stay above
+   * it. Overlays without an anchor before the first (a fixed view, a
+   * backdrop) stay in the container. A lifted view the batch moved in the
+   * DOM left the top layer, and is raised again with those above it.
+   */
+  syncFloats() {
+    const lifted = [];
+    for (const child of this.root.children) {
+      if (child._id === undefined || child._kind === "modal") continue;
+      if (lifted.length || child._props?.anchored) lifted.push(child);
+    }
+    const before = this.floats ?? [];
+    let kept = 0;
+    while (kept < lifted.length && lifted[kept] === before[kept] && lifted[kept].matches(":popover-open")) kept++;
+    for (const el of before) if (!lifted.includes(el)) this.sinkFloat(el);
+    if (kept === lifted.length) {
+      this.floats = lifted;
+      return;
+    }
+    // Raising again what is open takes the focus out of it.
+    const focus = document.activeElement;
+    for (const el of lifted.slice(kept)) this.liftFloat(el);
+    this.floats = lifted;
+    // Dialogs and alerts over the window stay above them.
+    for (const layer of this.root.children) {
+      if (layer.classList.contains("nsh-viewport") && layer.matches(":popover-open")) {
+        layer.hidePopover();
+        layer.showPopover();
+      }
+    }
+    if (focus && focus !== document.activeElement && focus.isConnected) focus.focus({ preventScroll: true });
+    this.placeFloats();
+  }
+
+  /** Shows overlay `el` in the top layer, above what is there already. */
+  liftFloat(el) {
+    el.classList.add("nsh-float");
+    el.popover = "manual";
+    // As a dialog's layer (`raise`): the browser waits for the root's
+    // blocking `wheel` listener only over the root's box. Added once, and
+    // again to a view drawn as another element since (`retag`).
+    el.addEventListener("wheel", noop, { passive: false });
+    if (el.matches(":popover-open")) el.hidePopover();
+    el.showPopover();
+  }
+
+  /** Overlay `el` is drawn in the container again (or went). */
+  sinkFloat(el) {
+    if (!el.classList.contains("nsh-float")) return;
+    if (el.matches(":popover-open")) el.hidePopover();
+    el.removeAttribute("popover");
+    el.classList.remove("nsh-float");
+    el.removeEventListener("wheel", noop);
+  }
+
+  /**
+   * Where the lifted overlays go: their frames are in the root's
+   * coordinates, moved by where the root is in the window (its CSS
+   * variables), and the core places them in the window less its safe
+   * area, in those coordinates (`nsh_overlay_area`), so they flip and
+   * stay inside it by the window's edges rather than the container's.
+   */
+  placeFloats() {
+    if (!this.wasm || this.stopping) return;
+    const r = this.root.getBoundingClientRect();
+    const x = `${r.left}px`, y = `${r.top}px`;
+    if (this.floatOrigin !== x + y) {
+      this.floatOrigin = x + y;
+      this.root.style.setProperty("--nsh-float-x", x);
+      this.root.style.setProperty("--nsh-float-y", y);
+    }
+    // The window without its scroll bars, less its safe area.
+    const doc = document.documentElement;
+    const [w, h] = [doc.clientWidth, doc.clientHeight];
+    const [top, right, bottom, left] = this.safeProbe
+      ? this.safeArea({ left: 0, top: 0, right: w, bottom: h })
+      : [0, 0, 0, 0];
+    // Not under the on-screen keyboard, which covers the layout viewport's
+    // bottom (as `keyboardHeight`; not while zoomed).
+    const vv = visualViewport;
+    const visible = vv && vv.scale <= 1.01 ? Math.min(h, vv.offsetTop + vv.height) : h;
+    const area = [left - r.left, top - r.top, Math.max(0, w - left - right), Math.max(0, visible - top - bottom)];
+    const key = area.join();
+    if (this.floatArea === key) return;
+    this.floatArea = key;
+    this.call((wasm) => wasm.nsh_overlay_area(...area));
+  }
+
+  /** A press on the page around the container while overlays are lifted
+   * over it: they hear `onPressOutside`, as for a press in the root
+   * outside them (a popover closes). */
+  pressAround(e) {
+    if (!this.floats?.length || this.stopping || !this.wasm) return;
+    if (e.target instanceof Node && this.root.contains(e.target)) return;
+    const [x, y] = this.point(e, null);
+    this.call((w) => w.nsh_press_outside(x, y));
+  }
+
   /** Going back or Escape on a modal: it asks to close (`onRequestClose`,
    * reason `"cancel"`); with `closeOnEscape` it closes natively, then
    * reports `onDismiss`. */
@@ -6829,6 +7062,7 @@ class Player {
       case "setResponder": this.responderBlocks = !!args[0]; break;
       case "clearResponder": this.responderBlocks = false; break;
       case "dialog": this.dialog(args[0], args[1], args[2], args[3], args[4] ?? [], args[5] ?? true, args[6] ?? false); break;
+      case "closeDialog": this.closeDialog(args[0]); break;
       case "reload": {
         const frame = el?._frameEl;
         if (!frame) break;
@@ -8140,16 +8374,22 @@ class Player {
     let down = null;
     backdrop.addEventListener("pointerdown", (e) => { down = e.target; }, true);
     const pressed = (e, el) => e.detail === 0 || (down !== null && el.contains(down));
-    const close = (index) => {
-      if (answered) return;
+    // Off the surface, once: false when it was already.
+    const takeDown = () => {
+      if (answered) return false;
       answered = true;
       backdrop.remove();
       this.releaseFrame(backdrop);
       this.dialogs = this.dialogs.filter((d) => d !== backdrop);
       this.scopeFocus();
       if (restore?.isConnected) restore.focus({ preventScroll: true });
-      this.event(ROOT_ID, "onDialog", { id: dialogId, index });
+      return true;
     };
+    const close = (index) => {
+      if (takeDown()) this.event(ROOT_ID, "onDialog", { id: dialogId, index });
+    };
+    backdrop._dialogId = dialogId;
+    backdrop._takeDown = takeDown;
     const cancel = list.findIndex((_, i) => style(i) === "cancel");
     backdrop._cancel = () => (cancel >= 0 ? close(cancel) : cancelable && close(-1));
     const button = (index) => {
@@ -8229,6 +8469,11 @@ class Player {
     (this.dialogs ??= []).push(backdrop);
     this.scopeFocus();
     focus?.focus({ preventScroll: true });
+  }
+
+  /** Takes back the dialog `dialog` showed as `dialogId` (`closeDialog`), reporting nothing: the core answered it. */
+  closeDialog(dialogId) {
+    this.dialogs?.find((d) => d._dialogId === dialogId)?._takeDown();
   }
 
   /** Dialogs and other system UI look as the desktop backends' with the desktop idiom, else as on phones. */
