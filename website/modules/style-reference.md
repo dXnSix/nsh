@@ -274,7 +274,7 @@ An outline is drawn outside the border and takes no space in layout.
 
 | Key | Type | Rust | Description |
 |---|---|---|---|
-| `outlineWidth` | `number` | `.outline(w)` | Line width. |
+| `outlineWidth` | `number` | `.outline(w)` | Line width. In Rust a signal or a closure (a theme token's value, `.outline(move \|\| FOCUS_RING.get().unwrap_or(px(2.0)))`) sets it again whenever it changes. |
 | `outlineColor` | `ColorValue` | `.outline_color(c)` | Line color. Default the text color. |
 | `outlineStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`, `.outline_dotted()`, `.outline_none()` | Line style. |
 | `outlineOffset` | `number` | `.outline_offset(o)` | Distance from the border edge; negative values move it inside. |

@@ -2707,9 +2707,13 @@ pub trait Styled: Sized {
 
     /// An outline `width` wide, outside the border; it takes no space.
     /// Solid unless a style method says otherwise, before or after it.
-    fn outline(mut self, width: impl Into<AbsoluteLength>) -> Self {
+    /// Like [`Styled::ring`], `width` may be a closure or a signal (a
+    /// theme token's value, say): the outline follows it.
+    fn outline(mut self, width: impl IntoReactive<AbsoluteLength>) -> Self {
         let s = self.style();
-        s.number(StyleKey::OutlineWidth, points(width.into()));
+        s.bind_value(width, |s, width: AbsoluteLength| {
+            s.number(StyleKey::OutlineWidth, points(width));
+        });
         s.push(Declaration::Default(
             StyleKey::OutlineStyle,
             PropertyValue::BorderStyle(crate::BorderStyle::Solid, false),

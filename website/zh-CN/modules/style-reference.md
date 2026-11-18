@@ -274,7 +274,7 @@ view().h(px(120.0)).rounded(px(16.0)).bg_linear(deg(135.0)).gradient_from(rgb(0x
 
 | 键 | 类型 | Rust | 说明 |
 |---|---|---|---|
-| `outlineWidth` | `number` | `.outline(w)` | 线宽。 |
+| `outlineWidth` | `number` | `.outline(w)` | 线宽。在 Rust 中传入 signal 或闭包（例如主题 token 的值，`.outline(move \|\| FOCUS_RING.get().unwrap_or(px(2.0)))`）时，值变化后会重新设置。 |
 | `outlineColor` | `ColorValue` | `.outline_color(c)` | 颜色。默认为文字颜色。 |
 | `outlineStyle` | `"solid" \| "dashed" \| "dotted" \| "none" \| "hidden"` | `.outline_dashed()`、`.outline_dotted()`、`.outline_none()` | 线型。 |
 | `outlineOffset` | `number` | `.outline_offset(o)` | 与边框外缘的距离；负值向内。 |
