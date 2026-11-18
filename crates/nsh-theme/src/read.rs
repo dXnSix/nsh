@@ -720,10 +720,7 @@ fn apply_rules(document: &mut ThemeDocument, mut state: State, diagnostics: &mut
                 ),
             ));
         }
-        if too_few || no_default {
-            return false;
-        }
-        true
+        !(too_few || no_default)
     });
 
     // resolutionOrder: each modifier exactly once.
