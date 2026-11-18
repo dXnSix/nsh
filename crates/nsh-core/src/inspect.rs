@@ -58,7 +58,8 @@ pub struct DevNode {
     pub class: Option<String>,
     /// `testID`.
     pub test_id: Option<Arc<str>>,
-    /// The text of a raw text run.
+    /// The text of a raw text run, or of the run a text block or span
+    /// holds without a node of its own (its only child).
     pub text: Option<String>,
     /// The frame relative to its parent, from the last layout.
     pub frame: Bounds<Points>,

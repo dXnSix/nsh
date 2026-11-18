@@ -234,7 +234,14 @@ impl<M: TextEngine> Core<M> {
                 .map(super::classes::ClassNames::authored)
                 .filter(|class| !class.is_empty()),
             test_id: node.props.as_deref().and_then(|p| p.test_id.clone()),
-            text: (node.kind == Kind::RawText && !node.text.is_empty()).then(|| node.text.clone()),
+            text: match node.kind {
+                Kind::RawText => Some(node.text.as_str()),
+                // A text block or span keeps its only run without a node.
+                Kind::Text => self.folded_text(key),
+                _ => None,
+            }
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned),
             frame: node.frame,
             page: self.measure(node.id).map(|m| m.page),
             flags: DevFlags {
@@ -510,7 +517,8 @@ mod tree_tests {
         let tree = c.dev_tree();
         assert_eq!(tree.root, ROOT_ID);
         let ids: Vec<NodeId> = tree.nodes.iter().map(|n| n.id).collect();
-        assert_eq!(ids, [ROOT_ID, 2, 4, 6]);
+        // The text block holds its only run without a node (#2366).
+        assert_eq!(ids, [ROOT_ID, 2, 4]);
         let card = &tree.nodes[1];
         assert_eq!(card.kind, "view");
         assert_eq!(card.parent, Some(ROOT_ID));
@@ -523,9 +531,7 @@ mod tree_tests {
         let text = &tree.nodes[2];
         assert_eq!(text.kind, "text");
         assert_eq!(text.page, Some(point(Points(4.0), Points(4.0))));
-        let run = &tree.nodes[3];
-        assert_eq!(run.kind, "raw-text");
-        assert_eq!(run.text.as_deref(), Some("Hello"));
+        assert_eq!(text.text.as_deref(), Some("Hello"));
     }
 
     #[test]
@@ -665,6 +671,113 @@ mod tree_tests {
         c.commit();
         assert!(!c.inspected());
         assert!(c.dev.is_none());
+    }
+}
+
+/// A text block or span keeps its only run without a node (upstream
+/// #2366): the tree reports that run's text on the block, and a tree asked
+/// after the run's text changed has the new text.
+#[cfg(test)]
+mod inline_text_tests {
+    use super::super::tests::{apply, core};
+    use crate::{
+        NodeId, Op, ROOT_ID, Tag,
+        element::Answer,
+        inspect::{DevTree, Request},
+    };
+
+    fn ready<T>(answer: Answer<T>) -> T {
+        use std::future::Future;
+        let mut answer = std::pin::pin!(answer);
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        match answer.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(value) => value,
+            std::task::Poll::Pending => panic!("not answered"),
+        }
+    }
+
+    /// A text block `block` under the root holding the runs `runs`.
+    fn label(
+        block: NodeId,
+        runs: &[(NodeId, &str)],
+    ) -> crate::core::Core<super::super::tests::FakeEngine> {
+        let mut c = core();
+        let mut ops = vec![
+            Op::Create {
+                id: block,
+                tag: Tag::Text,
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: block,
+                before: None,
+            },
+        ];
+        for &(id, text) in runs {
+            ops.push(Op::CreateText {
+                id,
+                text: text.into(),
+            });
+            ops.push(Op::Insert {
+                parent: block,
+                child: id,
+                before: None,
+            });
+        }
+        apply(&mut c, ops);
+        c.commit();
+        c
+    }
+
+    fn text_of(tree: &DevTree, id: NodeId) -> Option<&str> {
+        tree.nodes.iter().find(|n| n.id == id)?.text.as_deref()
+    }
+
+    #[test]
+    fn a_text_block_s_only_run_is_the_block_s_text() {
+        let c = label(4, &[(6, "Save")]);
+        let tree = c.dev_tree();
+        let ids: Vec<NodeId> = tree.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(ids, [ROOT_ID, 4], "the run has no node of its own");
+        assert_eq!(tree.nodes[1].kind, "text");
+        assert_eq!(text_of(&tree, 4), Some("Save"));
+    }
+
+    #[test]
+    fn a_tree_asked_after_the_run_changed_has_its_new_text() {
+        let mut c = label(4, &[(6, "Save")]);
+        let before = c.dev_tree();
+        let (tree, slot) = Answer::<DevTree>::new();
+        c.queue_inspect(Request::Tree(slot));
+        apply(
+            &mut c,
+            vec![Op::SetText {
+                id: 6,
+                text: "Saved".into(),
+            }],
+        );
+        c.commit();
+        let after = ready(tree);
+        assert_eq!(text_of(&after, 4), Some("Saved"));
+        assert_ne!(after, before, "a tool comparing trees sees the change");
+    }
+
+    #[test]
+    fn runs_with_nodes_keep_their_text_and_the_block_has_none() {
+        let c = label(4, &[(6, "Save"), (8, " all")]);
+        let tree = c.dev_tree();
+        let ids: Vec<NodeId> = tree.nodes.iter().map(|n| n.id).collect();
+        assert_eq!(ids, [ROOT_ID, 4, 6, 8]);
+        assert_eq!(text_of(&tree, 4), None);
+        assert_eq!(tree.nodes[2].kind, "raw-text");
+        assert_eq!(text_of(&tree, 6), Some("Save"));
+        assert_eq!(text_of(&tree, 8), Some(" all"));
+    }
+
+    #[test]
+    fn an_empty_run_is_no_text() {
+        let c = label(4, &[(6, "")]);
+        assert_eq!(text_of(&c.dev_tree(), 4), None);
     }
 }
 
