@@ -3190,8 +3190,9 @@ mod fallback_tests {
 
 #[cfg(test)]
 mod font_rendering_tests {
-    use super::*;
     use pangocairo::cairo::{HintMetrics, HintStyle};
+
+    use super::*;
 
     /// By default layout is unhinted and drawing slightly hinted; hinted
     /// metrics (manual font rendering) hint and round layout too.
