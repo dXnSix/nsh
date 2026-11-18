@@ -63,6 +63,8 @@ pub(crate) mod keys;
 pub(crate) mod menus;
 pub(crate) mod module;
 mod once;
+#[cfg(test)]
+mod outline_binding;
 pub mod palette;
 mod prop;
 pub(crate) mod quit;

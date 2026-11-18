@@ -394,7 +394,7 @@ GPUI draws no `maskImage` yet: a masked view draws whole, so a fade made with a 
 
 ## Outlines, opacity and visibility
 
-- `outlineWidth`, `outlineColor`, `outlineStyle`, `outlineOffset` (`.outline(..)`, `.outline_color(..)`, `.outline_dashed()`, `.outline_offset(..)`): a line outside the border that takes no space (negative offsets draw inside). `outlineStyle: "none"` (or `"hidden"`, `.outline_none()`) hides the outline whatever its width, as in CSS.
+- `outlineWidth`, `outlineColor`, `outlineStyle`, `outlineOffset` (`.outline(..)`, `.outline_color(..)`, `.outline_dashed()`, `.outline_offset(..)`): a line outside the border that takes no space (negative offsets draw inside). `outlineStyle: "none"` (or `"hidden"`, `.outline_none()`) hides the outline whatever its width, as in CSS. In Rust, `.outline(..)` takes a width, a signal or a closure, as `.ring(..)` does: `.focus_visible(|s| s.outline(move || FOCUS_RING.get().unwrap_or(px(2.0))))` follows a theme token.
 - `opacity` (`.opacity(n)`): 0 to 1, applied to the view and its children.
 - `visibility: "hidden"` (`.invisible()` in Rust): the view is not drawn but keeps its space, and screen readers skip it and its subtree, as in a browser. On a span (a `Text` inside a `Text`) it hides the span's characters in place, and copies leave them out too ([Text element](../elements/text.md#hidden-spans)). `display: "none"` (`.hidden()`) removes it from layout.
 - `zIndex` (`.z_index(n)`): the order among siblings, also the native stacking order (stable for equal values).
