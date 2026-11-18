@@ -99,7 +99,7 @@ impl Palette {
         let theme = crate::theme();
         let tokens = theme.tokens();
         let own = Palette::default();
-        let color = |role, own| tokens.role(role).unwrap_or(own);
+        let color = |role, own| tokens.role(role).map_or(own, AdaptiveColor::from);
         Palette {
             comment: color(role::SYNTAX_COMMENT, own.comment),
             keyword: color(role::SYNTAX_KEYWORD, own.keyword),

@@ -7,10 +7,10 @@
 
 use std::time::Duration;
 
-use nsh_base::{Theme, diff_view, editor::editor, role, text_view};
+use nsh_base::{diff_view, editor::editor, role, text_view};
 use nsh_core::{
     Color, Size,
-    element::{Root, Tokens},
+    element::{Patch as ThemePatch, PatchValues, Root},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -65,9 +65,9 @@ fn Harness() -> impl IntoElement {
     content()
 }
 
-fn start<C: Component<Props = ()>>(tokens: Option<Tokens>) -> Headless {
+fn start<C: Component<Props = ()>>(tokens: Option<ThemePatch>) -> Headless {
     let root = match tokens {
-        Some(tokens) => Root::of::<C>().tokens(tokens),
+        Some(tokens) => Root::of::<C>().theme_overrides(nsh_theme::write_patch(&tokens)),
         None => Root::of::<C>(),
     };
     let mut config = EngineConfig {
@@ -125,21 +125,21 @@ fn without_a_token_code_keeps_the_highlighters_colors() {
 
 #[test]
 fn a_theme_with_the_roles_tokens_colors_the_code() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("syntax-keyword", VIOLET);
-    tokens.set_color("syntax-number", ORANGE);
-    tokens.set_color("syntax-comment", SLATE);
+    let tokens = ThemePatch::new();
+    let tokens = tokens.value("syntax-keyword", VIOLET.light);
+    let tokens = tokens.value("syntax-number", ORANGE.light);
+    let tokens = tokens.value("syntax-comment", SLATE.light);
     let mut app = start::<Harness>(Some(tokens));
     see(&mut app, colors(VIOLET, ORANGE, SLATE));
 }
 
 #[test]
 fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("code-keyword", VIOLET);
+    let tokens = ThemePatch::new();
+    let tokens = tokens.value("code-keyword", VIOLET.light);
     // The token of the role's own name is not read while it is mapped.
-    tokens.set_color("syntax-keyword", ORANGE);
-    let tokens = tokens.with_role(role::SYNTAX_KEYWORD, "code-keyword");
+    let tokens = tokens.value("syntax-keyword", ORANGE.light);
+    let tokens = tokens.role(role::SYNTAX_KEYWORD.name(), "code-keyword");
     let mut app = start::<Harness>(Some(tokens));
     see(&mut app, colors(VIOLET, NUMBER, COMMENT));
 }
@@ -149,10 +149,10 @@ fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
 #[component]
 fn Changes() -> impl IntoElement {
     set_timeout(Duration::from_millis(300), || {
-        let mut tokens = Tokens::default();
-        tokens.set_color("syntax-keyword", VIOLET);
-        tokens.set_color("syntax-number", ORANGE);
-        tokens.set_color("syntax-comment", SLATE);
+        let tokens = ThemePatch::new();
+        let tokens = tokens.value("syntax-keyword", VIOLET.light);
+        let tokens = tokens.value("syntax-number", ORANGE.light);
+        let tokens = tokens.value("syntax-comment", SLATE.light);
         update_tokens(tokens);
     });
     content()
@@ -187,8 +187,8 @@ fn a_patchs_removed_lines_take_the_diff_deleted_role() {
         removed(s) == own
     })
     .unwrap();
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("diff-deleted", ORANGE);
+    let tokens = ThemePatch::new();
+    let tokens = tokens.value("diff-deleted", ORANGE.light);
     let mut app = start::<Patch>(Some(tokens));
     app.wait_until("the theme's color", Duration::from_secs(10), move |s| {
         removed(s) == Some(light(ORANGE))

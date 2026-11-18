@@ -117,8 +117,9 @@ fn main() -> gtk::glib::ExitCode {
 }
 ```
 
-`Root::tokens` gives the root its [theme](./rust.md#theme) and `Root::app_id` the id its data is kept under. A TSX
-bundle that `nsh build` wrote loads into the same view, with `asset_base` set to its `assets` directory:
+`Root::theme(json)` gives the root its [theme](./rust.md#theme) (a theme document) and `Root::app_id` the id its data
+is kept under. A TSX bundle that `nsh build` wrote loads into the same view, with `asset_base` set to its `assets`
+directory:
 
 ```rust
 use nsh_platform_linux::{AppOptions, AppView, AssetBase, Bundle};

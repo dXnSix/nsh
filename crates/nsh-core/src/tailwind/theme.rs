@@ -13,9 +13,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     css,
     effects::BoxShadow,
-    element::{AdaptiveColor, theme_file::GRADIENTS},
+    element::{AdaptiveColor, Token},
     style::{Color, TextShadow},
 };
+
+/// The prefix of a gradient token's name, as Tailwind's
+/// `--background-image-*`: its class is `bg-<n>`.
+const GRADIENTS: &str = "background-image-";
 
 /// Tailwind's design tokens.
 #[derive(Debug, Clone)]
@@ -86,9 +90,12 @@ pub struct Theme {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ClassTokens {
     colors: FxHashMap<Box<str>, AdaptiveColor>,
+    /// The numbers, with a duration's milliseconds, a blur's radius and a
+    /// text style's size.
     numbers: FxHashMap<Box<str>, f32>,
-    /// The dark values of the numbers that have one of their own.
-    dark_numbers: FxHashMap<Box<str>, f32>,
+    /// The text styles, whose classes set their parts beside their size
+    /// ([`ClassTokens::typography_parts`]).
+    typography: FxHashMap<Box<str>, crate::element::Typography>,
     fonts: FxHashMap<Box<str>, Arc<str>>,
     /// Box shadows, per appearance (`shadow-raised`).
     shadows: FxHashMap<Box<str>, crate::element::AdaptiveShadow>,
@@ -111,28 +118,48 @@ static DEFAULT_TOKENS: LazyLock<Arc<ClassTokens>> =
     LazyLock::new(|| Arc::new(ClassTokens::new(&crate::element::Tokens::default())));
 
 impl ClassTokens {
-    /// The names classes give `theme`'s tokens.
+    /// The names classes give `theme`'s tokens: each by its value, one
+    /// value per token.
     pub(crate) fn new(theme: &crate::element::Tokens) -> Self {
-        ClassTokens {
-            colors: theme.colors().map(|(k, c)| (k.into(), c)).collect(),
-            numbers: theme.numbers().map(|(k, n)| (k.into(), n)).collect(),
-            dark_numbers: theme.dark_numbers().map(|(k, n)| (k.into(), n)).collect(),
-            fonts: theme.fonts().map(|(k, f)| (k.into(), f.clone())).collect(),
-            shadows: theme
-                .shadows()
-                .map(|(k, s)| (k.into(), s.clone()))
-                .collect(),
-            gradients: theme
-                .gradients()
-                .map(|(k, g)| (k.into(), g.clone()))
-                .collect(),
-            easings: theme.easings().map(|(k, e)| (k.into(), e)).collect(),
-            namespaced: theme
-                .numbers()
-                .chain(theme.dark_numbers())
-                .any(|(k, _)| is_namespaced(k)),
-            roles: theme.roles().map(|(r, t)| (r.into(), t.into())).collect(),
+        let mut out = ClassTokens::default();
+        for (name, token) in theme.iter() {
+            let name: Box<str> = name.into();
+            match token {
+                Token::Color(c) => {
+                    out.colors.insert(name, AdaptiveColor::from(*c));
+                }
+                Token::Number(n) => {
+                    out.numbers.insert(name, *n);
+                }
+                Token::Duration(d) => {
+                    out.numbers
+                        .insert(name, crate::element::theme_values::millis(*d) as f32);
+                }
+                Token::Blur(b) => {
+                    out.numbers.insert(name, b.radius.0);
+                }
+                Token::Typography(t) => {
+                    out.numbers.insert(name.clone(), t.size.0);
+                    out.typography.insert(name, t.clone());
+                }
+                Token::Font(f) => {
+                    out.fonts.insert(name, f.clone());
+                }
+                Token::Shadow(s) => {
+                    out.shadows.insert(name, s.iter().copied().into());
+                }
+                Token::Gradient(g) => {
+                    out.gradients.insert(name, [g.clone()].into());
+                }
+                Token::Easing(e) => {
+                    out.easings.insert(name, *e);
+                }
+                _ => {}
+            }
         }
+        out.namespaced = out.numbers.keys().any(|k| is_namespaced(k));
+        out.roles = theme.roles().map(|(r, t)| (r.into(), t.into())).collect();
+        out
     }
 
     /// The names of the colors, the numbers, the fonts, the shadows and
@@ -186,11 +213,8 @@ impl ClassTokens {
         for (name, number) in &self.numbers {
             differ(name, other.numbers.get(name) == Some(number));
         }
-        for name in self.dark_numbers.keys().chain(other.dark_numbers.keys()) {
-            differ(
-                name,
-                self.dark_numbers.get(name) == other.dark_numbers.get(name),
-            );
+        for (name, typography) in &self.typography {
+            differ(name, other.typography.get(name) == Some(typography));
         }
         for (name, font) in &self.fonts {
             differ(name, other.fonts.get(name) == Some(font));
@@ -359,7 +383,6 @@ impl ClassTokens {
     fn variable<'a>(&'a self, name: &'a str) -> &'a str {
         let token = self.colors.contains_key(name)
             || self.numbers.contains_key(name)
-            || self.dark_numbers.contains_key(name)
             || self.fonts.contains_key(name)
             || self.shadows.contains_key(name)
             || self.gradients.contains_key(name)
@@ -370,45 +393,40 @@ impl ClassTokens {
         }
     }
 
-    /// The number named `name` in the dark appearance or the light one
-    /// ([`crate::element::Tokens::number_in`]).
     /// The parts a typography token's class sets beside its size
     /// (`text-title`: `leading-[1.25] tracking-[-0.2px] font-[650]`), from
-    /// the number tokens `text-title--line-height`, `--letter-spacing` and
-    /// `--font-weight`, as Tailwind 4's `--text-*` sub-values; none for a
-    /// class that is no size token's. The tokens it read are added to
-    /// `read`.
+    /// its line height, letter spacing and font weight, as Tailwind 4's
+    /// `--text-*` sub-values; none for a class that is no text style's.
+    /// The token is added to `read`.
     pub(crate) fn typography_parts(
         &self,
         utility: &str,
-        dark: bool,
+        _dark: bool,
         read: &mut Vec<u64>,
     ) -> Vec<String> {
         let mut out = Vec::new();
-        if !utility.starts_with("text-") || !self.numbers.contains_key(utility) {
+        let Some(style) = self.typography.get(utility) else {
             return out;
+        };
+        match style.line_height {
+            Some(crate::LineHeight::Multiple(m)) => out.push(format!("leading-[{m}]")),
+            Some(crate::LineHeight::Points(p)) => out.push(format!("leading-[{}px]", p.0)),
+            _ => {}
         }
-        for (suffix, prefix, length) in [
-            ("--line-height", "leading", false),
-            ("--letter-spacing", "tracking", true),
-            ("--font-weight", "font", false),
-        ] {
-            let part = format!("{utility}{suffix}");
-            if let Some(value) = self.number(&part, dark) {
-                read.push(token_key(&part));
-                out.push(match length {
-                    true => format!("{prefix}-[{value}px]"),
-                    false => format!("{prefix}-[{value}]"),
-                });
-            }
+        if let Some(spacing) = style.letter_spacing {
+            out.push(format!("tracking-[{}px]", spacing.0));
+        }
+        if let Some(weight) = style.font_weight {
+            out.push(format!("font-[{weight}]"));
+        }
+        if !out.is_empty() {
+            read.push(token_key(utility));
         }
         out
     }
 
-    fn number(&self, name: &str, dark: bool) -> Option<f32> {
-        dark.then(|| self.dark_numbers.get(name).copied())
-            .flatten()
-            .or_else(|| self.numbers.get(name).copied())
+    fn number(&self, name: &str, _dark: bool) -> Option<f32> {
+        self.numbers.get(name).copied()
     }
 
     /// A utility naming a number token of its namespace (`rounded-card`:

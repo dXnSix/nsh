@@ -6,10 +6,10 @@
 
 use std::time::Duration;
 
-use nsh_base::{DiffIndicators, DiffLayout, Theme, diff_view, role};
+use nsh_base::{DiffIndicators, DiffLayout, diff_view, role};
 use nsh_core::{
     Color, Size,
-    element::{Root, Tokens},
+    element::{Patch, PatchValues, Root},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -50,9 +50,9 @@ fn Harness() -> impl IntoElement {
     content()
 }
 
-fn start<C: Component<Props = ()>>(tokens: Option<Tokens>) -> Headless {
+fn start<C: Component<Props = ()>>(tokens: Option<Patch>) -> Headless {
     let root = match tokens {
-        Some(tokens) => Root::of::<C>().tokens(tokens),
+        Some(tokens) => Root::of::<C>().theme_overrides(nsh_theme::write_patch(&tokens)),
         None => Root::of::<C>(),
     };
     let mut config = EngineConfig {
@@ -98,20 +98,20 @@ fn without_a_token_the_view_draws_its_own_green_and_red() {
 
 #[test]
 fn a_theme_with_the_roles_tokens_colors_the_lines() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("diff-added", TEAL);
-    tokens.set_color("diff-deleted", ROSE);
+    let tokens = Patch::new();
+    let tokens = tokens.value("diff-added", TEAL.light);
+    let tokens = tokens.value("diff-deleted", ROSE.light);
     let app = start::<Harness>(Some(tokens));
     assert_eq!(drawn(app.screen()), colors(TEAL, ROSE));
 }
 
 #[test]
 fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("status-positive", TEAL);
+    let tokens = Patch::new();
+    let tokens = tokens.value("status-positive", TEAL.light);
     // The token of the role's own name is not read while it is mapped.
-    tokens.set_color("diff-added", ROSE);
-    let tokens = tokens.with_role(role::DIFF_ADDED, "status-positive");
+    let tokens = tokens.value("diff-added", ROSE.light);
+    let tokens = tokens.role(role::DIFF_ADDED.name(), "status-positive");
     let app = start::<Harness>(Some(tokens));
     assert_eq!(drawn(app.screen()), colors(TEAL, DELETED));
 }
@@ -121,9 +121,9 @@ fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
 #[component]
 fn Changes() -> impl IntoElement {
     set_timeout(Duration::from_millis(100), || {
-        let mut tokens = Tokens::default();
-        tokens.set_color("diff-added", TEAL);
-        tokens.set_color("diff-deleted", ROSE);
+        let tokens = Patch::new();
+        let tokens = tokens.value("diff-added", TEAL.light);
+        let tokens = tokens.value("diff-deleted", ROSE.light);
         update_tokens(tokens);
     });
     content()

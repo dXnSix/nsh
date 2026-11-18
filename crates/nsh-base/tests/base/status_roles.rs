@@ -11,7 +11,6 @@ use std::{
 };
 
 use nsh_base::{
-    Theme,
     editor::{
         EditorDiagnostic, EditorDiagnosticSeverity, EditorPosition, EditorRange, EditorSearch,
         editor,
@@ -20,7 +19,7 @@ use nsh_base::{
 };
 use nsh_core::{
     Color, MountItem, Size,
-    element::{Root, Tokens},
+    element::{Patch, PatchValues, Root},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -94,9 +93,9 @@ fn Harness() -> impl IntoElement {
 }
 
 /// The harness drawn with `tokens` (`None`: nsh-base's default theme).
-fn start<C: Component<Props = ()>>(tokens: Option<Tokens>) -> Headless {
+fn start<C: Component<Props = ()>>(tokens: Option<Patch>) -> Headless {
     let root = match tokens {
-        Some(tokens) => Root::of::<C>().tokens(tokens),
+        Some(tokens) => Root::of::<C>().theme_overrides(nsh_theme::write_patch(&tokens)),
         None => Root::of::<C>(),
     };
     let mut config = EngineConfig {
@@ -170,11 +169,11 @@ fn without_a_token_each_part_draws_its_own_color() {
 
 #[test]
 fn a_theme_with_the_roles_tokens_colors_each_part() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("success", GREEN);
-    tokens.set_color("warning", AMBER);
-    tokens.set_color("info", BLUE);
-    tokens.set_color("highlight", PINK);
+    let tokens = Patch::new();
+    let tokens = tokens.value("success", GREEN.light);
+    let tokens = tokens.value("warning", AMBER.light);
+    let tokens = tokens.value("info", BLUE.light);
+    let tokens = tokens.value("highlight", PINK.light);
     let mut app = start::<Harness>(Some(tokens));
     // The editor's and the text view's warnings are the one color now, as
     // are their marks; an important alert has no role.
@@ -187,14 +186,14 @@ fn a_theme_with_the_roles_tokens_colors_each_part() {
 
 #[test]
 fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("status-caution", AMBER);
-    tokens.set_color("status-positive", GREEN);
+    let tokens = Patch::new();
+    let tokens = tokens.value("status-caution", AMBER.light);
+    let tokens = tokens.value("status-positive", GREEN.light);
     // The token of the role's own name is not read while it is mapped.
-    tokens.set_color("warning", PINK);
+    let tokens = tokens.value("warning", PINK.light);
     let tokens = tokens
-        .with_role(role::WARNING, "status-caution")
-        .with_role(role::SUCCESS, "status-positive");
+        .role(role::WARNING.name(), "status-caution")
+        .role(role::SUCCESS.name(), "status-positive");
     let app = start::<Harness>(Some(tokens));
     assert_eq!(
         drawn(app.screen()),
@@ -207,9 +206,9 @@ fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
 #[component]
 fn Changes() -> impl IntoElement {
     set_timeout(Duration::from_millis(100), || {
-        let mut tokens = Tokens::default();
-        tokens.set_color("warning", AMBER);
-        tokens.set_color("highlight", PINK);
+        let tokens = Patch::new();
+        let tokens = tokens.value("warning", AMBER.light);
+        let tokens = tokens.value("highlight", PINK.light);
         update_tokens(tokens);
     });
     harness()

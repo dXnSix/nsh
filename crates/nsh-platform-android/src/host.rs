@@ -1009,8 +1009,8 @@ extern "system" fn Java_com_longbridge_nsh_Native_setThemeOverrides<'local>(
         match env.get_string(&json) {
             Ok(json) => {
                 let json = String::from(json);
-                nsh_core::element::theme_file::check(&json)
-                    .map(|()| Some(json))
+                serde_json::from_str::<serde_json::Value>(&json)
+                    .map(|_| Some(json))
                     .map_err(|err| format!("invalid theme: {err}"))
             }
             Err(err) => Err(format!("invalid theme: {err}")),

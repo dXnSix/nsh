@@ -931,17 +931,17 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                         }
                     }
                     // `SystemUi.dialog` draws alerts and action sheets in
-                    // them: each of `DIALOG_ROLES`, light then dark (0: the
-                    // system's). An app without a theme of its own (the
-                    // core says so: `Tokens::is_themed`) keeps the system's
-                    // colors.
+                    // them: each of `DIALOG_ROLES`, its current value in
+                    // both the light and the dark slot (0: the system's).
+                    // An app without a theme of its own (the core says so:
+                    // `Tokens::is_themed`) keeps the system's colors.
                     Command::Tokens(tokens) => {
                         e.int(27);
                         let themed = tokens.is_themed();
                         for role in DIALOG_ROLES {
                             let color = tokens.role(role).filter(|_| themed);
-                            for c in [color.map(|c| c.light), color.map(|c| c.dark)] {
-                                e.int(c.map_or(0, |c| argb(c.into())));
+                            for _ in 0..2 {
+                                e.int(color.map_or(0, |c| argb(c.into())));
                             }
                         }
                     }

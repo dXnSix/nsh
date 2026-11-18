@@ -64,6 +64,7 @@ mod term_input;
 mod terminal;
 mod text_view;
 mod theme_documents;
+mod theme_format_roles;
 mod theme_roles;
 mod time_field;
 mod toggle;

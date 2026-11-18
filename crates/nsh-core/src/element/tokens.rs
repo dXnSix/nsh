@@ -1,22 +1,28 @@
-//! Design tokens: colors with a light and a dark value, numbers and font
-//! families, by name (`muted-foreground`, `radius`, `font-sans`). The core
-//! gives no name a meaning but `font-sans`, the app's default font (as
-//! Tailwind's `--font-sans` is a page's), and has none of its own: a UI set
-//! brings them (`nsh-base`'s theme, through
-//! [`super::Registry::tokens_from`]), an app sets its own, an embedding app
-//! its own over those ([`crate::Core::set_host_tokens`]).
+//! Design tokens: the values of the active theme document, resolved, by
+//! name (`muted-foreground`, `radius-card`, `font-sans`). The core gives no
+//! name a meaning but `font-sans`, the app's default font (as Tailwind's
+//! `--font-sans` is a page's), and has none of its own: a theme document
+//! declares them (`docs/dev/theme-format.md`), a UI set or the app brings it
+//! ([`super::Registry::theme_document`], [`super::Root::theme`]).
 //!
-//! A name is a CSS custom property's without its `--`: Tailwind classes name
-//! every token as they name a theme variable (`bg-muted`, `bg-up/30`,
-//! `rounded-(--radius)`, `font-(family-name:--font-mono)`;
-//! `tailwind/theme.rs`), TS reads them with `nsh`'s `token()`, and Rust
-//! components with [`super::tokens`].
+//! [`Tokens`] is one map, name → [`Token`], of one value per name, typed by
+//! its declaration: a name decides nothing about a type. The core makes it
+//! with `nsh_theme::resolve` once per change, never per read: the document's
+//! values, the picked modifier contexts, the app's and the host's overrides
+//! ([`super::Patch`]), references last.
+//!
+//! Tailwind classes name every token as they name a theme variable
+//! (`bg-muted`, `rounded-(--radius)`; `tailwind/theme.rs`), TS reads them
+//! with `nsh`'s `token()`, and Rust components with [`super::token`], typed
+//! keys ([`super::TokenKey`]) and roles ([`super::role()`]).
 
-use std::{borrow::Cow, marker::PhantomData, sync::Arc};
+use std::{borrow::Cow, marker::PhantomData, sync::Arc, time::Duration};
 
+use nsh_theme::{Patch, Resolved, Selection, ThemeDocument, ValueType};
 use rustc_hash::FxHashMap;
 
-use super::style::{AdaptiveColor, AdaptiveGradient, AdaptiveShadow};
+use super::{Blur, Border, TransitionToken, Typography};
+use crate::{BoxShadow, color::Hsla, effects::Gradient};
 
 /// The app's default font family's token: Tailwind's `--font-sans`.
 pub const FONT_SANS: &str = "font-sans";
@@ -24,65 +30,50 @@ pub const FONT_SANS: &str = "font-sans";
 /// The monospaced font family's token: Tailwind's `--font-mono`.
 pub const FONT_MONO: &str = "font-mono";
 
-/// Design tokens by name: colors with a value per appearance, numbers and
-/// font families. The default has none.
+/// What a [`Tokens`] was resolved from: the active document, the selection
+/// and the patches over it (the app's, the host's, outer scopes'), so a
+/// [`super::ThemeScope`] resolves its subtree with the same stack.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ThemeLayers {
+    pub(crate) document: Arc<ThemeDocument>,
+    pub(crate) selection: Selection,
+    pub(crate) patches: Vec<Arc<Patch>>,
+}
+
+impl ThemeLayers {
+    /// The layers' patches as `resolve` takes them.
+    pub(crate) fn patch_refs(&self) -> Vec<&Patch> {
+        self.patches.iter().map(|p| &**p).collect()
+    }
+}
+
+/// The design tokens: one resolved value per token name, the resolved role
+/// mapping, and the active document's declarations ([`Tokens::kind_of`],
+/// [`Tokens::path_of`], [`Tokens::names`]). The default has none.
 ///
-/// A name is a token of one kind: set as another kind (or laid over one,
-/// [`Tokens::over`]) it is that kind alone, so every reader answers the
-/// same kind for it. Its form says the kind, as a theme file reads it: a
-/// font family is `font-*`, a weight `font-weight-*`, a shadow `shadow-*`,
-/// a gradient `background-image-*`, and no color or other number is
-/// `font-*`. A setter leaves out (and logs) a name of another kind's form,
-/// so a theme file written of the tokens (`theme_file::write`) reads back
-/// as the same tokens.
-///
-/// They may map [`Role`]s, what NSH's own parts draw with, onto tokens of
-/// other names ([`Tokens::with_role`]): a theme whose surface for popovers
-/// is `surface-overlay` maps [`role::POPOVER`] onto it, and every part that
-/// draws a popover reads that token ([`Tokens::role`]). Without a mapping a
+/// Roles, what NSH's own parts draw with, read the token a theme maps them
+/// onto ([`Tokens::role`]): a theme whose surface for popovers is
+/// `surface-overlay` maps [`role::POPOVER`] onto it. Without a mapping a
 /// role reads the token of its own name (`popover`).
 #[derive(Debug, Clone, Default)]
 pub struct Tokens {
-    colors: FxHashMap<Box<str>, AdaptiveColor>,
-    /// The numbers' light values, which the dark appearance has too unless
-    /// [`Self::dark_numbers`] has another.
-    numbers: FxHashMap<Box<str>, f32>,
-    /// The dark values of the numbers that have one of their own.
-    dark_numbers: FxHashMap<Box<str>, f32>,
-    fonts: FxHashMap<Box<str>, Arc<str>>,
-    /// Box shadows, per appearance.
-    shadows: FxHashMap<Box<str>, AdaptiveShadow>,
-    /// Gradients (a `background-image`'s), per appearance.
-    gradients: FxHashMap<Box<str>, AdaptiveGradient>,
-    /// The tokens with one value in both appearances: strings, booleans and
-    /// easing curves.
-    plain: FxHashMap<Box<str>, Plain>,
-    /// A role's name -> the name of the token it reads (`None`: each its
-    /// own name).
-    roles: Option<Arc<FxHashMap<Box<str>, Box<str>>>>,
+    values: FxHashMap<Box<str>, Token>,
+    /// A role's name → the name of the token it reads, for the roles a
+    /// document or a patch maps.
+    roles: FxHashMap<Box<str>, Box<str>>,
+    /// What they were resolved from (`None`: made of values alone).
+    layers: Option<Arc<ThemeLayers>>,
     /// Whether the app has a theme of its own ([`Tokens::is_themed`]): not
     /// a token, so not compared.
     themed: bool,
-    /// What declares them, when they were read by declared tokens
-    /// ([`Tokens::declarations`]): not a token, so not compared.
-    declarations: Option<Arc<super::theme::Declarations>>,
-    /// The theme's modifiers, with the context each has now
-    /// ([`Tokens::modifiers`]): compared, so a context picked is a change
-    /// even where it changes no value.
-    modifiers: Option<Arc<super::ThemeModifiers>>,
 }
 
 impl PartialEq for Tokens {
     fn eq(&self, other: &Self) -> bool {
-        self.colors == other.colors
-            && self.numbers == other.numbers
-            && self.dark_numbers == other.dark_numbers
-            && self.fonts == other.fonts
-            && self.shadows == other.shadows
-            && self.gradients == other.gradients
-            && self.plain == other.plain
+        self.values == other.values
             && self.roles == other.roles
-            && self.modifiers == other.modifiers
+            && self.layers.as_ref().map(|l| &l.selection)
+                == other.layers.as_ref().map(|l| &l.selection)
     }
 }
 
@@ -95,14 +86,13 @@ impl PartialEq for Tokens {
 /// platforms' are in [`role`], `nsh-base`'s in `nsh_base::role`, and a
 /// design system's components have their own
 /// (`pub const BANNER: Role = Role::new("banner");`). It reads the token of
-/// its name ([`Role::name`]), or the token a theme maps it onto
-/// ([`Tokens::with_role`]). A role is its name: two constants of one name
-/// are one role. It is no token and no class: `bg-primary` exists when a
-/// theme has a token `primary`.
+/// its name ([`Role::name`]), or the token a theme maps it onto. A role is
+/// its name: two constants of one name are one role. It is no token and no
+/// class: `bg-primary` exists when a theme has a token `primary`.
 ///
 /// `V` is what it reads ([`RoleValue`]): a color unless it says otherwise
 /// ([`NumberRole`], [`FontRole`]).
-pub struct Role<V = AdaptiveColor> {
+pub struct Role<V = Hsla> {
     name: &'static str,
     value: PhantomData<fn() -> V>,
 }
@@ -114,8 +104,8 @@ pub type NumberRole = Role<f32>;
 pub type FontRole = Role<Arc<str>>;
 
 impl<V> Role<V> {
-    /// The role named `name`: the token it reads unless a theme maps it,
-    /// as a theme file spells it (`popover-foreground`).
+    /// The role named `name`: the token it reads unless a theme maps it
+    /// (`popover-foreground`).
     pub const fn new(name: &'static str) -> Self {
         Self {
             name,
@@ -157,53 +147,30 @@ impl<V> std::fmt::Debug for Role<V> {
     }
 }
 
-/// What a [`Role`] reads: a color ([`AdaptiveColor`]), a number (`f32`) or
-/// a font family (`Arc<str>`).
-pub trait RoleValue: Sized + sealed::Sealed {
+/// What a [`Role`] reads: a color ([`Hsla`]), a number (`f32`) or a font
+/// family (`Arc<str>`).
+pub trait RoleValue: super::TokenValue {
     /// Which of them.
     const KIND: RoleKind;
-
-    /// The token `name` of `tokens` as this, if they have it.
-    #[doc(hidden)]
-    fn read(tokens: &Tokens, name: &str) -> Option<Self>;
 }
 
-mod sealed {
-    pub trait Sealed {}
-    impl Sealed for super::AdaptiveColor {}
-    impl Sealed for f32 {}
-    impl Sealed for std::sync::Arc<str> {}
-}
-
-impl RoleValue for AdaptiveColor {
+impl RoleValue for Hsla {
     const KIND: RoleKind = RoleKind::Color;
-
-    fn read(tokens: &Tokens, name: &str) -> Option<Self> {
-        tokens.color(name)
-    }
 }
 
 impl RoleValue for f32 {
     const KIND: RoleKind = RoleKind::Number;
-
-    fn read(tokens: &Tokens, name: &str) -> Option<Self> {
-        tokens.number(name)
-    }
 }
 
 impl RoleValue for Arc<str> {
     const KIND: RoleKind = RoleKind::Font;
-
-    fn read(tokens: &Tokens, name: &str) -> Option<Self> {
-        tokens.font(name).cloned()
-    }
 }
 
 /// What a role reads ([`RoleValue::KIND`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RoleKind {
-    /// A color per appearance.
+    /// A color.
     Color,
     /// A number.
     Number,
@@ -214,11 +181,7 @@ pub enum RoleKind {
 impl RoleKind {
     /// Its name, as the toolchain writes it.
     pub fn name(self) -> &'static str {
-        match self {
-            RoleKind::Color => "color",
-            RoleKind::Number => "number",
-            RoleKind::Font => "font",
-        }
+        self.value_type().name()
     }
 
     /// The kind of this name ([`RoleKind::name`]).
@@ -230,11 +193,19 @@ impl RoleKind {
             _ => return None,
         })
     }
+
+    /// The value type a token it reads has.
+    pub fn value_type(self) -> ValueType {
+        match self {
+            RoleKind::Color => ValueType::Color,
+            RoleKind::Number => ValueType::Number,
+            RoleKind::Font => ValueType::Font,
+        }
+    }
 }
 
 /// A role of any kind: its name and what it reads, for lists of roles of
-/// several kinds ([`Tokens::with_roles`]). Every [`Role`] is one
-/// (`role::POPOVER.into()`).
+/// several kinds. Every [`Role`] is one (`role::POPOVER.into()`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AnyRole {
     name: Cow<'static, str>,
@@ -358,34 +329,59 @@ pub mod role {
     }
 }
 
-/// A token's value.
+/// A token's value: one variant per value type
+/// ([`nsh_theme::ValueType`]), each in its Rust type
+/// (`element/theme_values.rs`' table).
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum Token {
-    /// A color, per appearance.
-    Color(AdaptiveColor),
+    /// A color.
+    Color(Hsla),
     /// A number: a length in points, or a unitless quantity.
     Number(f32),
-    /// A font family.
+    /// A font family list, whole.
     Font(Arc<str>),
-    /// Box shadows, per appearance.
-    Shadow(AdaptiveShadow),
-    /// Gradients, per appearance.
-    Gradient(AdaptiveGradient),
-    /// A string (a label, a name, an icon's), one in both appearances.
-    String(Arc<str>),
-    /// A boolean (a feature on or off), one in both appearances.
+    /// A string.
+    String(String),
+    /// A boolean.
     Boolean(bool),
-    /// An easing curve (`ease-*`: `ease-snappy`), one in both appearances.
+    /// A duration.
+    Duration(Duration),
+    /// An easing curve.
     Easing(CubicBezier),
+    /// A text style.
+    Typography(Typography),
+    /// Box shadows, the first on top.
+    Shadow(Arc<[BoxShadow]>),
+    /// A gradient.
+    Gradient(Gradient),
+    /// A blur.
+    Blur(Blur),
+    /// A border.
+    Border(Border),
+    /// A transition.
+    Transition(TransitionToken),
 }
 
-/// A token of one value in both appearances ([`Tokens`]' plain map).
-#[derive(Debug, Clone, PartialEq)]
-enum Plain {
-    String(Arc<str>),
-    Boolean(bool),
-    Easing(CubicBezier),
+impl Token {
+    /// Its value type.
+    pub fn value_type(&self) -> ValueType {
+        match self {
+            Token::Color(_) => ValueType::Color,
+            Token::Number(_) => ValueType::Number,
+            Token::Font(_) => ValueType::Font,
+            Token::String(_) => ValueType::String,
+            Token::Boolean(_) => ValueType::Boolean,
+            Token::Duration(_) => ValueType::Duration,
+            Token::Easing(_) => ValueType::Easing,
+            Token::Typography(_) => ValueType::Typography,
+            Token::Shadow(_) => ValueType::Shadow,
+            Token::Gradient(_) => ValueType::Gradient,
+            Token::Blur(_) => ValueType::Blur,
+            Token::Border(_) => ValueType::Border,
+            Token::Transition(_) => ValueType::Transition,
+        }
+    }
 }
 
 /// An easing curve: a cubic Bézier `x1, y1, x2, y2`, as CSS's
@@ -439,542 +435,305 @@ impl CubicBezier {
     }
 }
 
-/// A text style as one token (`typography`, Tailwind v4's `--text-*` with
-/// its sub-values): `text-title` is its size, and `text-title--line-height`,
-/// `text-title--letter-spacing` and `text-title--font-weight` its other
-/// parts, each a number token of its own; the class `text-title` sets
-/// them together.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Typography {
-    /// The font size.
-    pub size: crate::geometry::Points,
-    /// The line height, as `leading-*` takes it.
-    pub line_height: Option<f32>,
-    /// The letter spacing.
-    pub letter_spacing: Option<crate::geometry::Points>,
-    /// The font weight (`100`…`900`).
-    pub font_weight: Option<f32>,
-}
-
-impl Typography {
-    /// The suffixes of its parts' names after its own (`--line-height`), in
-    /// the order of its fields.
-    pub const PARTS: [&'static str; 3] = ["--line-height", "--letter-spacing", "--font-weight"];
-}
-
-/// Makes the tokens of a theme file's content (`Some`), or the defaults
-/// (`None`), with what of the file it left out (a value it cannot read):
-/// how a UI set reads the app's theme ([`super::Registry::tokens_from`]).
-/// `Err`: the content is no theme file at all.
-pub type TokenSource = fn(Option<&str>) -> Result<(Tokens, Vec<String>), String>;
-
-/// Reads the tokens theme file `json` sets, and only those (a value it
-/// cannot read is left out, so the token keeps the value it has); a color
-/// it names and does not set (`var(--ring)`) is `base`'s, the tokens drawn
-/// with now. Returns them with what of the file it left out: how a UI set
-/// reads a change of some of the app's tokens
-/// ([`super::Registry::token_overrides_from`], `nsh`'s `updateTheme`).
-/// `Err`: the content is no theme file at all.
-pub type TokenOverrides = fn(&str, &Tokens) -> Result<(Tokens, Vec<String>), String>;
-
-/// The tokens a surface is drawn with once the app's theme file reaches its
-/// root ([`crate::Core::theme_tokens`]). The entry hands the theme to the
-/// renderer in the turn of its first render, before the theme's op reaches
-/// the core: JS reads the tokens from here meanwhile, so its first render
-/// already has them (`token()` of `nsh`).
-#[derive(Debug, Clone, Default)]
-#[non_exhaustive]
-pub struct ThemeTokens {
-    /// How theme files are read (`None`: no UI set reads them).
-    provider: Option<super::theme::TokenProvider>,
-    /// The embedding app's tokens, which win over the app's.
-    host: Option<Arc<Tokens>>,
-}
-
-/// What of `left_out` refuses a file read whole: every value that could not
-/// be read, `; `-separated, but no name only that nothing declares.
-fn refused(left_out: &[super::theme_file::LeftOut]) -> Option<String> {
-    let what: Vec<String> = left_out
-        .iter()
-        .filter(|l| !l.is_undeclared())
-        .map(ToString::to_string)
-        .collect();
-    (!what.is_empty()).then(|| what.join("; "))
-}
-
-impl ThemeTokens {
-    pub(crate) fn new(
-        provider: Option<super::theme::TokenProvider>,
-        host: Option<Arc<Tokens>>,
-    ) -> Self {
-        Self { provider, host }
-    }
-
-    /// The tokens drawn with when the app's theme file is `json`: its own
-    /// under the embedding app's, as the core makes them. `None`: no UI set
-    /// reads themes, or `json` is not one (the core reports it when the
-    /// theme reaches it).
-    pub fn of(&self, json: &str) -> Option<Tokens> {
-        let (app, _) = self.provider.as_ref()?.read(Some(json)).ok()?;
-        Some(self.under_host(app))
-    }
-
-    /// [`ThemeTokens::of`] for a theme file that must be read whole (`nsh`'s
-    /// `setTheme`): `Err` names each value it cannot read, `; `-separated.
-    /// Under declared tokens a name nothing declares is left out, not
-    /// refused (#1190). `None`: no UI set reads themes.
-    pub fn checked(&self, json: &str) -> Option<Result<Tokens, String>> {
-        Some(match self.provider.as_ref()?.read_left_out(Some(json)) {
-            Ok((app, left_out)) => match refused(&left_out) {
-                None => Ok(self.under_host(app)),
-                Some(what) => Err(what),
-            },
-            Err(e) => Err(e),
-        })
-    }
-
-    /// The tokens drawn with once theme file `json` changes some of the
-    /// app's (`nsh`'s `updateTheme`): the values it sets over `current` (the
-    /// tokens drawn with now, which a `var()` it does not set names), under
-    /// the embedding app's. Read whole: `Err` as [`ThemeTokens::checked`].
-    /// `None`: no UI set reads theme changes.
-    pub fn updated(&self, current: &Tokens, json: &str) -> Option<Result<Tokens, String>> {
-        Some(
-            match self
-                .provider
-                .as_ref()?
-                .updated_left_out(json, current, current)?
-            {
-                Ok((tokens, left_out)) => match refused(&left_out) {
-                    None => Ok(self.under_host(tokens)),
-                    Some(what) => Err(what),
-                },
-                Err(e) => Err(e),
-            },
-        )
-    }
-
-    /// The tokens drawn with once the tokens `names` (`None`: every one)
-    /// go back to their values in the app's theme file `json` (`nsh`'s
-    /// `resetTheme`), the others staying as in `current`: a name the file
-    /// and the defaults lack is gone. Under declared tokens a role's name
-    /// is the token it is mapped onto, as in a theme file. `None`: no UI set
-    /// reads themes, or `json` is not one.
-    pub fn reset(
-        &self,
-        current: &Tokens,
-        json: &str,
-        names: Option<&[Box<str>]>,
-    ) -> Option<Tokens> {
-        let theme = self.of(json)?;
-        let Some(names) = names else {
-            return Some(theme);
-        };
-        let mut out = current.clone();
-        for name in names {
-            let name = match &self.provider {
-                Some(provider) => provider.token_name(name),
-                None => name,
-            };
-            out.copy_named(&theme, name);
-        }
-        Some(out)
-    }
-
-    /// The tokens drawn with once the theme's modifier `name` takes the
-    /// context `context` (`nsh`'s `setModifier`): the tokens its contexts set
-    /// over `current`, under the embedding app's. `Err` says the theme has no
-    /// modifiers, no such modifier or no such context of it.
-    pub fn modifier(&self, current: &Tokens, name: &str, context: &str) -> Result<Tokens, String> {
-        let Some(modifiers) = current.modifiers() else {
-            return Err("the theme has no modifiers".into());
-        };
-        let picked = modifiers.select(name, context)?;
-        let mut out = self.under_host(picked.tokens()).over(current);
-        out.set_modifiers(Some(Arc::new(picked)));
-        Ok(out)
-    }
-
-    /// The tokens a [`super::ThemeScope`] draws with: the values theme
-    /// file `json` sets, over `current` (the tokens around the scope,
-    /// which a `var()` it does not set names). A scope sets values and adds
-    /// no names: a name `current` lacks, or has as another kind, is left
-    /// out, as a value that cannot be read is, each said in the second
-    /// part. `Err`: `json` is no theme
-    /// file. `None`: no UI set reads theme changes.
-    pub fn scoped(
-        &self,
-        current: &Tokens,
-        json: &str,
-    ) -> Option<Result<(Tokens, Vec<String>), String>> {
-        let read = self.provider.as_ref()?.overrides_left_out(json, current)?;
-        let value = serde_json::from_str::<crate::JsonValue>(json).ok();
-        Some(read.map(|(part, left_out)| {
-            let mut said: Vec<String> = left_out.iter().map(ToString::to_string).collect();
-            if let Some(value) = &value {
-                // A scope picks contexts with its own prop, and declares nothing.
-                if value.get("modifiers").is_some() {
-                    said.push(
-                        "theme.modifiers: a scope picks the theme's contexts with its `modifiers` prop"
-                            .to_owned(),
-                    );
-                }
-                said.extend(
-                    super::theme_file::unknown_sections(value)
-                        .iter()
-                        .map(|l| format!("theme.{l}")),
-                );
-            }
-            let (tokens, unknown) = part.within(current);
-            said.extend(unknown.iter().map(|name| scope_left_out(name, current)));
-            (tokens, said)
-        }))
-    }
-
-    /// `app` under the embedding app's tokens.
-    fn under_host(&self, app: Tokens) -> Tokens {
-        match &self.host {
-            Some(host) => host.over(&app),
-            None => app,
-        }
-    }
+/// A modifier of the active theme document, as [`super::modifiers`] lists
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModifierAxis {
+    /// Its name (`brand`).
+    pub name: Box<str>,
+    /// Its contexts (`ocean`, `forest`).
+    pub contexts: Vec<Box<str>>,
+    /// The context picked when nothing else is.
+    pub default: Box<str>,
 }
 
 impl Tokens {
+    /// The tokens of `document` under `selection` and `patches` (a later
+    /// patch winning), with references resolved: what the core draws with
+    /// when that document is active. The diagnostics of resolving are
+    /// returned, not logged.
+    pub fn resolve(
+        document: Arc<ThemeDocument>,
+        selection: Selection,
+        patches: Vec<Arc<Patch>>,
+    ) -> (Tokens, Vec<nsh_theme::Diagnostic>) {
+        let layers = Arc::new(ThemeLayers {
+            document,
+            selection,
+            patches,
+        });
+        let resolved =
+            nsh_theme::resolve(&layers.document, &layers.selection, &layers.patch_refs());
+        let tokens = Tokens::from_resolved(&resolved, layers, None);
+        (tokens, resolved.diagnostics)
+    }
+
+    /// The tokens of `resolved`, made from `layers`. With `previous` (the
+    /// tokens before and what changed since), only the changed names are
+    /// converted; the others are taken from `previous`.
+    pub(crate) fn from_resolved(
+        resolved: &Resolved,
+        layers: Arc<ThemeLayers>,
+        previous: Option<(&Tokens, &nsh_theme::Changes)>,
+    ) -> Tokens {
+        let values = match previous {
+            Some((before, changes)) => {
+                let mut values = before.values.clone();
+                for name in &changes.tokens {
+                    match resolved
+                        .values
+                        .get(name)
+                        .and_then(super::theme_values::token_of)
+                    {
+                        Some(token) => {
+                            values.insert(name.as_str().into(), token);
+                        }
+                        None => {
+                            values.remove(name.as_str());
+                        }
+                    }
+                }
+                values
+            }
+            None => resolved
+                .values
+                .iter()
+                .filter_map(|(name, value)| {
+                    Some((name.into(), super::theme_values::token_of(value)?))
+                })
+                .collect(),
+        };
+        let roles = resolved
+            .roles
+            .iter()
+            .map(|(role, token)| (role.into(), token.as_str().into()))
+            .collect();
+        Tokens {
+            values,
+            roles,
+            layers: Some(layers),
+            themed: false,
+        }
+    }
+
+    /// What they were resolved from.
+    pub(crate) fn layers(&self) -> Option<&Arc<ThemeLayers>> {
+        self.layers.as_ref()
+    }
+
+    /// The token named `name`.
+    pub fn get(&self, name: &str) -> Option<Token> {
+        self.values.get(name).cloned()
+    }
+
+    /// The token named `name`, borrowed.
+    pub fn value(&self, name: &str) -> Option<&Token> {
+        self.values.get(name)
+    }
+
+    /// Each token with its value, in no order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Token)> {
+        self.values.iter().map(|(name, token)| (&**name, token))
+    }
+
+    /// The value type token `name` is declared with in the active
+    /// document (made of values alone: its value's type).
+    pub fn kind_of(&self, name: &str) -> Option<ValueType> {
+        match self.document() {
+            Some(document) => document.token(name).map(|t| t.value_type),
+            None => self.values.get(name).map(Token::value_type),
+        }
+    }
+
+    /// The path token `name` is declared at in the active document.
+    pub fn path_of(&self, name: &str) -> Option<&str> {
+        self.document()?.token(name)?.path.as_deref()
+    }
+
+    /// The doc token `name` is declared with in the active document.
+    pub fn doc_of(&self, name: &str) -> Option<&str> {
+        self.document()?.token(name)?.doc.as_deref()
+    }
+
+    /// The declared token at `path` in the active document.
+    pub fn name_at(&self, path: &str) -> Option<&str> {
+        self.document()?
+            .tokens
+            .iter()
+            .find(|(_, token)| token.path.as_deref() == Some(path))
+            .map(|(name, _)| name)
+    }
+
+    /// Each token's name: the active document's, in its order (made of
+    /// values alone: theirs, in no order).
+    pub fn names(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        match self.document() {
+            Some(document) => Box::new(document.tokens.keys()),
+            None => Box::new(self.values.keys().map(|name| &**name)),
+        }
+    }
+
+    /// Whether it has no token.
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// The active document they were resolved from.
+    pub fn document(&self) -> Option<&ThemeDocument> {
+        self.layers.as_deref().map(|l| &*l.document)
+    }
+
+    /// The modifier contexts they were resolved with.
+    pub fn selection(&self) -> Option<&Selection> {
+        self.layers.as_deref().map(|l| &l.selection)
+    }
+
+    /// The context modifier `name` shows: the one picked, else its
+    /// default. `None`: the active document has no such modifier.
+    pub fn modifier(&self, name: &str) -> Option<&str> {
+        let layers = self.layers.as_deref()?;
+        let modifier = layers.document.modifiers.get(name)?;
+        Some(
+            layers
+                .selection
+                .get(name)
+                .filter(|context| modifier.contexts.contains_key(context))
+                .unwrap_or(modifier.default.as_str()),
+        )
+    }
+
+    /// The active document's modifiers, each with its contexts and
+    /// default, in its order.
+    pub fn modifiers(&self) -> Vec<ModifierAxis> {
+        let Some(document) = self.document() else {
+            return Vec::new();
+        };
+        document
+            .modifiers
+            .iter()
+            .map(|(name, modifier)| ModifierAxis {
+                name: name.into(),
+                contexts: modifier.contexts.keys().map(Into::into).collect(),
+                default: modifier.default.as_str().into(),
+            })
+            .collect()
+    }
+
     /// The color named `name`.
-    pub fn color(&self, name: &str) -> Option<AdaptiveColor> {
-        self.colors.get(name).copied()
-    }
-
-    /// Sets the color named `name`.
-    pub fn set_color(&mut self, name: &str, color: AdaptiveColor) {
-        if misnamed(name, Kind::Color) {
-            return;
+    pub fn color(&self, name: &str) -> Option<Hsla> {
+        match self.values.get(name)? {
+            Token::Color(c) => Some(*c),
+            _ => None,
         }
-        self.clear_but(name, Kind::Color);
-        self.colors.insert(name.into(), color);
     }
 
-    /// The number named `name` (its light value, the only one of most
-    /// numbers). [`Tokens::number_in`] reads it in either appearance;
-    /// [`super::token`] and a key's [`super::TokenKey::get`] read it in the
-    /// appearance shown.
+    /// The number named `name`.
     pub fn number(&self, name: &str) -> Option<f32> {
-        self.numbers.get(name).copied()
-    }
-
-    /// The number named `name` in the dark appearance (`dark`) or the
-    /// light one: its dark value when it has one of its own, else the one
-    /// value it has.
-    pub fn number_in(&self, name: &str, dark: bool) -> Option<f32> {
-        dark.then(|| self.dark_numbers.get(name).copied())
-            .flatten()
-            .or_else(|| self.number(name))
-    }
-
-    /// Sets the number named `name`, in both appearances (a dark value it
-    /// had goes).
-    pub fn set_number(&mut self, name: &str, value: f32) {
-        if misnamed(name, Kind::Number) {
-            return;
+        match self.values.get(name)? {
+            Token::Number(n) => Some(*n),
+            _ => None,
         }
-        self.clear_but(name, Kind::Number);
-        self.numbers.insert(name.into(), value);
-        self.dark_numbers.remove(name);
-    }
-
-    /// Gives the number named `name` a value of its own in the dark
-    /// appearance (its light one is [`Tokens::set_number`]'s).
-    pub fn set_dark_number(&mut self, name: &str, value: f32) {
-        if misnamed(name, Kind::Number) {
-            return;
-        }
-        self.dark_numbers.insert(name.into(), value);
     }
 
     /// The font family named `name` ([`FONT_SANS`], [`FONT_MONO`], ...).
     pub fn font(&self, name: &str) -> Option<&Arc<str>> {
-        self.fonts.get(name)
-    }
-
-    /// Sets the font family named `name`.
-    pub fn set_font(&mut self, name: &str, family: impl Into<Arc<str>>) {
-        if misnamed(name, Kind::Font) {
-            return;
-        }
-        self.clear_but(name, Kind::Font);
-        self.fonts.insert(name.into(), family.into());
-    }
-
-    /// The box shadows named `name` (`shadow-raised`).
-    pub fn shadow(&self, name: &str) -> Option<&AdaptiveShadow> {
-        self.shadows.get(name)
-    }
-
-    /// Sets the box shadows named `name`.
-    pub fn set_shadow(&mut self, name: &str, shadow: impl Into<AdaptiveShadow>) {
-        if misnamed(name, Kind::Shadow) {
-            return;
-        }
-        self.clear_but(name, Kind::Shadow);
-        self.shadows.insert(name.into(), shadow.into());
-    }
-
-    /// Each shadow by name.
-    pub fn shadows(&self) -> impl Iterator<Item = (&str, &AdaptiveShadow)> {
-        self.shadows.iter().map(|(k, s)| (&**k, s))
-    }
-
-    /// The gradients named `name` (`background-image-hero`).
-    pub fn gradient(&self, name: &str) -> Option<&AdaptiveGradient> {
-        self.gradients.get(name)
-    }
-
-    /// Sets the gradients named `name`.
-    pub fn set_gradient(&mut self, name: &str, gradient: impl Into<AdaptiveGradient>) {
-        if misnamed(name, Kind::Gradient) {
-            return;
-        }
-        self.clear_but(name, Kind::Gradient);
-        self.gradients.insert(name.into(), gradient.into());
-    }
-
-    /// Each gradient token by name.
-    pub fn gradients(&self) -> impl Iterator<Item = (&str, &AdaptiveGradient)> {
-        self.gradients.iter().map(|(k, g)| (&**k, g))
-    }
-
-    /// The string named `name`.
-    pub fn string(&self, name: &str) -> Option<&Arc<str>> {
-        match self.plain.get(name)? {
-            Plain::String(s) => Some(s),
+        match self.values.get(name)? {
+            Token::Font(f) => Some(f),
             _ => None,
         }
     }
 
-    /// Sets the string named `name`.
-    pub fn set_string(&mut self, name: &str, value: impl Into<Arc<str>>) {
-        if misnamed(name, Kind::String) {
-            return;
+    /// The string named `name`.
+    pub fn string(&self, name: &str) -> Option<&str> {
+        match self.values.get(name)? {
+            Token::String(s) => Some(s),
+            _ => None,
         }
-        self.clear_but(name, Kind::String);
-        self.plain.insert(name.into(), Plain::String(value.into()));
     }
 
     /// The boolean named `name`.
     pub fn boolean(&self, name: &str) -> Option<bool> {
-        match self.plain.get(name)? {
-            Plain::Boolean(b) => Some(*b),
+        match self.values.get(name)? {
+            Token::Boolean(b) => Some(*b),
             _ => None,
         }
     }
 
-    /// Sets the boolean named `name`.
-    pub fn set_boolean(&mut self, name: &str, value: bool) {
-        if misnamed(name, Kind::Boolean) {
-            return;
+    /// The duration named `name`.
+    pub fn duration(&self, name: &str) -> Option<Duration> {
+        match self.values.get(name)? {
+            Token::Duration(d) => Some(*d),
+            _ => None,
         }
-        self.clear_but(name, Kind::Boolean);
-        self.plain.insert(name.into(), Plain::Boolean(value));
     }
 
-    /// The easing curve named `name` (`ease-snappy`).
+    /// The easing curve named `name`.
     pub fn easing(&self, name: &str) -> Option<CubicBezier> {
-        match self.plain.get(name)? {
-            Plain::Easing(e) => Some(*e),
+        match self.values.get(name)? {
+            Token::Easing(e) => Some(*e),
             _ => None,
         }
     }
 
-    /// Sets the easing curve named `name`, which starts with `ease-`.
-    pub fn set_easing(&mut self, name: &str, value: CubicBezier) {
-        if misnamed(name, Kind::Easing) {
-            return;
-        }
-        self.clear_but(name, Kind::Easing);
-        self.plain.insert(name.into(), Plain::Easing(value));
-    }
-
-    /// Each string by name.
-    pub fn strings(&self) -> impl Iterator<Item = (&str, &Arc<str>)> {
-        self.plain.iter().filter_map(|(k, v)| match v {
-            Plain::String(s) => Some((&**k, s)),
+    /// The text style named `name`.
+    pub fn typography(&self, name: &str) -> Option<&Typography> {
+        match self.values.get(name)? {
+            Token::Typography(t) => Some(t),
             _ => None,
-        })
+        }
     }
 
-    /// Each boolean by name.
-    pub fn booleans(&self) -> impl Iterator<Item = (&str, bool)> {
-        self.plain.iter().filter_map(|(k, v)| match v {
-            Plain::Boolean(b) => Some((&**k, *b)),
+    /// The box shadows named `name`.
+    pub fn shadow(&self, name: &str) -> Option<&Arc<[BoxShadow]>> {
+        match self.values.get(name)? {
+            Token::Shadow(s) => Some(s),
             _ => None,
-        })
+        }
     }
 
-    /// Each easing curve by name.
-    pub fn easings(&self) -> impl Iterator<Item = (&str, CubicBezier)> {
-        self.plain.iter().filter_map(|(k, v)| match v {
-            Plain::Easing(e) => Some((&**k, *e)),
+    /// The gradient named `name`.
+    pub fn gradient(&self, name: &str) -> Option<&Gradient> {
+        match self.values.get(name)? {
+            Token::Gradient(g) => Some(g),
             _ => None,
-        })
-    }
-
-    /// Typography token `name` (`text-title`, a size) with its parts
-    /// ([`Typography::PARTS`]), in the dark appearance (`dark`) or the
-    /// light one. `None`: it has no number of that name.
-    pub fn typography_in(&self, name: &str, dark: bool) -> Option<Typography> {
-        let part = |suffix: &str| self.number_in(&format!("{name}{suffix}"), dark);
-        Some(Typography {
-            size: crate::geometry::Points(self.number_in(name, dark)?),
-            line_height: part(Typography::PARTS[0]),
-            letter_spacing: part(Typography::PARTS[1]).map(crate::geometry::Points),
-            font_weight: part(Typography::PARTS[2]),
-        })
-    }
-
-    /// Sets typography token `name` and its parts; a part it has not is
-    /// removed.
-    pub fn set_typography(&mut self, name: &str, value: Typography) {
-        self.set_number(name, value.size.0);
-        let parts = [
-            value.line_height,
-            value.letter_spacing.map(|p| p.0),
-            value.font_weight,
-        ];
-        for (suffix, part) in Typography::PARTS.iter().zip(parts) {
-            let part_name = format!("{name}{suffix}");
-            match part {
-                Some(n) => self.set_number(&part_name, n),
-                None => self.remove_named(&part_name),
-            }
         }
     }
 
-    /// The token named `name`, of any kind (a color first, as classes take
-    /// it), as kept: a color, a shadow and a gradient with their values in
-    /// both appearances, a number its light value ([`Tokens::get_in`]
-    /// gives it in either).
-    pub fn get(&self, name: &str) -> Option<Token> {
-        if let Some(c) = self.colors.get(name) {
-            return Some(Token::Color(*c));
-        }
-        if let Some(n) = self.numbers.get(name) {
-            return Some(Token::Number(*n));
-        }
-        if let Some(f) = self.fonts.get(name) {
-            return Some(Token::Font(f.clone()));
-        }
-        if let Some(s) = self.shadows.get(name) {
-            return Some(Token::Shadow(s.clone()));
-        }
-        if let Some(g) = self.gradients.get(name) {
-            return Some(Token::Gradient(g.clone()));
-        }
-        self.plain.get(name).map(|v| match v {
-            Plain::String(s) => Token::String(s.clone()),
-            Plain::Boolean(b) => Token::Boolean(*b),
-            Plain::Easing(e) => Token::Easing(*e),
-        })
-    }
-
-    /// The token named `name` in the dark appearance (`dark`) or the light
-    /// one: a number its value there ([`Tokens::number_in`]), any other
-    /// kind as [`Tokens::get`] gives it. Where the app is shown, Rust reads
-    /// it with [`super::token`], as TS's `token()` does.
-    pub fn get_in(&self, name: &str, dark: bool) -> Option<Token> {
-        match self.get(name)? {
-            Token::Number(_) => self.number_in(name, dark).map(Token::Number),
-            token => Some(token),
+    /// The blur named `name`.
+    pub fn blur(&self, name: &str) -> Option<Blur> {
+        match self.values.get(name)? {
+            Token::Blur(b) => Some(*b),
+            _ => None,
         }
     }
 
-    /// Whether number `name` has a dark value of its own.
-    pub(crate) fn has_dark_number(&self, name: &str) -> bool {
-        self.dark_numbers.contains_key(name)
-    }
-
-    /// The kind of token `name`.
-    pub(crate) fn kind(&self, name: &str) -> Option<Kind> {
-        if self.colors.contains_key(name) {
-            Some(Kind::Color)
-        } else if self.numbers.contains_key(name) {
-            Some(Kind::Number)
-        } else if self.fonts.contains_key(name) {
-            Some(Kind::Font)
-        } else if self.shadows.contains_key(name) {
-            Some(Kind::Shadow)
-        } else if self.gradients.contains_key(name) {
-            Some(Kind::Gradient)
-        } else {
-            self.plain.get(name).map(|v| match v {
-                Plain::String(_) => Kind::String,
-                Plain::Boolean(_) => Kind::Boolean,
-                Plain::Easing(_) => Kind::Easing,
-            })
+    /// The border named `name`.
+    pub fn border(&self, name: &str) -> Option<Border> {
+        match self.values.get(name)? {
+            Token::Border(b) => Some(*b),
+            _ => None,
         }
     }
 
-    /// Removes token `name` of any kind but `kind`: a name is one kind.
-    fn clear_but(&mut self, name: &str, kind: Kind) {
-        if kind != Kind::Color {
-            self.colors.remove(name);
-        }
-        if kind != Kind::Number {
-            self.numbers.remove(name);
-            self.dark_numbers.remove(name);
-        }
-        if kind != Kind::Font {
-            self.fonts.remove(name);
-        }
-        if kind != Kind::Shadow {
-            self.shadows.remove(name);
-        }
-        if kind != Kind::Gradient {
-            self.gradients.remove(name);
-        }
-        if self.plain.get(name).is_some_and(|v| v.kind() != kind) {
-            self.plain.remove(name);
+    /// The transition named `name`.
+    pub fn transition(&self, name: &str) -> Option<TransitionToken> {
+        match self.values.get(name)? {
+            Token::Transition(t) => Some(*t),
+            _ => None,
         }
     }
 
-    /// These tokens with `role` mapped onto the token named `token` (in
-    /// place of the one it was mapped onto): [`Tokens::role`] reads it
-    /// through the mapping.
-    pub fn with_role<V: RoleValue>(self, role: Role<V>, token: impl Into<Box<str>>) -> Self {
-        self.with_roles([(role, token)])
-    }
-
-    /// These tokens with each of `roles` mapped onto the token named, as
-    /// [`Tokens::with_role`] maps one: roles of several kinds as
-    /// [`AnyRole`]s (`role.into()`).
-    pub fn with_roles<R: Into<AnyRole>, S: Into<Box<str>>>(
-        mut self,
-        roles: impl IntoIterator<Item = (R, S)>,
-    ) -> Self {
-        let mut map = self.roles.as_deref().cloned().unwrap_or_default();
-        map.extend(
-            roles
-                .into_iter()
-                .map(|(role, token)| (role.into().name().into(), token.into())),
-        );
-        self.roles = (!map.is_empty()).then(|| Arc::new(map));
-        self
-    }
-
-    /// Each role mapped onto a token of another name: the role's name and
-    /// the token's.
+    /// Each role a document or a patch maps: the role's name and the
+    /// token's.
     pub fn roles(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.roles
-            .iter()
-            .flat_map(|r| r.iter())
-            .map(|(role, token)| (&**role, &**token))
+        self.roles.iter().map(|(role, token)| (&**role, &**token))
     }
 
     /// The name of the token the role named `role` is mapped onto, if a
     /// theme mapped it: for a role known by its name alone, as TS's
     /// `role()` knows one ([`Tokens::role`] reads a role constant).
     pub fn mapped(&self, role: &str) -> Option<&str> {
-        self.roles.as_ref()?.get(role).map(|token| &**token)
+        self.roles.get(role).map(|token| &**token)
     }
 
     /// Whether `other` maps the same roles onto the same tokens.
@@ -988,326 +747,165 @@ impl Tokens {
         self.mapped(role.name()).unwrap_or(role.name())
     }
 
+    /// The name of the token the role named `role` reads as a `kind`: the
+    /// token a theme mapped it onto when that one is a `kind`, else the
+    /// token of its own name.
+    pub(crate) fn role_token<'a>(&'a self, role: &'a str, kind: ValueType) -> &'a str {
+        match self.mapped(role) {
+            Some(token) if self.values.get(token).map(Token::value_type) == Some(kind) => token,
+            _ => role,
+        }
+    }
+
     /// What `role` draws with: the token a theme mapped it onto, else the
     /// one of its own name. A color for a [`Role`], a number for a
     /// [`NumberRole`], a font family for a [`FontRole`].
     pub fn role<V: RoleValue>(&self, role: Role<V>) -> Option<V> {
-        self.mapped(role.name())
-            .and_then(|token| V::read(self, token))
-            .or_else(|| V::read(self, role.name()))
+        let token = self.role_token(role.name(), V::TYPE);
+        self.values.get(token).and_then(V::from_token)
     }
 
-    /// Whether the app is drawn with a theme of its own: tokens other than
-    /// its UI set's defaults (`nsh-base`'s theme), its own or an embedding
-    /// app's. The core says so on the tokens it draws with, which the
-    /// platforms get (`Command::Tokens`): their own controls take the
-    /// theme's colors only then (iOS's and Android's alerts), and keep the
-    /// system's for an app without one. `false` on tokens made elsewhere.
+    /// Whether the app is drawn with a theme of its own: a document of the
+    /// app's or of a UI set (not only a fallback), or overrides. The core
+    /// says so on the tokens it draws with, which the platforms get
+    /// (`Command::Tokens`): their own controls take the theme's colors only
+    /// then (iOS's and Android's alerts), and keep the system's for an app
+    /// without one. `false` on tokens made elsewhere.
     pub fn is_themed(&self) -> bool {
         self.themed
     }
 
     /// Says whether the app has a theme of its own ([`Tokens::is_themed`]).
-    pub fn set_themed(&mut self, themed: bool) {
+    pub(crate) fn set_themed(&mut self, themed: bool) {
         self.themed = themed;
     }
+}
 
-    /// What declares these tokens, when they were read by declared tokens:
-    /// each name's kind, path and doc ([`super::Declarations`]).
-    pub fn declarations(&self) -> Option<&super::Declarations> {
-        self.declarations.as_deref()
+/// Setting values directly: for the core's tests, which make tokens
+/// without a document. A value given per appearance (`AdaptiveColor`,
+/// `AdaptiveShadow`, `AdaptiveGradient`, as the tests written before the
+/// theme format give them) sets its light value: a token has one.
+#[cfg(test)]
+impl Tokens {
+    pub(crate) fn insert(&mut self, name: &str, token: Token) {
+        self.values.insert(name.into(), token);
     }
 
-    /// [`Tokens::declarations`], shared.
-    pub(crate) fn declarations_arc(&self) -> Option<Arc<super::Declarations>> {
-        self.declarations.clone()
-    }
-
-    /// The theme's modifiers, with the context each has now, when these
-    /// tokens were read from a theme file that has them
-    /// ([`super::ThemeModifiers`]).
-    pub fn modifiers(&self) -> Option<&super::ThemeModifiers> {
-        self.modifiers.as_deref()
-    }
-
-    /// Says what modifiers the theme has (`None`: none).
-    pub(crate) fn set_modifiers(&mut self, modifiers: Option<Arc<super::ThemeModifiers>>) {
-        self.modifiers = modifiers;
-    }
-
-    /// Says what declares these tokens (`None`: nothing).
-    pub(crate) fn set_declarations(&mut self, declarations: Option<Arc<super::Declarations>>) {
-        self.declarations = declarations;
-    }
-
-    /// Each token's name, of whatever kind (in no order).
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.colors
-            .keys()
-            .chain(self.numbers.keys())
-            .chain(self.fonts.keys())
-            .chain(self.shadows.keys())
-            .chain(self.gradients.keys())
-            .chain(self.plain.keys())
-            .map(|name| &**name)
-    }
-
-    /// Whether it has no token.
-    pub fn is_empty(&self) -> bool {
-        self.colors.is_empty()
-            && self.numbers.is_empty()
-            && self.dark_numbers.is_empty()
-            && self.fonts.is_empty()
-            && self.shadows.is_empty()
-            && self.gradients.is_empty()
-            && self.plain.is_empty()
-    }
-
-    /// Each color by name.
-    pub fn colors(&self) -> impl Iterator<Item = (&str, AdaptiveColor)> {
-        self.colors.iter().map(|(k, c)| (&**k, *c))
-    }
-
-    /// Each number by name.
-    pub fn numbers(&self) -> impl Iterator<Item = (&str, f32)> {
-        self.numbers.iter().map(|(k, n)| (&**k, *n))
-    }
-
-    /// Each number's dark value of its own, by name.
-    pub fn dark_numbers(&self) -> impl Iterator<Item = (&str, f32)> {
-        self.dark_numbers.iter().map(|(k, n)| (&**k, *n))
-    }
-
-    /// Each font family by name.
-    pub fn fonts(&self) -> impl Iterator<Item = (&str, &Arc<str>)> {
-        self.fonts.iter().map(|(k, f)| (&**k, f))
-    }
-
-    /// These tokens over `base` as a scope's values are over the tokens
-    /// around it ([`super::ThemeScope`]): the values of the names `base`
-    /// has, each of the kind `base` has it. The names it lacks, or has as
-    /// another kind, are left out and returned, sorted.
-    pub fn within(mut self, base: &Tokens) -> (Tokens, Vec<Box<str>>) {
-        let numbers = self.numbers.keys().chain(self.dark_numbers.keys());
-        let mut unknown: Vec<Box<str>> = (self.colors.keys().map(|n| (n, Kind::Color)))
-            .chain(numbers.map(|n| (n, Kind::Number)))
-            .chain(self.fonts.keys().map(|n| (n, Kind::Font)))
-            .chain(self.shadows.keys().map(|n| (n, Kind::Shadow)))
-            .chain(self.gradients.keys().map(|n| (n, Kind::Gradient)))
-            .chain(self.plain.iter().map(|(n, v)| (n, v.kind())))
-            .filter(|(name, kind)| base.kind(name) != Some(*kind))
-            .map(|(name, _)| name.clone())
-            .collect();
-        unknown.sort();
-        unknown.dedup();
-        for name in &unknown {
-            self.remove_named(name);
-        }
-        (self.over(base), unknown)
-    }
-
-    /// Removes token `name`, of whatever kind.
     pub(crate) fn remove_named(&mut self, name: &str) {
-        self.colors.remove(name);
-        self.numbers.remove(name);
-        self.dark_numbers.remove(name);
-        self.fonts.remove(name);
-        self.shadows.remove(name);
-        self.gradients.remove(name);
-        self.plain.remove(name);
+        self.values.remove(name);
     }
 
-    /// Makes token `name` what it is in `from`, of whatever kind, or
-    /// removes it when `from` has none of that name.
-    pub(crate) fn copy_named(&mut self, from: &Tokens, name: &str) {
-        fn copy<V: Clone>(
-            to: &mut FxHashMap<Box<str>, V>,
-            from: &FxHashMap<Box<str>, V>,
-            name: &str,
-        ) {
-            match from.get(name) {
-                Some(value) => {
-                    to.insert(name.into(), value.clone());
-                }
-                None => {
-                    to.remove(name);
-                }
-            }
-        }
-        copy(&mut self.colors, &from.colors, name);
-        copy(&mut self.numbers, &from.numbers, name);
-        copy(&mut self.dark_numbers, &from.dark_numbers, name);
-        copy(&mut self.fonts, &from.fonts, name);
-        copy(&mut self.shadows, &from.shadows, name);
-        copy(&mut self.gradients, &from.gradients, name);
-        copy(&mut self.plain, &from.plain, name);
+    pub(crate) fn set_color(&mut self, name: &str, color: impl Into<super::AdaptiveColor>) {
+        self.insert(name, Token::Color(color.into().light));
     }
 
-    /// `self` with the tokens of `base` it does not have; what declares
-    /// `self` and its modifiers, if it has them, are the result's.
-    pub fn over(&self, base: &Tokens) -> Tokens {
-        // A name of `self` is the kind `self` has it, whatever `base` has.
+    /// `self` with the tokens of `base` it does not have, and the roles of
+    /// both, its own winning.
+    pub(crate) fn over(&self, base: &Tokens) -> Tokens {
         let mut out = base.clone();
-        for (k, c) in &self.colors {
-            out.clear_but(k, Kind::Color);
-            out.colors.insert(k.clone(), *c);
+        for (name, token) in &self.values {
+            out.values.insert(name.clone(), token.clone());
         }
-        // A number of `self` is its values: a dark one of `base`'s goes
-        // unless `self` has its own.
-        for (k, n) in &self.numbers {
-            out.clear_but(k, Kind::Number);
-            out.numbers.insert(k.clone(), *n);
-            out.dark_numbers.remove(k);
-        }
-        out.dark_numbers.extend(
-            (self.dark_numbers.iter())
-                .filter(|(k, _)| out.kind(k).is_none_or(|kind| kind == Kind::Number))
-                .map(|(k, n)| (k.clone(), *n))
-                .collect::<Vec<_>>(),
-        );
-        for (k, f) in &self.fonts {
-            out.clear_but(k, Kind::Font);
-            out.fonts.insert(k.clone(), f.clone());
-        }
-        for (k, s) in &self.shadows {
-            out.clear_but(k, Kind::Shadow);
-            out.shadows.insert(k.clone(), s.clone());
-        }
-        for (k, g) in &self.gradients {
-            out.clear_but(k, Kind::Gradient);
-            out.gradients.insert(k.clone(), g.clone());
-        }
-        for (k, v) in &self.plain {
-            out.clear_but(k, v.kind());
-            out.plain.insert(k.clone(), v.clone());
-        }
-        if let Some(roles) = &self.roles {
-            out.roles = match out.roles {
-                Some(base) => {
-                    let mut map = Arc::unwrap_or_clone(base);
-                    map.extend(roles.iter().map(|(r, n)| (r.clone(), n.clone())));
-                    Some(Arc::new(map))
-                }
-                None => Some(roles.clone()),
-            };
-        }
-        if self.declarations.is_some() {
-            out.declarations = self.declarations.clone();
-        }
-        if self.modifiers.is_some() {
-            out.modifiers = self.modifiers.clone();
+        for (role, token) in &self.roles {
+            out.roles.insert(role.clone(), token.clone());
         }
         out
     }
-}
 
-/// What a scope says of its token `name`, which the tokens `around` it
-/// do not take ([`Tokens::within`]): they lack it, or have it as another
-/// kind.
-pub(crate) fn scope_left_out(name: &str, around: &Tokens) -> String {
-    match around.kind(name) {
-        Some(kind) => format!(
-            "`{name}`: the theme's token of this name is a {}",
-            kind.name()
-        ),
-        None => format!("`{name}`: the theme has no token of this name"),
+    pub(crate) fn set_number(&mut self, name: &str, value: f32) {
+        self.insert(name, Token::Number(value));
     }
-}
 
-/// Whether a token `name` of `kind` is one a theme file would read as
-/// another kind ([`Kind::names`]): a setter leaves it out, and logs it.
-fn misnamed(name: &str, kind: Kind) -> bool {
-    let refused = !kind.names(name);
-    if refused {
-        log::warn!(
-            "design token `{name}` not set: a {} is named as no {} is ({})",
-            kind.name(),
-            kind.name(),
-            Kind::FORMS
-        );
+    pub(crate) fn set_font(&mut self, name: &str, family: impl Into<Arc<str>>) {
+        self.insert(name, Token::Font(family.into()));
     }
-    refused
-}
 
-/// The kind of a token: a name is one ([`Tokens`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Kind {
-    Color,
-    Number,
-    Font,
-    Shadow,
-    Gradient,
-    String,
-    Boolean,
-    Easing,
-}
-
-impl Plain {
-    fn kind(&self) -> Kind {
-        match self {
-            Plain::String(_) => Kind::String,
-            Plain::Boolean(_) => Kind::Boolean,
-            Plain::Easing(_) => Kind::Easing,
-        }
+    pub(crate) fn set_shadow(&mut self, name: &str, layers: impl Into<super::AdaptiveShadow>) {
+        self.insert(name, Token::Shadow(layers.into().light));
     }
-}
 
-impl Kind {
-    /// The name forms that say a kind, as a sentence lists them.
-    pub(crate) const FORMS: &str = "a font is `font-*`, a shadow `shadow-*`, a gradient \
-                                    `background-image-*`, a weight `font-weight-*`, an easing \
-                                    `ease-*`";
-
-    /// Whether a theme file reads a token named `name` as this kind: the
-    /// name says its kind, as a CSS variable's does ([`Tokens`]).
-    pub(crate) fn names(self, name: &str) -> bool {
-        let font = name.starts_with("font-");
-        let weight = name.starts_with("font-weight-");
-        match self {
-            Kind::Font => font && !weight,
-            Kind::Shadow => name.starts_with("shadow-"),
-            Kind::Gradient => name.starts_with(super::theme_file::GRADIENTS),
-            Kind::Color | Kind::String | Kind::Boolean => !font,
-            Kind::Number => !font || weight,
-            Kind::Easing => name.starts_with("ease-"),
+    pub(crate) fn set_gradient(
+        &mut self,
+        name: &str,
+        gradient: impl Into<super::AdaptiveGradient>,
+    ) {
+        match gradient.into().light.first() {
+            Some(g) => self.insert(name, Token::Gradient(g.clone())),
+            None => self.remove_named(name),
         }
     }
 
-    /// The kind as a sentence names it.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Kind::Color => "color",
-            Kind::Number => "number",
-            Kind::Font => "font family",
-            Kind::Shadow => "shadow",
-            Kind::Gradient => "gradient",
-            Kind::String => "string",
-            Kind::Boolean => "boolean",
-            Kind::Easing => "easing",
+    pub(crate) fn set_easing(&mut self, name: &str, value: CubicBezier) {
+        self.insert(name, Token::Easing(value));
+    }
+
+    pub(crate) fn set_typography(&mut self, name: &str, value: Typography) {
+        self.insert(name, Token::Typography(value));
+    }
+
+    /// These tokens with `role` mapped onto the token named `token`.
+    pub(crate) fn with_role<V: RoleValue>(self, role: Role<V>, token: impl Into<Box<str>>) -> Self {
+        self.with_roles([(AnyRole::from(role), token)])
+    }
+
+    /// These tokens with each of `roles` mapped onto the token named.
+    pub(crate) fn with_roles<R: Into<AnyRole>, S: Into<Box<str>>>(
+        mut self,
+        roles: impl IntoIterator<Item = (R, S)>,
+    ) -> Self {
+        for (role, token) in roles {
+            self.roles.insert(role.into().name().into(), token.into());
         }
+        self
+    }
+
+    /// A patch of these tokens' values and roles: how a test overrides.
+    pub(crate) fn to_patch(&self) -> Patch {
+        let mut patch = Patch::new();
+        let mut names: Vec<&str> = self.values.keys().map(|n| &**n).collect();
+        names.sort_unstable();
+        for name in names {
+            patch.set(name, &super::theme_values::value_of(&self.values[name]));
+        }
+        let mut roles: Vec<(&str, &str)> = self.roles().collect();
+        roles.sort_unstable();
+        for (role, token) in roles {
+            patch.set_role(role, token);
+        }
+        patch
+    }
+
+    /// A theme document that declares each of these tokens with its value
+    /// and maps their roles: how a test hands values to a core.
+    pub(crate) fn to_document(&self) -> ThemeDocument {
+        let mut names: Vec<&str> = self.values.keys().map(|n| &**n).collect();
+        names.sort_unstable();
+        let mut document = ThemeDocument::new();
+        for name in names {
+            let token = &self.values[name];
+            document.insert_token(
+                name,
+                nsh_theme::Token::new(token.value_type(), super::theme_values::value_of(token)),
+            );
+        }
+        let mut roles: Vec<(&str, &str)> = self.roles().collect();
+        roles.sort_unstable();
+        for (role, token) in roles {
+            if document.token(token).is_some() {
+                document.set_role(role, token);
+            }
+        }
+        document
     }
 }
 
-/// Tokens as apps have them (`nsh-base`'s default theme's and a few of an
-/// app's own), for the core's tests.
+/// Tokens as apps have them (`nsh-base`'s default theme's light values and
+/// a few of an app's own), for the core's tests.
 #[cfg(test)]
 pub(crate) fn sample() -> Tokens {
     let mut tokens = Tokens::default();
-    for (key, light, dark) in [
-        ("background", 0xffffff, 0x0a0a0a),
-        ("foreground", 0x0a0a0a, 0xfafafa),
-        ("border", 0xe5e5e5, 0x262626),
-        ("ring", 0xa3a3a3, 0x525252),
-        ("muted", 0xf5f5f5, 0x262626),
-        ("muted-foreground", 0x737373, 0xa3a3a3),
-        ("accent", 0xf5f5f5, 0x262626),
-        ("primary", 0x171717, 0xfafafa),
-        ("primary-active", 0x0a0a0a, 0xe5e5e5),
-        ("primary-foreground", 0xfafafa, 0x171717),
-        ("popover", 0xffffff, 0x0a0a0a),
-        ("popover-foreground", 0x0a0a0a, 0xfafafa),
-    ] {
-        tokens.set_color(key, AdaptiveColor::rgb(light, dark));
+    for (key, value) in SAMPLE_COLORS {
+        tokens.set_color(key, crate::color::rgb(*value));
     }
     for (key, n) in [("radius", 12.0), ("radius-lg", 16.0), ("body-size", 16.0)] {
         tokens.set_number(key, n);
@@ -1315,333 +913,19 @@ pub(crate) fn sample() -> Tokens {
     tokens
 }
 
+/// The sample's colors: name and value.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::color::rgb;
-
-    #[test]
-    fn tokens_over_others_win_and_keep_the_rest() {
-        let mut base = Tokens::default();
-        base.set_color("primary", rgb(0x111111).into());
-        base.set_color("ring", rgb(0x222222).into());
-        base.set_number("radius", 12.0);
-        base.set_font(FONT_SANS, "Inter");
-        let mut top = Tokens::default();
-        top.set_color("primary", rgb(0x333333).into());
-        top.set_number("radius-card", 10.0);
-        top.set_font(FONT_MONO, "Iosevka");
-        let tokens = top.over(&base);
-        assert_eq!(tokens.color("primary"), Some(rgb(0x333333).into()));
-        assert_eq!(tokens.color("ring"), Some(rgb(0x222222).into()));
-        assert_eq!(tokens.number("radius"), Some(12.0));
-        assert_eq!(tokens.number("radius-card"), Some(10.0));
-        assert_eq!(tokens.font(FONT_SANS).map(|f| &**f), Some("Inter"));
-        assert_eq!(tokens.font(FONT_MONO).map(|f| &**f), Some("Iosevka"));
-        assert!(Tokens::default().is_empty());
-    }
-}
-
-/// Roles: what NSH's own parts draw with, read through a theme's mapping.
-/// A role is a constant its crate declares, of the kind it reads.
-#[cfg(test)]
-mod theme_roles {
-    use super::*;
-    use crate::color::rgb;
-
-    /// Roles of a UI set's own, as `nsh-base` declares its.
-    const CARD: Role = Role::new("card");
-    const RADIUS: NumberRole = Role::new("radius");
-
-    #[test]
-    fn a_role_reads_the_token_of_its_name_without_a_mapping() {
-        let tokens = sample();
-        assert_eq!(tokens.role(role::POPOVER), tokens.color("popover"));
-        assert_eq!(tokens.role(RADIUS), tokens.number("radius"));
-        assert_eq!(
-            tokens.role_name(role::POPOVER_FOREGROUND),
-            "popover-foreground"
-        );
-        assert_eq!(tokens.roles().count(), 0);
-    }
-
-    #[test]
-    fn a_role_reads_the_token_a_theme_maps_it_onto() {
-        let mut tokens = Tokens::default();
-        tokens.set_color("surface-overlay", rgb(0x123456).into());
-        tokens.set_color("popover", rgb(0xffffff).into());
-        tokens.set_number("radius-control", 6.0);
-        tokens.set_font("font-body", "Inter");
-        let tokens = tokens
-            .with_role(role::POPOVER, "surface-overlay")
-            .with_role(RADIUS, "radius-control")
-            .with_role(role::FONT_SANS, "font-body")
-            .with_role(role::PRIMARY, "action");
-        assert_eq!(tokens.role(role::POPOVER), Some(rgb(0x123456).into()));
-        assert_eq!(tokens.role(RADIUS), Some(6.0));
-        assert_eq!(tokens.role(role::FONT_SANS).as_deref(), Some("Inter"));
-        // The token it maps onto is missing: the role's own name.
-        assert_eq!(tokens.role(role::PRIMARY), None);
-        // A role is no token.
-        assert_eq!(
-            tokens.get("popover"),
-            Some(Token::Color(rgb(0xffffff).into()))
-        );
-        assert!(tokens.color("primary").is_none());
-        let mut mapped: Vec<_> = tokens.roles().collect();
-        mapped.sort();
-        assert_eq!(
-            mapped,
-            [
-                ("font-sans", "font-body"),
-                ("popover", "surface-overlay"),
-                ("primary", "action"),
-                ("radius", "radius-control"),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_role_mapped_onto_a_token_that_is_missing_reads_its_own_name() {
-        let mut tokens = Tokens::default();
-        tokens.set_color("popover", rgb(0xffffff).into());
-        let tokens = tokens.with_role(role::POPOVER, "nowhere");
-        assert_eq!(tokens.role(role::POPOVER), Some(rgb(0xffffff).into()));
-        assert_eq!(tokens.role_name(role::POPOVER), "nowhere");
-    }
-
-    #[test]
-    fn over_keeps_the_roles_of_both_and_the_tops_win() {
-        let base = Tokens::default()
-            .with_role(role::POPOVER, "a")
-            .with_role(CARD, "b");
-        let top = Tokens::default().with_role(role::POPOVER, "c");
-        let tokens = top.over(&base);
-        assert_eq!(tokens.role_name(role::POPOVER), "c");
-        assert_eq!(tokens.role_name(CARD), "b");
-        let plain = Tokens::default().over(&base);
-        assert_eq!(plain.role_name(CARD), "b");
-    }
-
-    #[test]
-    fn a_role_is_its_name_whoever_declares_it() {
-        // Another crate's constant of the same name is the same role.
-        const THEIRS: Role = Role::new("popover");
-        assert_eq!(THEIRS, role::POPOVER);
-        assert_ne!(CARD, role::POPOVER);
-        let mut tokens = Tokens::default();
-        tokens.set_color("surface-overlay", rgb(0x123456).into());
-        let tokens = tokens.with_role(role::POPOVER, "surface-overlay");
-        assert_eq!(tokens.role(THEIRS), Some(rgb(0x123456).into()));
-        assert_eq!(role::POPOVER.name(), "popover");
-        assert_eq!(role::FONT_SANS.name(), FONT_SANS);
-        assert_eq!(format!("{CARD:?}"), r#"Role("card")"#);
-    }
-
-    #[test]
-    fn roles_of_several_kinds_are_listed_as_any_role() {
-        let any: AnyRole = RADIUS.into();
-        assert_eq!((any.name(), any.kind()), ("radius", RoleKind::Number));
-        assert_eq!(AnyRole::from(role::POPOVER).kind(), RoleKind::Color);
-        assert_eq!(AnyRole::from(role::FONT_SANS).kind(), RoleKind::Font);
-        // One known by its name alone, as the toolchain knows an app's.
-        assert_eq!(
-            AnyRole::new(String::from("popover"), RoleKind::Color),
-            role::POPOVER.into()
-        );
-        let tokens = Tokens::default().with_roles([
-            (AnyRole::from(role::POPOVER), "surface-overlay"),
-            (RADIUS.into(), "radius-control"),
-        ]);
-        assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
-        assert_eq!(tokens.role_name(RADIUS), "radius-control");
-        // Mapped again, a role reads the later token.
-        let tokens = tokens.with_role(role::POPOVER, "sheet");
-        assert_eq!(tokens.role_name(role::POPOVER), "sheet");
-    }
-
-    #[test]
-    fn being_themed_is_no_token() {
-        let mut themed = sample();
-        themed.set_themed(true);
-        assert_eq!(themed, sample());
-        assert!(!sample().is_themed());
-    }
-}
-
-/// A name is a token of one kind: set as another kind, laid over a token
-/// of another kind or set by a scope, it is never two at once, so `get`,
-/// `token()`, classes and `tokens.d.ts` answer the same kind for it.
-#[cfg(test)]
-mod one_kind {
-    use super::*;
-    use crate::color::rgb;
-
-    fn layer() -> crate::BoxShadow {
-        crate::BoxShadow {
-            blur: crate::geometry::Points(2.0),
-            color: crate::Color(0x0000_001a),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn a_name_set_as_another_kind_is_that_kind_alone() {
-        let mut t = Tokens::default();
-        t.set_number("radius", 8.0);
-        t.set_dark_number("radius", 12.0);
-        t.set_color("radius", rgb(0x111111).into());
-        assert_eq!(t.number("radius"), None);
-        assert_eq!(t.number_in("radius", true), None);
-        assert!(matches!(t.get("radius"), Some(Token::Color(_))));
-        t.set_number("radius", 4.0);
-        assert_eq!(t.color("radius"), None);
-        assert_eq!(t.get("radius"), Some(Token::Number(4.0)));
-        t.set_shadow("shadow-soft-blur", [layer()]);
-        t.set_number("shadow-soft-blur", 2.0);
-        assert!(t.shadow("shadow-soft-blur").is_none());
-        t.set_color("background-image-hero", rgb(0x222222).into());
-        t.set_gradient("background-image-hero", AdaptiveGradient::new([], []));
-        assert_eq!(t.color("background-image-hero"), None);
-    }
-
-    #[test]
-    fn tokens_over_another_kind_of_the_name_replace_it() {
-        let mut base = Tokens::default();
-        base.set_number("radius", 8.0);
-        base.set_dark_number("radius", 12.0);
-        base.set_color("ring", rgb(0x111111).into());
-        let mut top = Tokens::default();
-        top.set_color("radius", rgb(0x222222).into());
-        top.set_number("ring", 2.0);
-        let out = top.over(&base);
-        assert!(matches!(out.get("radius"), Some(Token::Color(_))));
-        assert_eq!(out.number("radius"), None);
-        assert_eq!(out.number_in("radius", true), None);
-        assert_eq!(out.get("ring"), Some(Token::Number(2.0)));
-        assert_eq!(out.color("ring"), None);
-    }
-
-    #[test]
-    fn a_theme_file_over_a_base_gives_the_name_the_files_kind() {
-        let mut base = Tokens::default();
-        base.set_number("radius", 8.0);
-        let (tokens, ignored) = super::super::theme_file::parse(
-            r##"{ "cssVars": { "theme": { "radius": "#ffffff" } } }"##,
-            &base,
-        )
-        .unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        assert!(matches!(tokens.get("radius"), Some(Token::Color(_))));
-        assert_eq!(tokens.number("radius"), None);
-    }
-
-    #[test]
-    fn a_scope_keeps_the_kind_of_each_name_around_it() {
-        let mut around = Tokens::default();
-        around.set_number("radius", 8.0);
-        around.set_color("ring", rgb(0x111111).into());
-        let mut scope = Tokens::default();
-        scope.set_color("radius", rgb(0x222222).into());
-        scope.set_color("ring", rgb(0x333333).into());
-        let (tokens, left_out) = scope.within(&around);
-        assert_eq!(left_out, [Box::<str>::from("radius")]);
-        assert_eq!(tokens.get("radius"), Some(Token::Number(8.0)));
-        assert_eq!(tokens.color("radius"), None);
-        assert_eq!(tokens.color("ring"), Some(rgb(0x333333).into()));
-        assert_eq!(
-            scope_left_out("radius", &around),
-            "`radius`: the theme's token of this name is a number"
-        );
-        assert_eq!(
-            scope_left_out("glow", &around),
-            "`glow`: the theme has no token of this name"
-        );
-    }
-}
-
-/// A token's name says its kind, as a theme file reads it: a setter takes
-/// no name the file would read as another kind, so the tokens read back
-/// from a theme file written of them (`theme_file::write`) are the same.
-#[cfg(test)]
-mod name_forms {
-    use super::super::theme_file;
-    use super::*;
-    use crate::color::rgb;
-
-    fn layer(rgba: u32) -> crate::BoxShadow {
-        crate::BoxShadow {
-            offset_y: crate::geometry::Points(1.0),
-            blur: crate::geometry::Points(2.0),
-            color: crate::Color(rgba),
-            ..Default::default()
-        }
-    }
-
-    fn gradient() -> AdaptiveGradient {
-        let layers = crate::css::gradients("linear-gradient(to right, #7c3aed, #db2777)").unwrap();
-        AdaptiveGradient::new(layers.clone(), layers)
-    }
-
-    /// Each name with its kind, sorted.
-    fn kinds(t: &Tokens) -> Vec<(String, Kind)> {
-        let mut out: Vec<(String, Kind)> = (t.colors().map(|(n, _)| (n, Kind::Color)))
-            .chain(t.numbers().map(|(n, _)| (n, Kind::Number)))
-            .chain(t.fonts().map(|(n, _)| (n, Kind::Font)))
-            .chain(t.shadows().map(|(n, _)| (n, Kind::Shadow)))
-            .chain(t.gradients().map(|(n, _)| (n, Kind::Gradient)))
-            .map(|(n, k)| (n.to_owned(), k))
-            .collect();
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        out
-    }
-
-    #[test]
-    fn a_setter_takes_no_name_of_another_kinds_form() {
-        let mut t = Tokens::default();
-        t.set_gradient("hero", gradient());
-        t.set_shadow("elevation", [layer(0x0000_001a)]);
-        t.set_number("font-scale", 1.2);
-        t.set_dark_number("font-scale", 1.4);
-        t.set_color("font-color", rgb(0xffffff).into());
-        t.set_font("code", "Berkeley Mono");
-        t.set_font("font-weight-strong", "Inter");
-        assert_eq!(kinds(&t), []);
-        assert_eq!(t.dark_numbers().count(), 0);
-        // Each in its own kind's form is set.
-        t.set_gradient("background-image-hero", gradient());
-        t.set_shadow("shadow-elevation", [layer(0x0000_001a)]);
-        t.set_number("scale", 1.2);
-        t.set_number("font-weight-strong", 650.0);
-        t.set_color("color-font", rgb(0xffffff).into());
-        t.set_font("font-code", "Berkeley Mono");
-        assert_eq!(kinds(&t).len(), 6);
-    }
-
-    #[test]
-    fn tokens_written_to_a_theme_file_read_back_as_they_are() {
-        let mut t = Tokens::default();
-        t.set_color("primary", AdaptiveColor::rgb(0x111111, 0x222222));
-        t.set_color("shadow-color", rgb(0x333333).into());
-        t.set_number("radius", 8.0);
-        t.set_dark_number("radius", 12.0);
-        t.set_number("font-weight-strong", 650.0);
-        t.set_font("font-sans", "Inter");
-        t.set_shadow(
-            "shadow-raised",
-            AdaptiveShadow::new([layer(0x0000_001a)], [layer(0xffff_ff33)]),
-        );
-        t.set_gradient("background-image-hero", gradient());
-        // Names a file reads as another kind, which it would lose.
-        t.set_gradient("hero", gradient());
-        t.set_shadow("elevation", [layer(0x0000_001a)]);
-        t.set_number("font-scale", 1.2);
-        let (back, ignored) =
-            theme_file::parse(&theme_file::write(&t), &Tokens::default()).unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        assert_eq!(kinds(&back), kinds(&t));
-        assert_eq!(back.number_in("radius", true), Some(12.0));
-        assert_eq!(back.number("font-weight-strong"), Some(650.0));
-        assert_eq!(back.font("font-sans").map(|f| &**f), Some("Inter"));
-    }
-}
+const SAMPLE_COLORS: &[(&str, u32)] = &[
+    ("background", 0xffffff),
+    ("foreground", 0x0a0a0a),
+    ("border", 0xe5e5e5),
+    ("ring", 0xa3a3a3),
+    ("muted", 0xf5f5f5),
+    ("muted-foreground", 0x737373),
+    ("accent", 0xf5f5f5),
+    ("primary", 0x171717),
+    ("primary-active", 0x0a0a0a),
+    ("primary-foreground", 0xfafafa),
+    ("popover", 0xffffff),
+    ("popover-foreground", 0x0a0a0a),
+];

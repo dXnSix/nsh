@@ -74,6 +74,7 @@ pub(crate) fn alert_tint(
     tokens
         .role(nsh_core::element::role::PRIMARY)
         .filter(|_| tokens.is_themed())
+        .map(nsh_core::element::AdaptiveColor::from)
 }
 
 /// The appearance the app asked for (`Unspecified`: the system's).
@@ -910,16 +911,21 @@ mod tests {
     #[test]
     fn a_surfaces_alert_tint_comes_from_its_own_tokens() {
         let plain = nsh_base::tokens_of(None).unwrap();
-        let mut themed = plain.clone();
         let ink = plain.color("foreground").unwrap();
-        themed.set_color("primary", ink);
-        // The core marks the tokens of an app with a theme of its own.
-        themed.set_themed(true);
+        let document = nsh_theme::read(
+            r##"{ "tokens": { "primary": { "kind": "color", "value": "#0a0a0a" } } }"##,
+        )
+        .document;
+        let (themed, _) = nsh_core::element::Tokens::resolve(
+            std::sync::Arc::new(document),
+            Default::default(),
+            Vec::new(),
+        );
 
         let a = alert_tint(&themed);
         let b = alert_tint(&plain);
 
-        assert_eq!(a, Some(ink));
+        assert_eq!(a, Some(ink.into()));
         assert_eq!(b, None);
     }
 }

@@ -2181,7 +2181,7 @@ fn code_span(span: Text) -> Text {
 /// alert colors, as shadcn's tokens have no status colors. An important one
 /// is GitHub's purple, a caution the theme's `destructive`.
 fn alert_color(alert: Alert) -> AdaptiveColor {
-    let themed = |role, own| theme().tokens().role(role).unwrap_or(own);
+    let themed = |role, own| theme().tokens().role(role).map_or(own, AdaptiveColor::from);
     match alert {
         Alert::Note => themed(role::INFO, AdaptiveColor::rgb(0x0969da, 0x4493f8)),
         Alert::Tip => themed(role::SUCCESS, AdaptiveColor::rgb(0x1a7f37, 0x3fb950)),
@@ -2198,7 +2198,10 @@ const HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0xfde047, 0xca8a04);
 /// Highlighted text's color: the theme's `highlight` ([`role::HIGHLIGHT`]),
 /// else the view's own yellow.
 fn mark_color() -> AdaptiveColor {
-    theme().tokens().role(role::HIGHLIGHT).unwrap_or(HIGHLIGHT)
+    theme()
+        .tokens()
+        .role(role::HIGHLIGHT)
+        .map_or(HIGHLIGHT, AdaptiveColor::from)
 }
 
 /// The theme's monospaced font (`font-mono`), else the system's.

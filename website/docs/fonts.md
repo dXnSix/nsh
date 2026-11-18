@@ -175,15 +175,13 @@ An embedding app can register the same files itself, once, for every bundle it l
 
 ## A default font for the app
 
-The theme's `font-sans` is the app's font: every text that sets no family of its own is drawn with it, in Rust components and TSX alike, as a web page is with Tailwind's `--font-sans`. `font-mono` is the monospaced font, of the `font-mono` class and of code in `TextView`. Set them in the app's theme (`"theme"` in `nsh.json`, [Rust](./rust.md#theme)) and ship the font files as above:
+The theme's `font-sans` is the app's font: every text that sets no family of its own is drawn with it, in Rust components and TSX alike, as a web page is with Tailwind's `--font-sans`. `font-mono` is the monospaced font, of the `font-mono` class and of code in `TextView`. Set them as `font` tokens among the `tokens` of the app's theme document (`"theme"` in `nsh.json`, [Rust](./rust.md#theme)), or override the theme's with a patch while the app runs (`update_tokens` in Rust, `updateTheme` in TSX), and ship the font files as above:
 
 ```json
 {
-  "cssVars": {
-    "theme": {
-      "font-sans": "Inter, sans-serif",
-      "font-mono": "JetBrains Mono, monospace"
-    }
+  "tokens": {
+    "font-sans": { "kind": "font", "value": "Inter, sans-serif" },
+    "font-mono": { "kind": "font", "value": "JetBrains Mono, monospace" }
   }
 }
 ```

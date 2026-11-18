@@ -7,7 +7,11 @@ use std::{collections::BTreeMap, time::Duration};
 
 use crossbeam_channel::Receiver;
 use nsh_base::{Theme, theme};
-use nsh_core::{ApproxTextEngine, Color, MountBatch, MountItem, Size, element::Root, prelude::*};
+use nsh_core::{
+    ApproxTextEngine, Color, MountBatch, MountItem, Size,
+    element::{Patch, Root},
+    prelude::*,
+};
 use nsh_engine::{App, ColorScheme, Engine, EngineConfig, Environment};
 
 use crate::ChannelSink;
@@ -23,18 +27,20 @@ fn default_primary() -> Color {
     Color::from(Theme::default().primary.light)
 }
 
-fn themed(hex: &str) -> Theme {
-    Theme::from_json(&format!(
-        r#"{{ "cssVars": {{ "light": {{ "primary": "{hex}" }} }} }}"#
-    ))
-    .unwrap()
+/// A theme patch of `values` (`{ "primary": "#00ff00" }`).
+fn patch(values: &str) -> Patch {
+    nsh_theme::read_patch(&format!(r#"{{ "values": {values} }}"#)).0
 }
 
-fn start(app_theme: Option<Theme>, host_theme: Option<Theme>) -> (Engine, Receiver<MountBatch>) {
+fn themed(hex: &str) -> Patch {
+    patch(&format!(r#"{{ "primary": "{hex}" }}"#))
+}
+
+fn start(app_theme: Option<Patch>, host_theme: Option<Patch>) -> (Engine, Receiver<MountBatch>) {
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut root = Root::new::<Swatch>(|| ());
     if let Some(theme) = app_theme {
-        root = root.tokens(theme.into_tokens());
+        root = root.theme_overrides(nsh_theme::write_patch(&theme));
     }
     let config = EngineConfig {
         app: App::Rust(root),
@@ -72,7 +78,7 @@ fn start(app_theme: Option<Theme>, host_theme: Option<Theme>) -> (Engine, Receiv
         ChannelSink(tx),
         |control| {
             if let Some(theme) = host_theme {
-                control.set_tokens(Some(theme.into_tokens()));
+                control.set_tokens(Some(theme));
             }
         },
     )
@@ -114,9 +120,7 @@ fn a_host_theme_sent_before_the_start_is_in_the_first_frame() {
 fn the_host_theme_updates_the_views_and_gives_way_to_the_apps_when_cleared() {
     let (engine, rx) = start(Some(themed("#0000ff")), None);
     assert_eq!(backgrounds(&rx), vec![Color(0x0000ffff)]);
-    engine
-        .control()
-        .set_tokens(Some(themed("#00ff00").into_tokens()));
+    engine.control().set_tokens(Some(themed("#00ff00")));
     assert_eq!(backgrounds(&rx), vec![Color(0x00ff00ff)]);
     engine.control().set_tokens(None);
     assert_eq!(backgrounds(&rx), vec![Color(0x0000ffff)]);
@@ -176,9 +180,7 @@ fn a_tsx_apps_token_classes_follow_the_host_theme() {
     };
     let engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
     assert_eq!(backgrounds(&rx), vec![default_primary()]);
-    engine
-        .control()
-        .set_tokens(Some(themed("#00ff00").into_tokens()));
+    engine.control().set_tokens(Some(themed("#00ff00")));
     assert_eq!(backgrounds(&rx), vec![Color(0x00ff00ff)]);
     engine.control().set_tokens(None);
     assert_eq!(backgrounds(&rx), vec![default_primary()]);
@@ -266,10 +268,7 @@ fn a_hosts_theme_overrides_win_over_the_apps_tokens_they_set_and_keep_the_rest()
         data_dir: None,
     };
     // A brand's primary, light and dark, set before the app runs.
-    let overrides = nsh_base::theme_overrides(
-        r##"{ "cssVars": { "light": { "primary": "#e11d48" }, "dark": { "primary": "#fb7185" } } }"##,
-    )
-    .unwrap();
+    let overrides = patch(r##"{ "primary": "#e11d48" }"##);
     let engine = Engine::start_with(
         config,
         || ApproxTextEngine,
@@ -290,10 +289,9 @@ fn a_hosts_theme_overrides_win_over_the_apps_tokens_they_set_and_keep_the_rest()
     });
     assert!(colors(backgrounds_by_id(&rx)).contains(&Color(0xfb7185ff)));
     // Changed live, then cleared: the app's own again.
-    engine.control().set_tokens(Some(
-        nsh_base::theme_overrides(r##"{ "cssVars": { "theme": { "primary": "#00ff00" } } }"##)
-            .unwrap(),
-    ));
+    engine
+        .control()
+        .set_tokens(Some(patch(r##"{ "primary": "#00ff00" }"##)));
     assert_eq!(colors(backgrounds_by_id(&rx)), vec![Color(0x00ff00ff)]);
     engine.control().set_tokens(None);
     assert!(colors(backgrounds_by_id(&rx)).contains(&Color(0x0000ffff)));
@@ -326,10 +324,7 @@ fn last_text(rx: &Receiver<MountBatch>) -> Option<String> {
 /// A TSX app whose theme (`nsh.json`) adds a token, `brand`, which it reads
 /// once as its entry evaluates and again where it renders, started with
 /// the embedding app's tokens `host` sent before the start.
-fn start_branded(
-    name: &str,
-    host: Option<nsh_core::element::Tokens>,
-) -> (Engine, Receiver<MountBatch>) {
+fn start_branded(name: &str, host: Option<Patch>) -> (Engine, Receiver<MountBatch>) {
     let dir = crate::temporary_root().join(format!("nsh-theme-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -415,12 +410,7 @@ fn the_apps_theme_tokens_are_read_in_the_first_render() {
 /// render too; changed later, what read them reactively follows.
 #[test]
 fn the_host_tokens_win_in_the_first_render_and_reads_follow_their_changes() {
-    let overrides = |hex: &str| {
-        nsh_base::theme_overrides(&format!(
-            r#"{{ "cssVars": {{ "light": {{ "brand": "{hex}" }} }} }}"#
-        ))
-        .unwrap()
-    };
+    let overrides = |hex: &str| patch(&format!(r#"{{ "brand": "{hex}" }}"#));
     let (engine, rx) = start_branded("host-first-render", Some(overrides("#abcdef")));
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(texts(&first), vec!["#abcdefff #abcdefff".to_owned()]);

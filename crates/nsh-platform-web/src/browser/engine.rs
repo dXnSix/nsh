@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use nsh_core::{
     EventKind, EventPayload, NodeId, Op,
-    element::{JsEvent, JsHost, ThemeTokens, Tokens},
+    element::{JsEvent, JsHost, Tokens},
 };
 use nsh_engine::{
     Environment,
@@ -67,7 +67,6 @@ impl Host for Runtime {
             .chain(services.registries)
             .collect();
         *self.tokens.borrow_mut() = Some(services.tokens);
-        *self.theme.borrow_mut() = Some(services.theme);
         *self.host.borrow_mut() = Some(services.host);
         *self.wake.borrow_mut() = Some(services.wake);
         self.timers.set_clock(services.clock);
@@ -247,9 +246,6 @@ impl Host for Runtime {
     fn set_tokens(&self, tokens: Arc<Tokens>) {
         *self.tokens.borrow_mut() = Some(tokens);
         self.notify("tokens", []);
-    }
-    fn set_theme_tokens(&self, theme: ThemeTokens) {
-        *self.theme.borrow_mut() = Some(theme);
     }
     fn take_fonts(&self, out: &mut Vec<String>) {
         out.append(&mut self.fonts.borrow_mut());

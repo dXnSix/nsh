@@ -1,788 +1,90 @@
-//! Declared tokens: what theme documents say their tokens are. A theme
-//! document is a theme file (`cssVars`, the values) with a `tokens` section
-//! that declares each token's kind, its path in the designer's tree and its
-//! doc, and a `roles` section that maps the roles NSH's own parts draw with
-//! onto its tokens:
+//! The active theme document, and how the runtime reports a theme's
+//! diagnostics.
 //!
-//! ```json
-//! {
-//!   "cssVars": { "theme": { "radius-card": "12px" }, "light": { "surface": "#fff" } },
-//!   "tokens": {
-//!     "surface": { "kind": "color", "path": "colors.surface", "doc": "Cards and popovers." },
-//!     "radius-card": { "kind": "radius", "path": "radius.card" }
-//!   },
-//!   "roles": { "popover": "surface" }
-//! }
-//! ```
+//! A theme document (`docs/dev/theme-format.md`, read by `nsh-theme`)
+//! declares tokens with a value type and a value, modifiers whose contexts
+//! change token values, and roles. One document is active at a time:
 //!
-//! A UI set ships its tokens as a document ([`super::Registry::theme_document`]),
-//! and an app's own theme file (`nsh.json`'s `"theme"`, TS's `setTheme`)
-//! may declare tokens too. Declared tokens replace the default token source
-//! (`nsh-base`'s shadcn theme), and a theme file is read by them
-//! ([`Declarations`]): a name no document declares is left out, a value is
-//! read as its token's kind.
+//! 1. the app's theme: [`super::Root::theme`] or `nsh.json`'s `"theme"`,
+//!    replaced at run time by [`super::set_theme`] (TS: `setTheme`);
+//! 2. else the document of the first UI set, in the host's set order, that
+//!    registers one ([`super::Registry::theme_document`]); each other set's
+//!    gives the warning `document-unused`;
+//! 3. else the document of [`super::Registry::fallback_theme_document`].
 //!
-//! The tokens stay flat and by name: classes name them (`bg-surface`,
-//! `rounded-card`), TS reads them with `token()`, Rust with
-//! [`super::token`] or through typed keys ([`super::TokenKey`], which
-//! `theme_keys!` makes of a document).
+//! Documents are never merged. A text that is no document (`not-a-document`)
+//! or is in the old `cssVars` format (`legacy-format`) is never active.
+//!
+//! No theme input panics: each diagnostic is logged once, with
+//! `log::warn!` and the target `nsh::theme`, as `{code} {pointer}:
+//! {message}`, and a document with errors loads with its good entries.
 
-use std::sync::Arc;
+use nsh_theme::{Diagnostic, ThemeDocument, code};
 
-use rustc_hash::FxHashMap;
+/// The log target of a theme's diagnostics.
+pub const LOG_TARGET: &str = "nsh::theme";
 
-use super::{AnyRole, RoleKind, Tokens};
-
-/// What a token holds, which decides how a theme file's value is read and
-/// how TS types it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum TokenKind {
-    /// A color per appearance.
-    Color,
-    /// A number (a unitless quantity, or a length in points).
-    Number,
-    /// A corner radius (`radius-*`: `rounded-*`).
-    Radius,
-    /// A spacing (`spacing-*`: `p-*`, `gap-*`, …).
-    Spacing,
-    /// A font size (`text-*`).
-    Text,
-    /// A font weight (`font-weight-*`: `font-*`).
-    Weight,
-    /// A letter spacing in points (`tracking-*`).
-    Tracking,
-    /// A line height (`leading-*`).
-    Leading,
-    /// A blur radius (`blur-*`).
-    Blur,
-    /// A font family.
-    Font,
-    /// Box shadows per appearance (`shadow-*`).
-    Shadow,
-    /// Gradients per appearance (`background-image-*`: `bg-*`).
-    Gradient,
-    /// A string (a label, a name), one in both appearances.
-    String,
-    /// A boolean (a feature on or off), one in both appearances.
-    Boolean,
-    /// A duration in milliseconds (`duration-*`: `duration-*`, `delay-*`).
-    Duration,
-    /// An easing curve (`ease-*`: `ease-*`), one in both appearances.
-    Easing,
-    /// A text style (`text-*`): its size, with its line height, letter
-    /// spacing and font weight as parts (`text-title--line-height`, …),
-    /// which the class `text-title` sets together.
-    Typography,
+/// Logs each of `diagnostics` (`{code} {pointer}: {message}`).
+pub(crate) fn report(diagnostics: &[Diagnostic]) {
+    for d in diagnostics {
+        log::warn!(target: LOG_TARGET, "{} {}: {}", d.code, d.pointer, d.message);
+    }
 }
 
-impl TokenKind {
-    /// The kind [`Tokens`] keeps it as: a namespaced number is a number.
-    pub(crate) fn stored(self) -> super::tokens::Kind {
-        use super::tokens::Kind;
-        match self {
-            TokenKind::Color => Kind::Color,
-            TokenKind::Font => Kind::Font,
-            TokenKind::Shadow => Kind::Shadow,
-            TokenKind::Gradient => Kind::Gradient,
-            TokenKind::String => Kind::String,
-            TokenKind::Boolean => Kind::Boolean,
-            TokenKind::Easing => Kind::Easing,
-            _ => Kind::Number,
-        }
-    }
+/// Whether `diagnostics` refuse the text whole: it is no document, or one
+/// of the old format. Such a text is never active.
+pub(crate) fn refused(diagnostics: &[Diagnostic]) -> bool {
+    diagnostics
+        .iter()
+        .any(|d| d.code == code::NOT_A_DOCUMENT || d.code == code::LEGACY_FORMAT)
+}
 
-    /// Its name, as a theme document and the toolchain write it.
-    pub fn name(self) -> &'static str {
-        match self {
-            TokenKind::Color => "color",
-            TokenKind::Number => "number",
-            TokenKind::Radius => "radius",
-            TokenKind::Spacing => "spacing",
-            TokenKind::Text => "text",
-            TokenKind::Weight => "weight",
-            TokenKind::Tracking => "tracking",
-            TokenKind::Leading => "leading",
-            TokenKind::Blur => "blur",
-            TokenKind::Font => "font",
-            TokenKind::Shadow => "shadow",
-            TokenKind::Gradient => "gradient",
-            TokenKind::String => "string",
-            TokenKind::Boolean => "boolean",
-            TokenKind::Duration => "duration",
-            TokenKind::Easing => "easing",
-            TokenKind::Typography => "typography",
-        }
-    }
+/// Reads theme document `text` and logs its diagnostics: the document
+/// (`None` when it is refused whole, [`refused`]) and the diagnostics.
+pub(crate) fn read_document(text: &str) -> (Option<ThemeDocument>, Vec<Diagnostic>) {
+    let read = nsh_theme::read(text);
+    report(&read.diagnostics);
+    let document = (!refused(&read.diagnostics)).then_some(read.document);
+    (document, read.diagnostics)
+}
 
-    /// Every kind's name, as a sentence lists them.
-    pub const NAMES: &'static str = "color, number, radius, spacing, text, weight, tracking, \
-        leading, blur, font, shadow, gradient, string, boolean, duration, easing, typography";
+/// Reads patch `text` (the app's or the host's overrides) and logs its
+/// diagnostics. Text that is no patch gives an empty one.
+pub(crate) fn read_patch(text: &str) -> (nsh_theme::Patch, Vec<Diagnostic>) {
+    let (patch, diagnostics) = nsh_theme::read_patch(text);
+    report(&diagnostics);
+    (patch, diagnostics)
+}
 
-    /// The kind of this name ([`TokenKind::name`]).
-    pub fn from_name(name: &str) -> Option<TokenKind> {
-        Some(match name {
-            "color" => TokenKind::Color,
-            "number" => TokenKind::Number,
-            "radius" => TokenKind::Radius,
-            "spacing" => TokenKind::Spacing,
-            "text" => TokenKind::Text,
-            "weight" => TokenKind::Weight,
-            "tracking" => TokenKind::Tracking,
-            "leading" => TokenKind::Leading,
-            "blur" => TokenKind::Blur,
-            "font" => TokenKind::Font,
-            "shadow" => TokenKind::Shadow,
-            "gradient" => TokenKind::Gradient,
-            "string" => TokenKind::String,
-            "boolean" => TokenKind::Boolean,
-            "duration" => TokenKind::Duration,
-            "easing" => TokenKind::Easing,
-            "typography" => TokenKind::Typography,
-            _ => return None,
-        })
-    }
-
-    /// What a role its token plays reads (`None`: no role reads box
-    /// shadows or gradients).
-    pub(crate) fn role_kind(self) -> Option<RoleKind> {
-        match self {
-            TokenKind::Color => Some(RoleKind::Color),
-            TokenKind::Font => Some(RoleKind::Font),
-            TokenKind::Shadow
-            | TokenKind::Gradient
-            | TokenKind::String
-            | TokenKind::Boolean
-            | TokenKind::Easing => None,
-            _ => Some(RoleKind::Number),
-        }
-    }
-
-    /// Whether its value is a number token.
-    pub fn is_number(self) -> bool {
-        !matches!(
-            self,
-            TokenKind::Color
-                | TokenKind::Font
-                | TokenKind::Shadow
-                | TokenKind::Gradient
-                | TokenKind::String
-                | TokenKind::Boolean
-                | TokenKind::Easing
+/// The warning a pick of `context` for modifier `name` gives in `document`
+/// (`unknown-modifier`, `unknown-context`), `None` when both exist.
+pub(crate) fn unknown_pick(
+    document: &ThemeDocument,
+    name: &str,
+    context: &str,
+) -> Option<Diagnostic> {
+    let Some(modifier) = document.modifiers.get(name) else {
+        return Some(Diagnostic::warning(
+            code::UNKNOWN_MODIFIER,
+            pointer(["modifiers", name]),
+            format!("The theme has no modifier `{name}`; the pick is ignored."),
+        ));
+    };
+    (!modifier.contexts.contains_key(context)).then(|| {
+        Diagnostic::warning(
+            code::UNKNOWN_CONTEXT,
+            pointer(["modifiers", name, "contexts", context]),
+            format!("The modifier `{name}` has no context `{context}`; the pick is ignored."),
         )
-    }
-
-    /// The TS type `token()` gives its value: `number` (a number, a
-    /// duration in milliseconds, a text style's size), `boolean`, or
-    /// `string` (a color, a font family, CSS, a string).
-    pub fn ts_type(self) -> &'static str {
-        match self {
-            TokenKind::Boolean => "boolean",
-            kind if kind.is_number() => "number",
-            _ => "string",
-        }
-    }
-
-    /// The namespace its names take, which its classes read them by
-    /// (`radius-`: `rounded-*`); a color's and a number's is none.
-    pub fn namespace(self) -> &'static str {
-        match self {
-            TokenKind::Color | TokenKind::Number | TokenKind::String | TokenKind::Boolean => "",
-            TokenKind::Duration => "duration-",
-            TokenKind::Easing => "ease-",
-            TokenKind::Typography => "text-",
-            TokenKind::Radius => "radius-",
-            TokenKind::Spacing => "spacing-",
-            TokenKind::Text => "text-",
-            TokenKind::Weight => "font-weight-",
-            TokenKind::Tracking => "tracking-",
-            TokenKind::Leading => "leading-",
-            TokenKind::Blur => "blur-",
-            TokenKind::Font => "font-",
-            TokenKind::Shadow => "shadow-",
-            TokenKind::Gradient => super::theme_file::GRADIENTS,
-        }
-    }
-
-    /// Whether `tokens` hold `name` as this kind.
-    pub(crate) fn holds(self, tokens: &Tokens, name: &str) -> bool {
-        match self {
-            TokenKind::Color => tokens.color(name).is_some(),
-            TokenKind::Font => tokens.font(name).is_some(),
-            TokenKind::Shadow => tokens.shadow(name).is_some(),
-            TokenKind::Gradient => tokens.gradient(name).is_some(),
-            TokenKind::String => tokens.string(name).is_some(),
-            TokenKind::Boolean => tokens.boolean(name).is_some(),
-            TokenKind::Easing => tokens.easing(name).is_some(),
-            _ => tokens.number(name).is_some(),
-        }
-    }
-
-    /// Whether a token of this kind may be named `name`: its form says the
-    /// kind, as a theme file reads it, and a namespaced kind's name is in
-    /// its namespace, which its classes read it by.
-    pub(crate) fn names(self, name: &str) -> bool {
-        self.stored().names(name) && name.starts_with(self.namespace())
-    }
+    })
 }
 
-/// One token a theme document declares (its `tokens` section).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Declared {
-    /// Who declares it: the UI set whose document it is, or the app's
-    /// theme file.
-    pub owner: Box<str>,
-    /// What it holds.
-    pub kind: TokenKind,
-    /// Its place in the designer's tree (`colors.backgrounds.primary`), if
-    /// the document gives one.
-    pub path: Option<Box<str>>,
-    /// Its doc, for the toolchain's declarations (`tokens.d.ts`).
-    pub doc: Box<str>,
-    /// The typography token it is a part of (`text-title` of
-    /// `text-title--line-height`), which declares it: a part may have no
-    /// value.
-    pub part_of: Option<Box<str>>,
-}
-
-/// The tokens theme documents declare, merged: each name's kind, owner,
-/// path and doc (one owner per name), the roles they map (one token per
-/// role) and the union of their default values. Tokens read by them carry
-/// them ([`Tokens::declarations`]).
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Declarations {
-    names: FxHashMap<Box<str>, Declared>,
-    /// The defaults of every document, with the roles they map, under no
-    /// modifier's context.
-    defaults: Tokens,
-    /// The documents' modifiers, in the order the documents were added.
-    modifiers: Option<super::ThemeModifiers>,
-}
-
-impl Declarations {
-    /// The kind token `name` is declared as.
-    pub fn kind_of(&self, name: &str) -> Option<TokenKind> {
-        self.names.get(name).map(|d| d.kind)
+/// A JSON pointer of `parts`, each escaped (`~0`, `~1`).
+fn pointer<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
+    let mut out = String::new();
+    for part in parts {
+        out.push('/');
+        out.push_str(&part.replace('~', "~0").replace('/', "~1"));
     }
-
-    /// The path token `name` is declared at.
-    pub fn path_of(&self, name: &str) -> Option<&str> {
-        self.names.get(name)?.path.as_deref()
-    }
-
-    /// The declared token at `path`.
-    pub fn name_at(&self, path: &str) -> Option<&str> {
-        self.names
-            .iter()
-            .find(|(_, d)| d.path.as_deref() == Some(path))
-            .map(|(name, _)| &**name)
-    }
-
-    /// The declaration of token `name`.
-    pub fn get(&self, name: &str) -> Option<&Declared> {
-        self.names.get(name)
-    }
-
-    /// Each declared token, sorted by name.
-    pub fn tokens(&self) -> Vec<(&str, &Declared)> {
-        let mut all: Vec<_> = self.names.iter().map(|(n, d)| (&**n, d)).collect();
-        all.sort_unstable_by(|a, b| a.0.cmp(b.0));
-        all
-    }
-
-    /// Whether no token is declared.
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
-    }
-
-    /// The default values of every document, with the roles they map and
-    /// each of their modifiers' default contexts: the tokens the app is
-    /// drawn with when its theme file sets none.
-    pub fn defaults(&self) -> Tokens {
-        match &self.modifiers {
-            Some(modifiers) => modifiers.clone().apply(&self.defaults),
-            None => self.defaults.clone(),
-        }
-    }
-
-    /// The tokens of theme file `json` (`None`: the defaults) read by these
-    /// declarations, with what of it was left out: how the toolchain reads
-    /// `nsh.json`'s theme as the core does. `Err`: `json` is not JSON.
-    pub fn read(&self, json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
-        TokenProvider::Declared(Arc::new(self.clone())).read(json)
-    }
-
-    /// Adds the theme document `json` of `owner`: its declared tokens, its
-    /// roles and its values, which become defaults. `Err`: the document is
-    /// no theme document, says what it cannot (a kind there is not, a value
-    /// of another kind, a name it does not declare), or declares a name or
-    /// maps a role another owner has, naming both.
-    pub(crate) fn add_document(&mut self, owner: &str, json: &str) -> Result<(), String> {
-        let value: crate::JsonValue =
-            serde_json::from_str(json).map_err(|e| format!("{owner}: not JSON: {e}"))?;
-        if !super::theme_file::declares_tokens(&value) {
-            return Err(format!(
-                "{owner}: a theme document declares its tokens (`\"tokens\"`)"
-            ));
-        }
-        let (declared, mut left_out) = super::theme_file::declared_tokens(&value, owner);
-        left_out.extend(super::theme_file::unknown_sections(&value));
-        let mut own = Declarations::default();
-        own.extend(owner, declared.clone(), &[])?;
-        let (defaults, read_out) =
-            super::theme_file::overrides_declared(json, &Tokens::default(), &own)?;
-        left_out.extend(read_out);
-        for (name, d) in &declared {
-            if d.part_of.is_none()
-                && !d.kind.holds(&defaults, name)
-                && !left_out.iter().any(|l| l.is_about(name))
-            {
-                left_out.push(super::theme_file::LeftOut::no_value(name));
-            }
-        }
-        if !left_out.is_empty() {
-            let what: Vec<String> = left_out.iter().map(ToString::to_string).collect();
-            return Err(format!("{owner}'s theme document: {}", what.join("; ")));
-        }
-        // Its modifiers, each context read by its own declarations.
-        let (modifiers, said) = super::ThemeModifiers::read(json, &value, &defaults, |context| {
-            super::theme_file::overrides_declared(context, &defaults, &own)
-        });
-        if !said.is_empty() {
-            let what: Vec<String> = said.iter().map(ToString::to_string).collect();
-            return Err(format!("{owner}'s theme document: {}", what.join("; ")));
-        }
-        let modifiers = match (self.modifiers.take(), modifiers) {
-            (Some(ours), Some(theirs)) => Some(
-                ours.merged(theirs)
-                    .map_err(|e| format!("{owner}'s theme document: {e}"))?,
-            ),
-            (ours, theirs) => ours.or(theirs),
-        };
-        let plays: Vec<(String, String)> = defaults
-            .roles()
-            .map(|(role, token)| (role.to_owned(), token.to_owned()))
-            .collect();
-        self.extend(owner, declared, &plays)?;
-        self.defaults = defaults.over(&self.defaults);
-        self.modifiers = modifiers;
-        Ok(())
-    }
-
-    /// Checks that each role of `roles` (what UI sets list, and the core's)
-    /// a document maps reads what its token holds. `Err` names the role
-    /// and the token.
-    pub(crate) fn check_roles(&self, roles: &[super::RoleSpec]) -> Result<(), String> {
-        let core = super::role::all();
-        for spec in roles.iter().chain(&core) {
-            let name = spec.role.name();
-            let Some(token) = self.defaults.mapped(name) else {
-                continue;
-            };
-            let Some(kind) = self.kind_of(token) else {
-                continue;
-            };
-            if kind.role_kind() != Some(spec.role.kind()) {
-                return Err(format!(
-                    "the role `{name}` reads {}, and `{token}` is a {} token",
-                    match spec.role.kind() {
-                        RoleKind::Color => "a color",
-                        RoleKind::Number => "a number",
-                        RoleKind::Font => "a font family",
-                    },
-                    kind.name()
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Adds `declared`, owned by `owner`, and the roles `plays` maps onto
-    /// them (role, token). `Err`: a name or a role another owner has,
-    /// naming both, a role mapped twice, or one that reads another kind
-    /// than its token holds.
-    fn extend(
-        &mut self,
-        owner: &str,
-        declared: Vec<(Box<str>, Declared)>,
-        plays: &[(String, String)],
-    ) -> Result<(), String> {
-        for (i, (name, d)) in declared.iter().enumerate() {
-            if declared[..i].iter().any(|(n, _)| n == name) {
-                return Err(format!("{owner} declares the theme token `{name}` twice"));
-            }
-            if let Some(other) = self.names.get(name) {
-                return Err(format!(
-                    "the theme token `{name}` is declared by both {} and {owner}",
-                    other.owner
-                ));
-            }
-            if let Some(path) = &d.path
-                && let Some(other) = self.name_at(path)
-            {
-                return Err(format!(
-                    "{owner}: the path `{path}` of the theme token `{name}` is the path of `{other}`, which {} declares",
-                    self.names[other].owner
-                ));
-            }
-            debug_assert!(d.kind.names(name));
-        }
-        let mut roles = Vec::new();
-        for (role, token) in plays {
-            let Some((_, d)) = declared.iter().find(|(n, _)| **n == **token) else {
-                return Err(format!(
-                    "{owner}: the role `{role}` is mapped onto `{token}`, which it does not declare"
-                ));
-            };
-            let Some(kind) = d.kind.role_kind() else {
-                return Err(format!(
-                    "{owner}: the role `{role}` is mapped onto `{token}`, a {} token, which no role reads",
-                    d.kind.name()
-                ));
-            };
-            if let Some(other) = self.role_owner(role) {
-                return Err(format!(
-                    "the role `{role}` is mapped by both {other} and {owner}"
-                ));
-            }
-            roles.push((AnyRole::new(role.clone(), kind), Box::<str>::from(&**token)));
-        }
-        for (name, d) in declared {
-            self.names.insert(name, d);
-        }
-        if !roles.is_empty() {
-            self.defaults = std::mem::take(&mut self.defaults).with_roles(roles);
-        }
-        Ok(())
-    }
-
-    /// These declarations with the tokens theme file `value` declares
-    /// itself (the app's own, owned by `owner`), and what of them was left
-    /// out: a name another owner declares as the same kind is theirs, as
-    /// another kind it is left out.
-    pub(crate) fn with_file(
-        &self,
-        value: &crate::JsonValue,
-        owner: &str,
-    ) -> (Declarations, Vec<super::theme_file::LeftOut>) {
-        let (declared, mut left_out) = super::theme_file::declared_tokens(value, owner);
-        let mut out = self.clone();
-        let mut own = Vec::new();
-        for (name, d) in declared {
-            match self.names.get(&name) {
-                Some(other) if other.kind == d.kind => {}
-                Some(other) => left_out.push(super::theme_file::LeftOut::declared_by(
-                    &name,
-                    other.kind,
-                    &other.owner,
-                )),
-                None => match d.path.as_deref().and_then(|path| self.name_at(path)) {
-                    Some(other) => left_out.push(super::theme_file::LeftOut::about(
-                        &format!("tokens.{name}.path"),
-                        format_args!(
-                            ": `{}` is the path of `{other}`, which {} declares",
-                            d.path.as_deref().unwrap_or_default(),
-                            self.names[other].owner
-                        ),
-                    )),
-                    None => own.push((name, d)),
-                },
-            }
-        }
-        if !own.is_empty() {
-            // Only names and roles no other owner has are left: this adds.
-            let _ = out.extend(owner, own, &[]);
-        }
-        (out, left_out)
-    }
-
-    /// The owner mapping the role named `role`, if any.
-    fn role_owner(&self, role: &str) -> Option<&str> {
-        self.defaults
-            .mapped(role)
-            .and_then(|name| self.names.get(name))
-            .map(|d| &*d.owner)
-    }
-
-    /// Each role the documents map onto a token of another name: the role's
-    /// name and the token's.
-    pub(crate) fn renamed_roles(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.defaults
-            .roles()
-            .filter(|(role, token)| role != token && self.names.contains_key(*token))
-    }
-
-    /// Each declared name with its kind.
-    pub(crate) fn names(&self) -> impl Iterator<Item = (&str, TokenKind)> {
-        self.names.iter().map(|(name, d)| (&**name, d.kind))
-    }
-
-    /// The name a theme file's `key` sets: a declared name, else the token
-    /// a role of that name (`primary`) is mapped onto.
-    pub(crate) fn target<'a>(&'a self, key: &'a str) -> Option<&'a str> {
-        if self.names.contains_key(key) {
-            return Some(key);
-        }
-        self.defaults
-            .mapped(key)
-            .filter(|name| self.names.contains_key(*name))
-    }
-}
-
-/// Who declares the tokens an app's own theme file declares.
-pub(crate) const APP_THEME: &str = "the app's theme";
-
-/// How the core reads a theme file: with a UI set's functions
-/// ([`super::Registry::tokens_from`], [`super::Registry::token_overrides_from`])
-/// while nothing declares tokens, or by the declared tokens.
-#[derive(Clone)]
-pub(crate) enum TokenProvider {
-    Source {
-        read: super::TokenSource,
-        overrides: Option<super::TokenOverrides>,
-    },
-    Declared(Arc<Declarations>),
-}
-
-impl std::fmt::Debug for TokenProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TokenProvider::Source { .. } => f.write_str("TokenProvider::Source"),
-            TokenProvider::Declared(set) => {
-                f.debug_tuple("TokenProvider::Declared").field(set).finish()
-            }
-        }
-    }
-}
-
-impl TokenProvider {
-    /// The token a theme file's `name` names: under declared tokens the
-    /// token a role of that name is mapped onto ([`Declarations::target`]),
-    /// as `setTheme` and `updateTheme` read it; any other name, and every
-    /// name without declared tokens, is its own.
-    pub(crate) fn token_name<'a>(&'a self, name: &'a str) -> &'a str {
-        match self {
-            TokenProvider::Declared(set) => set.target(name).unwrap_or(name),
-            TokenProvider::Source { .. } => name,
-        }
-    }
-
-    /// The tokens of theme file `json` over the defaults (`None`: the
-    /// defaults), with what of it was left out.
-    pub(crate) fn read(&self, json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
-        let (tokens, left_out) = self.read_left_out(json)?;
-        Ok((tokens, super::theme_file::sentences(left_out)))
-    }
-
-    /// [`TokenProvider::read`], each thing left out with what the core
-    /// asks of it (whether it is only a name nothing declares). A theme
-    /// file that declares tokens is read by them, with the documents' own,
-    /// and replaces a UI set's defaults.
-    pub(crate) fn read_left_out(
-        &self,
-        json: Option<&str>,
-    ) -> Result<(Tokens, Vec<super::theme_file::LeftOut>), String> {
-        let set = match self {
-            TokenProvider::Declared(set) => set.clone(),
-            TokenProvider::Source { read, .. } => {
-                let declares = json
-                    .and_then(|json| serde_json::from_str::<crate::JsonValue>(json).ok())
-                    .is_some_and(|value| super::theme_file::declares_tokens(&value));
-                if !declares {
-                    let (tokens, mut left_out) = read(json).map(said)?;
-                    if let Some(value) =
-                        json.and_then(|json| serde_json::from_str::<crate::JsonValue>(json).ok())
-                    {
-                        left_out.extend(super::theme_file::unknown_sections(&value));
-                    }
-                    let tokens = match json {
-                        Some(json) => self.with_modifiers(json, tokens, None, None, &mut left_out),
-                        None => tokens,
-                    };
-                    return Ok((tokens, left_out));
-                }
-                Arc::new(Declarations::default())
-            }
-        };
-        let Some(json) = json else {
-            return Ok((with_declarations(set.defaults(), &set), Vec::new()));
-        };
-        let value: crate::JsonValue =
-            serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
-        let (set, mut left_out) = set.with_file(&value, APP_THEME);
-        left_out.extend(super::theme_file::unknown_sections(&value));
-        let set = Arc::new(set);
-        let (tokens, read_out) = super::theme_file::parse_declared(json, &set.defaults, &set)?;
-        left_out.extend(read_out);
-        let tokens = with_declarations(tokens, &set);
-        let documents = set.modifiers.clone();
-        let tokens = self.with_modifiers(json, tokens, Some(&set), documents, &mut left_out);
-        Ok((tokens, left_out))
-    }
-
-    /// `tokens`, read from theme file `json` under no context, with the
-    /// documents' modifiers (`documents`) and the file's own, after them,
-    /// each one's picked context over them, carrying them
-    /// ([`super::ThemeModifiers`]); a file's context is read as a change of
-    /// the tokens is, by `set` when they are declared. What of the
-    /// modifiers was left out joins `left_out`.
-    fn with_modifiers(
-        &self,
-        json: &str,
-        tokens: Tokens,
-        set: Option<&Arc<Declarations>>,
-        documents: Option<super::ThemeModifiers>,
-        left_out: &mut Vec<super::theme_file::LeftOut>,
-    ) -> Tokens {
-        let Ok(value) = serde_json::from_str::<crate::JsonValue>(json) else {
-            return match documents {
-                Some(documents) => documents.rebased(&tokens).apply(&tokens),
-                None => tokens,
-            };
-        };
-        let read = |context: &str| self.read_context(set, context, &tokens);
-        let (file, said) = super::ThemeModifiers::read(json, &value, &tokens, read);
-        left_out.extend(said);
-        let modifiers = match (documents, file) {
-            (Some(documents), Some(file)) => match documents.clone().merged(file) {
-                Ok(both) => Some(both),
-                Err(e) => {
-                    left_out.push(super::theme_file::LeftOut::said(format!("modifiers: {e}")));
-                    Some(documents)
-                }
-            },
-            (documents, file) => documents.or(file),
-        };
-        match modifiers {
-            Some(modifiers) => modifiers.rebased(&tokens).apply(&tokens),
-            None => tokens,
-        }
-    }
-
-    /// A modifier's context `json` (a theme file of its `cssVars`) read
-    /// against `base`, as a change of the tokens is: by `set` when they are
-    /// declared.
-    fn read_context(
-        &self,
-        set: Option<&Arc<Declarations>>,
-        json: &str,
-        base: &Tokens,
-    ) -> Result<(Tokens, Vec<super::theme_file::LeftOut>), String> {
-        match (set, self) {
-            (Some(set), _) => super::theme_file::overrides_declared(json, base, set),
-            (
-                None,
-                TokenProvider::Source {
-                    overrides: Some(overrides),
-                    ..
-                },
-            ) => overrides(json, base).map(said),
-            _ => super::theme_file::overrides(json, base).map(said),
-        }
-    }
-
-    /// The app's tokens `app` changed by theme change `json` (`nsh`'s
-    /// `updateTheme`), its values read against `drawn` (the tokens drawn
-    /// with now, which a `var()` it does not set names): the values its
-    /// `cssVars` sets ([`Tokens::updated_by`]), then its `"modifiers"`
-    /// ([`super::ThemeModifiers::patched`], a theme with none taking the
-    /// change's as a file's). With what was left out. `None`: nothing reads
-    /// changes.
-    pub(crate) fn updated_left_out(
-        &self,
-        json: &str,
-        drawn: &Tokens,
-        app: &Tokens,
-    ) -> Option<Result<(Tokens, Vec<super::theme_file::LeftOut>), String>> {
-        // A change of only its modifiers (or declarations) sets no values.
-        let mut value: Option<crate::JsonValue> = serde_json::from_str(json).ok();
-        let values = match &mut value {
-            Some(crate::JsonValue::Object(object)) if !object.contains_key("cssVars") => {
-                object.insert("cssVars".into(), serde_json::json!({}));
-                std::borrow::Cow::Owned(crate::JsonValue::Object(object.clone()).to_string())
-            }
-            _ => std::borrow::Cow::Borrowed(json),
-        };
-        let read = self.overrides_left_out(&values, drawn)?;
-        Some(read.and_then(|(part, mut left_out)| {
-            let value = value.ok_or_else(|| "not JSON".to_owned())?;
-            left_out.extend(super::theme_file::unknown_sections(&value));
-            let mut out = app.updated_by(&part);
-            if value.get("modifiers").is_some() {
-                let set = out.declarations_arc();
-                let under = match out.modifiers() {
-                    Some(modifiers) => modifiers.under(&out),
-                    None => out.clone(),
-                };
-                let read = |context: &str| self.read_context(set.as_ref(), context, &under);
-                let (modifiers, said) = match out.modifiers() {
-                    Some(modifiers) => {
-                        let (patched, said) = modifiers.patched(json, &value, &under, read);
-                        (Some(patched), said)
-                    }
-                    None => super::ThemeModifiers::read(json, &value, &under, read),
-                };
-                left_out.extend(said);
-                if let Some(modifiers) = modifiers {
-                    out = modifiers.apply(&out);
-                }
-            }
-            Ok((out, left_out))
-        }))
-    }
-
-    /// The tokens theme file `json` sets, and only those (`var()` against
-    /// `base`); `None`: nothing reads changes.
-    pub(crate) fn overrides(
-        &self,
-        json: &str,
-        base: &Tokens,
-    ) -> Option<Result<(Tokens, Vec<String>), String>> {
-        Some(
-            self.overrides_left_out(json, base)?
-                .map(|(tokens, left_out)| (tokens, super::theme_file::sentences(left_out))),
-        )
-    }
-
-    /// [`TokenProvider::overrides`], as [`TokenProvider::read_left_out`].
-    /// The tokens drawn with now (`base`) are read by what declares them
-    /// (the documents and the app's theme file); a change may declare
-    /// tokens of its own beside them.
-    pub(crate) fn overrides_left_out(
-        &self,
-        json: &str,
-        base: &Tokens,
-    ) -> Option<Result<(Tokens, Vec<super::theme_file::LeftOut>), String>> {
-        let set = match (base.declarations_arc(), self) {
-            (Some(set), _) => set,
-            (None, TokenProvider::Declared(set)) => set.clone(),
-            (None, TokenProvider::Source { overrides, .. }) => {
-                return Some((*overrides)?(json, base).map(said));
-            }
-        };
-        Some((|| {
-            let value: crate::JsonValue =
-                serde_json::from_str(json).map_err(|e| format!("not JSON: {e}"))?;
-            let (set, mut left_out) = set.with_file(&value, APP_THEME);
-            let set = Arc::new(set);
-            let (tokens, read_out) = super::theme_file::overrides_declared(json, base, &set)?;
-            left_out.extend(read_out);
-            Ok((with_declarations(tokens, &set), left_out))
-        })())
-    }
-}
-
-/// `tokens`, read by `set`, carrying it.
-fn with_declarations(mut tokens: Tokens, set: &Arc<Declarations>) -> Tokens {
-    tokens.set_declarations(Some(set.clone()));
-    tokens
-}
-
-/// A UI set's own reader says what it left out in sentences alone.
-fn said((tokens, left_out): (Tokens, Vec<String>)) -> (Tokens, Vec<super::theme_file::LeftOut>) {
-    let left_out = left_out
-        .into_iter()
-        .map(super::theme_file::LeftOut::said)
-        .collect();
-    (tokens, left_out)
+    out
 }

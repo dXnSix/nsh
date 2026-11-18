@@ -5,8 +5,12 @@
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
-use nsh_base::{Theme, theme};
-use nsh_core::{ApproxTextEngine, Color, MountBatch, MountItem, Size, element::Root, prelude::*};
+use nsh_base::theme;
+use nsh_core::{
+    ApproxTextEngine, Color, Hsla, MountBatch, MountItem, Size,
+    element::{Patch, PatchValues, Root},
+    prelude::*,
+};
 use nsh_engine::{App, Engine, EngineConfig, Environment};
 
 use crate::ChannelSink;
@@ -155,11 +159,7 @@ fn update_theme_and_reset_theme_change_some_tokens_while_it_runs() {
 /// back, while it runs.
 #[component]
 fn Steps() -> impl IntoElement {
-    let primary = |hex: u32| {
-        let mut tokens = nsh_core::element::Tokens::default();
-        tokens.set_color("primary", rgb(hex).into());
-        tokens
-    };
+    let primary = |hex: u32| Patch::new().value("primary", Hsla::from(rgb(hex)));
     set_timeout(Duration::from_millis(100), move || {
         update_tokens(primary(0x00ff00));
         update_tokens(primary(0xff0000));
@@ -173,12 +173,10 @@ fn Steps() -> impl IntoElement {
 /// UI set's default.
 #[test]
 fn a_rust_app_updates_and_resets_its_tokens() {
-    let app_theme = Theme::from_json(r##"{ "cssVars": { "light": { "primary": "#0000ff" } } }"##)
-        .unwrap()
-        .into_tokens();
+    let app_theme = r##"{ "tokens": { "primary": { "kind": "color", "value": "#0000ff" } } }"##;
     let (tx, rx) = crossbeam_channel::unbounded();
     let config = EngineConfig {
-        app: App::Rust(Root::new::<Steps>(|| ()).tokens(app_theme)),
+        app: App::Rust(Root::new::<Steps>(|| ()).theme(app_theme)),
         viewport: Size::new(px(390.0), px(844.0)),
         trace: false,
         content_culling: false,

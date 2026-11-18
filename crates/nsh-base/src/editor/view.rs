@@ -36,19 +36,28 @@ const INFO: AdaptiveColor = AdaptiveColor::rgb(0x2563eb, 0x60a5fa);
 /// the token the app's theme maps it onto, else the one of that name), else
 /// the editor's own amber.
 fn match_color() -> AdaptiveColor {
-    theme().tokens().role(role::HIGHLIGHT).unwrap_or(MATCH)
+    theme()
+        .tokens()
+        .role(role::HIGHLIGHT)
+        .map_or(MATCH, AdaptiveColor::from)
 }
 
 /// A warning's color: the theme's `warning` ([`role::WARNING`]), else the
 /// editor's own amber.
 fn warning_color() -> AdaptiveColor {
-    theme().tokens().role(role::WARNING).unwrap_or(WARNING)
+    theme()
+        .tokens()
+        .role(role::WARNING)
+        .map_or(WARNING, AdaptiveColor::from)
 }
 
 /// An information's color: the theme's `info` ([`role::INFO`]), else the
 /// editor's own blue.
 fn info_color() -> AdaptiveColor {
-    theme().tokens().role(role::INFO).unwrap_or(INFO)
+    theme()
+        .tokens()
+        .role(role::INFO)
+        .map_or(INFO, AdaptiveColor::from)
 }
 
 /// `el` with part `part`'s classes and style, which follow the props.

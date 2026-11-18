@@ -110,7 +110,7 @@ fn main() -> gtk::glib::ExitCode {
 }
 ```
 
-`Root::tokens` 为根组件设置[主题](./rust.md#主题)，`Root::app_id` 设置保存其数据所用的 id。`nsh build` 写出的 TSX bundle
+`Root::theme(json)` 为根组件设置[主题](./rust.md#主题)（一份主题文档），`Root::app_id` 设置保存其数据所用的 id。`nsh build` 写出的 TSX bundle
 也加载到同一种视图中，`asset_base` 设为它的 `assets` 目录：
 
 ```rust

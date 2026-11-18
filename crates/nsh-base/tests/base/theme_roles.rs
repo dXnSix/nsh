@@ -6,16 +6,16 @@
 use nsh_base::{Theme, role, theme};
 use nsh_core::{
     Color, Size,
-    element::{Root, Tokens},
+    element::{Patch, PatchValues, Root},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
 use nsh_testing::Headless;
 
-fn start<C: Component<Props = ()>>(tokens: Tokens) -> Headless {
+fn start<C: Component<Props = ()>>(tokens: Patch) -> Headless {
     let config = EngineConfig {
         viewport: Size::new(px(390.0), px(844.0)),
-        ..EngineConfig::new(Root::of::<C>().tokens(tokens))
+        ..EngineConfig::new(Root::of::<C>().theme_overrides(nsh_theme::write_patch(&tokens)))
     };
     let mut app = Headless::start(config).unwrap();
     app.first_render().unwrap();
@@ -44,18 +44,21 @@ fn Fields() -> impl IntoElement {
 
 #[test]
 fn theme_reads_the_tokens_roles_map_onto() {
-    let mut tokens = Theme::default().into_tokens();
-    tokens.set_color("surface-overlay", AdaptiveColor::rgb(0x123456, 0x654321));
-    tokens.set_color("action", AdaptiveColor::rgb(0xabcdef, 0xfedcba));
-    tokens.set_color("highlight", AdaptiveColor::rgb(0x00ff00, 0x00ff00));
-    tokens.set_number("radius-control", 6.0);
-    tokens.set_font("font-body", "Inter");
+    let tokens = Patch::new();
+    let tokens = tokens.value(
+        "surface-overlay",
+        AdaptiveColor::rgb(0x123456, 0x654321).light,
+    );
+    let tokens = tokens.value("action", AdaptiveColor::rgb(0xabcdef, 0xfedcba).light);
+    let tokens = tokens.value("highlight", AdaptiveColor::rgb(0x00ff00, 0x00ff00).light);
+    let tokens = tokens.value("radius-control", 6.0_f32);
+    let tokens = tokens.value("font-body", std::sync::Arc::<str>::from("Inter"));
     let tokens = tokens
-        .with_role(role::POPOVER, "surface-overlay")
-        .with_role(role::PRIMARY, "action")
-        .with_role(role::SELECTION, "highlight")
-        .with_role(role::RADIUS, "radius-control")
-        .with_role(role::FONT_SANS, "font-body");
+        .role(role::POPOVER.name(), "surface-overlay")
+        .role(role::PRIMARY.name(), "action")
+        .role(role::SELECTION.name(), "highlight")
+        .role(role::RADIUS.name(), "radius-control")
+        .role(role::FONT_SANS.name(), "font-body");
     let mut app = start::<Fields>(tokens);
     app.wait_for(
         "text:popover #123456ff primary #abcdefff selection #00ff00ff radius 6 font Inter",
@@ -66,7 +69,7 @@ fn theme_reads_the_tokens_roles_map_onto() {
 #[test]
 fn without_a_mapping_the_theme_is_the_same() {
     let default = Theme::default();
-    let mut app = start::<Fields>(default.clone().into_tokens());
+    let mut app = start::<Fields>(Patch::new());
     app.wait_for(&format!(
         "text:popover {} primary {} selection {} radius {} font system",
         hex(default.popover),
@@ -81,9 +84,7 @@ fn without_a_mapping_the_theme_is_the_same() {
 /// its own name, then the default theme's.
 #[test]
 fn a_role_mapped_onto_a_missing_token_falls_back() {
-    let tokens = Theme::default()
-        .into_tokens()
-        .with_role(role::POPOVER, "nowhere");
+    let tokens = Patch::new().role(role::POPOVER.name(), "nowhere");
     let default = Theme::default();
     let mut app = start::<Fields>(tokens);
     app.wait_for(&format!(

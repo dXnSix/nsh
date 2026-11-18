@@ -114,8 +114,8 @@ gpui_platform::application().run(|cx| {
 });
 ```
 
-`Root::tokens` gives the root its [theme](./rust.md#theme) (`nsh_base::Theme::from_json(json)?.into_tokens()`,
-`Theme` is re-exported here) and `Root::app_id` the id its data is kept under. A TSX bundle that `nsh build` wrote
+`Root::theme(json)` gives the root its [theme](./rust.md#theme), a theme document, `Root::theme_overrides(json)` a
+patch over it, and `Root::app_id` the id its data is kept under. A TSX bundle that `nsh build` wrote
 loads into the same view:
 
 ```rust

@@ -58,19 +58,15 @@ struct Runtime {
     listener: RefCell<Option<Value>>,
     registries: RefCell<Vec<nsh_core::element::Registry>>,
     tokens: RefCell<Option<std::sync::Arc<nsh_core::element::Tokens>>>,
-    theme: RefCell<Option<nsh_core::element::ThemeTokens>>,
     /// The tokens each live `ThemeScope` draws with, by its slot, as
     /// nsh-js's (`env.rs`, `Env::scope_tokens`); the free slots; and the
     /// count of the times a scope's tokens were made.
     scope_tokens: RefCell<Vec<Option<std::sync::Arc<nsh_core::element::Tokens>>>>,
     scope_free: RefCell<Vec<usize>>,
     scope_versions: std::cell::Cell<u32>,
-    /// The theme file the app was built with (`setup`), which
+    /// The theme document the app was built with (`setup`), which
     /// `setTheme(null)` gives back.
     built_theme: RefCell<Option<String>>,
-    /// The theme file the app's tokens come from now (the built one, or
-    /// `setTheme`'s), which `resetTheme` puts tokens back to.
-    current_theme: RefCell<Option<String>>,
     host: RefCell<Option<Rc<dyn nsh_core::host_channel::HostBridge>>>,
     wake: RefCell<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
     fonts: RefCell<Vec<String>>,
@@ -95,12 +91,10 @@ impl Default for Runtime {
             listener: RefCell::default(),
             registries: RefCell::default(),
             tokens: RefCell::default(),
-            theme: RefCell::default(),
             scope_tokens: RefCell::default(),
             scope_free: RefCell::default(),
             scope_versions: std::cell::Cell::new(0),
             built_theme: RefCell::default(),
-            current_theme: RefCell::default(),
             host: RefCell::default(),
             wake: RefCell::default(),
             fonts: RefCell::default(),
@@ -216,7 +210,6 @@ impl Runtime {
             402 | 414 => {
                 use nsh_core::element::Token;
                 let name = args.index(0)?.as_string().unwrap_or_default();
-                let dark = args.index(1)?.truthy();
                 // In a `ThemeScope` with tokens, the scope's (its memo's
                 // value names them), else the surface's.
                 let scoped = args
@@ -230,20 +223,16 @@ impl Runtime {
                     .and_then(|t| t.mapped(&name).filter(|token| t.get(token).is_some()))
                     .map(str::to_owned)
                     .unwrap_or(name);
-                // A number in the appearance shown, as nsh-js's `token()`.
-                let token = tokens.as_ref().and_then(|t| match t.get(&name) {
-                    Some(Token::Number(_)) => t.number_in(&name, dark).map(Token::Number),
-                    token => token,
-                });
-                match token {
+                match tokens.as_ref().and_then(|t| t.get(&name)) {
                     Some(Token::Number(n)) => Ok(Value::number(n.into())),
                     Some(Token::Font(f)) => Value::string(&f),
-                    Some(Token::Color(c)) => Value::string(&format!(
-                        "#{:08x}",
-                        nsh_core::Color::from(if dark { c.dark } else { c.light }).0
-                    )),
-                    Some(Token::Shadow(s)) => Value::string(&s.css(dark)),
-                    Some(Token::Gradient(g)) => Value::string(&g.css(dark)),
+                    Some(Token::Color(c)) => {
+                        Value::string(&format!("#{:08x}", nsh_core::Color::from(c).0))
+                    }
+                    Some(Token::Shadow(s)) => Value::string(
+                        &nsh_core::element::AdaptiveShadow::new(s.iter().copied(), []).css(false),
+                    ),
+                    Some(Token::Gradient(g)) => Value::string(&g.css()),
                     Some(Token::String(s)) => Value::string(&s),
                     // `true` and `false`, as the page's values are kept.
                     Some(Token::Boolean(b)) => Ok(Value(if b { 3 } else { 2 })),
@@ -253,91 +242,49 @@ impl Runtime {
             }
             403 => {
                 let json = args.index(0)?.as_string().unwrap_or_default();
-                let tokens = self
-                    .theme
-                    .borrow()
-                    .as_ref()
-                    .and_then(|theme| theme.of(&json));
-                if let Some(tokens) = tokens {
-                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
-                }
-                *self.current_theme.borrow_mut() = Some(json.clone());
                 *self.built_theme.borrow_mut() = Some(json);
                 Ok(Value(0))
             }
-            // `setTheme(theme)`, as nsh-js's (`env.rs`): the theme read whole
-            // or a `TypeError` naming what is not; `null`, the one the app
-            // was built with. The page reads `token()` from here at once.
+            // `setTheme(theme)`, as nsh-js's (`env.rs`): the app's theme
+            // document from now on; `null`, the one the app was built with.
+            // The core reads it when the turn's ops reach it.
             406 => {
                 use nsh_core::element::JsError;
                 let value = args.index(0)?;
-                let theme = self.theme.borrow();
-                let (json, tokens) = if value.is_nullish() {
-                    let built = self.built_theme.borrow().clone();
-                    let json = built.unwrap_or_else(|| r#"{"cssVars":{}}"#.to_owned());
-                    let tokens = theme.as_ref().and_then(|t| t.of(&json));
-                    (json, tokens)
+                let json = if value.is_nullish() {
+                    self.built_theme.borrow().clone()
                 } else if value.is_object() {
-                    let json = protocol::to_json(&compat::Value::new(value))?.to_string();
-                    match theme.as_ref().and_then(|t| t.checked(&json)) {
-                        Some(Err(what)) => {
-                            return Err(self.throw(JsError::Type(format!("setTheme: {what}"))));
-                        }
-                        Some(Ok(tokens)) => (json, Some(tokens)),
-                        None => (json, None),
-                    }
+                    Some(protocol::to_json(&compat::Value::new(value))?.to_string())
                 } else {
-                    let message = "setTheme: expected a theme ({ cssVars }) or null";
+                    let message = "setTheme: expected a theme document or null";
                     return Err(self.throw(JsError::Type(message.into())));
                 };
-                *self.current_theme.borrow_mut() = Some(json.clone());
-                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
-                    id: nsh_core::ROOT_ID,
-                    prop: nsh_core::Prop::UiTheme(json.into()),
-                });
-                if let Some(tokens) = tokens {
-                    // The contexts the app picked stay picked, as in the core.
-                    let current = self.tokens.borrow().clone().unwrap_or_default();
-                    let tokens = tokens.with_picks_of(&current);
-                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
+                if let Some(json) = json {
+                    self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
+                        id: nsh_core::ROOT_ID,
+                        prop: nsh_core::Prop::UiTheme(json.into()),
+                    });
                 }
                 Ok(Value(0))
             }
-            // `updateTheme(theme)`, as nsh-js's (`env.rs`): the tokens the
-            // theme sets change over the others, read whole or a
-            // `TypeError` naming what is not.
+            // `updateTheme(patch)`, as nsh-js's (`env.rs`): the core merges
+            // the theme patch into the app's when the turn's ops reach it.
             409 => {
                 use nsh_core::element::JsError;
                 let value = args.index(0)?;
                 if !value.is_object() {
-                    let message = "updateTheme: expected a theme ({ cssVars })";
+                    let message = "updateTheme: expected a theme patch";
                     return Err(self.throw(JsError::Type(message.into())));
                 }
                 let json = protocol::to_json(&compat::Value::new(value))?.to_string();
-                let current = self.tokens.borrow().clone().unwrap_or_default();
-                let updated = self
-                    .theme
-                    .borrow()
-                    .as_ref()
-                    .and_then(|t| t.updated(&current, &json));
-                let tokens = match updated {
-                    Some(Err(what)) => {
-                        return Err(self.throw(JsError::Type(format!("updateTheme: {what}"))));
-                    }
-                    Some(Ok(tokens)) => Some(tokens),
-                    None => None,
-                };
                 self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
                     id: nsh_core::ROOT_ID,
                     prop: nsh_core::Prop::UiThemeUpdate(json.into()),
                 });
-                if let Some(tokens) = tokens {
-                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
-                }
                 Ok(Value(0))
             }
-            // `resetTheme(names?)`, as nsh-js's: the tokens named (none:
-            // every one) go back to the app's theme's.
+            // `resetTheme(names?)`, as nsh-js's: the app's overrides of the
+            // names (none: every one) go.
             410 => {
                 use nsh_core::element::JsError;
                 let value = args.index(0)?;
@@ -354,21 +301,10 @@ impl Runtime {
                     };
                     Some(names)
                 };
-                let json = self.current_theme.borrow().clone();
-                let json = json.unwrap_or_else(|| r#"{"cssVars":{}}"#.to_owned());
-                let current = self.tokens.borrow().clone().unwrap_or_default();
-                let tokens = self
-                    .theme
-                    .borrow()
-                    .as_ref()
-                    .and_then(|t| t.reset(&current, &json, names.as_deref()));
                 self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
                     id: nsh_core::ROOT_ID,
                     prop: nsh_core::Prop::UiThemeReset(names),
                 });
-                if let Some(tokens) = tokens {
-                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
-                }
                 Ok(Value(0))
             }
             // `setModifier(name, context)`, as nsh-js's (`env.rs`): the
@@ -384,47 +320,36 @@ impl Runtime {
                     return Err(self.throw(JsError::Type(message.into())));
                 };
                 let current = self.tokens.borrow().clone().unwrap_or_default();
-                let picked = self
-                    .theme
-                    .borrow()
-                    .as_ref()
-                    .map(|t| t.modifier(&current, &name, &context));
-                let tokens = match picked {
-                    Some(Err(what)) => {
-                        return Err(self.throw(JsError::Type(format!("setModifier: {what}"))));
+                let known = current.modifiers().into_iter().find(|m| *m.name == *name);
+                let what = match known {
+                    None => Some(format!("the theme has no modifier `{name}`")),
+                    Some(m) if !m.contexts.iter().any(|c| **c == *context) => {
+                        Some(format!("the modifier `{name}` has no context `{context}`"))
                     }
-                    Some(Ok(tokens)) => Some(tokens),
-                    None => None,
+                    Some(_) => None,
                 };
+                if let Some(what) = what {
+                    return Err(self.throw(JsError::Type(format!("setModifier: {what}"))));
+                }
                 self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
                     id: nsh_core::ROOT_ID,
                     prop: nsh_core::Prop::UiModifier(name.into(), context.into()),
                 });
-                if let Some(tokens) = tokens {
-                    *self.tokens.borrow_mut() = Some(std::sync::Arc::new(tokens));
-                }
                 Ok(Value(0))
             }
             // `modifier(name)` (416) and `modifiers()` (417), as nsh-js's: the
             // context a modifier has now, and every modifier as JSON.
             416 | 417 => {
                 let tokens = self.tokens.borrow().clone().unwrap_or_default();
-                let Some(modifiers) = tokens.modifiers() else {
-                    return if op == 416 {
-                        Ok(Value(0))
-                    } else {
-                        Value::string("[]")
-                    };
-                };
                 if op == 416 {
                     let name = args.index(0)?.as_string().unwrap_or_default();
-                    return match modifiers.selected(&name) {
+                    return match tokens.modifier(&name) {
                         Some(context) => Value::string(context),
                         None => Ok(Value(0)),
                     };
                 }
-                let list: Vec<serde_json::Value> = modifiers
-                    .axes()
+                let list: Vec<serde_json::Value> = tokens
+                    .modifiers()
                     .into_iter()
                     .map(|axis| {
                         serde_json::json!({
@@ -479,10 +404,10 @@ impl Runtime {
                 Value::string(&json.to_string())
             }
             // A `ThemeScope`'s tokens, as nsh-js's `make_scope_tokens`
-            // (`env.rs`): its theme's values over the tokens around it (the
-            // ones the scope around it names, else the surface's), kept in
-            // its slot. Returns the scope's memo value, new when the tokens
-            // are.
+            // (`env.rs`): its picks and theme patch over the tokens around it
+            // (the ones the scope around it names, else the surface's), kept
+            // in its slot. Returns the scope's memo value, new when the
+            // tokens are.
             411 => {
                 let slot = args.index(0)?.as_number().unwrap_or(-1.0) as usize;
                 let theme = args.index(1)?;
@@ -492,35 +417,25 @@ impl Runtime {
                     .and_then(|named| self.scope_tokens_named(named))
                     .or_else(|| self.tokens.borrow().clone())
                     .unwrap_or_default();
-                // Its modifiers' contexts first (argument 3), its theme over
-                // them; what it leaves out is said once, by the component in
-                // the core.
+                // Its modifiers' contexts first (argument 3), its theme patch
+                // over them; what it leaves out is said once, by the
+                // component in the core.
                 let picks = protocol::to_json(&compat::Value::new(args.index(3)?))
                     .unwrap_or(serde_json::Value::Null);
-                let around = match picks.as_object() {
-                    Some(picks) => {
-                        let picks: Vec<(&str, &str)> = picks
+                let picks = picks.as_object().map(|picks| {
+                    nsh_core::element::ScopeModifiers::new(
+                        picks
                             .iter()
-                            .filter_map(|(n, c)| Some((n.as_str(), c.as_str()?)))
-                            .collect();
-                        std::sync::Arc::new(around.picked(&picks).0)
-                    }
-                    None => around,
-                };
-                let tokens = if theme.is_object() {
+                            .filter_map(|(n, c)| Some((n.as_str(), c.as_str()?))),
+                    )
+                });
+                let patch = if theme.is_object() {
                     let json = protocol::to_json(&compat::Value::new(theme))?.to_string();
-                    let read = self
-                        .theme
-                        .borrow()
-                        .as_ref()
-                        .and_then(|t| t.scoped(&around, &json));
-                    match read {
-                        Some(Ok((tokens, _))) => std::sync::Arc::new(tokens),
-                        _ => around,
-                    }
+                    Some(nsh_theme::read_patch(&json).0)
                 } else {
-                    around
+                    None
                 };
+                let tokens = around.scoped(picks.as_ref(), patch).0;
                 let mut slots = self.scope_tokens.borrow_mut();
                 let Some(held) = slots.get_mut(slot) else {
                     return Ok(Value(0));

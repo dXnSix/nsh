@@ -131,7 +131,7 @@ view.load(Bundle::source(code).into());
 内容；`stop`（或销毁窗口）结束应用。`asset_base` 指定 `asset:/` URI 从哪里解析（`AssetBase::Directory` 或 `AssetBase::Http`）。
 字节码 bundle（`bundle.nshc`）用 `unsafe { Bundle::bytecode(bytes) }`（或同样是 unsafe 的 `Bundle::read_trusted(path)`）加载：
 QuickJS 字节码是受信任的输入，只能从你自己应用的文件中加载。独立窗口用 `nsh_platform_windows::run_app(source, options)`，传入 `AppSource::Rust(root)` 或
-`AppSource::Bundle(bundle)`。`Root::tokens` 为根组件设置[主题](./rust.md#主题)，`Root::app_id` 设置保存其数据所用的 id。
+`AppSource::Bundle(bundle)`。`Root::theme(json)` 为根组件设置[主题](./rust.md#主题)（一份主题文档），`Root::app_id` 设置保存其数据所用的 id。
 
 `AppOptions::notifications` 把进程的[通知](../modules/nsh.md#notifications)交给视图运行的应用：横幅、点击和角标都归它。默认关闭，这时嵌入应用的通知是 `unavailable`，你的应用的通知仍归你；`run_app` 会打开它。
 

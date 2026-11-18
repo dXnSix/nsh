@@ -731,11 +731,16 @@ theme in this format. Its rules:
    value that is the same in both appearances becomes the entry as it is; one that differs becomes a reference
    `{<token>.<modifier>.<context>}` to a helper token holding the light value, which `colorMode`'s `dark` context
    sets to the dark value.
-5. **`var()`.** A whole value `var(--x)` becomes `{x}`, with `x` renamed to its token when `x` is a role. Any other
-   `var()` is copied as the old reader copied it.
+5. **`var()`.** A whole value `var(--x)`, of any type, becomes `{x}`, with `x` renamed to its token when `x` is a role,
+   unless a context of an old modifier sets `x` or a token `x` refers to, `x` has another type, or the old reader read
+   a value that `x`'s differs from (a string's own text `var(--x)`): then the old reader's value stays. A whole
+   `var(--x)` the old reader read no value of (it copied only colors and numbers: a font's, a boolean's) becomes `{x}`
+   on the same conditions, else it stays left out. Any other `var()` is copied as the old reader copied it.
 6. **Roles** are copied.
 7. **Over a base.** With `--over`, an old app theme that extended a library's old default becomes one complete
-   document: the base's tokens and the app's together, the app's winning by name.
+   document, as the old runtime read it: the base's tokens and the app's together, the app's winning by name. A base
+   that declares `tokens` is a registered theme document, and the app's theme is read by its declarations; a theme
+   that declares `tokens` over a base that declares none replaces it, and only its own names are kept.
 8. **What the format can't express** is reported and left out.
 
 The output reads with no error, and for every combination (every appearance, with every choice of one context per old

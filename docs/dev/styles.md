@@ -110,36 +110,37 @@
   system's; in a view with an appearance of its own (a `ThemeScope`), that view's (`Core::dark_at`: the core keeps
   per node what the nearest such view says, pushed down when a view is inserted or the prop changes, and applies each
   node's classes in it, so a scope restyles only its own nodes whose classes depend on the appearance, and a change
-  of the surface's leaves them alone). A view with design tokens of its own (a `ThemeScope` with a `theme`) has the
-  classes in it resolved with its values: a list that reads a token the scope changes is parsed for the scope, every
+  of the surface's leaves them alone). The appearance never changes a token's value: a theme's dark values are a
+  context of its light/dark modifier (`docs/dev/theme-format.md`, section 5), which `set_modifier` or a scope's
+  `modifiers` picks. A view with design tokens of its own (a `ThemeScope` with `modifiers` or a `theme` patch) has
+  the classes in it resolved with its values: a list that reads a token the scope changes is parsed for the scope, every
   other list is the surface's (`Core::classes_at`, `components.md` "ThemeScope"). A view's parts (a page's
   `headerClass`, a list's `contentClass`) are resolved in its scope as its own classes are, and parsed again by
   their names when a token they read changes there or on the surface. The theme is Tailwind 4's
   extended by `nsh.json` `"tailwind"` (`colors`, `spacing`, `breakpoints`, `fontSize`, `radius`, `shadow`, ...; unknown
   keys are build errors). Rust components do not use classes: their typed styles (`element/style.rs`, every utility group has its
   methods, tested against the classes) lower into the same rules and their
-  colors come from `nsh/base`'s theme, `nsh.json` `"theme"` (`docs/dev/components.md`); the Tailwind theme only
-  shapes the app's own classes. The app's classes name the design tokens (`element::Tokens`: shadcn/ui's and the app's
-  own, `nsh.json` `"theme"`, by the names of `tailwind/theme.rs` `ClassTokens`) as Tailwind 4 names the variables of
+  colors come from the active theme document, `nsh.json` `"theme"` or a UI set's (`docs/dev/components.md` "The
+  theme"); the Tailwind theme only shapes the app's own classes. The app's classes name the design tokens
+  (`element::Tokens`: the active document's, by the names of `tailwind/theme.rs` `ClassTokens`) as Tailwind 4 names
+  the variables of
   `@theme`: a color is a color utility's name (`bg-primary`, `text-muted-foreground/70`, `bg-up/30`) when the
   Tailwind palette has no color of that name (a palette color of the same name wins), and every token is a variable
   (`bg-(--primary)`, `rounded-(--radius)`, `text-(length:--x)`, `font-(family-name:--font-mono)`); the fonts
   `font-sans` / `font-mono`, when the theme sets them, are what the `font-sans` / `font-mono` utilities set
   (`ClassTokens::replaces`); a number token of a Tailwind 4 namespace (`radius-`, `spacing-`, `text-`, `font-weight-`,
   `tracking-`, `leading-`, `blur-`) is a named class of that namespace's utilities (`rounded-card`, `p-gutter`,
-  `font-strong`: `ClassTokens::substitute` → `named_number`, an arbitrary value by name prefix, so cssVars-only TSX
-  apps get them), checked after Tailwind's own names, which keep winning (`Theme::shadowed_tokens` lists each token's
+  `font-strong`: `ClassTokens::substitute` → `named_number`, an arbitrary value by name prefix), checked after Tailwind's own names, which keep winning (`Theme::shadowed_tokens` lists each token's
   classes that stay Tailwind's or, for `text-`, a color's, which the bundler warns of), and before colors at the same
-  utility except for `text-` (the longer utility wins otherwise: `inset-shadow-card`); the theme reader makes
-  `font-weight-*` numbers and leaves `em` lengths out, so `tracking-*` tokens are points; and `font-sans` is the default
-  font of every text (Tailwind's `--font-sans`, a page's
-  preflight). Such a utility is parsed with the light and the dark values as arbitrary ones (two rules of its rank
-  when they differ, so it follows the appearance with no `dark:`) and depends on `deps::THEME`. When the design
-  tokens the app draws with change (`Core::set_tokens`, `set_host_tokens`; a host's keep the app's names they lack,
-  `Tokens::over`), `Core::class_tokens_changed` drops the cached strings that name tokens and resolves
-  their nodes (and the app's classes on Rust components) again; when the names change, every class. Classes name
-  tokens only, never roles (`element::Role`, what NSH's own parts draw with, `components.md` "The theme"): a role
-  mapped onto another token (`Tokens::with_role`) adds no class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
+  utility except for `text-` (the longer utility wins otherwise: `inset-shadow-card`); a number token is points
+  (`tracking-*` too); and `font-sans` is the default font of every text (Tailwind's `--font-sans`, a page's
+  preflight). Such a utility is parsed with the token's one value as an arbitrary one and depends on
+  `deps::THEME`. When the design tokens the app draws with change (a theme action resolved by
+  `Core::install_theme`: another document, a pick, the app's or the host's patch), `Core::class_tokens_changed`
+  drops the cached strings that name a token whose value changed and resolves their nodes (and the app's classes
+  on Rust components) again; when the names change, every class. Classes name tokens only, never roles
+  (`element::Role`, what NSH's own parts draw with, `components.md` "The theme"): a role mapped onto another token
+  (a document's or a patch's `"roles"`) adds no class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
   unknown class '...'`, target `nsh::build`); the core logs each unknown class once at run time. Settings
   that are props in React Native are style keys here, as in CSS (`numberOfLines`, `textOverflow`, `userSelect`,
   `pointerEvents`, `objectFit`; `line-clamp-*`, `truncate`, `text-ellipsis`, `select-*`, `pointer-events-*`,
@@ -538,7 +539,8 @@ none).
 ## Colors
 
 Colors in Rust follow GPUI's design (`nsh_core::color`; GPUI is a reference, not a dependency). **`Hsla`** is the
-color Rust code holds, passes and computes with: theme colors (`AdaptiveColor { light: Hsla, dark: Hsla }`), the
+color Rust code holds, passes and computes with: color tokens, colors per appearance (`AdaptiveColor { light: Hsla,
+dark: Hsla }`), the
 `Styled` color methods (`.bg(..)`, `.text_color(..)`: anything `Into<AdaptiveColor>`, so an `Hsla`, an `Rgba` or a
 theme color), host element setters (`.placeholder_color(..)`, `.header_tint_color(..)`), the canvas painter, the
 palette (`palette::SKY.shade(500)`), `color(..)` (an adaptive color for the appearance now) and Rust components'

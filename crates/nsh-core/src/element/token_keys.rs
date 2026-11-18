@@ -1,36 +1,50 @@
 //! Typed keys of design tokens: a token's name with the type of its value
 //! ([`TokenKey`]), so code that reads or writes a token of the app's own is
 //! checked by the compiler: a name that is no key does not compile, nor does
-//! a value of another kind. `theme_keys!` makes them of a theme document's
-//! `tokens` section; they read the token dictionary ([`Tokens`]) and hold
-//! nothing of their own.
+//! a value of another type. `theme_keys!` makes them of a theme document's
+//! `tokens` section; they read the token store ([`Tokens`]) and hold nothing
+//! of their own.
 //!
 //! A key reads the token of its name. Code that cannot know the app's names
 //! (`nsh-base`'s components, the platforms' own controls) reads roles
 //! instead ([`super::Role`]), which a theme maps onto its tokens.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
-use super::{AdaptiveColor, AdaptiveGradient, AdaptiveShadow, SharedString, Tokens};
-use crate::geometry::Points;
+use nsh_theme::ValueType;
 
-/// A design token by name, with the type of its value: a color
-/// ([`AdaptiveColor`]), a number (`f32`, a length as [`Points`]), a font
-/// family ([`SharedString`]), box shadows ([`AdaptiveShadow`]) or
-/// gradients ([`AdaptiveGradient`]).
+use super::{Blur, Border, CubicBezier, Token, Tokens, TransitionToken, Typography};
+use crate::{BoxShadow, color::Hsla, effects::Gradient, geometry::Points};
+
+/// A design token by name, with the type of its value: the Rust type of
+/// its value type (`element/theme_values.rs`' table: [`Hsla`] for a color,
+/// `f32` or [`Points`] for a number, `Arc<str>` for a font, …).
 ///
 /// ```
-/// use nsh_core::{
-///     element::{AdaptiveColor, TokenKey, Tokens},
-///     geometry::Points,
-/// };
+/// use std::sync::Arc;
 ///
-/// const CARD: TokenKey<Points> = TokenKey::new("radius-card");
-/// const INK: TokenKey<AdaptiveColor> = TokenKey::new("ink");
+/// use nsh_core::element::{Patch, PatchValues, TokenKey, Tokens, Typography};
 ///
-/// let tokens = Tokens::default().with(CARD, Points(12.0));
-/// assert_eq!(tokens.key(CARD), Some(Points(12.0)));
+/// const CARD: TokenKey<f32> = TokenKey::new("radius-card");
+/// const TITLE: TokenKey<Typography> = TokenKey::new("text-title");
+/// const INK: TokenKey<nsh_core::color::Hsla> = TokenKey::new("ink");
+///
+/// let document = nsh_theme::read(
+///     r##"{ "tokens": {
+///         "radius-card": { "kind": "number", "value": 12 },
+///         "text-title": { "kind": "typography",
+///             "value": { "fontSize": 20, "lineHeight": 1.25, "fontFamily": "Inter, sans-serif" } }
+///     } }"##,
+/// )
+/// .document;
+/// let (tokens, _) = Tokens::resolve(Arc::new(document), Default::default(), Vec::new());
+/// assert_eq!(tokens.key(CARD), Some(12.0));
+/// assert_eq!(tokens.key(TITLE).map(|t| t.size.0), Some(20.0));
 /// assert_eq!(tokens.key(INK), None);
+///
+/// // A change to hand `update_tokens`.
+/// let patch = Patch::new().key(CARD, 14.0);
+/// assert_eq!(patch.values.len(), 1);
 /// ```
 pub struct TokenKey<V> {
     name: &'static str,
@@ -54,14 +68,12 @@ impl<V> TokenKey<V> {
 
 impl<V: TokenValue> TokenKey<V> {
     /// Its token's value where it is read: the nearest
-    /// [`super::ThemeScope`]'s, a number its value in the appearance there,
-    /// as [`super::token`] reads it. Reading it subscribes, as
-    /// [`super::tokens`] does. `None`: the tokens have none of its name and
-    /// kind.
+    /// [`super::ThemeScope`]'s, as [`super::token`] reads it. Reading it
+    /// subscribes to that token alone outside a scope, to the scope's
+    /// tokens inside one. `None`: the tokens have none of its name and
+    /// type.
     pub fn get(self) -> Option<V> {
-        let tokens = super::tokens();
-        let dark = V::per_appearance(&tokens, self.name) && super::dark();
-        V::read(&tokens, self.name, dark)
+        super::ambient::with_token(self.name, |token| token.and_then(V::from_token))
     }
 }
 
@@ -93,200 +105,87 @@ impl<V> std::fmt::Debug for TokenKey<V> {
     }
 }
 
-/// What a [`TokenKey`] reads: the value of one kind of token.
+/// What a [`TokenKey`] reads: the value of one value type, in its Rust
+/// type.
 pub trait TokenValue: Sized + sealed::Sealed {
-    /// The kind it is, as a sentence names it (`"color"`).
-    const KIND: &'static str;
+    /// The value type it is.
+    const TYPE: ValueType;
 
-    /// The token `name` of `tokens` as this, in the dark appearance
-    /// (`dark`) or the light one, if they have it as this kind.
+    /// `token` as this, if it is of this type.
     #[doc(hidden)]
-    fn read(tokens: &Tokens, name: &str, dark: bool) -> Option<Self>;
+    fn from_token(token: &Token) -> Option<Self>;
 
-    /// Sets it as the token `name` of `tokens`.
+    /// This as a token.
     #[doc(hidden)]
-    fn write(self, name: &str, tokens: &mut Tokens);
-
-    /// Whether token `name` of `tokens` read as this differs between the
-    /// appearances in a way [`TokenValue::read`]'s `dark` decides (a
-    /// number with a dark value of its own): [`TokenKey::get`] reads the
-    /// appearance only then.
-    #[doc(hidden)]
-    fn per_appearance(tokens: &Tokens, name: &str) -> bool {
-        tokens.has_dark_number(name)
-    }
+    fn into_token(self) -> Token;
 }
 
 mod sealed {
     pub trait Sealed {}
-    impl Sealed for super::AdaptiveColor {}
+    impl Sealed for super::Hsla {}
     impl Sealed for f32 {}
     impl Sealed for super::Points {}
-    impl Sealed for super::SharedString {}
     impl Sealed for std::sync::Arc<str> {}
-    impl Sealed for super::AdaptiveShadow {}
-    impl Sealed for super::AdaptiveGradient {}
     impl Sealed for String {}
     impl Sealed for bool {}
     impl Sealed for std::time::Duration {}
-    impl Sealed for crate::element::CubicBezier {}
-    impl Sealed for crate::element::Typography {}
+    impl Sealed for super::CubicBezier {}
+    impl Sealed for super::Typography {}
+    impl Sealed for std::sync::Arc<[super::BoxShadow]> {}
+    impl Sealed for super::Gradient {}
+    impl Sealed for super::Blur {}
+    impl Sealed for super::Border {}
+    impl Sealed for super::TransitionToken {}
 }
 
-impl TokenValue for String {
-    const KIND: &'static str = "string";
+macro_rules! token_value {
+    ($($ty:ty: $value_type:ident),* $(,)?) => {$(
+        impl TokenValue for $ty {
+            const TYPE: ValueType = ValueType::$value_type;
 
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens.string(name).map(|s| s.to_string())
-    }
+            fn from_token(token: &Token) -> Option<Self> {
+                match token {
+                    Token::$value_type(value) => Some(value.clone()),
+                    _ => None,
+                }
+            }
 
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_string(name, self);
-    }
+            fn into_token(self) -> Token {
+                Token::$value_type(self)
+            }
+        }
+    )*};
 }
 
-impl TokenValue for bool {
-    const KIND: &'static str = "boolean";
+token_value!(
+    Hsla: Color,
+    f32: Number,
+    Arc<str>: Font,
+    String: String,
+    bool: Boolean,
+    Duration: Duration,
+    CubicBezier: Easing,
+    Typography: Typography,
+    Arc<[BoxShadow]>: Shadow,
+    Gradient: Gradient,
+    Blur: Blur,
+    Border: Border,
+    TransitionToken: Transition,
+);
 
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens.boolean(name)
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_boolean(name, self);
-    }
-}
-
-/// A duration token, kept as a number of milliseconds.
-impl TokenValue for std::time::Duration {
-    const KIND: &'static str = "number";
-
-    fn read(tokens: &Tokens, name: &str, dark: bool) -> Option<Self> {
-        let ms = tokens.number_in(name, dark)?;
-        (ms.is_finite() && ms >= 0.0)
-            .then(|| std::time::Duration::from_secs_f64(f64::from(ms) / 1000.0))
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_number(name, (self.as_secs_f64() * 1000.0) as f32);
-    }
-}
-
-impl TokenValue for super::CubicBezier {
-    const KIND: &'static str = "easing";
-
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens.easing(name)
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_easing(name, self);
-    }
-}
-
-/// A text style: its size token and its parts' ([`super::Typography::PARTS`]).
-impl TokenValue for super::Typography {
-    const KIND: &'static str = "number";
-
-    fn read(tokens: &Tokens, name: &str, dark: bool) -> Option<Self> {
-        tokens.typography_in(name, dark)
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_typography(name, self);
-    }
-
-    fn per_appearance(tokens: &Tokens, name: &str) -> bool {
-        tokens.has_dark_number(name)
-            || super::Typography::PARTS
-                .iter()
-                .any(|suffix| tokens.has_dark_number(&format!("{name}{suffix}")))
-    }
-}
-
-impl TokenValue for AdaptiveColor {
-    const KIND: &'static str = "color";
-
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens.color(name)
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_color(name, self);
-    }
-}
-
-impl TokenValue for f32 {
-    const KIND: &'static str = "number";
-
-    fn read(tokens: &Tokens, name: &str, dark: bool) -> Option<Self> {
-        tokens.number_in(name, dark)
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_number(name, self);
-    }
-}
-
+/// A number token as a length.
 impl TokenValue for Points {
-    const KIND: &'static str = "number";
+    const TYPE: ValueType = ValueType::Number;
 
-    fn read(tokens: &Tokens, name: &str, dark: bool) -> Option<Self> {
-        tokens.number_in(name, dark).map(Points)
+    fn from_token(token: &Token) -> Option<Self> {
+        match token {
+            Token::Number(n) => Some(Points(*n)),
+            _ => None,
+        }
     }
 
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_number(name, self.0);
-    }
-}
-
-impl TokenValue for SharedString {
-    const KIND: &'static str = "font family";
-
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens
-            .font(name)
-            .map(|family| SharedString::from(family.to_string()))
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_font(name, self.to_string());
-    }
-}
-
-impl TokenValue for Arc<str> {
-    const KIND: &'static str = "font family";
-
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens.font(name).cloned()
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_font(name, self);
-    }
-}
-
-impl TokenValue for AdaptiveShadow {
-    const KIND: &'static str = "shadow";
-
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens.shadow(name).cloned()
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_shadow(name, self);
-    }
-}
-
-impl TokenValue for AdaptiveGradient {
-    const KIND: &'static str = "gradient";
-
-    fn read(tokens: &Tokens, name: &str, _: bool) -> Option<Self> {
-        tokens.gradient(name).cloned()
-    }
-
-    fn write(self, name: &str, tokens: &mut Tokens) {
-        tokens.set_gradient(name, self);
+    fn into_token(self) -> Token {
+        Token::Number(self.0)
     }
 }
 
@@ -295,11 +194,11 @@ impl TokenValue for AdaptiveGradient {
 pub enum TokenError {
     /// The tokens have no token of the name.
     Missing,
-    /// The token is of another kind than the type asked for.
+    /// The token is of another value type than the type asked for.
     WrongKind {
-        /// The kind asked for (`"color"`).
+        /// The value type asked for (`"color"`).
         expected: &'static str,
-        /// The kind the token is.
+        /// The value type the token is.
         found: &'static str,
     },
 }
@@ -318,38 +217,21 @@ impl std::fmt::Display for TokenError {
 impl std::error::Error for TokenError {}
 
 impl Tokens {
-    /// The token of `key` as kept: a number its light value
-    /// ([`TokenKey::get`] reads it in the appearance shown).
+    /// The token of `key`.
     pub fn key<V: TokenValue>(&self, key: TokenKey<V>) -> Option<V> {
-        V::read(self, key.name, false)
+        self.value(key.name).and_then(V::from_token)
     }
 
-    /// The token `name` as a `V`, as kept (a number its light value):
-    /// [`TokenError::Missing`] when there is none of the name,
-    /// [`TokenError::WrongKind`] when it is of another kind.
+    /// The token `name` as a `V`: [`TokenError::Missing`] when there is
+    /// none of the name, [`TokenError::WrongKind`] when it is of another
+    /// value type.
     pub fn get_as<V: TokenValue>(&self, name: &str) -> Result<V, TokenError> {
-        match V::read(self, name, false) {
-            Some(value) => Ok(value),
-            None => match self.kind(name) {
-                Some(kind) => Err(TokenError::WrongKind {
-                    expected: V::KIND,
-                    found: kind.name(),
-                }),
-                None => Err(TokenError::Missing),
-            },
-        }
-    }
-
-    /// Sets the token of `key` to `value` (in both appearances, for a
-    /// number).
-    pub fn set<V: TokenValue>(&mut self, key: TokenKey<V>, value: V) {
-        value.write(key.name, self);
-    }
-
-    /// These tokens with the token of `key` set to `value`
-    /// ([`Tokens::set`]): a change to hand [`super::update_tokens`].
-    pub fn with<V: TokenValue>(mut self, key: TokenKey<V>, value: V) -> Self {
-        self.set(key, value);
-        self
+        let Some(token) = self.value(name) else {
+            return Err(TokenError::Missing);
+        };
+        V::from_token(token).ok_or(TokenError::WrongKind {
+            expected: V::TYPE.name(),
+            found: token.value_type().name(),
+        })
     }
 }

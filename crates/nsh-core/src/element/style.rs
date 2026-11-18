@@ -67,8 +67,8 @@ impl FontWeight {
 
 /// Box shadows (CSS's `box-shadow` layers) for each appearance: the
 /// platform switches between them with nothing running, as it does an
-/// [`AdaptiveColor`]. A theme's shadow tokens are adaptive
-/// ([`super::Tokens::shadow`]); layers given once are the same in both.
+/// [`AdaptiveColor`]. Layers given once are the same in both (a theme's
+/// shadow token, [`super::Tokens::shadow`], has one value).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AdaptiveShadow {
     /// In light appearance.
@@ -131,9 +131,8 @@ crate::static_reactive!(AdaptiveShadow: AdaptiveShadow);
 
 /// Gradients (CSS's `background-image` layers of them) for each appearance:
 /// the platform switches between them with nothing running, as it does an
-/// [`AdaptiveColor`]. A theme's gradient tokens are adaptive
-/// ([`super::Tokens::gradient`]); gradients given once are the same in
-/// both.
+/// [`AdaptiveColor`]. Gradients given once are the same in both (a theme's
+/// gradient token, [`super::Tokens::gradient`], has one value).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AdaptiveGradient {
     /// In light appearance.
@@ -2832,7 +2831,7 @@ pub trait Styled: Sized {
 
     /// Box shadows of its own per appearance, and reactive: a closure
     /// reading a theme's shadow token (`.adaptive_shadow(move ||
-    /// tokens().shadow("shadow-raised").cloned().unwrap_or_default())`)
+    /// AdaptiveShadow::from(SHADOW.get().unwrap_or_default().iter().copied()))`)
     /// follows theme changes, and the platform switches the layers with the
     /// appearance with nothing running, as [`Styled::bg`] does a color.
     /// [`Styled::shadow`] takes static layers, the same in both.
@@ -4056,6 +4055,33 @@ pub trait Styled: Sized {
                 PropertyValue::FontFamily(Some(crate::FontFamily::new(family.trim()))),
             );
         });
+        self
+    }
+
+    /// A text style applied whole (a `typography` token,
+    /// `move || TITLE.get().unwrap_or_default()`): its font size, and the
+    /// line height (a multiple or points), letter spacing, weight and
+    /// family it sets.
+    fn typography(mut self, typography: impl IntoReactive<super::Typography>) -> Self {
+        self.style()
+            .bind_value(typography, |s, t: super::Typography| {
+                s.lengths(&[StyleKey::FontSize], t.size);
+                if let Some(height) = t.line_height {
+                    s.value(StyleKey::LineHeight, PropertyValue::LineHeight(height));
+                }
+                if let Some(spacing) = t.letter_spacing {
+                    s.number(StyleKey::LetterSpacing, spacing.0);
+                }
+                if let Some(weight) = t.font_weight {
+                    s.number(StyleKey::FontWeight, weight);
+                }
+                if let Some(family) = t.font_family {
+                    s.value(
+                        StyleKey::FontFamily,
+                        PropertyValue::FontFamily(Some(crate::FontFamily::new(family.trim()))),
+                    );
+                }
+            });
         self
     }
 

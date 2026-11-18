@@ -7,7 +7,11 @@ use std::time::Duration;
 
 use crossbeam_channel::Receiver;
 use nsh_base::theme;
-use nsh_core::{ApproxTextEngine, Color, MountBatch, MountItem, Size, element::Root, prelude::*};
+use nsh_core::{
+    ApproxTextEngine, Color, Hsla, MountBatch, MountItem, Size,
+    element::{Patch, PatchValues, Root},
+    prelude::*,
+};
 use nsh_engine::{App, Engine, EngineConfig, Environment};
 
 use crate::ChannelSink;
@@ -23,9 +27,7 @@ fn Swatch() -> impl IntoElement {
 #[component]
 fn Resets() -> impl IntoElement {
     set_timeout(Duration::from_millis(100), || {
-        let mut tokens = nsh_core::element::Tokens::default();
-        tokens.set_color("primary", rgb(0xff0000).into());
-        update_tokens(tokens);
+        update_tokens(Patch::new().value("primary", Hsla::from(rgb(0xff0000))));
     });
     set_timeout(Duration::from_millis(200), || reset_tokens(["primary"]));
     view().size_10().bg(move || theme().primary)
@@ -100,24 +102,29 @@ fn Card() -> impl IntoElement {
 /// defaults, not over them.
 #[test]
 fn the_theme_file_replaces_the_roots_tokens() {
-    let mut tokens = nsh_base::Theme::default().into_tokens();
-    tokens.set_color("primary", rgb(0x00ff00).into());
-    tokens.set_color("card", rgb(0xff00ff).into());
+    let tokens = Patch::new()
+        .value("primary", Hsla::from(rgb(0x00ff00)))
+        .value("card", Hsla::from(rgb(0xff00ff)));
+    let tokens = nsh_theme::write_patch(&tokens);
     let (_engine, rx) = start(
         Root::new::<Swatch>(|| ())
-            .tokens(tokens.clone())
+            .theme_overrides(tokens.clone())
             .theme(BLUE),
     );
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(backgrounds(&first), vec![Color(0x0000ffff)]);
-    let (_engine, rx) = start(Root::new::<Card>(|| ()).tokens(tokens.clone()).theme(BLUE));
+    let (_engine, rx) = start(
+        Root::new::<Card>(|| ())
+            .theme_overrides(tokens.clone())
+            .theme(BLUE),
+    );
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(
         backgrounds(&first),
         vec![Color::from(nsh_base::Theme::default().card.light)]
     );
     // `Root::tokens` alone keeps working.
-    let (_engine, rx) = start(Root::new::<Swatch>(|| ()).tokens(tokens));
+    let (_engine, rx) = start(Root::new::<Swatch>(|| ()).theme_overrides(tokens));
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(backgrounds(&first), vec![Color(0x00ff00ff)]);
 }

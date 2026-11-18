@@ -326,15 +326,15 @@ fn theme_tokens() {
     let s = styled("bg-primary text-muted-foreground border border-border rounded-(--radius)");
     assert_eq!(
         s.view.background_color,
-        Color::from(ui.color("primary").unwrap().light)
+        Color::from(ui.color("primary").unwrap())
     );
     assert_eq!(
         s.text.color,
-        Some(Color::from(ui.color("muted-foreground").unwrap().light))
+        Some(Color::from(ui.color("muted-foreground").unwrap()))
     );
     assert_eq!(
         s.view.borders.colors[0],
-        Color::from(ui.color("border").unwrap().light)
+        Color::from(ui.color("border").unwrap())
     );
     assert_eq!(s.view.border_radius, px(ui.number("radius").unwrap()));
     let (s, _) = styled_with(
@@ -345,21 +345,21 @@ fn theme_tokens() {
     );
     assert_eq!(
         s.view.background_color,
-        Color::from(ui.color("primary").unwrap().dark)
+        Color::from(ui.color("primary").unwrap())
     );
     assert_eq!(
         s.text.color,
-        Some(Color::from(ui.color("muted-foreground").unwrap().dark))
+        Some(Color::from(ui.color("muted-foreground").unwrap()))
     );
     // Opacity modifiers, longer prefixes, variants, the long form.
     let s = styled("bg-primary/50 border-t-2 border-t-ring");
     assert_eq!(
         s.view.background_color,
-        Color::from(ui.color("primary").unwrap().light).with_alpha(0.5)
+        Color::from(ui.color("primary").unwrap()).with_alpha(0.5)
     );
     assert_eq!(
         s.view.borders.colors[0],
-        Color::from(ui.color("ring").unwrap().light)
+        Color::from(ui.color("ring").unwrap())
     );
     // Parts and props: shadows, rings, gradients, the caret, placeholders.
     let (s, props) = styled_with(
@@ -370,33 +370,30 @@ fn theme_tokens() {
     );
     assert_eq!(
         props.caret_color,
-        Some(Color::from(ui.color("primary").unwrap().light))
+        Some(Color::from(ui.color("primary").unwrap()))
     );
     assert_eq!(
         props.placeholder_color,
-        Some(Color::from(ui.color("muted-foreground").unwrap().light))
+        Some(Color::from(ui.color("muted-foreground").unwrap()))
     );
     let e = s.view.effects.as_ref().unwrap();
     assert!(
         e.box_shadows
             .iter()
-            .any(|l| l.color == Color::from(ui.color("ring").unwrap().light))
+            .any(|l| l.color == Color::from(ui.color("ring").unwrap()))
     );
     // The shadow's color keeps each layer's alpha.
     assert!(
         e.box_shadows
             .iter()
-            .any(|l| l.color.0 >> 8 == Color::from(ui.color("primary").unwrap().light).0 >> 8)
+            .any(|l| l.color.0 >> 8 == Color::from(ui.color("primary").unwrap()).0 >> 8)
     );
     let g = &e.background_images[0];
-    assert_eq!(
-        g.stops[0].color,
-        Color::from(ui.color("primary").unwrap().light)
-    );
+    assert_eq!(g.stops[0].color, Color::from(ui.color("primary").unwrap()));
     let accent = ui.color("accent").unwrap();
-    assert_eq!(g.stops.last().unwrap().color, Color::from(accent.light));
+    assert_eq!(g.stops.last().unwrap().color, Color::from(accent));
     let (s, _) = styled_with("dark:bg-accent", dark, (390.0, 844.0), 0);
-    assert_eq!(s.view.background_color, Color::from(accent.dark));
+    assert_eq!(s.view.background_color, Color::from(accent));
     let s = styled("text-(length:--body-size) rounded-(--radius-lg)");
     assert_eq!(s.text.font_size, Some(px(ui.number("body-size").unwrap())));
     assert_eq!(s.view.border_radius, px(ui.number("radius-lg").unwrap()));
@@ -961,8 +958,9 @@ fn duration_easing_and_typography_tokens_make_classes() {
     tokens.set_typography(
         "text-title",
         crate::element::Typography {
+            font_family: None,
             size: crate::geometry::Points(24.0),
-            line_height: Some(1.25),
+            line_height: Some(crate::LineHeight::Multiple(1.25)),
             letter_spacing: Some(crate::geometry::Points(-0.5)),
             font_weight: Some(650.0),
         },
@@ -2219,9 +2217,7 @@ fn svg_paint_utilities_follow_tailwind_css() {
     let s = styled("stroke-primary");
     assert_eq!(
         s.paint.stroke,
-        Some(SvgPaint::Color(Color::from(
-            ui.color("primary").unwrap().light
-        )))
+        Some(SvgPaint::Color(Color::from(ui.color("primary").unwrap())))
     );
 }
 
@@ -2373,7 +2369,7 @@ mod text_color_opacity {
         let ui = ui_theme();
         for dark in [false, true] {
             let primary = ui.color("primary").unwrap();
-            let primary = Color::from(if dark { primary.dark } else { primary.light });
+            let primary = Color::from(primary);
             let half = primary.with_alpha(0.5);
             assert_eq!(text_color("text-primary", dark), Some(primary), "{dark}");
             assert_eq!(text_color("text-primary/50", dark), Some(half), "{dark}");
@@ -2600,20 +2596,6 @@ mod token_namespaces {
         same_with(&t, "inset-shadow-card", "inset-shadow-[color:#ffffffff]");
     }
 
-    /// A weight a theme file sets is a number token, so its class works.
-    #[test]
-    fn a_theme_files_weight_is_a_named_class() {
-        let (t, ignored) = crate::element::theme_file::parse(
-            r#"{ "cssVars": { "theme": { "font-weight-strong": "650", "font-display": "Pacifico", "radius-card": "14px" } } }"#,
-            &crate::element::Tokens::default(),
-        )
-        .unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        assert_eq!(t.number("font-weight-strong"), Some(650.0));
-        assert_eq!(t.font("font-display").map(|f| &**f), Some("Pacifico"));
-        same_with(&t, "font-strong", "font-[650]");
-    }
-
     /// Named classes depend on the theme, so the class cache parses them
     /// again when the tokens change.
     #[test]
@@ -2643,171 +2625,11 @@ mod token_namespaces {
     }
 }
 
-/// Number tokens with a value per appearance: `Tokens::number_in`, a theme
-/// file's `cssVars.dark` numbers, and the classes naming them in each
-/// appearance; a number with one value is as it was.
-mod number_per_appearance {
-    use super::*;
-    use crate::element::{Tokens, theme_file};
-
-    fn file(json: &str) -> Tokens {
-        let (tokens, ignored) = theme_file::parse(json, &Tokens::default()).unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        tokens
-    }
-
-    /// The style `classes` give with `tokens` in the appearance `dark`.
-    fn style(tokens: &Tokens, classes: &str, dark: bool) -> Style {
-        let mut theme = Theme::default();
-        theme.set_tokens(tokens);
-        let list = parse(&theme, classes);
-        assert!(list.unknown().is_empty(), "{classes}: {:?}", list.unknown());
-        let mut style = Style::default();
-        let group = |_: &str| 0;
-        let context = Context {
-            env: ClassEnvironment {
-                dark,
-                ..Default::default()
-            },
-            window: crate::geometry::size_pt(390.0, 844.0),
-            rtl: false,
-            states: 0,
-            position: 0,
-            group: &group,
-        };
-        list.apply(
-            &context,
-            &theme,
-            &mut style,
-            &mut ClassProps::default(),
-            |_| {},
-        );
-        style
-    }
-
-    #[test]
-    fn a_number_reads_its_dark_value_in_the_dark_appearance() {
-        let mut t = Tokens::default();
-        t.set_number("radius", 10.0);
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(10.0), Some(10.0))
-        );
-        t.set_dark_number("radius", 12.0);
-        assert_eq!(t.number("radius"), Some(10.0));
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(10.0), Some(12.0))
-        );
-        // Setting the number sets it in both again.
-        t.set_number("radius", 8.0);
-        assert_eq!(t.number_in("radius", true), Some(8.0));
-        assert_eq!(t.number_in("nothing", true), None);
-    }
-
-    #[test]
-    fn over_carries_dark_values_and_a_number_without_one_takes_both() {
-        let mut base = Tokens::default();
-        base.set_number("radius", 10.0);
-        base.set_dark_number("radius", 12.0);
-        base.set_number("gap", 4.0);
-        base.set_dark_number("gap", 6.0);
-        let mut top = Tokens::default();
-        top.set_number("radius", 20.0);
-        let t = top.over(&base);
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(20.0), Some(20.0))
-        );
-        assert_eq!(t.number_in("gap", true), Some(6.0));
-        let mut top = Tokens::default();
-        top.set_number("gap", 5.0);
-        top.set_dark_number("gap", 7.0);
-        let t = top.over(&base);
-        assert_eq!(
-            (t.number_in("gap", false), t.number_in("gap", true)),
-            (Some(5.0), Some(7.0))
-        );
-        // Put back from another set of tokens, the dark value comes too.
-        let mut copy = Tokens::default();
-        copy.copy_named(&base, "gap");
-        assert_eq!(copy.number_in("gap", true), Some(6.0));
-    }
-
-    #[test]
-    fn a_theme_files_dark_number_is_its_dark_value() {
-        let t = file(
-            r#"{ "cssVars": { "theme": { "radius": "10px", "gap": "4px" },
-                "light": { "radius-card": "14px" }, "dark": { "radius": "12px", "radius-card": "6px", "only-dark": "3px" } } }"#,
-        );
-        assert_eq!(
-            (t.number_in("radius", false), t.number_in("radius", true)),
-            (Some(10.0), Some(12.0))
-        );
-        assert_eq!(
-            (
-                t.number_in("radius-card", false),
-                t.number_in("radius-card", true)
-            ),
-            (Some(14.0), Some(6.0))
-        );
-        // One value: no dark value of its own, as before.
-        assert_eq!(t.number_in("gap", true), Some(4.0));
-        assert_eq!(t.dark_numbers().filter(|(n, _)| *n == "gap").count(), 0);
-        // Given in the dark appearance only, it is both's, as a color is.
-        assert_eq!(
-            (
-                t.number_in("only-dark", false),
-                t.number_in("only-dark", true)
-            ),
-            (Some(3.0), Some(3.0))
-        );
-        // A weight too.
-        let t = file(
-            r#"{ "cssVars": { "light": { "font-weight-strong": "500" }, "dark": { "font-weight-strong": "700" } } }"#,
-        );
-        assert_eq!(
-            (
-                t.number_in("font-weight-strong", false),
-                t.number_in("font-weight-strong", true)
-            ),
-            (Some(500.0), Some(700.0))
-        );
-    }
-
-    #[test]
-    fn classes_naming_a_number_follow_the_appearance() {
-        let t = file(
-            r#"{ "cssVars": { "light": { "radius-card": "14px", "gap": "4px" }, "dark": { "radius-card": "6px" } } }"#,
-        );
-        for classes in ["rounded-(--radius-card)", "rounded-card"] {
-            assert_eq!(
-                style(&t, classes, false).view.border_radius,
-                px(14.0),
-                "{classes}"
-            );
-            assert_eq!(
-                style(&t, classes, true).view.border_radius,
-                px(6.0),
-                "{classes}"
-            );
-        }
-        // A number with one value is the same in both.
-        assert_eq!(
-            format!("{:?}", style(&t, "p-(--gap)", true)),
-            format!("{:?}", style(&t, "p-(--gap)", false))
-        );
-        let mut theme = Theme::default();
-        theme.set_tokens(&t);
-        assert_ne!(parse(&theme, "rounded-card").deps() & deps::THEME, 0);
-    }
-}
-
 /// Shadow design tokens: `Tokens`' shadows, a theme file's `shadow-*`
 /// box shadows per appearance, and the classes naming them.
 mod shadow_tokens {
     use super::*;
-    use crate::element::{AdaptiveShadow, Token, Tokens, theme_file};
+    use crate::element::{AdaptiveShadow, Token, Tokens};
 
     fn layer(y: f32, rgba: u32) -> crate::BoxShadow {
         crate::BoxShadow {
@@ -2860,35 +2682,14 @@ mod shadow_tokens {
     fn tokens_hold_shadows_by_name() {
         let mut t = Tokens::default();
         t.set_shadow("shadow-raised", raised());
-        assert_eq!(t.shadow("shadow-raised"), Some(&raised()));
-        assert_eq!(t.get("shadow-raised"), Some(Token::Shadow(raised())));
+        assert_eq!(t.shadow("shadow-raised"), Some(&raised().light));
+        assert_eq!(t.get("shadow-raised"), Some(Token::Shadow(raised().light)));
         let mut top = Tokens::default();
         top.set_shadow("shadow-flat", [layer(0.0, 0)]);
         let t = top.over(&t);
         assert!(t.shadow("shadow-raised").is_some() && t.shadow("shadow-flat").is_some());
         assert!(!t.is_empty());
         assert_eq!(raised().css(false), "0px 1px 2px 0px #0000001a");
-    }
-
-    #[test]
-    fn a_theme_files_shadows_are_read_per_appearance() {
-        let (t, ignored) = theme_file::parse(
-            r#"{ "cssVars": {
-                "theme": { "shadow-sm": "0 1px 3px 0px hsl(0 0% 0% / 0.10), 0 1px 2px -1px hsl(0 0% 0% / 0.10)",
-                           "shadow-color": "hsl(0 0% 0%)", "shadow-opacity": "0.1", "shadow-offset-x": "0" },
-                "light": { "shadow-raised": "0 1px 2px #0000001a" },
-                "dark": { "shadow-raised": "0 2px 4px #ffffff33" } } }"#,
-            &Tokens::default(),
-        )
-        .unwrap();
-        assert!(ignored.is_empty(), "{ignored:?}");
-        assert_eq!(t.shadow("shadow-raised"), Some(&raised()));
-        assert_eq!(t.shadow("shadow-sm").map(|s| s.light.len()), Some(2));
-        // shadcn's other `shadow-*` names stay what they were.
-        assert!(t.color("shadow-color").is_some());
-        assert_eq!(t.number("shadow-opacity"), Some(0.1));
-        assert_eq!(t.number("shadow-offset-x"), Some(0.0));
-        assert!(t.shadow("shadow-color").is_none());
     }
 
     #[test]
@@ -2999,9 +2800,8 @@ mod namespaced_numbers_lookup {
     /// one is read (`dark:`).
     #[test]
     fn a_dark_only_namespaced_number_makes_its_dark_classes() {
-        let mut t = plain();
+        let t = plain();
         assert_eq!(unknown(&t, "dark:rounded-card"), 1);
-        t.set_dark_number("radius-card", 16.0);
         assert_eq!(unknown(&t, "dark:rounded-card"), 0);
     }
 
@@ -3121,11 +2921,6 @@ mod tokens_by_name {
         let number = change(|t| t.set_number("radius-card", 20.0));
         assert!(list("rounded-card").reads(&number));
         assert!(!list("rounded-(--radius) bg-card").reads(&number));
-        // A dark value alone, which the tokens before did not have.
-        let dark = change(|t| t.set_dark_number("radius", 4.0));
-        assert_ne!(dark, TokenChange::All);
-        assert!(list("rounded-(--radius)").reads(&dark));
-        assert!(!list("rounded-card").reads(&dark));
         let font = change(|t| t.set_font("font-sans", "Geist"));
         assert!(list("font-sans").reads(&font) && !list("bg-brand").reads(&font));
         let shadow = change(|t| {
@@ -3177,7 +2972,6 @@ mod role_variables {
         t.set_color("caution", AdaptiveColor::rgb(0xb45309, 0xfbbf24));
         t.set_color("ink", AdaptiveColor::rgb(0x0a0a0a, 0xfafafa));
         t.set_number("corner", 6.0);
-        t.set_dark_number("corner", 8.0);
         t.set_font("font-code", "Berkeley Mono");
         t.with_roles([(POPOVER, "overlay"), (WARNING, "caution")])
             .with_roles([(RADIUS, "corner")])
@@ -3287,7 +3081,7 @@ mod role_variables {
         let mut t = brand();
         t.set_gradient("background-image-hero", hero);
         let t = t.with_roles([(
-            Role::<AdaptiveColor>::new("background-image-hero"),
+            Role::<crate::color::Hsla>::new("background-image-hero"),
             "overlay",
         )]);
         let l = list(&t, "bg-(image:--background-image-hero)");
@@ -3308,7 +3102,7 @@ mod role_variables {
 
     #[test]
     fn a_role_nothing_maps_and_one_mapped_onto_no_token_are_unknown() {
-        let t = brand().with_roles([(Role::<AdaptiveColor>::new("accent"), "missing")]);
+        let t = brand().with_roles([(Role::<crate::color::Hsla>::new("accent"), "missing")]);
         let theme = theme(&t);
         for class in ["bg-(--success)", "bg-(--accent)", "rounded-(--success)"] {
             assert_eq!(parse(&theme, class).unknown().len(), 1, "{class}");
@@ -3371,7 +3165,7 @@ mod gradient_tokens {
     use super::*;
     use crate::{
         effects::{Gradient, GradientKind},
-        element::{AdaptiveColor, AdaptiveGradient, Token, Tokens, theme_file},
+        element::{AdaptiveColor, AdaptiveGradient, Token, Tokens},
     };
 
     fn css(css: &str) -> Vec<Gradient> {
@@ -3430,10 +3224,10 @@ mod gradient_tokens {
     #[test]
     fn tokens_hold_gradients_by_name() {
         let t = themed();
-        assert_eq!(t.gradient("background-image-hero"), Some(&hero()));
+        assert_eq!(t.gradient("background-image-hero"), Some(&hero().light[0]));
         assert_eq!(
             t.get("background-image-hero"),
-            Some(Token::Gradient(hero()))
+            Some(Token::Gradient(hero().light[0].clone()))
         );
         let mut top = Tokens::default();
         top.set_gradient(
@@ -3471,45 +3265,6 @@ mod gradient_tokens {
         let two = css("linear-gradient(#000, #fff), radial-gradient(#f00, #00f)");
         let again = AdaptiveGradient::from(two.clone()).css(false);
         assert_eq!(css(&again), two, "{again}");
-    }
-
-    #[test]
-    fn a_theme_files_gradients_are_read_per_appearance() {
-        let mut base = Tokens::default();
-        base.set_color("accent", AdaptiveColor::rgb(0x0000ff, 0x00ffff));
-        let (t, ignored) = theme_file::parse(
-            r##"{ "cssVars": {
-                "theme": { "primary": "#171717",
-                           "background-image-scrim": "linear-gradient(to top, #000000cc, #00000000)",
-                           "background-image-brand": "linear-gradient(to right, var(--primary), var(--accent))",
-                           "background-image-photo": "url(/hero.jpg)",
-                           "background-image-none": "none" },
-                "light": { "background-image-hero": "linear-gradient(135deg, #7c3aed, #db2777)" },
-                "dark": { "primary": "#fafafa",
-                          "background-image-hero": "linear-gradient(135deg, #a78bfa, #f472b6)" } } }"##,
-            &base,
-        )
-        .unwrap();
-        assert_eq!(ignored, Vec::<String>::new());
-        assert_eq!(t.gradient("background-image-hero"), Some(&hero()));
-        // One value for both appearances.
-        let scrim = t.gradient("background-image-scrim").unwrap();
-        assert_eq!(scrim.light, scrim.dark);
-        // A `var()` in a stop is the theme's color in each appearance: the
-        // file's `primary`, the base's `accent`.
-        let brand = t.gradient("background-image-brand").unwrap();
-        let colors = |g: &[Gradient]| g[0].stops.iter().map(|s| s.color.0).collect::<Vec<_>>();
-        assert_eq!(colors(&brand.light), [0x1717_17ff, 0x0000_ffff]);
-        assert_eq!(colors(&brand.dark), [0xfafa_faff, 0x00ff_ffff]);
-        // What is no gradient is read as before: no token.
-        assert_eq!(t.get("background-image-photo"), None);
-        assert_eq!(t.get("background-image-none"), None);
-        // Written back, it reads as the same tokens.
-        let (again, _) = theme_file::parse(&theme_file::write(&t), &Tokens::default()).unwrap();
-        assert_eq!(
-            again.gradient("background-image-hero"),
-            t.gradient("background-image-hero")
-        );
     }
 
     #[test]

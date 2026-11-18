@@ -39,7 +39,7 @@ pub(crate) fn TokenSwatch() -> impl IntoElement {
     text(|| {
         let up = tokens()
             .color("up")
-            .map(|c| nsh_core::Color::from(c.light).0 >> 8);
+            .map(|c| nsh_core::Color::from(c).0 >> 8);
         format!("swatch {:06x}", up.unwrap_or(0))
     })
 }

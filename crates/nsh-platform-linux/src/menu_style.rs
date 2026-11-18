@@ -10,9 +10,9 @@
 //! and `accent-foreground` (the item under the pointer or the keyboard),
 //! `muted-foreground` (shortcuts, disabled items) and `border` (the menu's
 //! edge, separators). A token the app does not have takes the default
-//! theme's value. Light values apply to every menu, dark ones to the menus
-//! of a surface in dark appearance (`.nsh-dark` on the root, around its
-//! context menus, and on the menu bar's slot).
+//! theme's value, light or dark. A token's value applies to every menu, the
+//! same under `.nsh-dark` (on the root, around its context menus, and on
+//! the menu bar's slot) as outside it.
 //!
 //! The indicators are drawn by the style sheet itself rather than taken
 //! from the icon theme (Yaru's submenu arrow is a hairline glyph): a
@@ -53,7 +53,7 @@ pub(crate) fn css(tokens: &Tokens) -> String {
             let fallback = if dark { *night } else { *light };
             tokens
                 .role(role)
-                .map(|c| css_color(if dark { c.dark } else { c.light }))
+                .map(css_color)
                 .unwrap_or_else(|| format!("#{fallback:06x}"))
         };
         let (popover, foreground) = (color(role::POPOVER), color(role::POPOVER_FOREGROUND));
@@ -120,18 +120,27 @@ fn css_color(color: Hsla) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use gtk4::{self as gtk, gdk, gio, prelude::*};
-    use nsh_core::element::{AdaptiveColor, Tokens};
+    use nsh_core::element::Tokens;
 
     use super::css;
+
+    /// The tokens of theme document `json`.
+    fn tokens_of(json: &str) -> Tokens {
+        let document = nsh_theme::read(json).document;
+        Tokens::resolve(Arc::new(document), Default::default(), Vec::new()).0
+    }
 
     /// A theme that maps a role onto a token of its own colors the menus
     /// with that token.
     #[test]
     fn menu_style_reads_the_tokens_roles_map_onto() {
-        let mut tokens = Tokens::default();
-        tokens.set_color("surface-overlay", AdaptiveColor::rgb(0x123456, 0x654321));
-        let tokens = tokens.with_role(nsh_core::element::role::POPOVER, "surface-overlay");
+        let tokens = tokens_of(
+            r##"{ "tokens": { "surface-overlay": { "kind": "color", "value": "#123456" } },
+                 "roles": { "popover": "surface-overlay" } }"##,
+        );
         let sheet = css(&tokens);
         assert!(sheet.contains("popover.menu > contents { background-color: rgba(18, 52, 86, 1);"));
         assert!(sheet.contains(
@@ -144,8 +153,8 @@ mod tests {
     /// opened).
     #[test]
     fn menu_style_follows_the_tokens_and_parses() {
-        let mut tokens = Tokens::default();
-        tokens.set_color("accent", AdaptiveColor::rgb(0xff0000, 0x0000ff));
+        let tokens =
+            tokens_of(r##"{ "tokens": { "accent": { "kind": "color", "value": "#ff0000" } } }"##);
         let sheet = css(&tokens);
         assert!(sheet.contains(
             "popover.menu modelbutton:hover, popover.menu modelbutton:selected { \

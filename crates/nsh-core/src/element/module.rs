@@ -423,18 +423,39 @@ impl ModuleCx {
         self.actions.push(Action::Appearance(appearance));
     }
 
-    /// Changes some of the app's design tokens, as
-    /// [`crate::element::update_tokens`] does.
-    pub fn update_tokens(&mut self, tokens: impl Into<crate::element::Tokens>) {
-        self.actions.push(Action::UpdateTokens(tokens.into()));
+    /// Activates theme document `json` (`None`: the app's built-in one
+    /// again), as [`crate::element::set_theme`] does: in order with the
+    /// app's other theme actions. Returns (and logs) its read diagnostics.
+    pub fn set_theme(&mut self, json: Option<&str>) -> Vec<crate::element::Diagnostic> {
+        let (document, diagnostics) = match json {
+            Some(json) => crate::element::theme::read_document(json),
+            None => (None, Vec::new()),
+        };
+        if json.is_none() || document.is_some() {
+            self.actions
+                .push(Action::Theme(document.map(std::sync::Arc::new)));
+        }
+        diagnostics
     }
 
-    /// Puts the design tokens `names` back to the app's theme's values, as
+    /// Merges `patch` into the app's overrides, as
+    /// [`crate::element::update_tokens`] does.
+    pub fn update_tokens(&mut self, patch: crate::element::Patch) {
+        self.actions.push(Action::UpdateTokens(patch));
+    }
+
+    /// Removes the names `names` from the app's overrides, as
     /// [`crate::element::reset_tokens`] does.
     pub fn reset_tokens<S: Into<Box<str>>>(&mut self, names: impl IntoIterator<Item = S>) {
-        self.actions.push(Action::ResetTokens(
+        self.actions.push(Action::ResetTokens(Some(
             names.into_iter().map(Into::into).collect(),
-        ));
+        )));
+    }
+
+    /// Empties the app's overrides, as [`crate::element::reset_all_tokens`]
+    /// does.
+    pub fn reset_all_tokens(&mut self) {
+        self.actions.push(Action::ResetTokens(None));
     }
 
     /// Gives a theme modifier another context, as

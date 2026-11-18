@@ -366,11 +366,10 @@ impl ResolveSetup {
     }
 }
 
-/// The design tokens of the app in `dir` whose UI sets are `ui_sets`:
-/// [`theme_tokens`], or, when the sets' theme documents or the app's theme
-/// file declare tokens, `nsh.json`'s `"theme"` read by them over the
-/// documents' defaults. Tokens read so carry what declares them
-/// (`Tokens::declarations`).
+/// The design tokens of the app in `dir` whose UI sets are `ui_sets`: those
+/// of its theme document (`nsh.json`'s `"theme"`, [`app_document`]), else
+/// of the document the sets make active, else of `nsh_base`'s default
+/// theme, each with its default contexts picked.
 pub fn theme_tokens_of(
     dir: &std::path::Path,
     ui_sets: &[nsh_core::element::description::SetDescription],
@@ -383,13 +382,57 @@ pub fn theme_tokens_of(
         }
         Err(_) => None,
     };
-    let Some(declared) = declared(ui_sets, json.as_deref())? else {
-        return theme_tokens(dir);
+    match json {
+        Some(json) => Ok(document_tokens(&app_document(&json)?.0)),
+        None => Ok(sets_tokens(ui_sets)),
+    }
+}
+
+/// The tokens of the document `ui_sets` make active, else of `nsh_base`'s
+/// default theme.
+fn sets_tokens(
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> nsh_core::element::Tokens {
+    match nsh_core::element::description::theme_document(ui_sets).0 {
+        Some(document) => {
+            nsh_core::element::Tokens::resolve(Arc::new(document), Default::default(), Vec::new()).0
+        }
+        None => nsh_base::Theme::default().into_tokens(),
+    }
+}
+
+/// The tokens of theme document `text`, its default contexts picked.
+fn document_tokens(text: &str) -> nsh_core::element::Tokens {
+    let read = nsh_theme::read(text);
+    nsh_core::element::Tokens::resolve(Arc::new(read.document), Default::default(), Vec::new()).0
+}
+
+/// The app's theme document of `nsh.json`'s `"theme"` `json`, with what of
+/// it is left out: the document itself, or an old `cssVars` theme converted
+/// over `nsh_base`'s default theme (`theme_convert`). `Err`: it is neither.
+fn app_document(json: &str) -> Result<(String, Vec<String>), BundleError> {
+    let read = nsh_theme::read(json);
+    let legacy = read
+        .diagnostics
+        .iter()
+        .any(|d| d.code == nsh_theme::code::LEGACY_FORMAT);
+    let (text, said) = if legacy {
+        nsh_core::element::theme_convert::convert(json, Some(nsh_core::element::theme_convert::OLD_DEFAULT))
+    } else {
+        (json.to_owned(), read.diagnostics)
     };
-    let (tokens, _) = declared
-        .read(json.as_deref())
-        .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
-    Ok(tokens)
+    let refused = text.is_empty()
+        || said
+            .iter()
+            .any(|d| d.code == nsh_theme::code::NOT_A_DOCUMENT);
+    let said: Vec<String> = said.into_iter().map(|d| d.message).collect();
+    if refused {
+        return Err(BundleError::other(format!(
+            "nsh.json: theme: {}",
+            said.join("; ")
+        )));
+    }
+    Ok((text, said))
 }
 
 /// A warning for each role theme file `json` maps (its `"roles"`) that no
@@ -416,42 +459,14 @@ fn unknown_roles(
         .collect())
 }
 
-/// The tokens the theme documents of `ui_sets` declare, merged, or none
-/// when the app's theme file `json` declares its own (`None`: nothing
-/// declares tokens: the UI set's defaults are the source).
-fn declared(
-    ui_sets: &[nsh_core::element::description::SetDescription],
-    json: Option<&str>,
-) -> Result<Option<nsh_core::element::Declarations>, BundleError> {
-    let documents =
-        nsh_core::element::description::declarations(ui_sets).map_err(BundleError::other)?;
-    Ok(documents.or_else(|| {
-        json.is_some_and(nsh_core::element::theme_file::declares)
-            .then(nsh_core::element::Declarations::default)
-    }))
-}
-
-/// The design tokens of the app in `dir`: its `nsh.json` `"theme"` over
-/// the default's (`nsh_base::Theme`), or the default's when it has none.
+/// The design tokens of the app in `dir`: its `nsh.json` `"theme"`'s, or
+/// `nsh_base`'s default theme's when it has none.
 pub fn theme_tokens(dir: &std::path::Path) -> Result<nsh_core::element::Tokens, BundleError> {
-    let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
-        return Ok(nsh_base::Theme::default().into_tokens());
-    };
-    let config: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| BundleError::other(format!("nsh.json: {e}")))?;
-    match theme_json(dir, &config)? {
-        Some(json) => {
-            let tokens = nsh_base::Theme::from_json(&json)
-                .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?
-                .into_tokens();
-            Ok(nsh_core::element::theme_file::with_modifiers(&json, tokens).0)
-        }
-        None => Ok(nsh_base::Theme::default().into_tokens()),
-    }
+    theme_tokens_of(dir, &[])
 }
 
-/// `nsh.json`'s `"theme"`: shadcn's `cssVars` in a file (a path relative
-/// to `nsh.json`) or in place.
+/// `nsh.json`'s `"theme"`: a theme document in a file (a path relative to
+/// `nsh.json`) or in place.
 fn theme_json(
     dir: &std::path::Path,
     config: &serde_json::Value,
@@ -477,20 +492,9 @@ fn tailwind_setup(
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<Arc<plugin::ThemeSetup>, BundleError> {
     let mut setup = plugin::ThemeSetup::default();
-    // The tokens the sets' theme documents declare replace the default as
-    // the source of tokens (and of the classes naming them).
-    let documents = declared(ui_sets, None)?;
-    // The theme's tokens are classes (`bg-primary`): the default's (the
-    // documents') unless the app sets its own.
-    let mut tokens = match &documents {
-        Some(declared) => {
-            declared
-                .read(None)
-                .map_err(|e| BundleError::other(format!("theme documents: {e}")))?
-                .0
-        }
-        None => nsh_base::Theme::default().into_tokens(),
-    };
+    // The theme's tokens are classes (`bg-primary`): the sets' document's
+    // (or the default's) unless the app has its own.
+    let mut tokens = sets_tokens(ui_sets);
     let path = dir.join("nsh.json");
     let Ok(text) = std::fs::read_to_string(&path) else {
         setup.theme.set_tokens(&tokens);
@@ -510,26 +514,13 @@ fn tailwind_setup(
         setup.json = Some(json);
     }
     if let Some(json) = theme_json(dir, &config)? {
-        // Under declared tokens a name nothing declares is warned of and
-        // left out, as the runtime leaves it out.
-        let (read, ignored) = match declared(ui_sets, Some(&json))? {
-            Some(declared) => declared.read(Some(&json)),
-            None => nsh_base::Theme::from_json_lenient(&json)
-                .map(|(theme, mut ignored)| {
-                    let (tokens, said) =
-                        nsh_core::element::theme_file::with_modifiers(&json, theme.into_tokens());
-                    ignored.extend(said);
-                    (tokens, ignored)
-                })
-                .map_err(|e| e.0),
-        }
-        .map_err(|e| BundleError::other(format!("nsh.json: theme: {e}")))?;
+        let (document, ignored) = app_document(&json)?;
         warn_ignored("theme", &ignored);
-        for warning in unknown_roles(&json, ui_sets)? {
+        for warning in unknown_roles(&document, ui_sets)? {
             log::warn!(target: "nsh::build", "{warning}");
         }
-        tokens = read;
-        setup.ui = Some(json);
+        tokens = document_tokens(&document);
+        setup.ui = Some(document);
     }
     setup.theme.set_tokens(&tokens);
     for warning in shadowed_tokens(&setup.theme) {
@@ -2369,9 +2360,7 @@ mod declared_theme {
         assert_eq!(unknown, ["bg-primary"]);
         let tokens = super::theme_tokens_of(&dir, &sets()).unwrap();
         assert_eq!(
-            tokens
-                .color("surface-overlay")
-                .map(|c| nsh_core::Color::from(c.light)),
+            tokens.color("surface-overlay").map(nsh_core::Color::from),
             Some(nsh_core::Color::from(nsh_core::color::rgb(0x333333)))
         );
         assert!(tokens.color("primary").is_none());
@@ -2491,8 +2480,9 @@ mod declared_theme {
             "{declaration}"
         );
         // Without declarations: by the stored kinds, as ever.
-        let mut plain = Tokens::default();
-        plain.set_number("radius", 10.0);
+        let plain = crate::types::tests_support::tokens_of(
+            r##"{ "tokens": { "radius": { "kind": "number", "value": 10 } } }"##,
+        );
         assert!(crate::types::tokens_declaration(&plain).contains("\"radius\": number;"));
     }
 }

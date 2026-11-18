@@ -181,8 +181,8 @@ fn show(window: &NSWindow) -> Rc<AppView> {
 }
 ```
 
-`Root::tokens` 为根组件设置[主题](./rust.md#主题)（`nsh_base::Theme::from_json(json)?.into_tokens()`），`Root::app_id`
-设置保存其数据所用的 id。`nsh build` 写出的 TSX bundle 也加载到同一种视图中：
+`Root::theme(json)` 为根组件设置[主题](./rust.md#主题)，即一份主题文档，`Root::theme_overrides(json)` 设置其上的补丁，
+`Root::app_id` 设置保存其数据所用的 id。`nsh build` 写出的 TSX bundle 也加载到同一种视图中：
 
 ```rust
 use nsh_platform_macos::{AppOptions, AppView, AssetBase, Bundle};

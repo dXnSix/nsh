@@ -16,10 +16,12 @@
 //! `neutral`); names it adds (`surface`, `up`, `radius-card`) are the app's
 //! own tokens, as variables a CSS theme adds are.
 //!
-//! The core keeps the result as design tokens ([`Tokens`]), which Tailwind
-//! classes name (`bg-primary`, `bg-up/30`, `rounded-(--radius)`) and TS
-//! reads (`token()` of `nsh`); it reads `nsh.json`'s theme with
-//! [`tokens_of`], which `nsh/base`'s registry brings. [`theme()`] reads
+//! `nsh/base`'s registry gives the default as the fallback theme document
+//! (`Registry::fallback_theme_document`), converted from the file
+//! (`theme_convert`). The core keeps the active document's values as
+//! design tokens ([`Tokens`]), which Tailwind classes name (`bg-primary`,
+//! `bg-up/30`, `rounded-(--radius)`) and TS reads (`token()` of `nsh`).
+//! [`theme()`] reads
 //! each field through its role ([`role`]: the token a theme maps it onto,
 //! else the token of its name), and the components that draw a look of their
 //! own read it: `Editor`, `TextView`, `RichEditor`, `DiffView`, `Terminal`,
@@ -28,16 +30,24 @@
 use std::sync::{Arc, LazyLock};
 
 #[cfg(test)]
-use nsh_core::{Color, color::Hsla};
+use nsh_core::{Color, color::Hsla, element::Token};
 use nsh_core::{
-    element::{AdaptiveColor, Role, SharedString, Tokens, theme_file},
+    element::{AdaptiveColor, Patch, PatchValues, Role, SharedString, Tokens, theme_convert},
     geometry::{Points, px},
 };
 
-/// The default theme file: shadcn/ui's `neutral` theme.
+/// The default theme document (`docs/dev/theme-format.md`): shadcn/ui's
+/// `neutral` theme, with its dark values in the `colorMode` modifier's
+/// `dark` context.
 pub const DEFAULT_THEME: &str = include_str!("default-theme.json");
 
 static DEFAULT: LazyLock<Theme> = LazyLock::new(|| Theme::of(Arc::new(DEFAULT_TOKENS.clone())));
+
+/// The default theme as a theme document (`docs/dev/theme-format.md`),
+/// what the registry gives as its fallback document: [`DEFAULT_THEME`],
+/// shadcn's default converted once with `nsh_core`'s `theme_convert`.
+pub(crate) static DEFAULT_DOCUMENT: LazyLock<String> =
+    LazyLock::new(|| DEFAULT_THEME.to_owned());
 
 /// A theme file that does not parse.
 #[derive(Debug, Clone, PartialEq)]
@@ -52,27 +62,21 @@ impl std::fmt::Display for ThemeError {
 impl std::error::Error for ThemeError {}
 
 thread_local! {
-    /// The theme of the tokens last read, and whether its radius is the
-    /// dark one: `theme()` makes one only when they change.
-    static CURRENT: std::cell::RefCell<Option<(Arc<Theme>, bool)>> = const { std::cell::RefCell::new(None) };
+    /// The theme of the tokens last read: `theme()` makes one only when
+    /// they change.
+    static CURRENT: std::cell::RefCell<Option<Arc<Theme>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The theme the app is drawn with (reading it subscribes: a new theme
 /// reaches what read it). Under an app's own declared tokens its fields are
-/// the tokens their roles are mapped onto. `radius` is its value in the
-/// appearance shown, as TS's `token()` and classes read it: a radius with a
-/// dark value of its own subscribes to the appearance too.
+/// the tokens their roles are mapped onto.
 pub fn theme() -> Arc<Theme> {
     let tokens = nsh_core::element::tokens();
-    let radius = tokens.role_name(role::RADIUS);
-    let dark = tokens.number_in(radius, true) != tokens.number(radius) && nsh_core::element::dark();
     CURRENT.with_borrow_mut(|current| match current {
-        Some((theme, was_dark)) if Arc::ptr_eq(&theme.tokens, &tokens) && *was_dark == dark => {
-            theme.clone()
-        }
+        Some(theme) if Arc::ptr_eq(&theme.tokens, &tokens) => theme.clone(),
         _ => {
-            let theme = Arc::new(Theme::of_shown(tokens, dark));
-            *current = Some((theme.clone(), dark));
+            let theme = Arc::new(Theme::of(tokens));
+            *current = Some(theme.clone());
             theme
         }
     })
@@ -88,9 +92,7 @@ pub fn tokens_of(json: Option<&str>) -> Result<Tokens, String> {
     Ok(tokens)
 }
 
-/// [`tokens_of`] with what it left out: how the core reads `nsh.json`'s
-/// `"theme"`, and checks one an app sets while it runs (`setTheme`)
-/// ([`nsh_core::element::Registry::tokens_from`]).
+/// [`tokens_of`] with what it left out.
 pub(crate) fn read_tokens(json: Option<&str>) -> Result<(Tokens, Vec<String>), String> {
     match json {
         Some(json) => {
@@ -105,7 +107,7 @@ macro_rules! theme {
     ($( $(#[doc = $doc:literal])* $name:ident = $key:literal => $role:ident ),* $(,)?) => {
         /// The roles `nsh-base`'s theme and components draw with: shadcn/ui's
         /// tokens, each the role of its name. An app's own theme maps them
-        /// onto its tokens ([`nsh_core::element::Tokens::with_role`]);
+        /// onto its tokens (a theme document's `roles`);
         /// without a mapping each reads the token of its name. The ones the
         /// core and the platforms' own controls draw with too
         /// ([`nsh_core::element::role`]: `POPOVER`, `PRIMARY`, …) are the
@@ -272,23 +274,16 @@ macro_rules! theme {
             /// shadcn's tokens they leave out (an embedding app's may) are
             /// the default's.
             fn of(tokens: Arc<Tokens>) -> Self {
-                Self::of_shown(tokens, false)
-            }
-
-            /// [`Theme::of`] with `radius` in the dark appearance (`dark`)
-            /// or the light one.
-            fn of_shown(tokens: Arc<Tokens>, dark: bool) -> Self {
                 let color = |role: Role| {
                     tokens
                         .role(role)
                         .or_else(|| DEFAULT_TOKENS.color(role.name()))
-                        .unwrap_or(AdaptiveColor::TRANSPARENT)
+                        .map_or(AdaptiveColor::TRANSPARENT, AdaptiveColor::from)
                 };
                 Theme {
                     $( $name: color(role::$role), )*
                     radius: px(tokens
-                        .number_in(tokens.role_name(role::RADIUS), dark)
-                        .or_else(|| tokens.number_in(role::RADIUS.name(), dark))
+                        .role(role::RADIUS)
                         .or_else(|| DEFAULT_TOKENS.number(role::RADIUS.name()))
                         .unwrap_or(0.0)),
                     font_sans: tokens.role(role::FONT_SANS).map(SharedString::from),
@@ -302,12 +297,7 @@ macro_rules! theme {
 
 /// The default theme's tokens, which [`Theme::of`] falls back on (the
 /// default [`Theme`] is made of them).
-static DEFAULT_TOKENS: LazyLock<Tokens> = LazyLock::new(|| {
-    let mut tokens = Tokens::default();
-    let ignored = apply(&mut tokens, DEFAULT_THEME).expect("the default theme parses");
-    debug_assert!(ignored.is_empty(), "the default theme: {ignored:?}");
-    tokens
-});
+static DEFAULT_TOKENS: LazyLock<Tokens> = LazyLock::new(|| resolve(&DEFAULT_DOCUMENT));
 
 theme! {
     /// The app's background.
@@ -394,14 +384,13 @@ impl Theme {
     /// [`Theme::from_json`], with what it left out, which the toolchain
     /// warns of (a newer NSH's, or a typo) and the runtime logs.
     pub fn from_json_lenient(json: &str) -> Result<(Self, Vec<String>), ThemeError> {
-        let mut tokens = DEFAULT_TOKENS.clone();
-        let ignored = apply(&mut tokens, json)?;
-        Ok((Self::of(Arc::new(tokens)), ignored))
+        let (document, ignored) = convert(json, Some(theme_convert::OLD_DEFAULT))?;
+        Ok((Self::of(Arc::new(resolve(&document))), ignored))
     }
 
     /// The color named `name` (any the theme sets: shadcn's, the app's).
     pub fn color(&self, name: &str) -> Option<AdaptiveColor> {
-        self.tokens.color(name)
+        self.tokens.color(name).map(AdaptiveColor::from)
     }
 
     /// The highlight of a selection, the one every component draws: the
@@ -410,7 +399,7 @@ impl Theme {
     pub fn selection(&self) -> AdaptiveColor {
         self.tokens
             .role(role::SELECTION)
-            .unwrap_or_else(|| self.primary.opacity(0.22))
+            .map_or_else(|| self.primary.opacity(0.22), AdaptiveColor::from)
     }
 
     /// The number named `name` (any the theme sets).
@@ -424,37 +413,38 @@ impl Theme {
         self.tokens.font(name).cloned()
     }
 
-    /// Sets the color named `name` (one of shadcn's sets its field).
+    /// Sets the color named `name` (one of shadcn's sets its field): its
+    /// light value.
     pub fn set_color(&mut self, name: &str, color: AdaptiveColor) {
-        self.edit(|t| t.set_color(name, color));
+        self.edit(Patch::new().value(name, color.light));
     }
 
     /// Sets the number named `name` (`radius` sets its field).
     pub fn set_number(&mut self, name: &str, value: f32) {
-        self.edit(|t| t.set_number(name, value));
+        self.edit(Patch::new().value(name, value));
     }
 
     /// Sets the font family named `name`.
     pub fn set_font(&mut self, name: &str, family: impl Into<Arc<str>>) {
-        self.edit(|t| t.set_font(name, family));
+        self.edit(Patch::new().value(name, family.into()));
     }
 
-    /// Its design tokens. Of [`theme`] they are the tokens as shown where
-    /// it was read: where the app is dark, each number its dark value.
+    /// Its design tokens.
     pub fn tokens(&self) -> &Tokens {
         &self.tokens
     }
 
-    /// Its design tokens, for the core ([`nsh_core::element::Root::tokens`],
-    /// an engine's host theme); of [`theme`], as [`Theme::tokens`] are.
+    /// Its design tokens.
     pub fn into_tokens(self) -> Tokens {
         Arc::unwrap_or_clone(self.tokens)
     }
 
-    /// Changes the tokens with `f`, and the fields with them.
-    fn edit(&mut self, f: impl FnOnce(&mut Tokens)) {
-        let mut tokens = std::mem::take(&mut self.tokens);
-        f(Arc::make_mut(&mut tokens));
+    /// Changes the tokens with `patch`, and the fields with them: its
+    /// tokens resolved again with `patch` after every patch they were
+    /// resolved with, so earlier edits hold. Tokens made of no document
+    /// stay as they are.
+    fn edit(&mut self, patch: Patch) {
+        let (tokens, _) = self.tokens.scoped(None, Some(patch));
         *self = Self::of(tokens);
     }
 }
@@ -465,25 +455,33 @@ impl From<Theme> for Tokens {
     }
 }
 
-/// Applies theme file `json` (shadcn's `cssVars`) over `tokens`.
-fn apply(tokens: &mut Tokens, json: &str) -> Result<Vec<String>, ThemeError> {
-    let (out, ignored) = theme_file::parse(json, tokens).map_err(ThemeError)?;
-    *tokens = out;
-    Ok(ignored)
+/// Theme file `json` (shadcn's `cssVars`) over `over` as a theme
+/// document's text, with what of it was left out. `Err`: it is no theme
+/// file at all.
+fn convert(json: &str, over: Option<&str>) -> Result<(String, Vec<String>), ThemeError> {
+    let (text, said) = theme_convert::convert(json, over);
+    let said: Vec<String> = said.into_iter().map(|d| d.message).collect();
+    if text.is_empty() {
+        return Err(ThemeError(said.join("; ")));
+    }
+    Ok((text, said))
+}
+
+/// The tokens of theme document `text`, its default contexts picked.
+fn resolve(text: &str) -> Tokens {
+    let read = nsh_theme::read(text);
+    Tokens::resolve(Arc::new(read.document), Default::default(), Vec::new()).0
 }
 
 /// The tokens theme file `json` sets, and only those: an embedding app's
-/// overrides of the app's theme (the platforms' `AppView`s, the iOS and
-/// Android SDKs), which win over the app's tokens of the same names and
-/// leave its others as they are (`Core::set_host_tokens`). The file is the
-/// one [`Theme::from_json`] reads, shadcn's `cssVars`; a color it names
-/// (`var(--ring)`) and does not set is the default theme's.
+/// overrides of the app's theme. The file is the one [`Theme::from_json`]
+/// reads, shadcn's `cssVars`.
 pub fn theme_overrides(json: &str) -> Result<Tokens, ThemeError> {
-    let (tokens, ignored) = theme_file::overrides(json, &DEFAULT_TOKENS).map_err(ThemeError)?;
+    let (document, ignored) = convert(json, None)?;
     for what in ignored {
         log::warn!("theme overrides: {what}, ignored");
     }
-    Ok(tokens)
+    Ok(resolve(&document))
 }
 
 #[cfg(test)]
@@ -492,6 +490,13 @@ mod tests {
 
     fn hex(c: Hsla) -> u32 {
         Color::from(c).0 >> 8
+    }
+
+    /// The names of the colors of `tokens`.
+    fn colors(tokens: &Tokens) -> impl Iterator<Item = &str> {
+        tokens
+            .iter()
+            .filter_map(|(k, t)| matches!(t, Token::Color(_)).then_some(k))
     }
 
     /// shadcn's names, every one: the default theme has these and no
@@ -533,14 +538,25 @@ mod tests {
     #[test]
     fn the_default_theme_is_shadcns_neutral() {
         let theme = Theme::default();
-        let mut colors: Vec<&str> = theme.tokens().colors().map(|(k, _)| k).collect();
+        let mut colors: Vec<&str> = colors(theme.tokens()).collect();
         colors.sort_unstable();
         let mut expected = SHADCN.to_vec();
         expected.sort_unstable();
         assert_eq!(colors, expected);
-        let numbers: Vec<_> = theme.tokens().numbers().collect();
+        let numbers: Vec<_> = theme
+            .tokens()
+            .iter()
+            .filter_map(|(k, t)| match t {
+                Token::Number(n) => Some((k, *n)),
+                _ => None,
+            })
+            .collect();
         assert_eq!(numbers, [("radius", 10.0)]);
-        assert_eq!(theme.tokens().fonts().count(), 0);
+        let fonts = theme.tokens().iter();
+        assert_eq!(
+            fonts.filter(|(_, t)| matches!(t, Token::Font(_))).count(),
+            0
+        );
         // oklch(0.205 0 0) / oklch(0.922 0 0).
         assert_eq!(hex(theme.primary.light), 0x171717);
         assert_eq!(hex(theme.primary.dark), 0xe5e5e5);
@@ -723,7 +739,7 @@ mod tests {
         // A box shadow is a shadow token.
         assert!(theme.tokens().shadow("shadow-sm").is_some());
         // A file read whole lists nothing.
-        let (_, ignored) = read_tokens(Some(DEFAULT_THEME)).unwrap();
+        let (_, ignored) = read_tokens(Some(theme_convert::OLD_DEFAULT)).unwrap();
         assert!(ignored.is_empty(), "{ignored:?}");
     }
 
@@ -749,19 +765,19 @@ mod tests {
         )
         .unwrap();
         let primary = tokens.color("primary").unwrap();
-        assert_eq!(
-            (hex(primary.light), hex(primary.dark)),
-            (0xe11d48, 0xfb7185)
-        );
+        assert_eq!(hex(primary), 0xe11d48);
         // The file's own, per appearance.
         assert_eq!(tokens.color("ring").unwrap(), primary);
         // One it does not set: the default's.
-        assert_eq!(tokens.color("focus").unwrap(), Theme::default().border);
+        assert_eq!(
+            tokens.color("focus").map(AdaptiveColor::from).unwrap(),
+            Theme::default().border
+        );
         assert_eq!(tokens.number("radius"), Some(12.0));
         // Nothing else: the app's tokens stay.
-        assert_eq!(tokens.colors().count(), 3);
+        assert_eq!(colors(&tokens).count(), 3);
         assert_eq!(tokens.color("background"), None);
-        assert_eq!(theme_overrides("{}").unwrap().colors().count(), 0);
+        assert_eq!(colors(&theme_overrides("{}").unwrap()).count(), 0);
         assert!(theme_overrides("not json").is_err());
     }
 }

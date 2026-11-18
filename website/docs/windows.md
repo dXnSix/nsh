@@ -146,7 +146,7 @@ window, the one it was made under. `AppView::load` replaces whatever ran; `stop`
 tells it where `asset:/` URIs resolve (`AssetBase::Directory` or `AssetBase::Http`). Bytecode bundles (`bundle.nshc`)
 load with `unsafe { Bundle::bytecode(bytes) }` (or `Bundle::read_trusted(path)`, unsafe too): QuickJS bytecode is trusted input, so
 only load it from your own app's files. A standalone window is `nsh_platform_windows::run_app(source, options)`, with
-`AppSource::Rust(root)` or `AppSource::Bundle(bundle)`. `Root::tokens` gives a root its [theme](./rust.md#theme) and
+`AppSource::Rust(root)` or `AppSource::Bundle(bundle)`. `Root::theme(json)` gives a root its [theme](./rust.md#theme) (a theme document) and
 `Root::app_id` the id its data is kept under.
 
 `AppOptions::notifications` hands the process's [notifications](../modules/nsh.md#notifications) to the app the view runs:

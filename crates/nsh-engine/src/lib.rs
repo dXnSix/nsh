@@ -61,7 +61,7 @@ use nsh_core::{
 pub use nsh_core::{
     JsonValue,
     access::{Access, Capabilities},
-    element::{EngineContext, Root, Tokens},
+    element::{EngineContext, Patch, Root, Tokens},
     geometry::{self, Bounds, Edges, Point, Points, Size},
     js::{HostLimits, Limits},
     main_thread::MainThreadTask,
@@ -1323,9 +1323,9 @@ enum Message {
     /// not be loaded (its id and the message).
     Chunk(Result<Chunk, (String, String)>),
     Perf(Option<Arc<perf::PerfMonitor>>),
-    /// The embedding app's design tokens.
-    Tokens(Option<Box<Tokens>>),
-    /// The embedding app's theme overrides, a theme file the core reads.
+    /// The embedding app's overrides, a theme patch.
+    Tokens(Option<Box<Patch>>),
+    /// The embedding app's overrides, a theme patch's text the core reads.
     ThemeOverrides(String),
     /// A font file the embedding app registers (TrueType, OpenType, WOFF or
     /// WOFF2), before the first frame and whenever it registers another.
@@ -1633,19 +1633,17 @@ impl EngineControl {
         let _ = self.tx.send(Message::Perf(monitor));
     }
 
-    /// Sets the embedding app's design tokens (`nsh-base`'s theme's),
-    /// which the app renders with instead of its own (`None`: its own
-    /// again; [`Core::set_host_tokens`]). Sent from
-    /// [`Engine::start_with`]'s `setup`, they are in the first frame.
-    pub fn set_tokens(&self, tokens: Option<Tokens>) {
-        let _ = self.tx.send(Message::Tokens(tokens.map(Box::new)));
+    /// Sets the embedding app's overrides, a theme patch over the app's
+    /// (`None`: none, the app's own theme again; [`Core::set_host_patch`]).
+    /// Sent from [`Engine::start_with`]'s `setup`, they are in the first
+    /// frame.
+    pub fn set_tokens(&self, patch: Option<Patch>) {
+        let _ = self.tx.send(Message::Tokens(patch.map(Box::new)));
     }
 
-    /// Sets the embedding app's theme overrides: a theme file (shadcn's
-    /// `cssVars`, as `nsh.json`'s `"theme"`) whose tokens win over the app's of
-    /// the same names, read by the core with the app's UI sets against their
-    /// default tokens ([`Core::set_host_theme`]), so a `var()` the file does
-    /// not set names the default theme's token.
+    /// Sets the embedding app's overrides from a theme patch's text
+    /// (`docs/dev/theme-format.md`), read by the core
+    /// ([`Core::set_host_theme`]): its tokens and roles win over the app's.
     /// [`EngineControl::set_tokens`]`(None)` gives the app its own theme back.
     /// Sent from [`Engine::start_with`]'s `setup`, they are in the first frame.
     pub fn set_theme_overrides(&self, json: impl Into<String>) {
@@ -2262,12 +2260,6 @@ impl<M: TextEngine + 'static> Driver<M> {
         // A Rust app's theme and fonts come with its root (a JS app's from
         // its bundle).
         if let App::Rust(root) = &config.app {
-            if let Some(tokens) = root.tokens_ref() {
-                core.set_tokens(tokens.clone());
-            }
-            if let Some(json) = root.theme_ref() {
-                core.set_ui_theme(json);
-            }
             if let Some(appearance) = root.appearance_ref() {
                 core.set_appearance(appearance);
             }
@@ -2326,8 +2318,10 @@ impl<M: TextEngine + 'static> Driver<M> {
         let mut displays: Arc<[nsh_core::desktop::Display]> = Arc::from(Vec::new());
         while let Ok(message) = rx.try_recv() {
             match message {
-                Message::Tokens(tokens) => core.set_host_tokens(tokens.map(|t| *t)),
-                Message::ThemeOverrides(json) => core.set_host_theme(Some(&json)),
+                Message::Tokens(patch) => core.set_host_patch(patch.map(|p| *p)),
+                Message::ThemeOverrides(json) => {
+                    core.set_host_theme(Some(&json));
+                }
                 Message::HostFont(data) => {
                     if let Err(err) = core.register_font(&data) {
                         log::error!("font failed: {err}");
@@ -2450,7 +2444,6 @@ impl<M: TextEngine + 'static> Driver<M> {
                     &environment,
                     &displays,
                     driver.state.js_tokens.clone(),
-                    driver.state.core.theme_tokens(),
                     text_engine,
                     stop,
                     sink,
@@ -4191,17 +4184,9 @@ fn handle<M: TextEngine>(script: Option<&Script>, state: &mut State<M>, message:
             state.perf = monitor;
             state.perf_commit = perf::CommitTiming::default();
         }
-        Message::Tokens(tokens) => {
-            state.core.set_host_tokens(tokens.map(|t| *t));
-            if let Some(script) = script {
-                script.set_theme_tokens(state.core.theme_tokens());
-            }
-        }
+        Message::Tokens(patch) => state.core.set_host_patch(patch.map(|p| *p)),
         Message::ThemeOverrides(json) => {
             state.core.set_host_theme(Some(&json));
-            if let Some(script) = script {
-                script.set_theme_tokens(state.core.theme_tokens());
-            }
         }
         Message::HostFont(data) => {
             if let Err(err) = state.core.register_font(&data) {

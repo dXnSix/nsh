@@ -209,21 +209,41 @@ pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDescription>, String> {
     Ok(out)
 }
 
-/// The tokens the theme documents `sets` describe declare, merged as
-/// [`Registry::merged`] merges them: `Ok(None)` when they register none,
-/// `Err` when a document says what it cannot, or two declare one token
-/// name or map one role. How the toolchain reads `nsh.json`'s theme as the
-/// core does ([`super::Declarations::read`]) and types `token()`.
-pub fn declarations(sets: &[SetDescription]) -> Result<Option<super::Declarations>, String> {
-    let mut out = super::Declarations::default();
-    let mut any = false;
-    for set in sets {
-        for document in &set.theme_documents {
-            out.add_document(&set.specifier, document)?;
-            any = true;
+/// The document `sets` make active when the app has none of its own, as
+/// the core takes it ([`Registry::theme_document_of_sets`]): the first a set
+/// registers, read, with its diagnostics and a `document-unused` warning of
+/// each other set's. Documents are never merged. How the toolchain reads
+/// the theme the core will draw with.
+pub fn theme_document(
+    sets: &[SetDescription],
+) -> (Option<nsh_theme::ThemeDocument>, Vec<nsh_theme::Diagnostic>) {
+    let mut documents = sets.iter().flat_map(|set| {
+        set.theme_documents
+            .iter()
+            .map(move |text| (set.specifier.as_str(), text))
+    });
+    let mut said = Vec::new();
+    let mut active = None;
+    for (owner, text) in documents.by_ref() {
+        let read = nsh_theme::read(text);
+        let refused = super::theme::refused(&read.diagnostics);
+        said.extend(read.diagnostics);
+        if !refused {
+            active = Some((owner, read.document));
+            break;
         }
     }
-    Ok(any.then_some(out))
+    for (owner, _) in documents {
+        said.push(nsh_theme::Diagnostic::warning(
+            nsh_theme::code::DOCUMENT_UNUSED,
+            "",
+            format!(
+                "The theme document of {owner} is unused: {} registers the active one.",
+                active.as_ref().map_or("another set", |(a, _)| *a)
+            ),
+        ));
+    }
+    (active.map(|(_, document)| document), said)
 }
 
 impl SetDescription {
@@ -284,8 +304,8 @@ impl SetDescription {
             undocumented: registry.undocumented(),
             theme_documents: registry
                 .theme_documents()
-                .iter()
-                .map(|(_, json)| (*json).to_owned())
+                .into_iter()
+                .map(|(_, json)| json.to_owned())
                 .collect(),
             roles: registry
                 .role_specs()
@@ -669,20 +689,18 @@ mod tests {
 }
 
 /// Theme documents as data: the description carries each set's documents
-/// as written, and the toolchain merges them as the registry does.
+/// as written, and the toolchain takes the first as the core does.
 #[cfg(test)]
 mod theme_documents {
     use super::*;
-    use crate::element::{TokenKind, role};
 
     const DS: &str = r##"{
-        "cssVars": { "light": { "surface-overlay": "#111111" }, "theme": { "radius-card": "14px", "font-body": "Inter" } },
         "tokens": {
-            "surface-overlay": { "kind": "color", "doc": "Popovers." },
-            "radius-card": { "kind": "radius", "doc": "Cards." },
-            "font-body": { "kind": "font" }
+            "surface-overlay": { "kind": "color", "value": "#111111", "doc": "Popovers." },
+            "radius-card": { "kind": "number", "value": 14, "doc": "Cards." },
+            "font-body": { "kind": "font", "value": "Inter" }
         },
-        "roles": { "popover": "surface-overlay", "card": "surface-overlay" }
+        "roles": { "popover": "surface-overlay" }
     }"##;
 
     fn set(specifier: &'static str, json: &'static str) -> SetDescription {
@@ -709,56 +727,16 @@ mod theme_documents {
     }
 
     #[test]
-    fn the_toolchain_merges_the_documents_as_the_registry_does() {
-        let declared = declarations(&[set("ds/native", DS)]).unwrap().unwrap();
-        let (tokens, ignored) = declared
-            .read(Some(
-                r##"{ "cssVars": { "light": { "popover": "#333333", "brand": "#000000" } } }"##,
-            ))
-            .unwrap();
-        assert_eq!(ignored, ["`brand`: no theme document declares it"]);
-        assert_eq!(
-            tokens
-                .color("surface-overlay")
-                .map(|c| crate::Color::from(c.light)),
-            Some(crate::Color::from(crate::color::rgb(0x333333)))
-        );
-        assert_eq!(tokens.role_name(role::POPOVER), "surface-overlay");
-        assert_eq!(tokens.mapped("card"), Some("surface-overlay"));
-        let names: Vec<_> = declared
-            .tokens()
-            .into_iter()
-            .map(|(n, d)| (n, d.kind, &*d.doc))
-            .collect();
-        assert_eq!(
-            names,
-            [
-                ("font-body", TokenKind::Font, ""),
-                ("radius-card", TokenKind::Radius, "Cards."),
-                ("surface-overlay", TokenKind::Color, "Popovers."),
-            ]
-        );
-        // No document: none; two declaring one name, or mapping one role: an
-        // error naming both.
-        assert!(
-            declarations(&[SetDescription::from(&Registry::ui_set("x/native"))])
-                .unwrap()
-                .is_none()
-        );
-        let clash = r##"{ "cssVars": { "light": { "surface-overlay": "#222222" } },
-                          "tokens": { "surface-overlay": { "kind": "color" } } }"##;
-        let err = declarations(&[set("ds/native", DS), set("app/native", clash)]).unwrap_err();
-        assert!(
-            err.contains("declared by both ds/native and app/native"),
-            "{err}"
-        );
-        let role_clash = r##"{ "cssVars": { "light": { "panel": "#222222" } },
-                               "tokens": { "panel": { "kind": "color" } }, "roles": { "popover": "panel" } }"##;
-        let err = declarations(&[set("ds/native", DS), set("app/native", role_clash)]).unwrap_err();
-        assert!(
-            err.contains("the role `popover` is mapped by both"),
-            "{err}"
-        );
+    fn the_toolchain_takes_the_first_document_as_the_core_does() {
+        let other = r##"{ "tokens": { "panel": { "kind": "color", "value": "#222222" } } }"##;
+        let (document, said) = theme_document(&[set("ds/native", DS), set("app/native", other)]);
+        let document = document.unwrap();
+        assert!(document.token("surface-overlay").is_some());
+        assert!(document.token("panel").is_none());
+        let codes: Vec<_> = said.iter().map(|d| d.code).collect();
+        assert_eq!(codes, [nsh_theme::code::DOCUMENT_UNUSED]);
+        let (none, _) = theme_document(&[SetDescription::from(&Registry::ui_set("x/native"))]);
+        assert!(none.is_none());
     }
 }
 
@@ -883,11 +861,15 @@ mod set_roles {
             error,
             "the role `banner` is listed reading color and number"
         );
-        // Merged for a host, the same clash panics, as two types claiming
-        // one token do.
+        // Merged for a host, the clash is logged (`role-conflict`) and the
+        // first listing kept: a registration never panics.
         let sets = [set(), other];
-        let clash =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Registry::merged(&sets)));
-        assert!(clash.is_err());
+        let merged = Registry::merged(&sets);
+        let banner = merged
+            .role_specs()
+            .iter()
+            .find(|r| r.role.name() == "banner")
+            .unwrap();
+        assert_eq!(banner.role.kind(), crate::element::RoleKind::Color);
     }
 }

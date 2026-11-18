@@ -1065,13 +1065,19 @@ fn root_config(
         }
     };
     // What the theme leaves out is warned of once the app's sets are
-    // described ([`theme_warnings`]): the tokens their theme documents
-    // declare decide its names.
-    if let Some(theme) = &theme {
-        let json = fs::read_to_string(theme)?;
-        nsh_core::element::theme_file::check(&json)
-            .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
-    }
+    // described ([`theme_warnings`]). An old `cssVars` theme is converted
+    // to a theme document for the root, beside the workspace's files.
+    let theme = match theme {
+        Some(path) => match converted_theme(&fs::read_to_string(&path)?)? {
+            Some(document) => {
+                let converted = workspace.join("theme.json");
+                write(&converted, &document)?;
+                Some(converted)
+            }
+            None => Some(path),
+        },
+        None => None,
+    };
     let appearance = match config.get("appearance").and_then(|a| a.as_str()) {
         None | Some("system") => None,
         Some(a @ ("light" | "dark")) => Some(a.to_owned()),
@@ -3725,29 +3731,49 @@ fn stamp(program: &Path) -> anyhow::Result<String> {
     Ok(format!("{}:{}", metadata.len(), modified.as_nanos()))
 }
 
-/// What `nsh.json`'s theme `json` leaves out, which the CLI warns of: read
-/// by the tokens the theme documents of `sets`, or the file itself, declare
-/// (a name nothing declares, a value of another kind), else as `nsh/base`
-/// reads it (a value it cannot read).
+/// What `nsh.json`'s theme document `json` leaves out, which the CLI
+/// warns of: its diagnostics as `nsh_theme::read` reports them, and each
+/// role it maps that neither the UI sets `sets` nor the core list.
 fn theme_warnings(json: &str, sets: &[SetDescription]) -> anyhow::Result<Vec<String>> {
-    let documents = nsh_core::element::description::declarations(sets)
-        .map_err(|e| anyhow::anyhow!("the app's theme documents: {e}"))?;
-    let declared = documents.or_else(|| {
-        nsh_core::element::theme_file::declares(json).then(nsh_core::element::Declarations::default)
-    });
-    let (_, ignored) = match declared {
-        Some(declared) => declared.read(Some(json)),
-        None => nsh_base::Theme::from_json_lenient(json)
-            .map(|(theme, mut ignored)| {
-                let (tokens, said) =
-                    nsh_core::element::theme_file::with_modifiers(json, theme.into_tokens());
-                ignored.extend(said);
-                (tokens, ignored)
-            })
-            .map_err(|e| e.0),
+    let read = nsh_theme::read(json);
+    let listed = nsh_core::element::description::roles(sets)
+        .map_err(|e| anyhow::anyhow!("the app's UI sets: {e}"))?;
+    let mut warned: Vec<String> = read.diagnostics.into_iter().map(|d| d.message).collect();
+    for role in read.document.roles.keys() {
+        if !listed.iter().any(|listed| listed.name == *role) {
+            warned.push(format!("`roles.{role}`: no UI set has a role of this name"));
+        }
     }
-    .map_err(|e| anyhow::anyhow!("nsh.json: theme: {e}"))?;
-    Ok(ignored)
+    Ok(warned)
+}
+
+/// `nsh.json`'s theme `json` converted to a theme document when it is an
+/// old `cssVars` theme, over `nsh/base`'s default theme (`None`: it is a
+/// document already). `Err`: it is no document at all.
+fn converted_theme(json: &str) -> anyhow::Result<Option<String>> {
+    let read = nsh_theme::read(json);
+    let refused = |said: &[nsh_theme::Diagnostic]| {
+        said.iter()
+            .find(|d| d.code == nsh_theme::code::NOT_A_DOCUMENT)
+            .map(|d| d.message.clone())
+    };
+    if let Some(what) = refused(&read.diagnostics) {
+        bail!("nsh.json: theme: {what}");
+    }
+    if !read
+        .diagnostics
+        .iter()
+        .any(|d| d.code == nsh_theme::code::LEGACY_FORMAT)
+    {
+        return Ok(None);
+    }
+    let (text, said) =
+        nsh_core::element::theme_convert::convert(json, Some(nsh_core::element::theme_convert::OLD_DEFAULT));
+    if text.is_empty() {
+        let what: Vec<String> = said.into_iter().map(|d| d.message).collect();
+        bail!("nsh.json: theme: {}", what.join("; "));
+    }
+    Ok(Some(text))
 }
 
 /// The sets of `crates` (`what` the steps call them) in `text`, the output

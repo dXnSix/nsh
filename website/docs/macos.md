@@ -210,8 +210,8 @@ fn show(window: &NSWindow) -> Rc<AppView> {
 }
 ```
 
-`Root::tokens` gives the root its [theme](./rust.md#theme) (`nsh_base::Theme::from_json(json)?.into_tokens()`) and
-`Root::app_id` the id its data is kept under. A TSX bundle that `nsh build` wrote loads into the same view:
+`Root::theme(json)` gives the root its [theme](./rust.md#theme), a theme document, `Root::theme_overrides(json)` a
+patch over it, and `Root::app_id` the id its data is kept under. A TSX bundle that `nsh build` wrote loads into the same view:
 
 ```rust
 use nsh_platform_macos::{AppOptions, AppView, AssetBase, Bundle};

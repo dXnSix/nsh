@@ -33,13 +33,19 @@ const DELETED: AdaptiveColor = AdaptiveColor::rgb(0xdc2626, 0xf87171);
 /// token the app's theme maps it onto, else the one of that name), else the
 /// view's own green.
 pub(crate) fn added_color() -> AdaptiveColor {
-    theme().tokens().role(role::DIFF_ADDED).unwrap_or(ADDED)
+    theme()
+        .tokens()
+        .role(role::DIFF_ADDED)
+        .map_or(ADDED, AdaptiveColor::from)
 }
 
 /// Deleted lines' color: the theme's `diff-deleted`
 /// ([`role::DIFF_DELETED`]), else the view's own red.
 pub(crate) fn deleted_color() -> AdaptiveColor {
-    theme().tokens().role(role::DIFF_DELETED).unwrap_or(DELETED)
+    theme()
+        .tokens()
+        .role(role::DIFF_DELETED)
+        .map_or(DELETED, AdaptiveColor::from)
 }
 /// The width of a bar indicator.
 const BAR: f32 = 3.0;

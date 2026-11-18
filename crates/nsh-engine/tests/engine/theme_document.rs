@@ -10,7 +10,7 @@ use std::time::Duration;
 use crossbeam_channel::Receiver;
 use nsh_core::{
     ApproxTextEngine, Color, MountBatch, MountItem, Size,
-    element::{AdaptiveColor, Registry, Root, TokenKey, Tokens},
+    element::{AdaptiveColor, Patch, PatchValues, Registry, Root, TokenKey},
     prelude::*,
 };
 use nsh_engine::{App, Engine, EngineConfig, Environment};
@@ -28,12 +28,12 @@ const ODDS: &str = r##"{
     "tokens": { "odds-up": { "kind": "color" } }
 }"##;
 
-const OVERLAY: TokenKey<AdaptiveColor> = TokenKey::new("surface-overlay");
-const ACTION: TokenKey<AdaptiveColor> = TokenKey::new("action");
-const UP: TokenKey<AdaptiveColor> = TokenKey::new("odds-up");
+const OVERLAY: TokenKey<nsh_core::Hsla> = TokenKey::new("surface-overlay");
+const ACTION: TokenKey<nsh_core::Hsla> = TokenKey::new("action");
+const UP: TokenKey<nsh_core::Hsla> = TokenKey::new("odds-up");
 
-fn hex(c: AdaptiveColor) -> String {
-    format!("{:06x}", Color::from(c.light).0 >> 8)
+fn hex(c: impl Into<AdaptiveColor>) -> String {
+    format!("{:06x}", Color::from(c.into().light).0 >> 8)
 }
 
 /// Shows each document's tokens by their keys and `nsh-base`'s theme, then
@@ -41,7 +41,7 @@ fn hex(c: AdaptiveColor) -> String {
 #[component]
 fn Shows() -> impl IntoElement {
     set_timeout(Duration::from_millis(100), || {
-        update_tokens(Tokens::default().with(ACTION, AdaptiveColor::rgb(0x0000ff, 0x0000ff)))
+        update_tokens(Patch::new().key(ACTION, AdaptiveColor::rgb(0x0000ff, 0x0000ff).light))
     });
     text(move || {
         let base = nsh_base::theme();

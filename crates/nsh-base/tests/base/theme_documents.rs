@@ -9,7 +9,7 @@ use std::time::Duration;
 use nsh_base::{Theme, theme};
 use nsh_core::{
     Color, Size,
-    element::{Registry, Root, Tokens},
+    element::{Patch, PatchValues, Registry, Root},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
@@ -37,8 +37,8 @@ fn start<C: Component<Props = ()>>(ui_sets: Vec<Registry>) -> Headless {
 #[component]
 fn Updates() -> impl IntoElement {
     set_timeout(Duration::from_millis(50), || {
-        let mut change = Tokens::default();
-        change.set_color("primary", AdaptiveColor::rgb(0x123456, 0x123456));
+        let change = Patch::new();
+        let change = change.value("primary", AdaptiveColor::rgb(0x123456, 0x123456).light);
         update_tokens(change);
     });
     text(move || {

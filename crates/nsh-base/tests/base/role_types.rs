@@ -8,7 +8,7 @@ use std::time::Duration;
 use nsh_base::{DiffIndicators, DiffLayout, diff_view, text_view};
 use nsh_core::{
     Color, Size,
-    element::{Registry, Root, TokenKey, Tokens},
+    element::{Patch, PatchValues, Registry, Root, TokenKey},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -37,7 +37,7 @@ const ACME: &str = r##"{
                "diff-added": "status-positive", "syntax-keyword": "code-keyword" }
 }"##;
 
-const POSITIVE: TokenKey<AdaptiveColor> = TokenKey::new("status-positive");
+const POSITIVE: TokenKey<nsh_core::Hsla> = TokenKey::new("status-positive");
 
 fn light(color: AdaptiveColor) -> Color {
     Color::from(color.light)
@@ -129,7 +129,7 @@ fn a_documents_tokens_color_what_their_roles_draw() {
 #[component]
 fn Sets() -> impl IntoElement {
     set_timeout(Duration::from_millis(300), || {
-        update_tokens(Tokens::default().with(POSITIVE, TEAL));
+        update_tokens(Patch::new().key(POSITIVE, TEAL.light));
     });
     content()
 }

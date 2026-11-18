@@ -7,7 +7,7 @@ use std::time::Duration;
 use nsh_base::theme;
 use nsh_core::{
     Color, Size,
-    element::{Registry, Root, TokenKey, Tokens},
+    element::{Patch, PatchValues, Registry, Root, TokenKey},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
@@ -20,7 +20,7 @@ const FLAT: &str = r##"{
     "roles": { "card": "surface", "popover": "surface" }
 }"##;
 
-const SURFACE: TokenKey<AdaptiveColor> = TokenKey::new("surface");
+const SURFACE: TokenKey<nsh_core::Hsla> = TokenKey::new("surface");
 
 fn hex(c: AdaptiveColor) -> String {
     format!("#{:08x}", Color::from(c.light).0)
@@ -38,7 +38,7 @@ fn shown() -> String {
 fn Surfaces() -> impl IntoElement {
     let first = shown();
     set_timeout(Duration::from_millis(50), || {
-        update_tokens(Tokens::default().with(SURFACE, AdaptiveColor::rgb(0x123456, 0x123456)));
+        update_tokens(Patch::new().key(SURFACE, AdaptiveColor::rgb(0x123456, 0x123456).light));
     });
     text(move || format!("first {first}, now {}", shown()))
 }

@@ -293,20 +293,25 @@ fn type_name(name: &str) -> String {
     }
 }
 
-/// The Rust type of a kind's value.
+/// The Rust type of a kind's value: its value type's
+/// (`element/theme_values.rs`' table). The old kinds of numbers are
+/// `number`s.
 fn value_type(kind: &str) -> Option<fn(&TokenStream2) -> TokenStream2> {
     Some(match kind {
-        "color" => |c| quote!(#c::element::AdaptiveColor),
-        "number" | "weight" | "leading" => |_| quote!(::core::primitive::f32),
-        "radius" | "spacing" | "text" | "tracking" | "blur" => |c| quote!(#c::geometry::Points),
-        "font" => |c| quote!(#c::element::SharedString),
-        "shadow" => |c| quote!(#c::element::AdaptiveShadow),
-        "gradient" => |c| quote!(#c::element::AdaptiveGradient),
+        "color" => |c| quote!(#c::color::Hsla),
+        "number" | "weight" | "leading" | "radius" | "spacing" | "text" | "tracking" | "blur" => {
+            |_| quote!(::core::primitive::f32)
+        }
+        "font" => |_| quote!(::std::sync::Arc<::core::primitive::str>),
+        "shadow" => |c| quote!(::std::sync::Arc<[#c::BoxShadow]>),
+        "gradient" => |c| quote!(#c::Gradient),
         "string" => |_| quote!(::std::string::String),
         "boolean" => |_| quote!(::core::primitive::bool),
         "duration" => |_| quote!(::core::time::Duration),
         "easing" => |c| quote!(#c::element::CubicBezier),
         "typography" => |c| quote!(#c::element::Typography),
+        "border" => |c| quote!(#c::element::Border),
+        "transition" => |c| quote!(#c::element::TransitionToken),
         _ => return None,
     })
 }

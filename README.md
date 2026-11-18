@@ -242,8 +242,7 @@ NSH builds on the ideas of these projects:
   `Bounds`, `Edges`), `SharedString`, typed styles in Rust and much of the vocabulary of NSH's API.
 - [GPUI Kit](https://gpui-kit.com): `gpui-base`'s unstyled base components, which `nsh-base`
   follows in names and scope, and the Coding and Design Guides.
-- [shadcn/ui](https://ui.shadcn.com): the design tokens of NSH's theme, its default theme (`neutral`) and the
-  `cssVars` theme files apps write or export from shadcn's themes and tweakcn.
+- [shadcn/ui](https://ui.shadcn.com): the design tokens of NSH's default theme and their values (`neutral`).
 - [Solid](https://solidjs.com): the reactive graph, signals, memos, effects, owners and context, which both the
   Rust and the TSX side of NSH run on.
 

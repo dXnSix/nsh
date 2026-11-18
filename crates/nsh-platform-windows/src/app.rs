@@ -557,7 +557,8 @@ impl AppView {
     /// Fails, changing nothing, on a file that does not parse.
     pub fn set_theme_overrides(&self, json: Option<&str>) -> Result<(), nsh_base::ThemeError> {
         if let Some(json) = json {
-            nsh_core::element::theme_file::check(json).map_err(nsh_base::ThemeError)?;
+            serde_json::from_str::<serde_json::Value>(json)
+                .map_err(|e| nsh_base::ThemeError(e.to_string()))?;
         }
         *self.surface.host_theme.borrow_mut() = json.map(str::to_owned);
         // The engine reads the file with the app's UI set, against its
