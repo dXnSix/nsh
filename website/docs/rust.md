@@ -671,9 +671,10 @@ A theme document is JSON: each token with its `kind` and its `value`, the modifi
   line height, letter spacing, weight and family). `.adaptive_gradient(..)` and `.adaptive_shadow(..)` take one per
   appearance: `AdaptiveShadow::new(light, dark)` of two tokens' layers.
 - **Your own tokens.** Any other name is a token of the app, as a variable in Tailwind's `@theme` is: `"up"` above is
-  `theme().color("up")` in Rust, `bg-up` / `text-up/70` in classes and `token("up")` in TSX
-  ([Theme tokens](./tailwind.md#theme-tokens)). A number such as `"radius-card"` is `theme().number("radius-card")`
-  and `rounded-(--radius-card)`.
+  `token("up")` or a typed key's `get()` in Rust ([below](#theme-documents-and-typed-keys)), `bg-up` / `text-up/70` in
+  classes and `token("up")` in TSX ([Theme tokens](./tailwind.md#theme-tokens)). A number such as `"radius-card"` is
+  `TokenKey::<Points>::new("radius-card").get()` and `rounded-(--radius-card)`. Each follows its token where it is
+  read; `theme().color(name)` reads the tokens the theme was made of and does not follow a token no role reads.
 - A document never stops the app: what it cannot use (a value that does not fit its kind, a reference to no token) is
   left out and logged (target `nsh::theme`), and the rest applies. The runtime refuses a shadcn theme file of the old
   format: `Root::theme` and `set_theme` report `legacy-format` and activate nothing, and the theme stays.
@@ -817,18 +818,44 @@ reset_tokens([keys::ACTION.name()]); // the theme's action again
 - Code that does not know the app's names, such as `nsh_base`'s components, reads roles instead.
 
 **Roles.** NSH's own parts draw with roles, constants of the crate that draws with them (`nsh_base::role`: `POPOVER`,
-`PRIMARY`, `BORDER`, `RADIUS`, `FONT_SANS`, …; [Theme roles](../modules/nsh-base.md#theme-roles)), and a crate with
-components of its own declares its roles the same way (`pub const BANNER: Role = Role::new("banner");`). A document's
-`"roles"` maps roles onto its tokens, a color token for a color's role, a number for a number's, a font for a font's,
-so `nsh_base`'s `theme()` fields and components, the tab bar, the platforms' menus and alerts, and the default font
-draw with the document's tokens: above, `theme().popover` is the design system's `surface-overlay` and
-`theme().primary` its `action`. A token may play several roles (`"card": "surface", "popover": "surface"`): a design
-system with one surface for cards and popovers maps both onto it, and both follow every change of it. A role is played
-by one token.
+`PRIMARY`, `BORDER`, `RADIUS`, `FONT_SANS`, …; [Theme roles](../modules/nsh-base.md#theme-roles)). A role is a name
+and the kind of token it reads, in its type: `Role` reads a color (an `Hsla`), `NumberRole` a number, `FontRole` a
+font, and `Role<Typography>`, `Role<Arc<[BoxShadow]>>` and the like the other kinds. A document's `"roles"` maps
+roles onto its tokens, a token of the kind the role reads, so `nsh_base`'s `theme()` fields and components, the tab
+bar, the platforms' menus and alerts, and the default font draw with the document's tokens: above, `theme().popover`
+is the design system's `surface-overlay` and `theme().primary` its `action`. Without a mapping a role reads the token
+of its own name. A token may play several roles (`"card": "surface", "popover": "surface"`): a design system with one
+surface for cards and popovers maps both onto it, and both follow every change of it. A role is played by one token.
 
-A set lists the roles its components draw with in its registry, mapped by a theme or not, so the toolchain knows
-them: `registry.roles(role::all())`, where `nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }`
-writes the constants with `all()` beside them. `nsh/base` lists its own.
+- A role resolves in the active document alone, `nsh_base`'s as any library's: a document that neither maps one of
+  nsh-base's roles nor has a token of its name gives it nothing, and `theme()` draws that color transparent and the
+  `radius` as 0. nsh-base's default document is a theme only while it is the active one.
+- A mapping onto a token the theme does not have, or of another kind than the role reads, is reported and left out,
+  and the role reads what it would without it (a patch's mapping falls back on the document's).
+- `role(role::POPOVER)` reads a role where it is used, typed (`Option<Hsla>` for a color's), and outside a
+  [`ThemeScope`](../modules/nsh.md#themescope) runs again only when its token or its mapping changes; `tokens().role(..)`
+  reads it from tokens in hand. `theme()` reads its fields the same way: what reads it runs again when one of its
+  roles changes, and not for a token none of them reads.
+
+A crate with components of its own declares its roles, and lists them in its registry, mapped by a theme or not, so
+the toolchain and the theme's checks know them: `registry.roles(role::all())`, where
+
+```rust
+pub mod role {
+    use nsh_core::element::{NumberRole, Role};
+
+    nsh_core::roles! {
+        /// A banner's surface.
+        pub BANNER: Role = "banner" required,
+        /// How round a chip is.
+        pub CHIP_RADIUS: NumberRole = "chip-radius",
+    }
+}
+```
+
+writes the constants with `all()` beside them, each with its doc and kind. `required` marks a role every theme should
+map: a theme that does not is warned of when it loads. Two sets that list one role with different kinds keep the
+first, with a warning. `nsh/base` lists its own: 48 roles, none required.
 
 **One document at a time.** The app's document (`nsh.json`'s `"theme"`, `Root::theme`, or `set_theme`'s) is the
 theme; without one, the first UI set's that registers one; without any, nsh-base's default. Documents are never

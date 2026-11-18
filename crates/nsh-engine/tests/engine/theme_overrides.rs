@@ -108,8 +108,8 @@ fn last_text(rx: &Receiver<MountBatch>) -> Option<String> {
     last
 }
 
-fn hex(c: nsh_core::element::AdaptiveColor) -> String {
-    format!("#{:08x}", nsh_core::Color::from(c.light).0)
+fn hex(c: nsh_core::Hsla) -> String {
+    format!("#{:08x}", nsh_core::Color::from(c).0)
 }
 
 /// The default theme's primary, as `token()` shows it.

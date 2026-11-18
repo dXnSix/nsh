@@ -596,9 +596,10 @@ fn the_module_formats_money() {
   （`tokens().shadow("shadow-raised")`），`typography` 令牌是一个 `Typography`，
   `.typography(move || tokens().typography("text-title").cloned().unwrap_or_default())` 把它整体设置到文字上（字号、行高、字间距、字重和字体族）。
   `.adaptive_gradient(..)` 和 `.adaptive_shadow(..)` 按外观各取一个：用两个令牌的层构造 `AdaptiveShadow::new(light, dark)`。
-- **应用自己的令牌。** 其他任何名称都是应用的令牌，就像 Tailwind `@theme` 中的变量：上例的 `"up"` 在 Rust 中是 `theme().color("up")`，
-  在类名中是 `bg-up` / `text-up/70`，在 TSX 中是 `token("up")`（[主题 token](./tailwind.md#主题-token)）。数值如 `"radius-card"`
-  是 `theme().number("radius-card")` 和 `rounded-(--radius-card)`。
+- **应用自己的令牌。** 其他任何名称都是应用的令牌，就像 Tailwind `@theme` 中的变量：上例的 `"up"` 在 Rust 中是 `token("up")`
+  或类型化键的 `get()`（[见下文](#主题文档与类型化键)），在类名中是 `bg-up` / `text-up/70`，在 TSX 中是 `token("up")`
+  （[主题 token](./tailwind.md#主题-token)）。数值如 `"radius-card"` 是 `TokenKey::<Points>::new("radius-card").get()` 和
+  `rounded-(--radius-card)`。它们在读取处跟随各自的令牌；`theme().color(name)` 读取主题生成时的令牌，不跟随没有角色读取的令牌。
 - 文档从不会让应用停下：它无法使用的内容（与种类不符的值、指向不存在令牌的引用）会被忽略并记录日志（target `nsh::theme`），其余照常生效。
   运行时拒绝旧格式的 shadcn 主题文件：`Root::theme` 和 `set_theme` 报告 `legacy-format`，不启用任何内容，主题保持不变。
   `nsh_core::element::theme_convert::convert` 可把这样的文件写成主题文档；目前 `nsh build`、`nsh dev` 和 `nsh run` 会对 `nsh.json`
@@ -724,15 +725,37 @@ reset_tokens([keys::ACTION.name()]); // 恢复主题的 action
 - 不知道应用中名称的代码（例如 `nsh_base` 的组件）改为读取角色。
 
 **角色。** NSH 自身的部件用角色绘制，角色是绘制它的 crate 的常量（`nsh_base::role`：`POPOVER`、`PRIMARY`、`BORDER`、`RADIUS`、
-`FONT_SANS` 等；[主题角色](../modules/nsh-base.md#theme-roles)），有自己组件的 crate 以同样方式声明它的角色
-（`pub const BANNER: Role = Role::new("banner");`）。文档的 `"roles"` 把角色映射到它的令牌上：颜色角色对应颜色令牌，数值角色对应数值，
-字体角色对应字体，因此 `nsh_base` 的 `theme()` 字段和组件、标签栏、平台的菜单和警告框以及默认字体都用文档的令牌绘制：上例中
-`theme().popover` 是设计系统的 `surface-overlay`，`theme().primary` 是它的 `action`。一个令牌可以担任多个角色
-（`"card": "surface", "popover": "surface"`）：卡片和弹出层共用一个表面的设计系统把两者都映射到它，两者都跟随它的每次变化。
-一个角色只由一个令牌担任。
+`FONT_SANS` 等；[主题角色](../modules/nsh-base.md#theme-roles)）。角色是一个名称，它的类型说明它读取哪种令牌：`Role` 读取颜色
+（`Hsla`），`NumberRole` 读取数值，`FontRole` 读取字体，`Role<Typography>`、`Role<Arc<[BoxShadow]>>` 等读取其他种类。文档的
+`"roles"` 把角色映射到它的令牌上，令牌的种类须是角色读取的种类，因此 `nsh_base` 的 `theme()` 字段和组件、标签栏、平台的菜单和警告框
+以及默认字体都用文档的令牌绘制：上例中 `theme().popover` 是设计系统的 `surface-overlay`，`theme().primary` 是它的 `action`。
+没有映射时，角色读取与它同名的令牌。一个令牌可以担任多个角色（`"card": "surface", "popover": "surface"`）：卡片和弹出层共用一个表面的
+设计系统把两者都映射到它，两者都跟随它的每次变化。一个角色只由一个令牌担任。
 
-UI 集在注册表中列出其组件绘制所用的角色（不论是否被主题映射），以便工具链知道它们：`registry.roles(role::all())`，其中
-`nsh_core::roles! { /// A banner's surface. pub BANNER: Role = "banner", }` 生成这些常量以及旁边的 `all()`。`nsh/base` 列出它自己的角色。
+- 角色只在当前生效的文档中解析，`nsh_base` 的角色与任何库的角色一样：文档既没有映射 nsh-base 的某个角色、也没有与它同名的令牌时，
+  该角色什么也读不到，`theme()` 把这种颜色画成透明，`radius` 为 0。nsh-base 的默认文档只在它是当前文档时才是主题。
+- 映射到主题中不存在的令牌，或种类与角色读取的种类不同的令牌，会被报告并忽略，角色读取没有这条映射时会读取的值（补丁的映射回退到文档的映射）。
+- `role(role::POPOVER)` 在使用处按类型读取角色（颜色角色为 `Option<Hsla>`），在 [`ThemeScope`](../modules/nsh.md#themescope)
+  之外只在它的令牌或映射变化时重新运行；`tokens().role(..)` 从手头的令牌中读取。`theme()` 以同样方式读取它的字段：读取它的代码在它的
+  某个角色变化时重新运行，没有角色读取的令牌变化时不会。
+
+有自己组件的 crate 声明它的角色，并在注册表中列出（不论是否被主题映射），以便工具链和主题检查知道它们：`registry.roles(role::all())`，其中
+
+```rust
+pub mod role {
+    use nsh_core::element::{NumberRole, Role};
+
+    nsh_core::roles! {
+        /// A banner's surface.
+        pub BANNER: Role = "banner" required,
+        /// How round a chip is.
+        pub CHIP_RADIUS: NumberRole = "chip-radius",
+    }
+}
+```
+
+生成这些常量以及旁边的 `all()`，每个角色带有它的文档和种类。`required` 标记每个主题都应映射的角色：未映射它的主题在加载时收到警告。
+两个 UI 集以不同种类列出同一个角色时保留第一个，并给出警告。`nsh/base` 列出它自己的角色：48 个，都不是必需的。
 
 **一次一份文档。** 应用的文档（`nsh.json` 的 `"theme"`、`Root::theme` 或 `set_theme` 设置的）就是主题；没有时，是第一个注册了文档的 UI 集的文档；
 都没有时，是 nsh-base 的默认主题。文档从不合并，未生效文档的令牌在任何地方都读不到：在设计系统的令牌之外还有自己令牌（博彩应用的 `odds-up`）

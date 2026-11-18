@@ -894,8 +894,8 @@ impl Cx {
         super::document::inline_text(content, &mut line);
         let color: AdaptiveColor = match level {
             1 | 2 => crate::terminal::ACCENT.into(),
-            3 => theme().foreground,
-            _ => theme().muted_foreground,
+            3 => theme().foreground.into(),
+            _ => theme().muted_foreground.into(),
         };
         let heading = self.caret_after(
             text(line)
@@ -970,7 +970,7 @@ impl Cx {
                         .flex_none()
                         .text_color(move || match checked {
                             true => AdaptiveColor::from(crate::terminal::ACCENT),
-                            false => theme().muted_foreground,
+                            false => theme().muted_foreground.into(),
                         })
                         .role(AccessibilityRole::Checkbox)
                         .accessibility_state(AccessibilityState {
@@ -2162,7 +2162,7 @@ impl TextView {
 /// Lines that stand out more than the theme's borders (quotes' and
 /// rules'): the text's color, faint.
 fn strong_border() -> AdaptiveColor {
-    theme().foreground.opacity(0.15)
+    theme().foreground.opacity(0.15).into()
 }
 
 /// Code in text: monospace, smaller, on a rounded background (the text's
@@ -2181,13 +2181,13 @@ fn code_span(span: Text) -> Text {
 /// alert colors, as shadcn's tokens have no status colors. An important one
 /// is GitHub's purple, a caution the theme's `destructive`.
 fn alert_color(alert: Alert) -> AdaptiveColor {
-    let themed = |role, own| theme().tokens().role(role).map_or(own, AdaptiveColor::from);
+    let themed = |role, own| nsh_core::element::role(role).map_or(own, AdaptiveColor::from);
     match alert {
         Alert::Note => themed(role::INFO, AdaptiveColor::rgb(0x0969da, 0x4493f8)),
         Alert::Tip => themed(role::SUCCESS, AdaptiveColor::rgb(0x1a7f37, 0x3fb950)),
         Alert::Important => AdaptiveColor::rgb(0x8250df, 0xab7df8),
         Alert::Warning => themed(role::WARNING, AdaptiveColor::rgb(0x9a6700, 0xd29922)),
-        Alert::Caution => theme().destructive,
+        Alert::Caution => theme().destructive.into(),
     }
 }
 
@@ -2198,10 +2198,7 @@ const HIGHLIGHT: AdaptiveColor = AdaptiveColor::rgb(0xfde047, 0xca8a04);
 /// Highlighted text's color: the theme's `highlight` ([`role::HIGHLIGHT`]),
 /// else the view's own yellow.
 fn mark_color() -> AdaptiveColor {
-    theme()
-        .tokens()
-        .role(role::HIGHLIGHT)
-        .map_or(HIGHLIGHT, AdaptiveColor::from)
+    nsh_core::element::role(role::HIGHLIGHT).map_or(HIGHLIGHT, AdaptiveColor::from)
 }
 
 /// The theme's monospaced font (`font-mono`), else the system's.

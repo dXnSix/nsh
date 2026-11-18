@@ -1,9 +1,9 @@
 //! The syntax roles (`syntax-comment` … `syntax-type`): what highlighted
 //! code is colored with in a `TextView`'s code blocks, an `Editor` and a
-//! `DiffView`. Each kind keeps the highlighter's own color while the theme
-//! has no token for its role, takes the token of the role's name or the one
-//! the theme maps the role onto, and the spans, which are made once per
-//! change of the code, are made again when the theme changes.
+//! `DiffView`. Each kind keeps the highlighter's own color while the app's
+//! theme document has no token for its role, takes the token of the role's
+//! name or the one the theme maps the role onto, and the spans, which are
+//! made once per change of the code, are made again when the theme changes.
 
 use std::time::Duration;
 
@@ -16,6 +16,8 @@ use nsh_core::{
 };
 use nsh_engine::EngineConfig;
 use nsh_testing::{Headless, Screen};
+
+use crate::app_theme::{Add, default_with};
 
 /// The highlighter's own colors, light and dark.
 const KEYWORD: AdaptiveColor = AdaptiveColor::rgb(0x8250df, 0xc4a7ff);
@@ -65,13 +67,22 @@ fn Harness() -> impl IntoElement {
     content()
 }
 
-fn start<C: Component<Props = ()>>(tokens: Option<ThemePatch>) -> Headless {
-    let root = match tokens {
-        Some(tokens) => Root::of::<C>().theme_overrides(nsh_theme::write_patch(&tokens)),
-        None => Root::of::<C>(),
-    };
+/// The harness drawn with the app's theme document `theme` (`None`:
+/// nsh-base's default theme) and its overrides `overrides`.
+fn start<C: Component<Props = ()>>(
+    theme: Option<String>,
+    overrides: Option<ThemePatch>,
+) -> Headless {
+    let mut root = Root::of::<C>();
+    if let Some(theme) = theme {
+        root = root.theme(theme);
+    }
+    if let Some(overrides) = overrides {
+        root = root.theme_overrides(nsh_theme::write_patch(&overrides));
+    }
     let mut config = EngineConfig {
         viewport: Size::new(px(900.0), px(700.0)),
+        ui_sets: vec![nsh_base::registry()],
         ..EngineConfig::new(root)
     };
     config.environment.os = Os::Linux;
@@ -119,33 +130,42 @@ fn see(app: &mut Headless, expected: [Option<Color>; 5]) {
 
 #[test]
 fn without_a_token_code_keeps_the_highlighters_colors() {
-    let mut app = start::<Harness>(None);
+    let mut app = start::<Harness>(None, None);
     see(&mut app, colors(KEYWORD, NUMBER, COMMENT));
 }
 
 #[test]
 fn a_theme_with_the_roles_tokens_colors_the_code() {
-    let tokens = ThemePatch::new();
-    let tokens = tokens.value("syntax-keyword", VIOLET.light);
-    let tokens = tokens.value("syntax-number", ORANGE.light);
-    let tokens = tokens.value("syntax-comment", SLATE.light);
-    let mut app = start::<Harness>(Some(tokens));
+    let theme = default_with(
+        &[
+            ("syntax-keyword", Add::Color(VIOLET)),
+            ("syntax-number", Add::Color(ORANGE)),
+            ("syntax-comment", Add::Color(SLATE)),
+        ],
+        &[],
+    );
+    let mut app = start::<Harness>(Some(theme), None);
     see(&mut app, colors(VIOLET, ORANGE, SLATE));
 }
 
 #[test]
 fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
-    let tokens = ThemePatch::new();
-    let tokens = tokens.value("code-keyword", VIOLET.light);
-    // The token of the role's own name is not read while it is mapped.
-    let tokens = tokens.value("syntax-keyword", ORANGE.light);
-    let tokens = tokens.role(role::SYNTAX_KEYWORD.name(), "code-keyword");
-    let mut app = start::<Harness>(Some(tokens));
+    let theme = default_with(
+        &[
+            ("code-keyword", Add::Color(VIOLET)),
+            // The token of the role's own name is not read while it is
+            // mapped.
+            ("syntax-keyword", Add::Color(ORANGE)),
+        ],
+        &[],
+    );
+    let overrides = ThemePatch::new().role(role::SYNTAX_KEYWORD.name(), "code-keyword");
+    let mut app = start::<Harness>(Some(theme), Some(overrides));
     see(&mut app, colors(VIOLET, NUMBER, COMMENT));
 }
 
-/// The harness, which gives the theme the roles' tokens once the code is
-/// shown.
+/// The harness, which gives the roles' tokens other values once the code
+/// is shown.
 #[component]
 fn Changes() -> impl IntoElement {
     set_timeout(Duration::from_millis(300), || {
@@ -160,7 +180,16 @@ fn Changes() -> impl IntoElement {
 
 #[test]
 fn code_shown_already_is_colored_again_when_the_theme_changes() {
-    let mut app = start::<Changes>(None);
+    // The highlighter's own colors at first, declared by the app's theme.
+    let theme = default_with(
+        &[
+            ("syntax-keyword", Add::Color(KEYWORD)),
+            ("syntax-number", Add::Color(NUMBER)),
+            ("syntax-comment", Add::Color(COMMENT)),
+        ],
+        &[],
+    );
+    let mut app = start::<Changes>(Some(theme), None);
     see(&mut app, colors(VIOLET, ORANGE, SLATE));
 }
 
@@ -182,14 +211,13 @@ fn Patch() -> impl IntoElement {
 fn a_patchs_removed_lines_take_the_diff_deleted_role() {
     let removed = |s: &Screen| s.span_style("id:patch >> text:gone").ok().map(|s| s.color);
     let own = Some(light(AdaptiveColor::rgb(0xcf222e, 0xf87171)));
-    let mut app = start::<Patch>(None);
+    let mut app = start::<Patch>(None, None);
     app.wait_until("the block's own red", Duration::from_secs(10), move |s| {
         removed(s) == own
     })
     .unwrap();
-    let tokens = ThemePatch::new();
-    let tokens = tokens.value("diff-deleted", ORANGE.light);
-    let mut app = start::<Patch>(Some(tokens));
+    let theme = default_with(&[("diff-deleted", Add::Color(ORANGE))], &[]);
+    let mut app = start::<Patch>(Some(theme), None);
     app.wait_until("the theme's color", Duration::from_secs(10), move |s| {
         removed(s) == Some(light(ORANGE))
     })

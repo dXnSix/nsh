@@ -285,9 +285,11 @@ import type {
 | [`Toast`、`ToastStack`、`ToastManager`](../elements/toast.md) | `toast()`、`toast_stack()`、`ToastManager` | 无样式的 toast：语义根、层叠的栈、它们的生命周期。 |
 | 页面和对话框的 `statusBar` | `.status_bar(..)` | 页面或对话框显示期间的状态栏。见[状态栏](#status-bar)。 |
 
-在 Rust 中，`theme()` 以设计 token 的形式读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token。即 shadcn 的 31 种颜色、`radius`、`font-sans` 和 `font-mono`，每个都通过与其同名的角色读取，令牌每次变化后
-只生成一次。shadcn 应用用 `update_tokens(tokens)` 按名称修改部分 token，`reset_tokens(names)` 再把它们恢复；应用的
-[主题文档](../docs/rust.md#主题文档与类型化键)会取代默认主题。
+在 Rust 中，`theme()` 读取应用的主题（`theme().primary`、`theme().radius`），与 TSX 的[主题类](../docs/tailwind.md#主题-token)使用同样的 token：
+shadcn 的 31 种颜色、`radius`、`font-sans` 和 `font-mono`，每项一个值（`Hsla`，`radius` 以点为单位），都通过与其同名的角色读取。读取它的代码
+在它的某个角色变化时重新运行。`nsh/base` 的默认主题是一份[主题文档](../docs/rust.md#主题文档与类型化键)，即 shadcn 的 `neutral`，默认为浅色，
+深色值是它的 `colorMode` 修饰器的 `dark` 上下文（`set_modifier("colorMode", "dark")` 显示它们）；应用自己的主题和 UI 集都没有文档时，它就是应用的主题。
+应用用 `update_tokens(patch)` 按名称修改部分 token，`reset_tokens(names)` 再把它们恢复；应用的主题文档会整体取代默认主题。
 
 <a id="theme-roles"></a>
 
@@ -317,16 +319,20 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 | `font-sans` | 所有文本的默认字体；`theme().font_sans` |
 | `font-mono` | `theme().font_mono` |
 
-`selection`、`success`、`warning`、`info`、`highlight`、`diff-added`、`diff-deleted` 和各 `syntax-*` 角色在默认主题中没有 token：在主题拥有同名 token（`cssVars` 中的
-`"warning": "#b45309"`）或把该角色映射到自己的某个 token（主题文档或主题文件的 `"roles": { "warning": "caution" }`）之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
+`selection`、`success`、`warning`、`info`、`highlight`、`diff-added`、`diff-deleted` 和各 `syntax-*` 角色在默认主题中没有 token：在主题文档拥有同名 token
+（它的 `tokens` 中的 `"warning": { "kind": "color", "value": "#b45309" }`）或把该角色映射到自己的某个 token（它的 `"roles": { "warning": "caution" }`，
+或覆盖补丁的 `"roles"`）之前，各部件绘制自己的颜色。各部件以半透明绘制 `highlight` 和 diff 的底色；token 是不透明的颜色。
 
-角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，角色是一个常量，类型为
-`nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`，`role::RADIUS`
-读取数字，`role::FONT_SANS` 读取字体族）。`Tokens::with_role` 把一个角色映射到 token
-（`tokens.with_role(role::POPOVER, "surface-overlay")`），之后 `tokens.role(role::POPOVER)` 读取它。有自己组件的 crate
-用同样的方式声明这些组件所用的角色（`pub const BANNER: Role = Role::new("banner");`）：角色就是它的名字，不论由谁声明。
-没有映射时，每个角色读取同名的 token，所以 shadcn 主题的显示与以往相同。只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），
-各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
+这些角色只在当前生效的主题文档中解析，与任何库的角色一样：文档既没有映射其他某个角色、也没有与它同名的 token 时，该颜色画成透明，
+`radius` 为 0，绝不取默认主题的值。用自己名称命名 token 的主题要映射它希望绘制的每个角色。
+
+角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，
+角色是某种种类的常量，类型为 `nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`；颜色是读取
+`Hsla` 的 `Role`，`role::RADIUS` 是 `NumberRole`，`role::FONT_SANS` 和 `role::FONT_MONO` 是 `FontRole`），`role::all()` 列出它们的声明，共 48 个，
+都不是必需的，由 `nsh/base` 的注册表注册。`role(role::POPOVER)` 在使用处读取角色，`tokens().role(role::POPOVER)` 从手头的 token 中读取：
+主题把它映射到的 token，否则是同名的 token。映射到种类与角色读取的种类不同的 token 会被报告并忽略。有自己组件的 crate 在
+`nsh_core::roles!` 中声明这些组件所用的角色（`pub BANNER: Role = "banner"`）及其种类：角色就是它的名字，不论由谁声明。
+只有应用有自己的主题时（`Tokens::is_themed`，由核心设置），各平台的控件才采用主题的颜色；使用默认主题的应用保留系统的提示框颜色。
 
 已注册的[主题文档](../docs/rust.md#主题文档与类型化键)把角色映射到自己的 token 上（它的 `"roles"`），`theme()` 的字段随之读取这些 token：
 设计系统把 `role::POPOVER` 映射到 `surface-overlay` 时，`theme().popover` 就是 `surface-overlay`，`nsh/base` 的组件、标签栏和各平台的控件

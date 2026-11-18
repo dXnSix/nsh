@@ -910,7 +910,7 @@ mod tests {
     /// one without a theme keeps the system's.
     #[test]
     fn a_surfaces_alert_tint_comes_from_its_own_tokens() {
-        let plain = nsh_base::tokens_of(None).unwrap();
+        let plain = nsh_base::Theme::default().into_tokens();
         let ink = plain.color("foreground").unwrap();
         let document = nsh_theme::read(
             r##"{ "tokens": { "primary": { "kind": "color", "value": "#0a0a0a" } } }"##,

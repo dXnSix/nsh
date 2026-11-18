@@ -78,9 +78,9 @@ Visual rules are changed in the shared layer; `nsh-base` supplies the components
   `.bg(move || theme().primary)`, `.style_when(props.disabled, |s| ..)`); when what it read changes, only that part
   is updated. A prop is read with `props.x.get()` in a binding and `get_untracked()` in a listener. The root can be
   any element; the app's `class` (merged last, it wins) and `style` apply to it.
-- **Colors come from the theme** (`nsh_base::theme()`: shadcn/ui's tokens, a light and a dark value each),
-  not literals, so the app's `nsh.json` theme restyles its components and dark appearance switches natively. Read
-  `theme()` inside the bindings that use it, so a new theme reaches them.
+- **Colors come from the theme** (`nsh_base::theme()`: shadcn/ui's roles, one value each in the active theme
+  document), not literals, so the app's `nsh.json` theme restyles its components and a pick of its light/dark
+  context recolors them. Read `theme()` inside the bindings that use it, so a new value reaches them.
 - **What never changes is plain Rust** (`.when(cond, |v| ..)`, `match` at build time); interaction states are
   variants (`.active(..)`, `.hover(..)`, `.focus(..)`). **What comes and goes is a region**: `when(cond, ||
   el).otherwise(|| el)`, `dynamic(move || ..)`, `each(items, key, |item, index| row)`.
@@ -317,7 +317,7 @@ reasons: `reactive-components.md`.
   animated values take `f32`, `Points` or `Radians` too.
   `canvas(move || draw(..))` draws in a binding: again when what it read changes (a size kept from `on_layout`, the
   appearance through `color(..)`); a new drawing replaces the old one. Props that take a plain color (an input's
-  placeholder color) take `move || color(theme().muted_foreground)`: the theme color for the appearance now.
+  placeholder color) take `move || theme().muted_foreground`: the theme's color now.
 - **What TS does, in Rust**:
 
   | TS | Rust component |
@@ -805,32 +805,52 @@ document**, and gives no name a meaning but `font-sans` (the app's default font,
 page's; `font-mono` is the monospaced one). The format, its value types, modifiers, layers, references and roles
 are `docs/dev/theme-format.md`'s, and `nsh-theme` (`crates/nsh-theme`) is its one implementation: the core reads,
 checks and resolves through it and re-implements none of its rules. The theme is `nsh/base`'s: `nsh_base::Theme`
-(`crates/nsh-base/src/theme.rs`) has shadcn/ui's tokens, exactly: `background` / `foreground`, `card`, `popover`,
+(`crates/nsh-base/src/theme.rs`) has shadcn/ui's tokens as roles: `background` / `foreground`, `card`, `popover`,
 `primary`, `secondary`, `muted`, `accent` (each with its `-foreground`), `destructive`, `border`, `input`, `ring`,
 `chart-1` to `chart-5`, `sidebar`, `sidebar-foreground`, `sidebar-primary` / `-foreground`, `sidebar-accent` /
-`-foreground`, `sidebar-border`, `sidebar-ring` and `radius`, one field each (`theme().primary`, `theme().chart_1`,
-`theme().sidebar_ring`, `theme().radius`), plus Tailwind's fonts `font-sans` / `font-mono` (`theme().font_sans`,
-`theme().font_mono`; `None`, the system's fonts). `theme()` returns the theme of the tokens drawn with now, made once
-per change of them; an app's own tokens are read by name (`theme().color("up")`). Each field is read through its
-**role** (`element::Role<V>`: a name, `name()` shadcn's spelling, and in its type what it reads, `RoleValue`: a color
-by default, `NumberRole` an `f32`, `FontRole` a family). A role is a constant of the crate that draws with it and is
-its name, so two constants of one name are one role: the core's and the platforms' are `element::role` (`POPOVER`,
-`POPOVER_FOREGROUND`, `PRIMARY`, `ACCENT`, `ACCENT_FOREGROUND`, `MUTED_FOREGROUND`, `BORDER`, `DESTRUCTIVE`,
-`FONT_SANS`), nsh-base's `nsh_base::role` (one per field of `Theme`, written by `theme!` from its one list, with
-`RADIUS`, `FONT_MONO`, `SELECTION` and the status roles `SUCCESS`, `WARNING`, `INFO` and `HIGHLIGHT`, which like
-`SELECTION` have no token in the default theme: `Editor`'s `warning_color` / `info_color` / `match_color` and
-`TextView`'s `alert_color` / `mark_color` read `theme().tokens().role(..)` and fall back on their own constants;
-and the diff roles `DIFF_ADDED` and `DIFF_DELETED`, which `DiffView`'s `added_color` / `deleted_color` read the same
-way, each use a binding so the rows follow the theme; and the seven `SYNTAX_*` roles, which `syntax::Palette::of_theme`
-reads once per scope that styles spans (`Token::style(&palette)`; `Palette::default()` is Allsum's): the editor's
-and the diff view's row scopes and a scope of its own around a `TextView` block's spans, so that spans made once
-per change of the code are made again when the theme changes), and another UI set declares its own. `Tokens::role(role)` reads the token
-the document's or a patch's `"roles"` maps the role onto, else the token of the role's name, so without a mapping
-every reader gets what it always did. The core's readers use roles too (the default font, `role(role::FONT_SANS)`; the mobile tab bar's tint,
+`-foreground`, `sidebar-border`, `sidebar-ring` and `radius`, one field each and a single value (an `Hsla`,
+`radius` in `Points`: `theme().primary`, `theme().chart_1`, `theme().sidebar_ring`, `theme().radius`), plus
+Tailwind's fonts `font-sans` / `font-mono` (`theme().font_sans`, `theme().font_mono`; `None`, the system's fonts).
+Each field is read through its role in the active document alone, as any library's roles resolve: the token the
+document's or a patch's `"roles"` maps it onto, else the token of its name. A color whose role resolves to nothing is
+transparent and `radius` 0: nothing comes from nsh-base's default unless it is the active document. `selection()` is
+the `selection` role's color, else `primary` at 22 %. Outside a `ThemeScope`, `theme()` is a memo of the surface
+(made on its first read, under no owner) over its role reads (`element::role(r)`, each subscribing to its token and
+to the role mappings alone): what read it runs again when the value or the mapping of one of its roles changes, and
+not when a token none of them reads does. In a scope it is the scope's theme (`element::scope_tokens`), made once
+per change of the scope's tokens. `Theme::color(name)`, `number` and `font` read the tokens the theme was made of;
+a token no role reads is read where it is used, with `token(name)` (`theme().color("up")` does not follow `up`).
+
+**Roles** (`element/tokens.rs`). A role is what a part draws with, as data: `element::Role<V>` is a name and, in its
+type, what it reads (`RoleValue`, sealed over each value type's Rust type: an `Hsla` by default, `NumberRole` a
+`Role<f32>`, `FontRole` a `Role<Arc<str>>`, `Role<Typography>`, `Role<Arc<[BoxShadow]>>`, ...). Its declaration is
+`RoleSpec`, `nsh_theme::RoleDeclaration` (name, `ValueType`, doc, `required`): `roles!` writes the constants and
+`all()` from `$(#[doc])* pub NAME: Type = "name" [required]`, and a UI set registers them with `Registry::roles`.
+The host collects the served sets' declarations once, with the core's own (`RoleTable`): one listed again with the
+same type is one role, with another type it logs `role-conflict` and keeps the first; nothing panics. A role is a
+constant of the crate that draws with it and is its name, so two constants of one name are one role: the core's and
+the platforms' are `element::role` (`POPOVER`, `POPOVER_FOREGROUND`, `PRIMARY`, `ACCENT`, `ACCENT_FOREGROUND`,
+`MUTED_FOREGROUND`, `BORDER`, `DESTRUCTIVE`, `FONT_SANS`), nsh-base's `nsh_base::role` (48, none required: one
+`color` per color field of `Theme`, written by `theme!` from its one list, `FONT_SANS` and `FONT_MONO` fonts,
+`RADIUS` a number, and the colors `SELECTION`, the status roles `SUCCESS`, `WARNING`, `INFO` and `HIGHLIGHT`, which
+have no token in the default theme: `Editor`'s `warning_color` / `info_color` / `match_color` and `TextView`'s
+`alert_color` / `mark_color` read them with `element::role(..)` and fall back on their own constants; the diff roles
+`DIFF_ADDED` and `DIFF_DELETED`, which `DiffView`'s `added_color` / `deleted_color` read the same way, each in a
+binding so the rows follow the theme; and the seven `SYNTAX_*` roles, which `syntax::Palette::of_theme` reads once
+per scope that styles spans (`Token::style(&palette)`; `Palette::default()` is Allsum's): the editor's and the diff
+view's row scopes and a scope of its own around a `TextView` block's spans, so that spans made once per change of
+the code are made again when one of them changes), and another UI set declares its own. Every install checks the
+active layers' mappings (`nsh_theme::check_roles`, against the declarations and Tailwind's namespaces as patterns):
+a mapping onto a missing token or one of another type is reported and left out, and the role resolves through the
+layer below, else to the token of its name. `Tokens::role(role)` reads the token a role resolves to as its `V` (a
+token of another type gives `None` and logs `role-type` once), `Tokens::role_by_name(name)` whatever its type. The
+core's readers use roles too (the default font, `role(role::FONT_SANS)`; the mobile tab bar's tint,
 `role::PRIMARY`), and so do the platforms' (Linux's menus, iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host
-background is the host theme's `background` field, which `Theme::of` reads through `role::BACKGROUND`). A role is no
-token and adds no class. The defaults are shadcn's `neutral` theme (`default-theme.json`, `radius` 10 pt); no component of `nsh/base`
-draws with them but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
+background is the host theme's `background` field, read through `role::BACKGROUND`). A role is no token and adds
+no class. The default theme is shadcn's `neutral` as a theme document (`default-theme.json`, `radius` 10 pt, its
+dark values in the `colorMode` modifier's `dark` context: the output of `nsh theme convert` for the old `cssVars`
+file), which nsh-base registers as the fallback document (`Registry::fallback_theme_document`); no component of
+`nsh/base` draws with it but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
 
 **The store** (`element/tokens.rs`): `Tokens` is one map, name → `Token`, one value per name, of the type its
 declaration gives: `Token` has one variant per value type (`ValueType`, re-exported from `nsh-theme`), converted in
@@ -905,8 +925,8 @@ platform when they change (`Command::Tokens` on the root), which colors its own 
 the options, `muted-foreground` for the message, `primary` for the buttons and `destructive` for a destructive action,
 over the system dialog's shape, each as a role; iOS's alerts take `role::PRIMARY` as their tint, which iOS 17 draws the
 regular and cancel actions in and iOS 26 does not use; an app without a theme of its own, `!Tokens::is_themed()`,
-keeps the system's colors on both). `nsh_base::theme()` reads the tokens from a signal of the surface (`element::tokens`): new tokens run
-again the bindings that read them.
+keeps the system's colors on both). `nsh_base::theme()` reads its roles with `element::role`, each subscribing to
+its token: a change of one runs again the bindings that read the theme.
 
 Names a document declares beyond shadcn's (`surface`, `up`, `radius-card`) are the app's own tokens, as the
 variables of a Tailwind 4 `@theme` are: classes name them (`bg-surface`, `bg-up/30`, `rounded-(--radius-card)`;
@@ -947,8 +967,8 @@ ops 418 to 421) returns them as JSON. `get` tracks as `token()` does; the others
 run again for a name added. `tokens.d.ts` carries `interface TokenKinds` beside `Tokens`, and `modifiers.d.ts`
 `interface ThemeModifiers` (each modifier a union of its contexts).
 
-`nsh_base::Theme` is a view of the tokens with a field per shadcn token, each read through its role (`Theme::of`), so
-under a document that maps `popover` onto `surface-overlay`, `theme().popover` is that token.
+`nsh_base::Theme` is a view of the tokens with a field per shadcn token, each read through its role, so under a
+document that maps `popover` onto `surface-overlay`, `theme().popover` is that token.
 
 ## The host node and ids
 

@@ -510,7 +510,7 @@ fn Triggers() -> impl IntoElement {
             view()
                 .flex_row()
                 .gap(px(8.0))
-                .child(sample("Muted", nsh_base::theme().muted_foreground))
+                .child(sample("Muted", nsh_base::theme().muted_foreground.into()))
                 .child(sample("Accent", nsh_base::terminal::ACCENT.into())),
         )
         .child(

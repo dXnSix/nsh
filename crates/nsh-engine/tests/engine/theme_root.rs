@@ -121,7 +121,7 @@ fn the_theme_file_replaces_the_roots_tokens() {
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
     assert_eq!(
         backgrounds(&first),
-        vec![Color::from(nsh_base::Theme::default().card.light)]
+        vec![Color::from(nsh_base::Theme::default().card)]
     );
     // `Root::tokens` alone keeps working.
     let (_engine, rx) = start(Root::new::<Swatch>(|| ()).theme_overrides(tokens));

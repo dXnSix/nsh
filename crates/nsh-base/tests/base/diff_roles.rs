@@ -1,8 +1,8 @@
 //! The diff roles (`diff-added`, `diff-deleted`): what a `DiffView` draws
 //! added and deleted lines with. Its signs and changed words keep the
-//! view's own green and red while the theme has no token for the roles,
-//! take the token of a role's name or the one the theme maps the role
-//! onto, and follow a change of it.
+//! view's own green and red while the app's theme document has no token for
+//! the roles, take the token of a role's name or the one the theme maps the
+//! role onto, and follow a change of it.
 
 use std::time::Duration;
 
@@ -15,6 +15,8 @@ use nsh_core::{
 };
 use nsh_engine::EngineConfig;
 use nsh_testing::{Headless, Screen};
+
+use crate::app_theme::{Add, default_with};
 
 /// The colors the view draws on its own, light and dark.
 const ADDED: AdaptiveColor = AdaptiveColor::rgb(0x16a34a, 0x4ade80);
@@ -50,13 +52,19 @@ fn Harness() -> impl IntoElement {
     content()
 }
 
-fn start<C: Component<Props = ()>>(tokens: Option<Patch>) -> Headless {
-    let root = match tokens {
-        Some(tokens) => Root::of::<C>().theme_overrides(nsh_theme::write_patch(&tokens)),
-        None => Root::of::<C>(),
-    };
+/// The harness drawn with the app's theme document `theme` (`None`:
+/// `nsh/base`'s default) and its overrides `overrides`.
+fn start<C: Component<Props = ()>>(theme: Option<String>, overrides: Option<Patch>) -> Headless {
+    let mut root = Root::of::<C>();
+    if let Some(theme) = theme {
+        root = root.theme(theme);
+    }
+    if let Some(overrides) = overrides {
+        root = root.theme_overrides(nsh_theme::write_patch(&overrides));
+    }
     let mut config = EngineConfig {
         viewport: Size::new(px(900.0), px(600.0)),
+        ui_sets: vec![nsh_base::registry()],
         ..EngineConfig::new(root)
     };
     config.environment.os = Os::Linux;
@@ -92,31 +100,41 @@ fn colors(added: AdaptiveColor, deleted: AdaptiveColor) -> [Option<Color>; 4] {
 
 #[test]
 fn without_a_token_the_view_draws_its_own_green_and_red() {
-    let app = start::<Harness>(None);
+    let app = start::<Harness>(None, None);
     assert_eq!(drawn(app.screen()), colors(ADDED, DELETED));
 }
 
 #[test]
 fn a_theme_with_the_roles_tokens_colors_the_lines() {
-    let tokens = Patch::new();
-    let tokens = tokens.value("diff-added", TEAL.light);
-    let tokens = tokens.value("diff-deleted", ROSE.light);
-    let app = start::<Harness>(Some(tokens));
+    let theme = default_with(
+        &[
+            ("diff-added", Add::Color(TEAL)),
+            ("diff-deleted", Add::Color(ROSE)),
+        ],
+        &[],
+    );
+    let app = start::<Harness>(Some(theme), None);
     assert_eq!(drawn(app.screen()), colors(TEAL, ROSE));
 }
 
 #[test]
 fn a_role_mapped_onto_a_token_of_the_apps_draws_that_token() {
-    let tokens = Patch::new();
-    let tokens = tokens.value("status-positive", TEAL.light);
-    // The token of the role's own name is not read while it is mapped.
-    let tokens = tokens.value("diff-added", ROSE.light);
-    let tokens = tokens.role(role::DIFF_ADDED.name(), "status-positive");
-    let app = start::<Harness>(Some(tokens));
+    let theme = default_with(
+        &[
+            ("status-positive", Add::Color(TEAL)),
+            // The token of the role's own name is not read while it is
+            // mapped.
+            ("diff-added", Add::Color(ROSE)),
+        ],
+        &[],
+    );
+    // Mapped by the app's overrides.
+    let overrides = Patch::new().role(role::DIFF_ADDED.name(), "status-positive");
+    let app = start::<Harness>(Some(theme), Some(overrides));
     assert_eq!(drawn(app.screen()), colors(TEAL, DELETED));
 }
 
-/// The harness, which gives the theme the roles' tokens after its first
+/// The harness, which gives the roles' tokens other values after its first
 /// frames.
 #[component]
 fn Changes() -> impl IntoElement {
@@ -131,7 +149,15 @@ fn Changes() -> impl IntoElement {
 
 #[test]
 fn the_lines_follow_a_change_of_the_tokens() {
-    let mut app = start::<Changes>(None);
+    // The view's own colors at first, declared by the app's theme.
+    let theme = default_with(
+        &[
+            ("diff-added", Add::Color(ADDED)),
+            ("diff-deleted", Add::Color(DELETED)),
+        ],
+        &[],
+    );
+    let mut app = start::<Changes>(Some(theme), None);
     let now = colors(TEAL, ROSE);
     app.wait_until("the theme's colors", Duration::from_secs(5), move |s| {
         drawn(s) == now

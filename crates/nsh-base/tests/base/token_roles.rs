@@ -15,15 +15,14 @@ use nsh_testing::Headless;
 
 /// One surface for cards and popovers.
 const FLAT: &str = r##"{
-    "cssVars": { "theme": { "surface": "#0a0b0c" } },
-    "tokens": { "surface": { "kind": "color" } },
+    "tokens": { "surface": { "kind": "color", "value": "#0a0b0c" } },
     "roles": { "card": "surface", "popover": "surface" }
 }"##;
 
 const SURFACE: TokenKey<nsh_core::Hsla> = TokenKey::new("surface");
 
-fn hex(c: AdaptiveColor) -> String {
-    format!("#{:08x}", Color::from(c.light).0)
+fn hex(c: nsh_core::Hsla) -> String {
+    format!("#{:08x}", Color::from(c).0)
 }
 
 /// `theme()`'s card and popover.

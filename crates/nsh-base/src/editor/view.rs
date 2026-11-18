@@ -36,28 +36,19 @@ const INFO: AdaptiveColor = AdaptiveColor::rgb(0x2563eb, 0x60a5fa);
 /// the token the app's theme maps it onto, else the one of that name), else
 /// the editor's own amber.
 fn match_color() -> AdaptiveColor {
-    theme()
-        .tokens()
-        .role(role::HIGHLIGHT)
-        .map_or(MATCH, AdaptiveColor::from)
+    nsh_core::element::role(role::HIGHLIGHT).map_or(MATCH, AdaptiveColor::from)
 }
 
 /// A warning's color: the theme's `warning` ([`role::WARNING`]), else the
 /// editor's own amber.
 fn warning_color() -> AdaptiveColor {
-    theme()
-        .tokens()
-        .role(role::WARNING)
-        .map_or(WARNING, AdaptiveColor::from)
+    nsh_core::element::role(role::WARNING).map_or(WARNING, AdaptiveColor::from)
 }
 
 /// An information's color: the theme's `info` ([`role::INFO`]), else the
 /// editor's own blue.
 fn info_color() -> AdaptiveColor {
-    theme()
-        .tokens()
-        .role(role::INFO)
-        .map_or(INFO, AdaptiveColor::from)
+    nsh_core::element::role(role::INFO).map_or(INFO, AdaptiveColor::from)
 }
 
 /// `el` with part `part`'s classes and style, which follow the props.
@@ -661,8 +652,8 @@ fn gutter_row(
                         .items_center()
                         .justify_center()
                         .when_some(fold, |v, folded| {
-                            let hovered = theme().foreground.opacity(0.08);
-                            let pressed = theme().foreground.opacity(0.14);
+                            let hovered = AdaptiveColor::from(theme().foreground.opacity(0.08));
+                            let pressed = AdaptiveColor::from(theme().foreground.opacity(0.14));
                             // A ghost button smaller than the line, so
                             // markers on lines next to each other stay apart.
                             let button = (size * 0.7).round();
@@ -1381,10 +1372,15 @@ fn tagged(
 /// A severity's color and part.
 fn severity_look(severity: EditorDiagnosticSeverity) -> (fn() -> AdaptiveColor, EditorPart) {
     match severity {
-        EditorDiagnosticSeverity::Error => (|| theme().destructive, EditorPart::DiagnosticError),
+        EditorDiagnosticSeverity::Error => {
+            (|| theme().destructive.into(), EditorPart::DiagnosticError)
+        }
         EditorDiagnosticSeverity::Warning => (warning_color, EditorPart::DiagnosticWarning),
         EditorDiagnosticSeverity::Info => (info_color, EditorPart::DiagnosticInfo),
-        EditorDiagnosticSeverity::Hint => (|| theme().muted_foreground, EditorPart::DiagnosticHint),
+        EditorDiagnosticSeverity::Hint => (
+            || theme().muted_foreground.into(),
+            EditorPart::DiagnosticHint,
+        ),
     }
 }
 
@@ -1510,7 +1506,7 @@ fn composition(ed: Ed, lh: impl Fn() -> Points + Clone + 'static) -> impl IntoEl
                         .flex_row()
                         .h_full()
                         .bg(move || match active {
-                            true => theme().muted.opacity(0.6),
+                            true => theme().muted.opacity(0.6).into(),
                             false => AdaptiveColor::TRANSPARENT,
                         })
                         .child(part(

@@ -69,7 +69,7 @@ pub(crate) fn line(content: impl Fn(usize) -> String + 'static) -> View {
 /// line a terminal draws between two parts a GUI sets apart with a border
 /// (a command's search field and its rows).
 pub(crate) fn rule_line() -> View {
-    line_colored(rule, Some(|| crate::theme::theme().border))
+    line_colored(rule, Some(|| crate::theme::theme().border.into()))
 }
 
 /// A column of [`QUOTE_BAR`]s as tall as the view its parent stretches it
@@ -232,8 +232,8 @@ pub fn mark_text(mark: &Mark) -> String {
 /// The color of `tone`.
 pub(crate) fn tone_color(tone: Tone) -> AdaptiveColor {
     match tone {
-        Tone::Text | Tone::Strong => crate::theme::theme().foreground,
-        Tone::Muted => crate::theme::theme().muted_foreground,
+        Tone::Text | Tone::Strong => crate::theme::theme().foreground.into(),
+        Tone::Muted => crate::theme::theme().muted_foreground.into(),
         Tone::Accent => ACCENT.into(),
     }
 }

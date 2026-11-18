@@ -24,7 +24,7 @@ fn Swatch() -> impl IntoElement {
 
 /// The primary color of a theme that sets none: `nsh-base`'s default.
 fn default_primary() -> Color {
-    Color::from(Theme::default().primary.light)
+    Color::from(Theme::default().primary)
 }
 
 /// A theme patch of `values` (`{ "primary": "#00ff00" }`).

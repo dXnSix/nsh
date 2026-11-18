@@ -117,6 +117,9 @@ fn Harness(props: HarnessProps) -> impl IntoElement {
 fn start(classes: EditorClasses) -> Headless {
     let mut config = EngineConfig {
         viewport: Size::new(px(800.0), px(900.0)),
+        // nsh-base's default theme: the faded code is drawn in its
+        // `muted-foreground`, unlike the text around it.
+        ui_sets: vec![nsh_base::registry()],
         ..EngineConfig::new(Root::new::<Harness>(move || HarnessProps {
             classes: classes.clone(),
         }))

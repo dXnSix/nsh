@@ -274,8 +274,8 @@ The compiler accepts the wrong form, and the first frame looks right. The same a
 taking `label: String` freezes the label, and a helper taking `impl IntoReactive<SharedString>` passes it through
 (`examples/gallery-rs/native/src/demos/form.rs`, `Field::hint`).
 
-`theme()` is a read too. `.bg(move || theme().primary)` follows a theme change; `.bg(theme().primary)` is fixed to that
-theme object. Either follows light and dark, because the `AdaptiveColor` carries both values.
+`theme()` is a read too. `.bg(move || theme().primary)` follows a theme change (a new value of the role's token, the
+theme's dark context picked); `.bg(theme().primary)` is fixed to the one value it read.
 
 ### Signals
 
@@ -580,33 +580,62 @@ fn card(selected: Signal<bool>) -> impl IntoElement {
 
 ### Theme tokens
 
-`nsh_base::theme()` returns `Arc<Theme>` with fields as `AdaptiveColor`: `background`, `foreground`, `card`,
+`nsh_base::theme()` returns `Arc<Theme>` with one value per field, an `Hsla` each: `background`, `foreground`, `card`,
 `card_foreground`, `popover`, `popover_foreground`, `primary`, `primary_foreground`, `secondary`,
 `secondary_foreground`, `muted`, `muted_foreground`, `accent`, `accent_foreground`, `destructive`, `border`, `input`,
-`ring`, `chart_1`..`chart_5`, `sidebar` and its family; plus `radius`, `font_sans`, `font_mono`.
+`ring`, `chart_1`..`chart_5`, `sidebar` and its family; plus `radius` (`Points`), `font_sans`, `font_mono`.
 
-Do not write `rgb(..)` in app code. Name the role, so a theme file restyles the whole app.
+Do not write `rgb(..)` in app code. Name the role, so a theme restyles the whole app.
 
-Custom tokens go in the theme file under `cssVars` (any name), and are read by name:
+Each field is a **role** (`nsh_base::role`): the token the active theme document maps it onto in its `roles`, else
+the token of the field's name. The app's theme document (`docs/dev/theme-format.md`) is the whole theme: start from
+nsh-base's `default-theme.json`, or name the tokens as you like and map the roles onto them. A role the document
+neither maps nor has a token of draws transparent (`radius` 0). Dark values are the document's `colorMode`
+modifier's `dark` context, which `set_modifier("colorMode", "dark")` picks.
+
+Custom tokens are declared in the document's `tokens` (any name, with its `kind`), and read where they are used, with
+a typed key (`TokenKey`, or `theme_keys!` for every token of the document), which follows the token:
 
 ```json
-{ "cssVars": { "light": { "up": "#16a34a", "radius-card": "14px" }, "dark": { "up": "#4ade80" } } }
+{
+  "tokens": {
+    "surface-raised": { "kind": "color", "value": "#ffffff" },
+    "up": { "kind": "color", "value": "#16a34a" },
+    "radius-card": { "kind": "number", "value": 14 }
+  },
+  "modifiers": {
+    "colorMode": {
+      "default": "light",
+      "contexts": { "light": {}, "dark": { "surface-raised": "#18181b", "up": "#4ade80" } }
+    }
+  },
+  "resolutionOrder": ["colorMode"],
+  "roles": { "popover": "surface-raised", "card": "surface-raised" }
+}
 ```
 
 ```rust
 use nsh_base::theme;
-use nsh_core::prelude::*;
+use nsh_core::{element::TokenKey, prelude::*};
+
+const UP: TokenKey<Hsla> = TokenKey::new("up");
+const RADIUS_CARD: TokenKey<Points> = TokenKey::new("radius-card");
 
 fn change() -> impl IntoElement {
-    let up = move || theme().color("up").unwrap_or(theme().foreground);
-    let radius = move || px(theme().number("radius-card").unwrap_or(10.0));
+    let up = move || UP.get().unwrap_or_else(|| theme().foreground);
+    let radius = move || RADIUS_CARD.get().unwrap_or(px(10.0));
     view().rounded(radius).child(text("+2.4%").text_color(up))
 }
 ```
 
-`color`, `number` and `font` return `Option`: a misspelled token is `None`, so give a fallback that looks wrong in
+`get` returns `Option`: a misspelled token, or one of another kind, is `None`, so give a fallback that looks wrong in
 review rather than `.unwrap()`, which panics at run time. Wrap each custom token in one function of your `ui/theme`
-module. Tokens and defaults are listed in `website/docs/rust.md`, "Theme".
+module. `theme().color(name)` reads the tokens the theme was made of and does not follow a token no role reads.
+
+Components of your own draw with roles of their own, not fixed token names: declare them with `nsh_core::roles!`
+(`/// doc` then `pub CHIP: Role = "chip"`, `NumberRole`, `FontRole` or `Role<Typography>` for other kinds,
+`required` after the name for one every theme must map), register them with `registry.roles(role::all())`, and read
+them with `role(role::CHIP)`. Tokens, roles and defaults are listed in `website/docs/rust.md`, "Theme".
 
 ### `.app_class`
 

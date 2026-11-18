@@ -3,6 +3,7 @@
 
 mod accordion;
 mod alert_dialog;
+mod app_theme;
 mod avatar;
 mod button;
 mod calendar;
