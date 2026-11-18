@@ -974,7 +974,7 @@ fn dialog_colors(tokens: &nsh_core::element::Tokens) -> [i32; 2 * DIALOG_ROLES.l
     if !tokens.is_themed() {
         return colors;
     }
-    for (slots, (role, light)) in colors.chunks_exact_mut(2).zip(DIALOG_ROLES) {
+    for (slots, (role, light)) in colors.as_chunks_mut::<2>().0.iter_mut().zip(DIALOG_ROLES) {
         let color = tokens.role(role).map_or(light, Color::from);
         slots.fill(argb(color));
     }
