@@ -1299,6 +1299,142 @@ and this scenario moves nothing. CPU differs by −4.5 points between revisions,
 standard error of its own spread (3–37% within one run): this bench shows no CPU difference
 either way; paint and frame times are what it resolves.
 
+## Theme format (nsh-theme, the one-document store)
+
+Measured on 2026-11-18 on an Apple M5, macOS 26 (Darwin 25.6.0), release engine test binaries; the fork's `main`
+before the theme format, `c9bf1fe9a` (the old `cssVars` store), against the theme format's branch, `2a4ebb009`. The
+benchmark is kept outside the repository in two copies, one per API, that differ only where the APIs do. Each copy
+runs in its own worktree as `crates/nsh-engine/tests/engine/theme_bench.rs`, with
+`cargo test --release -p nsh-engine --test engine theme_bench:: -- --ignored --nocapture --test-threads=1`. Five
+rounds alternate the two sides (ABABA BABAB). Each figure is the median over the rounds of each round's median.
+"Total" is JS plus core, "core" the core alone (ops, components' tasks, commits). The counter row is
+`nsh test examples/counter/App.tsx --trace` with a debug `nsh`, `await app.press("+1"); await app.wait(50)`.
+
+The themes have 1,000 and 5,000 tokens: shadcn's 32 colors and `radius`, then 60 % colors with a light and a dark
+value, 15 % numbers, 20 % color references (half of them chains), 5 % number references. Three modifiers: the
+appearance, `brand` (`forest` sets four colors) and `density` (`compact` sets eleven numbers). The head reads them as
+theme documents, with `colorMode`, `brand` and `density` in `resolutionOrder`. The base reads the same model as
+`cssVars` `theme` / `light` / `dark` with `var()` references and old `{ theme }` contexts. Both sides read every
+token in every combination of contexts as the model has it. The app has 100 cards drawn with token classes, 200
+`Text`s that each show a `token()`, and six controls. Each switch is 60 presses (`setModifier`, `setColorScheme`,
+`setTheme` of the same document or of the other one, `updateTheme` of `primary`). On the head the appearance
+switch also calls `setModifier("colorMode")`, as its docs say an app does.
+
+| Scenario | Base total | Head total | Δ | Base core | Head core | Δ core | Ops / items, base → head |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 1,000 tokens, first frame | 6,602 µs | 6,952 µs | +5.3 % | 4,089 µs | 3,926 µs | −4.0 % | 5663/1366 → 5863/1566 |
+| 1,000, `brand` switch | 240 µs | 628 µs | +161 % | 182 µs | 594 µs | +226 % | 1/17 → 1/17 |
+| 1,000, `density` switch | 163 µs | 540 µs | +231 % | 103 µs | 506 µs | +391 % | 1/1 → 1/1 |
+| 1,000, appearance switch | 585 µs | 1,360 µs | +133 % | 500 µs | 1,244 µs | +149 % | 201/293 → 202/294 |
+| 1,000, same document again | 2,359 µs | 1,889 µs | −19.9 % | 1,081 µs | 254 µs | −76.5 % | 1/0 → 1/0 |
+| 1,000, other document | 3,105 µs | 2,823 µs | −9.1 % | 1,722 µs | 1,131 µs | −34.3 % | 201/293 → 201/293 |
+| 1,000, `updateTheme` of one token | 206 µs | 579 µs | +181 % | 128 µs | 540 µs | +321 % | 1/9 → 1/9 |
+| 5,000 tokens, first frame | 17,243 µs | 16,416 µs | −4.8 % | 8,554 µs | 5,871 µs | −31.4 % | 5663/1366 → 5863/1566 |
+| 5,000, `brand` switch | 829 µs | 3,029 µs | +265 % | 563 µs | 2,859 µs | +408 % | 1/17 → 1/17 |
+| 5,000, `density` switch | 837 µs | 2,863 µs | +242 % | 543 µs | 2,705 µs | +398 % | 1/1 → 1/1 |
+| 5,000, appearance switch | 590 µs | 4,520 µs | +667 % | 504 µs | 4,270 µs | +747 % | 201/293 → 202/294 |
+| 5,000, same document again | 12,114 µs | 9,441 µs | −22.1 % | 5,561 µs | 1,400 µs | −74.8 % | 1/0 → 1/0 |
+| 5,000, other document | 13,143 µs | 12,084 µs | −8.1 % | 6,464 µs | 3,920 µs | −39.4 % | 201/293 → 201/293 |
+| 5,000, `updateTheme` of one token | 860 µs | 2,981 µs | +247 % | 501 µs | 2,810 µs | +461 % | 1/9 → 1/9 |
+
+| Micro (one call, cold) | Base | Head | Δ |
+|---|---:|---:|---:|
+| `tailwind::parse` of 23 token class strings | 48.4 µs | 30.2 µs | −37.6 % |
+| `tailwind::parse` of 23 plain class strings | 14.3 µs | 15.1 µs | +5.6 % |
+| Read a theme of 1,000 tokens into `Tokens` | 835 µs | 1,399 µs | +67.5 % |
+| Read a theme of 5,000 tokens into `Tokens` | 4,303 µs | 6,874 µs | +59.7 % |
+| The class tokens of 1,000 tokens (`ClassTokens::new`) | 52.5 µs | 236.3 µs | +350 % |
+| The class tokens of 5,000 tokens (`ClassTokens::new`) | 154.9 µs | 1,137.5 µs | +634 % |
+
+| Counter commit | Base | Head | Δ | Ops | Mount items | Nodes |
+|---|---:|---:|---:|---|---|---|
+| 1 (mount) | 366 µs | 354 µs | −3.3 % | 57 → 57 | 51 → 51 | 21 → 21 |
+| 2 (`+1`) | 563 µs | 529 µs | −6.0 % | 10 → 10 | 7 → 7 | 24 → 24 |
+
+The counter's mount item counts are equal (51 and 7), and so are every switch's, except the two noted below. Every
+row the table marks slower was slower in each of the five rounds. Every slower row's cost is in the core: the JS
+side of a modifier switch or of `updateTheme` is faster on the head (34 µs against 58 µs for `brand` at 1,000
+tokens), as JS no longer computes tokens of its own.
+
+**Faster.** Activating a document (the same again, or another) and the 5,000-token first frame read the theme once.
+The base read the `cssVars` text twice, in JS for `token()` and again in the core (`Prop::UiTheme(json)`, then
+`Core::set_ui_theme`). The head's `setTheme` reads the document once, in JS
+(`nsh_core::element::theme::read_document`), and hands it to the core as an `Arc` (`Prop::UiThemeDocument`). The
+core then only resolves it, and skips the class tokens and the restyle when nothing changed (`Core::install_theme`'s
+`same`). Token class strings parse faster because `ClassTokens::class` serves a class from one lookup of its last
+segment (`by_last`), then the rows of the namespaces serving it, and returns the declarations directly. The base's
+`ClassTokens::substitute` rewrote a token class as an arbitrary value (`bg-[color:#171717ff]/50`) and parsed that.
+Plain classes pay that one missed lookup (+5.6 %, under the 10 % bar).
+
+**The first frame's +200 ops and +200 mount items** are real work, not a difference of the benchmark. Both sides
+run the same app, which calls `setTheme(themeA)` at the top of a module. The base's `setTheme` made tokens in JS on
+the spot (`theme.checked(json)`, then `env::set_tokens`), so the 200 `token()` readers rendered once, with themeA's
+values. The head's `token()` reads only what the core resolved: `setTheme` passes the document to the core with
+the turn's ops. The readers render first with the tokens they had (no `c-<i>` yet). After the core's install, the
+engine hands the new tokens over (`env::set_tokens`), and the readers run again: 200 text updates and 200 more
+`Text` items in the same turn. Their cost sits in the first frame's JS time (+513 µs at 1,000 tokens), and the
+total stays under the 10 % bar. A theme shipped as `nsh.json`'s `"theme"` does not pay it: `env::take_app_theme`
+installs it in JS before the first render (`Tokens::with_app_theme`). The other text hashes differ only because
+the head's `token()` writes an opaque color as `#rrggbb` where the base wrote `#rrggbbaa`. The appearance switch's
++1 op is the head's extra `setModifier("colorMode")` call. Its +1 item is the `Command::Tokens` that a change of the
+tokens sends the platforms' own controls: on the base, the appearance changed no token.
+
+### Causes of the slower rows
+
+**A modifier switch, an `updateTheme` and an appearance switch cost the whole theme, not what changed.** Every theme
+action marks the theme pending (`Core::set_modifier`, `Core::update_tokens`), and `Core::install_theme` then:
+
+1. re-runs `nsh_theme::resolve` over the whole document. This is O(tokens + references + context and patch
+   entries), as `theme-format.md`'s layer table (section 9) specifies. Per token it clones the value and builds
+   three strings for messages (the pointer, the place and the subject) whether or not a diagnostic follows. It
+   validates the value and checks its references, then walks every reference against the final values (`targets`,
+   `advance`, `value::substitute`);
+2. compares the result with the previous one in full (`Resolved::changed`). `Tokens::from_resolved` clones the whole
+   typed map and converts the changed names (`theme_values::token_of`). `resolve_roles` runs again, and so does
+   `Tokens == Tokens`;
+3. rebuilds the class tokens whole (`class_tokens_changed` → `Tailwind::set_tokens` →
+   `ClassTokens::new`). The base rebuilt them too, as plain copies of its typed maps. The head's also resolves every
+   token's name as a role (`Tokens::role_target`, which scans the Tailwind role patterns in `own_accepts`). It
+   serves each name in the rows of the namespaces that accept its type, and indexes every served name by its last
+   segment (`by_last`). That costs 4.5–7.3× the base's (the micro rows).
+
+The base did none of the resolving. Its `set_modifier` laid the picked context's few values over a copy of the
+token map (`ThemeModifiers::select`, `apply`, `Tokens::over`). Its `update_tokens` laid the update over it
+(`Tokens::updated_by`), with references copied once when the theme was read. So the base's cost per token was a map
+copy, about 0.1 µs a token in the core (`brand`: 182 → 563 µs from 1,000 to 5,000 tokens). The head's is about
+0.57 µs a token (594 → 2,859 µs), about 40 % of it `ClassTokens::new` (0.23 µs a token in the micro rows).
+Resolving whole also buys something: a token that refers to one a context or an update changes now follows it. The
+base kept the value it copied at read time, which is why the benchmark's model has no such reference.
+
+**The appearance switch is new work for the core.** The base's colors held both appearances (`AdaptiveColor`), so
+`setColorScheme` changed no token. It restyled the classes that depend on the appearance, and its cost did not
+grow with the theme (500 µs at 1,000 tokens, 504 µs at 5,000). On the head the appearance is the `colorMode`
+modifier, so a switch does all of the above. It does more than a `brand` switch, because `colorMode`'s `dark`
+context sets about 60 % of the tokens (600 / 2,900 entries for `resolve`). About 80 % of the values change through
+references, so `from_resolved` converts that many. `ClassTokens::changed` reports them all, every class reading one
+is resolved again, and JS's `env::install` takes the all-tokens signal: about 0.76 µs a token (1,244 → 4,270 µs).
+
+**Reading a theme is slower** (+60–68 %), which counts once per activated document and never per frame (the
+activations above are faster in total). `nsh_theme::read` builds its own JSON tree: objects keep their order, and a
+member written twice is reported (`json::parse`, a serde visitor). It then checks every token by the rules
+(`apply_rules`: the name, the value against its type, unique paths, every reference, every context entry), with a
+pointer and a message string built per entry. `Tokens::resolve` then resolves the document and converts every value.
+The base's reader (`nsh_base::Theme::from_json_lenient`) laid the `cssVars` sections over the default tokens
+without these checks.
+
+**What would bring them back** (follow-ups, outside this change):
+
+- Resolve incrementally: keep a reverse-reference index per document. On a selection or patch change, resolve only
+  the names that the changed contexts or patch entries set, and their dependents, over the previous `Resolved`. A
+  property test against the whole `resolve` keeps the layer table's result. This makes a modifier switch and
+  `updateTheme` O(changed + dependents).
+- Build `resolve`'s and the reader's pointer and message strings only when a diagnostic is pushed, a constant
+  factor on every path above.
+- Update `ClassTokens` in place when only values changed (`same_names`, same roles): replace the changed entries
+  of `values`, and keep `roles`, `rows` and `by_last`, which depend only on names, types and mappings.
+- Cache the resolved state (`Resolved`, `Tokens`, `ClassTokens`) per selection for the active document and patches.
+  Toggling `colorMode` back and forth then costs a lookup and the restyle.
+
 ## Cross-platform baseline sampler (`bench.py`)
 
 `examples/gallery/tools/bench.py` measures fresh processes from outside, in one versioned format (`nsh-bench/1`,
