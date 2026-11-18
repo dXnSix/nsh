@@ -37,7 +37,12 @@ fn start<C: Component<Props = ()>>(idiom: Idiom) -> Headless {
         },
         ..EngineConfig::new(Root::of::<C>())
     };
-    let mut app = Headless::start(config).unwrap();
+    // A terminal's text one row a line, as the TUI draws it.
+    let mut app = match idiom {
+        Idiom::Terminal => Headless::start_with_text_engine(config, || TerminalLines),
+        _ => Headless::start(config),
+    }
+    .unwrap();
     app.first_render().unwrap();
     app
 }
@@ -388,6 +393,74 @@ const CELL: f32 = 21.0;
 /// A column of [`text_bounds`]'s terminal, in points.
 const COLUMN: f32 = 8.0;
 
+/// [`ApproxTextEngine`](nsh_core::ApproxTextEngine) with the lines a
+/// terminal gives: one row a line, whatever line height the text asks for,
+/// as the TUI's engine draws it. Each line is `1.2 ×` its font size, one
+/// [`CELL`] for every size `text_view` uses (nearest).
+struct TerminalLines;
+
+impl nsh_core::TextEngine for TerminalLines {
+    type Prepared = <nsh_core::ApproxTextEngine as nsh_core::TextEngine>::Prepared;
+
+    fn prepare(&self, text: &nsh_core::AttributedText) -> Self::Prepared {
+        self.prepare_aligned(text, &Default::default())
+    }
+
+    fn prepare_aligned(
+        &self,
+        text: &nsh_core::AttributedText,
+        alignments: &nsh_core::AttachmentAlignments,
+    ) -> Self::Prepared {
+        let mut text = text.clone();
+        for span in &mut text.spans {
+            span.style.line_height = Points::ZERO;
+            span.style.line_height_multiple = 0.0;
+        }
+        nsh_core::ApproxTextEngine.prepare_aligned(&text, alignments)
+    }
+
+    fn first_baseline(&self, prepared: &Self::Prepared, width: Points) -> Option<Points> {
+        nsh_core::ApproxTextEngine.first_baseline(prepared, width)
+    }
+
+    fn measure(&self, prepared: &Self::Prepared, max_width: Option<Points>) -> Size<Points> {
+        nsh_core::ApproxTextEngine.measure(prepared, max_width)
+    }
+
+    fn layout(&self, prepared: &Self::Prepared, size: Size<Points>) -> nsh_core::TextLayout {
+        nsh_core::ApproxTextEngine.layout(prepared, size)
+    }
+
+    fn lines(&self, layout: &nsh_core::TextLayout) -> Vec<nsh_core::TextLine> {
+        nsh_core::ApproxTextEngine.lines(layout)
+    }
+
+    fn attachments(&self, layout: &nsh_core::TextLayout) -> Vec<Option<Point<Points>>> {
+        nsh_core::ApproxTextEngine.attachments(layout)
+    }
+
+    fn hit_test(&self, layout: &nsh_core::TextLayout, p: Point<Points>) -> nsh_core::TextPosition {
+        nsh_core::ApproxTextEngine.hit_test(layout, p)
+    }
+
+    fn caret_rect(
+        &self,
+        layout: &nsh_core::TextLayout,
+        position: nsh_core::TextPosition,
+    ) -> Option<Bounds<Points>> {
+        nsh_core::ApproxTextEngine.caret_rect(layout, position)
+    }
+
+    fn range_rects(
+        &self,
+        layout: &nsh_core::TextLayout,
+        range: std::ops::Range<u32>,
+        out: &mut Vec<Bounds<Points>>,
+    ) {
+        nsh_core::ApproxTextEngine.range_rects(layout, range, out)
+    }
+}
+
 /// Where each text starts in the window in a terminal (x, y), from the
 /// frames and parents the batches set.
 fn text_origins<C: Component<Props = ()>>() -> std::collections::HashMap<String, (f32, f32)> {
@@ -407,17 +480,17 @@ fn text_bounds<C: Component<Props = ()>>() -> std::collections::HashMap<String, 
             os: Os::Linux,
             idiom: Idiom::Terminal,
             // A terminal's Cells, so the core lays out on its grid as the
-            // TUI's does. The headless text engine's lines are 1.2 × the
-            // font size: the body's 18pt, a code block's 15.6, a level-3
-            // heading's 20.4 and the canvas font's 12, which components
-            // measure as a Cell, are each one row of 21pt (nearest), as a
-            // terminal's line is.
+            // TUI's does. [`TerminalLines`]'s lines are 1.2 × the font size
+            // (a terminal ignores line heights): the body's 18pt, a code
+            // block's 15.6, a level-3 heading's 20.4 and the canvas font's
+            // 12, which components measure as a Cell, are each one row of
+            // 21pt (nearest), as a terminal's line is.
             cell: Some(Size::new(px(8.0), px(21.0))),
             ..Environment::default()
         },
         ..EngineConfig::new(Root::of::<C>())
     };
-    let mut app = Headless::start(config).unwrap();
+    let mut app = Headless::start_with_text_engine(config, || TerminalLines).unwrap();
     type Seen = (
         std::collections::HashMap<NodeId, String>,
         std::collections::HashMap<NodeId, Bounds<Points>>,
