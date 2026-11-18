@@ -367,7 +367,7 @@ reasons: `reactive-components.md`.
   | `class="group"`, `group-active:`, `dark:`, `disabled:`, `selected:`, `checked:`, `focus-visible:`, `focus-within:`, `activeStyle` / `hoverStyle` / `focusStyle` / `focusVisibleStyle` / `focusWithinStyle` / `disabledStyle` | `.group()`, `.group_active(\|s\| ..)`, `.dark(\|s\| ..)`, `.disabled_style(\|s\| ..)`, `.selected(\|s\| ..)`, `.checked(\|s\| ..)`, `.focus_visible(\|s\| ..)`, `.focus_within(\|s\| ..)` (native, no binding) |
   | `<Button disabled={saving()} onPress={save} class="px-4 active:opacity-60">Save</Button>` | `button().disabled(move \|\| saving.get()).on_press(move \|\| save()).px_4().active(\|s\| s.opacity(0.6)).child(text("Save"))`: a setter per prop, a listener method per event |
   | `<Button class="bg-blue-500 active:opacity-70 selected:bg-green-500">` (state styles on a component) | `button().bg(..).active(\|s\| s.opacity(0.7))`: `ComponentBuilder`'s `active` / `hover` / `focus` / `disabled_style` and `Styled`'s `selected` / `checked`, on the component's root (`Styled::selected(el, \|s\| ..)` where a `selected` prop's setter comes first) |
-  | `<NavPage headerClass="bg-white text-black tint-blue-500">` | `nav_page().header_style_with(\|s\| s.bg(..).text_color(..).tint_color(..))` (theme colors follow the appearance natively; `header_style(Style)`, TS `headerStyle`, wins key by key) |
+  | `<NavPage headerClass="bg-white text-black tint-blue-500">` | `nav_page().header_style_with(\|s\| s.bg(..).text_color(..).tint_color(..))` (an `AdaptiveColor` follows the appearance natively, a theme color read in a binding the theme's modifiers; `header_style(Style)`, TS `headerStyle`, wins key by key) |
   | `bg-sky-500` (the palette) | `.bg(palette::SKY.shade(500))` |
 
 - **A nested component is made as a primitive is**: `#[component] fn Chip` makes `chip()` (the function's name in
@@ -432,8 +432,8 @@ reasons: `reactive-components.md`.
   a region that outlives the handle's owner goes on moving, and so does an animation running on it; the node is released
   when the last of these goes. Deriving the same node again gets the live one, through the handle the current owner
   keeps of it (made the first time: `Derived`), so a derivation run over and over adds no slot. Made with no owner at
-  all (outside any component), a handle lives as long as the surface, as a signal made there does. Colors interpolated from theme colors (`v.interpolate_colors(&[0.0, 1.0], &[colors::TRACK,
-  colors::ACCENT])`, any `AdaptiveColor`) follow the appearance: a binding of the view gives the node the other
+  all (outside any component), a handle lives as long as the surface, as a signal made there does. Colors interpolated from adaptive colors (`v.interpolate_colors(&[0.0, 1.0], &[TRACK,
+  ACCENT])`, any `AdaptiveColor`) follow the appearance: a binding of the view gives the node the other
   appearance's colors in place when it changes (`AnimationOp::SetOutput`), so nothing is made again and its bindings
   stay; such a node is derived again by both appearances' colors (`DerivedKey`), so interpolations that share their
   light colors, or a constant one and a theme one, are different nodes. Bound style properties go into the element's inline style, before the app's `style` on a host (the core keeps
@@ -455,8 +455,8 @@ reasons: `reactive-components.md`.
 - **A `element::Style` holds JS's declarations, Rust's typed styles or both**: JS decodes a style object into declarations
   (`StylePatch`, applied as the prop it goes to: `selectedStyle`, the inline style); a Rust caller's closure gives typed
   styles, which the element that takes the style (`.selected_style(..)`, `.checked_style(..)`, `.inline_style(..)`) adds
-  to its own in the state's variant, as `.selected(|s| ..)` would (theme colors follow the appearance natively, bound
-  parts their signals; a bound `Style` adds them as a bound part when it has typed styles as the element is made, so a
+  to its own in the state's variant, as `.selected(|s| ..)` would (an `AdaptiveColor` follows the appearance natively,
+  bound parts their signals, a theme color among them; a bound `Style` adds them as a bound part when it has typed styles as the element is made, so a
   style prop left unset or set from JS costs nothing more), and a page's `.header_style(..)` as `header_style_with`'s.
 - **What a view gives a nested component's element** (`chip()`) goes on the component's root, after
   the root's own, as its styles do: an inline style (`.inline_style(..)`), animated values (`.bind_opacity(&v)`,
@@ -736,8 +736,8 @@ it changes, and they are resolved again when the tokens change (`Components::app
   the status bar's default style and alert themes; native widgets elsewhere keep the system's).
   A theme document maps roles in its `"roles"`, and a patch in its own (`Patch::role`, so `update_tokens` and
   `updateTheme` map them too): `nsh_theme::resolve_role` takes the patches' mapping over the document's, else the
-  token of the role's name (`docs/dev/theme-format.md`, section 7). The build warns of a role's name no set lists
-  (`nsh-bundler` `unknown_roles`).
+  token of the role's name (`docs/dev/theme-format.md`, section 7). The build warns of a mapped role's name that no set
+  declares and no Tailwind namespace matches, unless it maps a color (`role-unknown`, `nsh-bundler` `read_app_theme`).
   TS reads a role with `role(name)` (`nsh-js` `env.rs`, the web's op 414): `Tokens::mapped`, by name, then the
   token of the role's name, as `Tokens::role`; it tracks both tokens, and a theme that maps roles onto other tokens
   runs every reader again. The names are typed from the roles the UI sets list (`Registry::roles`,
@@ -846,9 +846,9 @@ layer below, else to the token of its name. `Tokens::role(role)` reads the token
 token of another type gives `None` and logs `role-type` once), `Tokens::role_by_name(name)` whatever its type. The
 core's readers use roles too (the default font, `role(role::FONT_SANS)`; the mobile tab bar's tint,
 `role::PRIMARY`), and so do the platforms' (Linux's menus, iOS's alert tint, Android's `DIALOG_ROLES`; GPUI's host
-background is the host theme's `background` field, read through `role::BACKGROUND`). A role is no token and adds
-no class. The default theme is shadcn's `neutral` as a theme document (`default-theme.json`, `radius` 10 pt, its
-dark values in the `colorMode` modifier's `dark` context: the output of `nsh theme convert` for the old `cssVars`
+background is the host theme's `background` field, read through `role::BACKGROUND`). A role is no token; a class
+reads it as the core does (`styles.md`), so a role that resolves to no token is no class. The default theme is
+shadcn's `neutral` as a theme document (`default-theme.json`, `radius` 10 pt, its dark values in the `colorMode` modifier's `dark` context: the output of `nsh theme convert` for the old `cssVars`
 file), which nsh-base registers as the fallback document (`Registry::fallback_theme_document`); no component of
 `nsh/base` draws with it but `TextView`'s reading typography and the default looks of `Editor` and `DiffView`.
 
@@ -960,12 +960,12 @@ and an enum of each modifier's contexts in `modifiers` (`NAME`, `ALL`, `DEFAULT`
 `current()`).
 
 **The dictionary as data** (`element/token_info.rs`): `Tokens::kind_name(name)` (its value type's name), `infos()`
-(`TokenInfo`: name, kind, path and doc, sorted), `value_json(name)` (`{ kind, light, dark }`, both the token's one
-value) and `same_names`. TS's `tokens` object (`env.rs` `make_tokens`: `get`, `kind`, `names`, `entries`; the web's
-ops 418 to 421) returns them as JSON. `get` tracks as `token()` does; the others track `Env::shape_signal`, which
-`set_tokens` sets when the names, their kinds or the modifiers' contexts change, so a reader of `token()` does not
-run again for a name added. `tokens.d.ts` carries `interface TokenKinds` beside `Tokens`, and `modifiers.d.ts`
-`interface ThemeModifiers` (each modifier a union of its contexts).
+(`TokenInfo`: name, kind, path and doc, sorted), `value_json(name)` (`{ kind, value }`, the token's one value) and
+`same_names`. TS's `tokens` object (`env.rs` `make_tokens`: `get`, `kind`, `names`, `entries`; the web's ops 418 to
+421) returns them as JSON. `get` tracks as `token()` does; the others track `Env::shape_signal`, which `env.rs`
+`set_tokens` (the core's tokens reaching JS) sets when the names, their kinds or the modifiers' contexts change, so a
+reader of `token()` does not run again for a name added. `tokens.d.ts` carries `interface TokenKinds` beside `Tokens`,
+and `modifiers.d.ts` `interface ThemeModifiers` (each modifier a union of its contexts).
 
 `nsh_base::Theme` is a view of the tokens with a field per shadcn token, each read through its role, so under a
 document that maps `popover` onto `surface-overlay`, `theme().popover` is that token.

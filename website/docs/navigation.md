@@ -397,7 +397,7 @@ function Compose() {
 }
 ```
 
-A colored system header (in Rust, `header_style_with` takes typed styles: `bg`, `text_color` and `tint_color`, the color of the header's buttons; theme colors follow the appearance):
+A colored system header (in Rust, `header_style_with` takes typed styles: `bg`, `text_color` and `tint_color`, the color of the header's buttons; theme colors read in a binding follow the theme):
 
 ```rust tabs
 nav_page()

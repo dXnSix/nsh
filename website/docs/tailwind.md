@@ -250,7 +250,7 @@ view()
 </View>
 ```
 
-A class reads a **role**: the token the theme maps that name onto (`"roles": { "popover": "overlay" }`), else the token of that name. So `bg-primary` is the token `primary`, or the one the theme maps `primary` onto, and a component shared between apps writes `bg-popover rounded-card` once for every design system. In Rust, shadcn's tokens are fields of `theme()` (`primary`, `muted_foreground`, `radius`, `font_mono`), and every token is `theme().color("up")`, `theme().number("radius-card")` or `theme().font("font-display")`.
+A class reads a **role**: the token the theme maps that name onto (`"roles": { "popover": "overlay" }`), else the token of that name. So `bg-primary` is the token `primary`, or the one the theme maps `primary` onto, and a component shared between apps writes `bg-popover rounded-card` once for every design system. In Rust, shadcn's tokens are fields of `theme()` (`primary`, `muted_foreground`, `radius`, `font_mono`), and every token is `tokens().color("up")`, `tokens().number("radius-card")` or `tokens().font("font-display")`, or a typed key's `get()`, which follows that token alone ([Theme documents and typed keys](./rust.md#theme-documents-and-typed-keys)).
 
 | Class | Reads the role | Of kind | Example |
 |---|---|---|---|
@@ -325,7 +325,7 @@ import { Canvas, token } from "nsh";
 />
 ```
 
-The names are typed: NSH writes the app's tokens into `.nsh/types/nsh/tokens.d.ts` from its theme, so `token("up")` is a `string` once `"up"` is in the theme, and a name the theme lacks is a type error. Each is typed by its kind (a `number`, or a `string` for a color, a font and a shadow) with its doc.
+The names are typed: NSH writes the app's tokens into `.nsh/types/nsh/tokens.d.ts` from its theme, so `token("up")` is a `string` once `"up"` is in the theme, and a name the theme lacks is a type error. Each is typed by its kind as `token()` gives it (a `string` for a color or a font, a `number`, a `boolean`, `` `${number}ms` `` for a duration, an object of its members for a compound, an array of layers for a shadow) with its doc.
 
 ### Tokens for a part of the app
 

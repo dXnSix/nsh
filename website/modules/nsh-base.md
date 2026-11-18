@@ -345,7 +345,9 @@ The roles resolve in the active theme document alone, as any library's do: a doc
 other roles nor has a token of its name draws that color transparent and `radius` as 0, never the default theme's
 value. A theme with names of its own maps every role it wants drawn.
 
-A role is no token and no class: `bg-primary` is a class when the theme has a token `primary`. TSX reads a role with
+A role is no token: it reads the token the theme maps it onto, else the token of its name, and a class reads it the
+same way (`bg-popover` draws `surface-overlay` under `"roles": { "popover": "surface-overlay" }`; [Theme
+tokens](../docs/tailwind.md#theme-tokens)), so a role that resolves to no token is no class. TSX reads a role with
 [`role()`](./nsh.md#role) from `nsh`. In Rust, a role is a constant of a kind, an `nsh_core::element::Role`: the
 ones above are in `nsh_base::role` (`role::POPOVER.name()` is `"popover"`; the colors are `Role`s, which read an
 `Hsla`, `role::RADIUS` a `NumberRole`, `role::FONT_SANS` and `role::FONT_MONO` `FontRole`s), and `role::all()` lists

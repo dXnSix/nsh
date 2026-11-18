@@ -88,8 +88,8 @@ fn field(placeholder: &'static str, value: Signal<String>) -> Input {
         .value(move || value.get())
         .on_change(move |text: &str| value.set(text.to_owned()))
         .placeholder(placeholder)
-        .placeholder_color(|| color(theme().muted_foreground))
-        .caret_color(|| color(theme().primary))
+        .placeholder_color(|| theme().muted_foreground)
+        .caret_color(|| theme().primary)
         .h_9()
         .px_3()
         .text_sm()
@@ -150,8 +150,9 @@ fn shortcuts(find: Signal<bool>) {
   For a value the app never reads while typing, `.default_value` is simpler and avoids a round trip per key.
 - Do not transform text on a CJK composition. While `on_composition_change` reports composing, do not search or rewrite
   `value`: it breaks pinyin. See `website/docs/forms-and-keyboard.md`, "Controlled and uncontrolled inputs".
-- `placeholder_color`, `caret_color` and `selection_color` take a resolved `Hsla`, not `AdaptiveColor`. Wrap the token in
-  `color(..)` inside a closure, so that it follows the appearance.
+- `placeholder_color`, `caret_color` and `selection_color` take a resolved `Hsla`, not `AdaptiveColor`. Read the theme
+  inside a closure (`|| theme().primary`), so that it follows the theme; an `AdaptiveColor` of your own goes through
+  `color(..)` inside the closure, so that it follows the appearance.
 - A single-line input's return is `SubmitBehavior::BlurAndSubmit` by default: it loses focus. Use `Submit` to stay focused
   while moving to the next field.
 - In a `scroll`, the keyboard inset is handled natively. For a bar pinned under a list (a chat), use `.pb_keyboard()` on

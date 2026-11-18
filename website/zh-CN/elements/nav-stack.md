@@ -218,7 +218,7 @@ TSX 的子函数接收路由值本身，以及一个表示它在栈中位置的 
 | `headerRight` | `.header_right(..)` | `JSX.Element` | 无 | iOS 和 Android：系统标题栏末端的内容。 |
 | `headerTitle` | `.header_title(..)` | `JSX.Element` | 无 | iOS 和 Android：替代标题的内容。 |
 | `headerStyle` | `.header_style(..)` | `{ backgroundColor?, color?, tintColor? }` | 平台默认 | iOS 和 Android：系统标题栏的颜色：背景、标题的颜色（`color`）和按钮的颜色（`tintColor`）。 |
-| `headerClass` | `.header_style_with(\|s\| ..)` | `string` | 无 | 以类表示的同样的颜色：`bg-*`，标题用 `text-*`，按钮用 `tint-*`（Rust 中为 `.bg(..)`、`.text_color(..)`、`.tint_color(..)`，主题颜色随外观切换）。`headerStyle` 优先于它们。 |
+| `headerClass` | `.header_style_with(\|s\| ..)` | `string` | 无 | 以类表示的同样的颜色：`bg-*`，标题用 `text-*`，按钮用 `tint-*`（Rust 中为 `.bg(..)`、`.text_color(..)`、`.tint_color(..)`，主题颜色随主题选中的上下文（包括 `colorMode`）切换）。`headerStyle` 优先于它们。 |
 | `popOnBack` | `.pop_on_back(..)` | `boolean` | `true` | 返回按钮和侧滑返回会弹出页面。见[离开页面](#leaving-a-page)。 |
 | `popOnSwipe` | `.pop_on_swipe(..)` | `boolean` | `true` | 交互式返回手势会弹出页面：iOS 的侧滑返回、Android 跟随手指的预测性返回。返回按钮在任何情况下都会弹出页面。 |
 | `animation` | `.animation(..)` | `"default" \| "slide" \| "fade" \| "none"` | `"default"` | 页面进入和离开的方式。 |

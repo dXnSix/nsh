@@ -699,10 +699,12 @@ Rules:
 The effective precedence is the element's own style, then the state styles, later states winning, with `disabled`
 over all. Later layers only replace fields they set.
 
-Prefer the theme's semantic tokens for new app-owned presentation. Every name in the app's theme file is a token, as a
-variable of Tailwind's `@theme` is (`"up": "#16a34a"` gives `text-up`, `bg-up/30`, `token("up")` in TSX and
-`theme().color("up")` in Rust), and the theme has light and dark values, so a token follows the appearance with no
-`dark:` class. Name tokens after roles, not components, so they do not become the extension point
+Prefer the theme's semantic tokens for new app-owned presentation. Every token of the app's theme document is named
+as a variable of Tailwind's `@theme` is (`"up": { "kind": "color", "value": "#16a34a" }` gives `text-up`, `bg-up/30`,
+`token("up")` in TSX and `tokens().color("up")` in Rust). Its dark values are a context of the document's light/dark
+modifier (`colorMode`, [Theme](./rust.md#theme)): the appearance changes no token, so an app that switches or
+follows the appearance picks that modifier with it (`setModifier("colorMode", colorScheme())`), and a token then
+follows with no `dark:` class. Name tokens after roles, not components, so they do not become the extension point
 for every widget.
 
 Change the theme through the app's theme file (`nsh.json` `"theme"`), or let the embedding app give its own: classes
@@ -711,8 +713,9 @@ running. Code that copies a token's value into a signal of its own stops followi
 
 Components of a design system read its tokens in their bindings through the typed keys `theme_keys!` makes of its
 document, `.bg(move || keys::surface::RAISED.get().unwrap_or_default())`: the read is reactive and a name that is no
-key does not compile. Change tokens at run time with `update_tokens(Tokens::default().with(keys::ACTION, color))`
-and put them back with `reset_tokens`; both restyle natively, as a theme file does.
+key does not compile. Change tokens at run time with a patch, `update_tokens(Patch::new().key(keys::ACTION, color))`
+(`updateTheme({ values: { action: color } })` in TSX), and put them back with `reset_tokens`; both restyle natively,
+as a theme file does.
 
 An outward focus ring needs physical room. An ancestor with `overflow: hidden` (`overflow-hidden`) clips it. Prefer
 layouts that leave room; if a product must clip heavily, draw the focused state inside the control instead of silently

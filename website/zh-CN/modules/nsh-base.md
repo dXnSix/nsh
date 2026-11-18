@@ -326,7 +326,8 @@ NSH 自己绘制的部分通过**角色**读取主题：`theme()` 的各个字�
 这些角色只在当前生效的主题文档中解析，与任何库的角色一样：文档既没有映射其他某个角色、也没有与它同名的 token 时，该颜色画成透明，
 `radius` 为 0，绝不取默认主题的值。用自己名称命名 token 的主题要映射它希望绘制的每个角色。
 
-角色不是 token，也不是类名：主题有名为 `primary` 的 token 时，`bg-primary` 才是一个类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，
+角色不是 token：它读取主题把它映射到的 token，没有映射时读取同名的 token，类名也以同样方式读取它（在 `"roles": { "popover": "surface-overlay" }` 下，
+`bg-popover` 绘制 `surface-overlay`；[主题 token](../docs/tailwind.md#主题-token)），所以解析不到 token 的角色不是类名。TSX 用 `nsh` 的 [`role()`](./nsh.md#role) 读取角色。在 Rust 中，
 角色是某种种类的常量，类型为 `nsh_core::element::Role`：上表中的角色在 `nsh_base::role` 里（`role::POPOVER.name()` 为 `"popover"`；颜色是读取
 `Hsla` 的 `Role`，`role::RADIUS` 是 `NumberRole`，`role::FONT_SANS` 和 `role::FONT_MONO` 是 `FontRole`），`role::all()` 列出它们的声明，共 48 个，
 都不是必需的，由 `nsh/base` 的注册表注册。`role(role::POPOVER)` 在使用处读取角色，`tokens().role(role::POPOVER)` 从手头的 token 中读取：

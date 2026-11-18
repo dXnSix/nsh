@@ -120,7 +120,7 @@ TSX 元素同时有 `style` 和 `class` 时，`style` 优先：先应用类名�
 
 ## 颜色
 
-在 Rust 中，颜色是类型化的值：`rgb(0x0099ff)`、`rgba(0x0099ffcc)`、`hsla(..)`、`white()`、`black()`，以及 `nsh_core::element::palette` 中的 Tailwind 调色板（`BLUE.shade(500)`）。颜色方法接受 `AdaptiveColor`，即一个浅色值和一个深色值：`AdaptiveColor::rgb(0xffffff, 0x0d1117)` 以原生方式随系统外观切换，无需重新渲染。来自应用主题的颜色（`nsh_base` 的 `theme().primary`）同样会自适应（[Rust](./rust.md#主题)）。设计系统自己的令牌声明在主题文档中，通过 `theme_keys!` 根据它生成的键以类型化的方式读取，同样会自适应（[主题文档](./rust.md#主题文档与类型化键)）。
+在 Rust 中，颜色是类型化的值：`rgb(0x0099ff)`、`rgba(0x0099ffcc)`、`hsla(..)`、`white()`、`black()`，以及 `nsh_core::element::palette` 中的 Tailwind 调色板（`BLUE.shade(500)`）。颜色方法接受 `AdaptiveColor`，即一个浅色值和一个深色值：`AdaptiveColor::rgb(0xffffff, 0x0d1117)` 以原生方式随系统外观切换，无需重新渲染。来自应用主题的颜色（`nsh_base` 的 `theme().primary`）每个只有一个值，改为在绑定中读取以跟随主题（`.bg(move || theme().primary)`）：主题的深色值是它的 `colorMode` 修饰器的一个上下文，由应用随外观选择（[Rust](./rust.md#主题)）。设计系统自己的令牌声明在主题文档中，通过 `theme_keys!` 根据它生成的键以类型化的方式读取，也以同样方式跟随主题（[主题文档](./rust.md#主题文档与类型化键)）。
 
 在 TSX 中，颜色属性接受 CSS 颜色字符串：
 

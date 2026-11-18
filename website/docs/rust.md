@@ -678,8 +678,8 @@ A theme document is JSON: each token with its `kind` and its `value`, the modifi
 - A document never stops the app: what it cannot use (a value that does not fit its kind, a reference to no token) is
   left out and logged (target `nsh::theme`), and the rest applies. The runtime refuses a shadcn theme file of the old
   format: `Root::theme` and `set_theme` report `legacy-format` and activate nothing, and the theme stays.
-  `nsh_core::element::theme_convert::convert` writes such a file as a theme document; for now `nsh build`, `nsh dev`
-  and `nsh run` do that themselves, over nsh-base's default theme, with a file that `nsh.json`'s `"theme"` names.
+  [`nsh theme convert`](./cli.md#nsh-theme) writes such a file as a theme document; `nsh build`, `nsh dev` and
+  `nsh run` warn of a `"theme"` in `nsh.json` of the old format (`legacy-format`) and leave it out.
 - `nsh run` and `nsh package` hand the theme to the app's root, `Root::theme(json)`, so it is read as a TSX app's is
   and is in the first frame; the `cargo run` binary that `nsh init` writes does the same with `nsh.json`'s `"theme"`.
   A root you make yourself (a test's `EngineConfig::new(Root::of::<App>())`) takes one with

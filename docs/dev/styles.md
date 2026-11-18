@@ -121,26 +121,30 @@
   keys are build errors). Rust components do not use classes: their typed styles (`element/style.rs`, every utility group has its
   methods, tested against the classes) lower into the same rules and their
   colors come from the active theme document, `nsh.json` `"theme"` or a UI set's (`docs/dev/components.md` "The
-  theme"); the Tailwind theme only shapes the app's own classes. The app's classes name the design tokens
-  (`element::Tokens`: the active document's, by the names of `tailwind/theme.rs` `ClassTokens`) as Tailwind 4 names
-  the variables of
-  `@theme`: a color is a color utility's name (`bg-primary`, `text-muted-foreground/70`, `bg-up/30`) when the
-  Tailwind palette has no color of that name (a palette color of the same name wins), and every token is a variable
-  (`bg-(--primary)`, `rounded-(--radius)`, `text-(length:--x)`, `font-(family-name:--font-mono)`); the fonts
-  `font-sans` / `font-mono`, when the theme sets them, are what the `font-sans` / `font-mono` utilities set
-  (`ClassTokens::replaces`); a number token of a Tailwind 4 namespace (`radius-`, `spacing-`, `text-`, `font-weight-`,
-  `tracking-`, `leading-`, `blur-`) is a named class of that namespace's utilities (`rounded-card`, `p-gutter`,
-  `font-strong`: `ClassTokens::substitute` → `named_number`, an arbitrary value by name prefix), checked after Tailwind's own names, which keep winning (`Theme::shadowed_tokens` lists each token's
-  classes that stay Tailwind's or, for `text-`, a color's, which the bundler warns of), and before colors at the same
-  utility except for `text-` (the longer utility wins otherwise: `inset-shadow-card`); a number token is points
-  (`tracking-*` too); and `font-sans` is the default font of every text (Tailwind's `--font-sans`, a page's
-  preflight). Such a utility is parsed with the token's one value as an arbitrary one and depends on
-  `deps::THEME`. When the design tokens the app draws with change (a theme action resolved by
-  `Core::install_theme`: another document, a pick, the app's or the host's patch), `Core::class_tokens_changed`
-  drops the cached strings that name a token whose value changed and resolves their nodes (and the app's classes
-  on Rust components) again; when the names change, every class. Classes name tokens only, never roles
-  (`element::Role`, what NSH's own parts draw with, `components.md` "The theme"): a role mapped onto another token
-  (a document's or a patch's `"roles"`) adds no class. `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
+  theme"); the Tailwind theme only shapes the app's own classes. The app's classes read the design tokens
+  (`element::Tokens`: the active document's, held for classes by `tailwind/theme.rs` `ClassTokens`) as Tailwind 4
+  reads the variables of `@theme`, through roles (`docs/dev/theme-format.md`, section 7; `NAMESPACES`): a
+  namespaced class reads the role of its namespaced name (`rounded-card` the role `radius-card`, `p-gutter`
+  `spacing-gutter`, `text-body`, `font-strong` `font-weight-strong`, `tracking-label`, `leading-body`, `blur-soft`,
+  `duration-quick`, `ease-snappy`, `shadow-raised`, `bg-hero` `background-image-hero`), a bare color the color role
+  of its name (`bg-primary`, `text-muted-foreground/70`, `bg-up/30`), and a variable (`bg-(--popover)`,
+  `rounded-(--radius)`, `text-(length:--x)`, `font-(family-name:--font-mono)`) the role of its name, whatever its
+  type. Each resolves as `Tokens::role_by_name` does: the token a document's or a patch's `"roles"` maps it onto,
+  else the token of its own name; a role of a type its row does not take is skipped there, and the class falls to the
+  next row, else to Tailwind's own utility. The theme wins over Tailwind's built-in value of a class and over a color
+  of `"tailwind"` `colors` or the palette of the same name (`shadow-md`, `radius-lg` for `rounded-lg`, `spacing-4`
+  for `p-4`), as Tailwind 4's `@theme` does (TW-OVERRIDE). Where two rows can name a class the longer utility wins
+  (`inset-shadow-card`), and at one utility a namespaced role comes before a color, except for `text-` (a color, then
+  a typography, then a number). Compounds are read whole: `text-title` sets a typography's size, line height, letter
+  spacing, weight and family (a `leading-*`, `tracking-*` or `font-*` class of the element wins over those parts),
+  `shadow-*` a shadow's layers, `bg-*` a gradient, `blur-*` a blur's radius. A number is points (`tracking-*` too),
+  and `font-sans` is the default font of every text (Tailwind's `--font-sans`, a page's preflight). A class is one
+  rule with the token's one value, parsed as an arbitrary value, and depends on `deps::THEME`. When the design
+  tokens the app draws with change (a theme action resolved by `Core::install_theme`: another document, a pick, the
+  app's or the host's patch), `Core::class_tokens_changed` drops the cached strings that read a token whose value
+  changed, or a role whose mapping changed (`ClassTokens::changed`), and resolves their nodes (and the app's classes
+  on Rust components) again; when the names change, every class.
+  `nsh build` / `nsh dev` warn about unknown static classes in app code (`file:line:col:
   unknown class '...'`, target `nsh::build`); the core logs each unknown class once at run time. Settings
   that are props in React Native are style keys here, as in CSS (`numberOfLines`, `textOverflow`, `userSelect`,
   `pointerEvents`, `objectFit`; `line-clamp-*`, `truncate`, `text-ellipsis`, `select-*`, `pointer-events-*`,

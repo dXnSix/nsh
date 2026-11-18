@@ -289,8 +289,8 @@ import { role } from "nsh";
 <View style={{ backgroundColor: role("popover"), borderLeftWidth: 3, borderLeftColor: role("warning") ?? "#d97706" }} />
 ```
 
-类把角色当作变量读取：在主题没有同名令牌时，`bg-(--popover)` 是主题把 `popover` 映射到的令牌（[主题令牌](../docs/tailwind.md#theme-tokens)）。
-Rust 通过角色的常量读取：`theme().tokens().role(nsh_base::role::POPOVER)`。
+类也读取角色：`bg-popover` 和 `bg-(--popover)` 绘制主题把 `popover` 映射到的令牌，没有映射时绘制令牌 `popover`（[主题令牌](../docs/tailwind.md#theme-tokens)）。
+Rust 通过角色的常量读取，与 `role()` 一样是响应式的：`role(nsh_base::role::POPOVER)`（`nsh_core::element::role`）。
 
 ## setTheme
 
@@ -1248,7 +1248,7 @@ effect(() => {
 function setColorScheme(scheme: "light" | "dark" | "system"): void;
 ```
 
-无论系统外观如何，立即以 `scheme` 显示应用：`colorScheme()`、`dark:` 类、组件的主题和平台控件（警告框、状态栏的默认样式）都随之变化；`"system"` 重新跟随系统。`nsh.json` 的 `"appearance"` 从启动时就设置它。Rust：`set_color_scheme(Appearance::Dark)`（`Appearance::Light`、`Appearance::System`）。
+无论系统外观如何，立即以 `scheme` 显示应用：`colorScheme()`、`dark:` 类和平台控件（警告框、状态栏的默认样式）都随之变化，应用同时选择文档的浅色/深色修饰器时，主题的深色值才显示（[`setModifier`](#setmodifier-modifier-modifiers)）；`"system"` 重新跟随系统。`nsh.json` 的 `"appearance"` 从启动时就设置它。Rust：`set_color_scheme(Appearance::Dark)`（`Appearance::Light`、`Appearance::System`）。
 
 ### ThemeScope
 

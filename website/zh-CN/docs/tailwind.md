@@ -250,7 +250,7 @@ view()
 </View>
 ```
 
-类名读取的是一个**角色**：主题把这个名称映射到的 token（`"roles": { "popover": "overlay" }`），没有映射时是同名的 token。因此 `bg-primary` 是 token `primary`，或主题把 `primary` 映射到的那个 token，在多个应用之间共享的组件只需写一次 `bg-popover rounded-card`，就适用于每个设计系统。在 Rust 中，shadcn 的令牌是 `theme()` 的字段（`primary`、`muted_foreground`、`radius`、`font_mono`），所有令牌也都可以用 `theme().color("up")`、`theme().number("radius-card")` 或 `theme().font("font-display")` 读取。
+类名读取的是一个**角色**：主题把这个名称映射到的 token（`"roles": { "popover": "overlay" }`），没有映射时是同名的 token。因此 `bg-primary` 是 token `primary`，或主题把 `primary` 映射到的那个 token，在多个应用之间共享的组件只需写一次 `bg-popover rounded-card`，就适用于每个设计系统。在 Rust 中，shadcn 的令牌是 `theme()` 的字段（`primary`、`muted_foreground`、`radius`、`font_mono`），所有令牌也都可以用 `tokens().color("up")`、`tokens().number("radius-card")` 或 `tokens().font("font-display")` 读取，或用类型化键的 `get()` 读取，它只跟随那一个令牌（[主题文档与类型化键](./rust.md#主题文档与类型化键)）。
 
 | 类名 | 读取的角色 | 种类 | 示例 |
 |---|---|---|---|
@@ -318,7 +318,7 @@ import { Canvas, token } from "nsh";
 />
 ```
 
-名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。每个令牌按其种类标注类型（`number`，颜色、字体和阴影为 `string`），并附带文档注释。
+名称带有类型：NSH 根据主题把应用的令牌写入 `.nsh/types/nsh/tokens.d.ts`，所以主题中有 `"up"` 后 `token("up")` 的类型是 `string`，主题中没有的名称是类型错误。每个令牌按其种类、以 `token()` 给出的形式标注类型（颜色或字体为 `string`，`number`，`boolean`，时长为 `` `${number}ms` ``，复合类型为由其成员组成的对象，阴影为各层组成的数组），并附带文档注释。
 
 ### 应用某一部分的 token
 

@@ -702,7 +702,7 @@ over all. Later layers only replace fields they set.
 Prefer the theme's semantic tokens for new app-owned presentation. Every token of the app's theme document is named
 as a variable of Tailwind's `@theme` is (`"up": { "kind": "color", "value": "#16a34a" }` gives `text-up`, `bg-up/30`,
 `token("up")` in TSX and `tokens().color("up")` in Rust). Its dark values are a context of the document's light/dark
-modifier (`colorMode`, `docs/dev/theme-format.md`): the appearance changes no token, so an app that switches or
+modifier (`colorMode`, [Theme](./rust.md#theme)): the appearance changes no token, so an app that switches or
 follows the appearance picks that modifier with it (`setModifier("colorMode", colorScheme())`), and a token then
 follows with no `dark:` class. Name tokens after roles, not components, so they do not become the extension point
 for every widget.

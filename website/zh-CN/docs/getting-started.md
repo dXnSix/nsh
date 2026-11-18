@@ -147,7 +147,7 @@ Rust 版：
 - **`#[component] pub fn App()`** 是一个组件：只运行**一次**、返回自己元素的函数。`nsh.json` 中的 `"root": "App"` 指向它，`nsh run`
   挂载它。`signal(0_u32)` 创建一个会随时间变化的值。
 - **`text(move || format!(…, count.get()))`** 把文本绑定到 signal：`count` 变化时，NSH 重新运行这个闭包，只更新这一段文本，其他什么都不动。样式同样接受闭包：
-  `.bg(move || theme().primary)` 会随主题进入深色模式。
+  `.bg(move || theme().primary)` 跟随主题的每次变化，应用选择主题的深色值后也包括深色值（[深色模式](./device-and-environment.md#深色模式)）。
 - **`.on_press(..)`** 让视图响应按压；`.active(|s| s.opacity(0.6))` 是它按下时的样式，由原生应用。这个按钮属于应用自己：NSH
   提供基本元素和各项能力，应用用它们绘制自己的界面。
 - **`.px_5()`、`.rounded(px(10.0))`、`.gap_4()`** 是带类型的样式方法，与 Tailwind 的工具类同名，单位是点（`px`）。布局是
@@ -163,7 +163,7 @@ TSX 版：
   等[宿主元素](../elements/index.md)都从 `nsh` 导入（`Input` 从 `nsh/base` 导入）；只有 `If` 和 `Each` 无需导入。
 - **`class`** 接受 [Tailwind](./tailwind.md) 类；`style={{ … }}` 接受由 camelCase 样式属性组成的对象，数字的单位是点。
   `bg-background`、`bg-primary`、`text-primary-foreground` 和 `rounded-(--radius)` 引用应用主题的令牌（[主题 token](./tailwind.md#主题-token)）：
-  它们自动跟随深色模式，`nsh.json` 中的 `"theme"` 可以改变它们的样式。
+  它们跟随主题的每次变化（应用选择主题的 `colorMode` 修饰器后也包括深色值，[深色模式](./device-and-environment.md#深色模式)），`nsh.json` 中的 `"theme"` 可以改变它们的样式。
 - **`mount(App)`** 把组件渲染到应用的界面上。
 
 > [!IMPORTANT]

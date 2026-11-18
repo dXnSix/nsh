@@ -602,8 +602,8 @@ fn the_module_formats_money() {
   `rounded-(--radius-card)`。它们在读取处跟随各自的令牌；`theme().color(name)` 读取主题生成时的令牌，不跟随没有角色读取的令牌。
 - 文档从不会让应用停下：它无法使用的内容（与种类不符的值、指向不存在令牌的引用）会被忽略并记录日志（target `nsh::theme`），其余照常生效。
   运行时拒绝旧格式的 shadcn 主题文件：`Root::theme` 和 `set_theme` 报告 `legacy-format`，不启用任何内容，主题保持不变。
-  `nsh_core::element::theme_convert::convert` 可把这样的文件写成主题文档；目前 `nsh build`、`nsh dev` 和 `nsh run` 会对 `nsh.json`
-  的 `"theme"` 指定的文件自行转换，以 nsh-base 的默认主题为底。
+  [`nsh theme convert`](./cli.md#nsh-theme) 可把这样的文件写成主题文档；`nsh.json` 的 `"theme"` 是旧格式时，`nsh build`、`nsh dev` 和
+  `nsh run` 会给出警告（`legacy-format`）并忽略它。
 - `nsh run` 和 `nsh package` 把主题交给应用的根组件，即 `Root::theme(json)`，所以它的读取方式与 TSX 应用相同，并且在第一帧就生效；
   `nsh init` 生成的 `cargo run` 可执行文件也会这样使用 `nsh.json` 的 `"theme"`。自己创建的根组件（例如测试中的
   `EngineConfig::new(Root::of::<App>())`）可以用 `.theme(include_str!("../brand-theme.json"))` 指定主题，用 `.theme_overrides(..)` 指定覆盖。

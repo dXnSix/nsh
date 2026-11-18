@@ -293,7 +293,7 @@ export function Chip(props: { label: string; class?: string }) {
 - `class` is Tailwind v4's scale, resolved natively. `classList` applies after it. Later classes win, so a component can append the caller's `class`.
 - `style={{ ... }}` wins over classes per property; numbers are points. Use it for computed values and animated values.
 - A `View` is a **column** by default. `flex-row` or `class="flex"` makes a row.
-- Tokens are shadcn's: `bg-background`, `text-foreground`, `bg-card`, `bg-primary`, `text-primary-foreground`, `bg-muted`, `text-muted-foreground`, `border-border`, `border-input`, `text-destructive`, `rounded-(--radius)`. Add roles in the theme file (`nsh.json` `"theme"`): a role `up` gives `bg-up` and `token("up")`, typed.
+- Tokens are shadcn's: `bg-background`, `text-foreground`, `bg-card`, `bg-primary`, `text-primary-foreground`, `bg-muted`, `text-muted-foreground`, `border-border`, `border-input`, `text-destructive`, `rounded-(--radius)`. Add tokens in the app's theme document (`nsh.json` `"theme"`, `docs/dev/theme-format.md`): a token `"up": { "kind": "color", "value": "#16a34a" }` gives `bg-up` and `token("up")`, typed; its dark value goes in the `colorMode` modifier's `dark` context, which `setModifier("colorMode", colorScheme())` picks.
 - Variants: `active:`, `hover:`, `focus:`, `focus-visible:` (the keyboard's ring: not after a click or a tap), `disabled:`, `dark:`, breakpoints, `ios:`, `android:`, `web:`.
 - Safe area: `pt-[env(safe-area-inset-top)]`.
 - `nsh/base` has behaviour and no look. A `Switch` without `trackClass` and `thumbClass` draws nothing, and its test still passes. Style each part and look at it.

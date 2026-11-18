@@ -185,7 +185,7 @@ view()
 
 Badge 只用于有助快速扫描的短 state、count 或 classification，不能套在每个 label、metadata value、filter 或 section title 上。大多数 Badge 保持 neutral；只有真实表达 success、warning、destructive 或 info 时才使用语义颜色。满屏多色 Badge 通常说明 hierarchy 或 grouping 尚未设计完成。
 
-应用界面不应出现 raw hex、`rgb()`/`rgba()` 或 `hsl()` 颜色，也不应出现 `bg-zinc-100` 这样的调色板类名。颜色必须按语义角色从主题解析。需要的 role 不存在时，在应用的主题文件中定义（[主题 token](./tailwind.md#主题-token)：在它的 `light` 和 `dark` 中写 `"up": "#16a34a"`，会生成 `text-up`、`bg-up/30`、TSX 中的 `token("up")` 和 Rust 中的 `theme().color("up")`），而不是在 call site 嵌入 palette value。Raw color 只属于 theme definition，或颜色本身就是数据的、经过审查的 data/raster content。
+应用界面不应出现 raw hex、`rgb()`/`rgba()` 或 `hsl()` 颜色，也不应出现 `bg-zinc-100` 这样的调色板类名。颜色必须按语义角色从主题解析。需要的 role 不存在时，在应用的主题文档中定义（[主题 token](./tailwind.md#主题-token)：令牌 `"up": { "kind": "color", "value": "#16a34a" }`，深色值写在 `colorMode` 修饰器的 `dark` 上下文中，会生成 `text-up`、`bg-up/30`、TSX 中的 `token("up")` 和 Rust 中的 `tokens().color("up")`），而不是在 call site 嵌入 palette value。Raw color 只属于 theme definition，或颜色本身就是数据的、经过审查的 data/raster content。
 
 ### 圆角、间距与密度
 

@@ -135,6 +135,7 @@ mount(App);
 | `features` | string[] | `package` | 打包时 release runner 始终保留的原生功能（应用带 Rust crate，或本机装有 `cargo` 且打包目标是本机系统时，在本地构建 runner），如 `["plot"]`：只有 Rust 代码或动态 import 才用到的功能写在这里。其余功能中，bundle 用不到的（`shader`、`editor`、`plot` 等）`package` 会去掉，并输出原因。 |
 | `icon` | string \| object | `package`、`run` | 一张正方形 PNG，最好是 1024×1024，路径相对于 `nsh.json`；也可按平台分别提供（`{ "macos": "…", "windows": "…" }`，[打包](./packaging.md#图标)）。 |
 | `tailwind` | object | 每次构建 | 扩展 `class` 字符串所依据的 Tailwind 主题（[Tailwind](./tailwind.md)）。 |
+| `appearance` | string | 每次构建、`package` | `"light"`、`"dark"` 或 `"system"`（默认值）：始终为浅色或深色的应用在这里说明。`colorScheme()`、`dark:` 类和平台的控件从启动时就跟随它；应用随它选择主题的 `colorMode` 修饰器时，主题的令牌值才跟随（[设备与环境](./device-and-environment.md#深色模式)）。 |
 | `locales` | string[] | 每次构建 | 应用除英语外格式化数字和日期所用的语言（`["de", "zh-CN"]`），bundle 会携带它们的数据。默认：`locales/` 中翻译所包含的语言（[I18n](./i18n.md#数字和日期)）。 |
 | `theme` | string 或 object | 每次构建 | 应用的主题文档：它的 token、改变 token 的 modifier（包括浅色和深色）以及组件读取的角色（映射到它的 token 上）。token 类名、`token()`、`role()` 和 Rust 组件都用它绘制。它整体替换 UI 集合的主题和默认主题。值为相对于 `nsh.json` 的路径，或直接内联的文档（[用 Rust 开发](./rust.md#主题)、[主题 token](./tailwind.md#主题-token)）。旧格式的主题，或不是 JSON 对象的值，不会被打包：构建会给出警告，应用改用 UI 集合的主题绘制。 |
 | `themeOverrides` | string 或 object | 每次构建 | 叠加在当前主题文档（应用的 `theme`，否则为 UI 集合的）之上的值和角色映射：`{ "values": { "<token>": <值> }, "roles": { "<角色>": "<token>" } }`。值为相对于 `nsh.json` 的路径，或直接内联。它不会新增 token；`updateTheme()` 和 Rust 的 `update_tokens` 叠加在它之后。 |

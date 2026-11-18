@@ -90,6 +90,20 @@ written for it. Updating TypeScript is a change of the version
 and the integrities (`npm view @typescript/typescript-<os>-<arch>@<version> dist.integrity`). The distribution
 (`cargo xtask dist`) does not ship the compiler: it is 24 MB per platform and most runs of `nsh` never check types.
 
+### `nsh theme`
+
+`crates/nsh-cli/src/theme.rs` (user docs: `website/docs/cli.md`, "nsh theme") calls the theme format's one
+implementation and restates none of its rules (`theme-format.md`, sections 11 and 12). `nsh theme convert <OLD>
+[--over <BASE>] [-o <NEW>]` is nsh-core's converter (`theme_convert::convert`; `--over nsh/base` names nsh-base's old
+default, `theme_convert::OLD_DEFAULT`): it writes the document either way and exits 1 on an error diagnostic.
+`nsh theme check <FILE> [--app <DIR>]` reads a document, resolves it at its defaults and its references under every
+combination of one context per modifier, and checks its roles against the core's role table
+(`Tokens::resolve_with_roles`: the core's roles, the UI sets' and Tailwind's patterns); `--app` describes the app's
+Rust crates for their sets' roles. With `--patch` (which needs `--app`) `FILE` is an override patch, checked against
+the app's active document. Each diagnostic prints as `<severity> <code> <pointer>: <message>`, and the command exits 1
+on any error or `role-unmapped`, else 0. The tests are `crates/nsh-cli/tests/cli/theme_format.rs`, with their
+fixtures in `crates/nsh-cli/tests/fixtures/theme-format/`.
+
 ## Project files
 
 NSH-generated declarations, runner workspaces, tests and default build/package outputs live under `.nsh/`.

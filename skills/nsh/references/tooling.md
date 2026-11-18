@@ -53,6 +53,7 @@ Every command takes `[ENTRY]`: the app's directory (default `.`) or a TSX entry 
 | `nsh package --target` | Runner from Cargo | Runner with the crate, from Cargo | Prebuilt runtime; no Rust toolchain |
 | `nsh publish` | Refused | TSX only; crates ship in the host | Yes |
 | `nsh update-manifest` | Yes | Yes | Yes |
+| `nsh theme convert OLD [--over nsh/base] [-o NEW]`, `nsh theme check FILE [--app DIR]` (`--patch` for overrides) | Converts an old `cssVars` theme to a theme document (`nsh theme convert`); checks a document or a patch, exit 1 on an error | Same | Same |
 | `nsh keygen`, `certify`, `verify`, `revoke`, `symbolicate` | Keys only | Yes | Yes |
 | `cargo run` | Runs `src/main.rs` on the desktop backend | - | - |
 | `cargo test`, `cargo check` | Direct | Direct, for the crate | - |
