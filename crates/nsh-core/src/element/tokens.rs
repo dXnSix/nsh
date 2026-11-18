@@ -1160,7 +1160,11 @@ pub(crate) fn sample() -> Tokens {
     for (key, value) in SAMPLE_COLORS {
         tokens.set_color(key, crate::color::rgb(*value));
     }
-    for (key, n) in [("radius", 12.0), ("radius-lg", 16.0), ("body-size", 16.0)] {
+    for (key, n) in [
+        ("radius", 12.0),
+        ("radius-panel", 16.0),
+        ("body-size", 16.0),
+    ] {
         tokens.set_number(key, n);
     }
     tokens

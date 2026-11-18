@@ -18,12 +18,13 @@ pub struct ClassInfo {
     /// What it sets, in its declarations' order (none for `group` and the
     /// utilities that do nothing natively).
     pub targets: Vec<ClassTarget>,
-    /// It names theme tokens (`bg-primary`): its value follows the theme
-    /// and the appearance.
+    /// It reads the theme (`bg-primary`, `rounded-card`): its value
+    /// follows the theme's tokens and roles.
     pub reads_theme: bool,
-    /// The design tokens it reads, by name, sorted: `bg-primary` reads
-    /// `primary`, `rounded-card` `radius-card`, a role's variable
-    /// (`bg-(--popover)`) the token the role is mapped onto. What an editor
+    /// The design tokens it reads, by name, sorted: the token its role
+    /// resolves to (`bg-primary` reads `primary`, `rounded-card`
+    /// `radius-card` or the token a theme maps that role onto, a variable
+    /// `bg-(--popover)` the token `popover` is mapped onto). What an editor
     /// shows as a class's tokens, and what a change of them restyles.
     pub tokens: Vec<String>,
 }
@@ -60,15 +61,7 @@ pub fn describe(theme: &Theme, token: &str) -> Option<ClassInfo> {
     let mut read = Vec::new();
     let (targets, reads_theme) = match parse_token(theme, token, &mut read)? {
         Token::Rule(rule) => (targets(&rule.decls), false),
-        Token::Themed(rule, dark) => {
-            let mut t = targets(&rule.decls);
-            for target in dark.map(|d| targets(&d.decls)).unwrap_or_default() {
-                if !t.contains(&target) {
-                    t.push(target);
-                }
-            }
-            (t, true)
-        }
+        Token::Themed(rule) => (targets(&rule.decls), true),
         Token::Group(_) | Token::Ignored => (Vec::new(), false),
     };
     // The class keeps the tokens it reads by key; the theme has their names.

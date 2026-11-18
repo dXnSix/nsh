@@ -1086,6 +1086,28 @@ fn mixes_current(v: &str) -> Option<Box<str>> {
     Some(a.into())
 }
 
+/// What a theme's shadow token declares under `shadow-<n>/<modifier>`
+/// (`shadow-raised/20`), as a size of Tailwind's does: its layers with the
+/// modifier's alpha in place of their colors' own, and that alpha for a
+/// shadow color (Tailwind's `--tw-shadow-alpha`). `None` for no alpha.
+pub(crate) fn shadow_with_alpha(layers: &[BoxShadow], modifier: &str) -> Option<Vec<Decl>> {
+    let a = alpha_modifier(modifier)?;
+    let layers = layers.iter().map(|l| BoxShadow {
+        color: alpha_of(l.color, a),
+        ..*l
+    });
+    Some(vec![
+        Decl::Part(Part::Shadow(layers.collect())),
+        Decl::Part(Part::ShadowAlpha(a)),
+    ])
+}
+
+/// The line height `text-<n>/<modifier>` sets (`text-title/6`), as a size
+/// of Tailwind's reads its modifier.
+pub(crate) fn line_height_modifier(theme: &Theme, modifier: &str) -> Option<Decl> {
+    line_height(theme, modifier)
+}
+
 /// `name/50` of a theme's shadow sizes: the layers, and the modifier's
 /// alpha, which replaces the alpha of the layers' own colors.
 fn sized<T: Copy>(
