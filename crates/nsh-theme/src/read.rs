@@ -34,6 +34,36 @@ pub struct Read {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// The members of JSON object `text` in the order it writes them, each
+/// value written back as JSON text that keeps its own members' order: how
+/// a document or a patch is taken out of a larger object (a bundle's
+/// `{ "document": …, "overrides": … }`) for [`read`] and [`read_patch`]
+/// without a `serde_json::Value`, whose objects sort their members unless
+/// serde_json's `preserve_order` feature is on. A member written twice
+/// keeps its first value and is reported (`duplicate-member`, its pointer
+/// from `text`'s root). `None` when `text` is no JSON object. Never
+/// panics.
+///
+/// ```
+/// let (members, said) = nsh_theme::object_members(r#"{ "b": { "z": 1, "a": 2 }, "a": null }"#);
+/// let members = members.unwrap();
+/// assert_eq!(members[0].0, "b");
+/// assert!(members[0].1.find("\"z\"").unwrap() < members[0].1.find("\"a\"").unwrap());
+/// assert_eq!(members[1], ("a".to_owned(), "null\n".to_owned()));
+/// assert!(said.is_empty());
+/// ```
+pub fn object_members(text: &str) -> (Option<Vec<(String, String)>>, Vec<Diagnostic>) {
+    let mut diagnostics = Vec::new();
+    let Some(Json::Object(members)) = json::parse(text, &[], &mut diagnostics) else {
+        return (None, diagnostics);
+    };
+    let members = members
+        .into_iter()
+        .map(|(key, value)| (key, json::pretty(&value)))
+        .collect();
+    (Some(members), diagnostics)
+}
+
 /// Reads a theme document. Never panics, whatever `text` holds.
 ///
 /// Text that is not JSON, or not a JSON object, gives one `not-a-document`

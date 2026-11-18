@@ -294,7 +294,7 @@ fn imported_primitives(program: &Program<'_>) -> HashMap<String, Compiled> {
 }
 
 /// Compiles the JSX of `program` (TypeScript already removed; `scoping`
-/// its scopes). `prologue` is JS run first (the entry's setup). With
+/// its scopes). `prologue` is JS run first (the entry's setup imports). With
 /// `stamp` (the module's hot key) elements are stamped with where they
 /// were written. Errors come back rendered with a code frame of `source`.
 #[allow(clippy::too_many_arguments)]
@@ -338,7 +338,6 @@ pub(crate) fn transform<'a>(
     }
     let mut head = String::new();
     if let Some(prologue) = prologue {
-        compiler.used[helper("setup")] = true;
         head.push_str(prologue);
     }
     if let Some(stamps) = compiler.stamps.as_ref().filter(|s| !s.anchors.is_empty()) {

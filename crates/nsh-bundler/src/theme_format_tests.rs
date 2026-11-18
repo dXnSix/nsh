@@ -429,7 +429,7 @@ fn the_bundle_hands_the_runtime_its_theme() {
     })
     .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
-    // The entry's first statement hands the setup `{ document, overrides }`
+    // The setup module the entry imports first hands `{ document, overrides }`
     // as a JSON string (its quotes escaped, or not, as the printer quotes
     // it).
     let code = &bundle.code;

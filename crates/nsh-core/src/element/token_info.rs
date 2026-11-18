@@ -4,7 +4,7 @@
 //! document declares of it.
 
 use super::{Token, Tokens};
-use crate::{Color, JsonValue};
+use crate::JsonValue;
 
 /// A token as [`Tokens::infos`] lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,17 +59,13 @@ impl Tokens {
             .collect()
     }
 
-    /// Token `name` as JSON: `{ kind, light, dark }`, its value as TS's
-    /// `token()` gives it, the same under both keys (a color as
-    /// `#rrggbbaa`, a number in points, a duration in milliseconds, a font
-    /// family, shadows, a gradient and an easing as CSS, a string, a
-    /// boolean; a typography token as `{ size, lineHeight?, letterSpacing?,
-    /// fontWeight?, fontFamily? }`, a blur, a border and a transition as
-    /// objects of their members). `None`: there is none.
+    /// Token `name` as JSON: `{ kind, value }`, its value type's name and
+    /// its value in the canonical form ([`Tokens::json`]), as TS's
+    /// `tokens.get` gives it. `None`: there is none.
     pub fn value_json(&self, name: &str) -> Option<JsonValue> {
         let kind = self.kind_name(name)?;
-        let value = token_json(self.value(name)?);
-        Some(serde_json::json!({ "kind": kind, "light": value.clone(), "dark": value }))
+        let value = self.json(name)?;
+        Some(serde_json::json!({ "kind": kind, "value": value }))
     }
 
     /// Whether these tokens and `other` have the same names, each of the
@@ -80,68 +76,5 @@ impl Tokens {
             && self
                 .iter()
                 .all(|(n, t)| other.value(n).map(Token::value_type) == Some(t.value_type()))
-    }
-}
-
-/// A token's value as TS's `token()` gives it.
-fn token_json(token: &Token) -> JsonValue {
-    let hex = |c: crate::color::Hsla| JsonValue::from(format!("#{:08x}", Color::from(c).0));
-    let millis = |d: std::time::Duration| JsonValue::from(super::theme_values::millis(d));
-    match token {
-        Token::Color(c) => hex(*c),
-        Token::Number(n) => (*n).into(),
-        Token::Font(f) => JsonValue::from(&**f),
-        Token::String(s) => JsonValue::from(s.as_str()),
-        Token::Boolean(b) => (*b).into(),
-        Token::Duration(d) => millis(*d),
-        Token::Easing(e) => e.css().into(),
-        Token::Typography(t) => {
-            let mut out = serde_json::Map::new();
-            out.insert("size".into(), t.size.0.into());
-            match t.line_height {
-                Some(crate::LineHeight::Multiple(m)) => {
-                    out.insert("lineHeight".into(), m.into());
-                }
-                Some(crate::LineHeight::Points(p)) => {
-                    out.insert("lineHeight".into(), format!("{}px", p.0).into());
-                }
-                _ => {}
-            }
-            if let Some(spacing) = t.letter_spacing {
-                out.insert("letterSpacing".into(), spacing.0.into());
-            }
-            if let Some(weight) = t.font_weight {
-                out.insert("fontWeight".into(), weight.into());
-            }
-            if let Some(family) = &t.font_family {
-                out.insert("fontFamily".into(), JsonValue::from(&**family));
-            }
-            JsonValue::Object(out)
-        }
-        Token::Shadow(layers) => super::AdaptiveShadow::from(layers.iter().copied())
-            .css(false)
-            .into(),
-        Token::Gradient(g) => g.css().into(),
-        Token::Blur(b) => serde_json::json!({
-            "type": match b.kind {
-                super::BlurKind::Background => "background",
-                _ => "layer",
-            },
-            "radius": b.radius.0,
-        }),
-        Token::Border(b) => serde_json::json!({
-            "color": hex(b.color),
-            "width": b.width.0,
-            "style": match b.style {
-                crate::style::BorderStyle::Dashed => "dashed",
-                crate::style::BorderStyle::Dotted => "dotted",
-                crate::style::BorderStyle::Solid => "solid",
-            },
-        }),
-        Token::Transition(t) => serde_json::json!({
-            "duration": millis(t.duration),
-            "delay": millis(t.delay),
-            "easing": t.easing.css(),
-        }),
     }
 }

@@ -1506,3 +1506,33 @@ fn json_nested_128_levels_deep_is_not_a_document() {
     one(&objects(127), "unknown-member", "/a");
     one(&objects(128), "not-a-document", "");
 }
+
+/// A document taken out of a larger object (a bundle's `{ document,
+/// overrides }`) keeps its members' order, its modifiers' contexts too,
+/// whatever serde_json's features: the contexts list as written.
+#[test]
+fn a_document_taken_out_of_an_object_keeps_its_order() {
+    let text = r##"{ "document": { "tokens": { "zeta": { "kind": "color", "value": "#000000" }, "alpha": { "kind": "color", "value": "#ffffff" } },
+        "modifiers": { "mode": { "default": "light", "contexts": { "light": {}, "dark": { "zeta": "#111111" } } } },
+        "resolutionOrder": ["mode"] },
+        "overrides": null, "document": {} }"##;
+    let (members, said) = nsh_theme::object_members(text);
+    let members = members.unwrap();
+    let keys: Vec<&str> = members.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["document", "overrides"]);
+    assert_eq!(codes(&said), ["duplicate-member"]);
+    assert_eq!(said[0].pointer, "/document");
+    let document = nsh_theme::read(&members[0].1).document;
+    let names: Vec<&str> = document.tokens.keys().collect();
+    assert_eq!(names, ["zeta", "alpha"]);
+    let contexts: Vec<&str> = document
+        .modifiers
+        .get("mode")
+        .unwrap()
+        .contexts
+        .keys()
+        .collect();
+    assert_eq!(contexts, ["light", "dark"]);
+    assert_eq!(members[1].1.trim(), "null");
+    assert!(nsh_theme::object_members("[1]").0.is_none());
+}

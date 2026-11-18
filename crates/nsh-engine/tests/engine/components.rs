@@ -2290,33 +2290,38 @@ fn the_apps_appearance_overrides_the_systems() {
     assert_eq!(background(&later), Some(nsh_core::Color(0xffff_ffff)));
 }
 
-const TOKENS: &str = r#"import { mount, Text, token } from "nsh";
+const TOKENS: &str = r#"import { mount, setModifier, Text, token } from "nsh";
 
+setModifier("colorMode", "__MODE__");
 mount(() => (
   <Text>{`up ${token("up")} radius ${token("radius")} font ${token("font-sans")} primary ${token("primary") !== undefined}`}</Text>
 ));
 "#;
 
+/// `token()` reads the app's document (`nsh.json`'s `"theme"`), in the
+/// `colorMode` context the app picks; the appearance alone changes no
+/// token.
 #[test]
-fn token_reads_the_apps_theme_in_the_appearance_shown() {
-    let shown = |appearance: &str| {
-        let config = format!(
-            r##"{{ "appearance": "{appearance}", "theme": {{ "cssVars": {{
-                "theme": {{ "font-sans": "Inter, sans-serif", "radius": "0.5rem" }},
-                "light": {{ "up": "#00ff00" }}, "dark": {{ "up": "#004400" }} }} }} }}"##
-        );
-        let (_engine, rx) = start_with(TOKENS, Environment::default(), None, Some(&config));
-        let up = if appearance == "dark" {
-            "#004400ff"
-        } else {
-            "#00ff00ff"
-        };
-        let wanted = format!("up {up} radius 8 font Inter primary true");
+fn token_reads_the_apps_theme_in_the_context_picked() {
+    let config = r##"{ "appearance": "dark", "theme": {
+        "tokens": {
+            "font-sans": { "kind": "font", "value": "Inter, sans-serif" },
+            "radius": { "kind": "number", "value": 8 },
+            "up": { "kind": "color", "value": "#00ff00" },
+            "primary": { "kind": "color", "value": "#171717" } },
+        "modifiers": { "colorMode": { "default": "light", "contexts": {
+            "light": {}, "dark": { "up": "#004400" } } } },
+        "resolutionOrder": ["colorMode"] } }"##;
+    for (mode, up) in [("light", "#00ff00"), ("dark", "#004400")] {
+        let app = TOKENS.replace("__MODE__", mode);
+        let (_engine, rx) = start_with(&app, Environment::default(), None, Some(config));
+        let wanted = format!("up {up} radius 8 font Inter, sans-serif primary true");
         let batches = until(&rx, |b| shows(b, &wanted));
-        assert!(batches.iter().any(|b| shows(b, &wanted)), "{batches:?}");
-    };
-    shown("light");
-    shown("dark");
+        assert!(
+            batches.iter().any(|b| shows(b, &wanted)),
+            "{mode}: {batches:?}"
+        );
+    }
 }
 
 const MENU: &str = r#"import { mount, signal, Text } from "nsh";
@@ -6834,14 +6839,26 @@ fn the_tab_bar_is_the_systems_component_on_ios_and_android() {
 }
 
 /// The bar's selected tab takes the theme's `primary`, as the platforms
-/// read one color: the light value, then the dark one when the appearance
-/// turns dark.
+/// read one color: the document's, then its dark context's once the app
+/// picks it.
 #[test]
 fn the_tab_bar_takes_the_themes_primary_color() {
-    use nsh_core::platform::{ColorScheme, Os};
+    use nsh_core::platform::Os;
 
-    let theme = r##"{ "theme": { "cssVars": {
-        "light": { "primary": "#26251E" }, "dark": { "primary": "#EDECE6" } } } }"##;
+    let theme = r##"{ "theme": {
+        "tokens": { "primary": { "kind": "color", "value": "#26251E" } },
+        "modifiers": { "colorMode": { "default": "light", "contexts": {
+            "light": {}, "dark": { "primary": "#EDECE6" } } } },
+        "resolutionOrder": ["colorMode"] } }"##;
+    let app = TAB_BAR
+        .replace(
+            "mount(App);",
+            "setTimeout(() => setModifier(\"colorMode\", \"dark\"), 100);\nmount(App);",
+        )
+        .replace(
+            "import { mount, signal }",
+            "import { mount, setModifier, signal }",
+        );
     let tint = |batches: &[MountBatch]| {
         batches
             .iter()
@@ -6859,13 +6876,9 @@ fn the_tab_bar_takes_the_themes_primary_color() {
             os,
             ..Environment::default()
         };
-        let (engine, rx) = start_with(TAB_BAR, environment, None, Some(theme));
+        let (_engine, rx) = start_with(&app, environment, None, Some(theme));
         let batches = until(&rx, |batch| batch.items.iter().any(is_tab_bar));
         assert_eq!(tint(&batches), Some(serde_json::json!("#26251E")), "{os:?}");
-        engine.control().set_environment(Environment {
-            color_scheme: ColorScheme::Dark,
-            ..environment
-        });
         let dark = until(&rx, |batch| {
             tint(std::slice::from_ref(batch)) == Some(serde_json::json!("#EDECE6"))
         });

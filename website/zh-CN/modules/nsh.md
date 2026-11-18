@@ -253,10 +253,13 @@ function Feed() {
 function token<K extends keyof Tokens>(name: K): Tokens[K];
 ```
 
-应用主题（`nsh.json` 的 `"theme"`，叠加在 shadcn/ui 的令牌之上）中名为 `name` 的设计令牌在当前外观下的值：颜色是 `#rrggbbaa`，
-长度是以点为单位的数值，字体是字体族名称，阴影是它的 CSS `box-shadow` 各层，渐变是它的 CSS `background-image`。名称是主题中 CSS 变量去掉 `--` 后的名称（`primary`、`muted-foreground`、`radius`、
-`font-mono`，以及应用自己的令牌，如 `up`）。读取它是响应式的：读取令牌的组件、memo 或 effect 会在主题或外观变化时重新运行。在 [`ThemeScope`](#themescope) 中，它是该作用域的值和外观。
-`Tokens` 列出应用的令牌及其类型；NSH 根据主题把它写入 `.nsh/types/nsh/tokens.d.ts`。在类名中直接引用令牌（`bg-primary`、
+应用当前主题文档（`nsh.json` 的 `"theme"`，没有时为 UI 集合的文档）中名为 `name` 的设计令牌：引用已解析，所选的[修饰符](#setmodifier-modifier-modifiers)
+上下文已应用，形式是主题格式的规范形式：颜色为 `#rrggbb`（不完全不透明时为 `#rrggbbaa`），数值，字体族列表，字符串，布尔值，时长为 `"150ms"`，
+缓动保持书写时的形式（关键字如 `"ease-in"`，或四个控制点 `[0.42, 0, 1, 1]`），文字样式、阴影、渐变、模糊、边框和过渡为由其成员组成的对象，取默认值的成员省略
+（`{ fontSize: 14, fontWeight: 400, lineHeight: "20px" }`）。文档没有的名称为 `undefined`。读取它是响应式的：读取令牌的组件、memo 或 effect
+会在该令牌的值变化时重新运行，其他令牌的变化不会让它运行。外观不改变任何令牌：主题把深色值放在一个修饰符（`colorMode`）中，由应用选择。
+在 [`ThemeScope`](#themescope) 中，它是该作用域的值。`token()` 读取核心解析的结果，从一开始就是应用的文档和覆盖，模块顶层的读取也是如此。
+`Tokens` 列出应用的令牌及其类型；NSH 根据当前文档把它写入 `.nsh/types/nsh/tokens.d.ts`。在类名中直接引用令牌（`bg-primary`、
 `rounded-(--radius)`）：见[主题 token](../docs/tailwind.md#主题-token)。
 
 ```tsx
@@ -271,9 +274,10 @@ effect(() => console.log("primary is", token("primary"), "radius", token("radius
 function role<K extends keyof Roles>(name: K): Roles[K] | undefined;
 ```
 
-主题角色 `name` 在当前外观下用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用主题把该角色映射到的令牌（主题文档的 `"roles"`），
-否则是与角色同名的令牌，否则是 `undefined`。角色说明 UI 的某个部分是做什么用的（`popover`、`border`、`warning`），无论应用的设计系统如何命名
-对应的令牌：按角色编写的组件可以被任何设计系统主题化。读取它是响应式的，与 `token()` 一样。
+主题角色 `name` 用来绘制的值，形式与 [`token()`](#token) 给出令牌的值相同：应用的覆盖或当前文档把该角色映射到的令牌（`"roles"`），
+否则是与角色同名的令牌，否则是 `undefined`。映射到角色不读取的类型的令牌时，该映射被略过，角色读取下一层。角色说明 UI 的某个部分是做什么用的
+（`popover`、`border`、`warning`），无论应用的设计系统如何命名对应的令牌：按角色编写的组件可以被任何设计系统主题化。读取它是响应式的，
+与 `token()` 一样，也跟随新的映射。
 
 `Roles` 列出应用的 UI 集合绘制时使用的角色（`nsh/base` 的角色见[主题角色](./nsh-base.md#theme-roles)）以及每个角色读取的内容；NSH 把它写入
 `.nsh/types/nsh/roles.d.ts`。主题没有对应令牌的角色是 `undefined`，所以组件为它保留自己的颜色：
@@ -291,60 +295,63 @@ Rust 通过角色的常量读取：`theme().tokens().role(nsh_base::role::POPOVE
 ## setTheme
 
 ```ts
-function setTheme(theme: Theme | null): void;
+function setTheme(theme: Theme | null): ThemeDiagnostic[];
 
 interface Theme {
-  cssVars: {
-    theme?: Record<string, string | number>;
-    light?: Record<string, string | number>;
-    dark?: Record<string, string | number>;
-  };
-  roles?: Record<string, string>;
+  $schema?: string;
+  name?: string;
   tokens?: Record<string, TokenDeclaration>;
-  modifiers?: Record<string, { default: string; contexts: Record<string, Partial<Theme["cssVars"]>> }>;
+  modifiers?: Record<string, ThemeModifierDeclaration>;
+  resolutionOrder?: string[];
+  roles?: Record<string, string>;
 }
 
-interface TokenDeclaration {
-  kind:
-    | "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow"
-    | "gradient" | "string" | "boolean" | "duration" | "easing" | "typography";
-  path?: string;
-  doc?: string;
+/** 每种值类型一种：`{ kind: "color", value: "#0090ff" }`、`{ kind: "number", value: 12 }`…… */
+type TokenDeclaration = {
+  [K in TokenKind]: { kind: K; value: TokenKindValues[K] | `{${string}}`; path?: string; doc?: string };
+}[TokenKind];
+
+type TokenKind =
+  | "color" | "number" | "font" | "string" | "boolean" | "duration" | "easing"
+  | "typography" | "shadow" | "gradient" | "blur" | "border" | "transition";
+
+interface ThemeModifierDeclaration {
+  default: string;
+  contexts: Record<string, Record<string, unknown>>;
+}
+
+interface ThemeDiagnostic {
+  severity: "error" | "warning";
+  code: ThemeDiagnosticCode; // "bad-value"、"undeclared-token"、"role-type"、"legacy-format"……
+  pointer: string; // 指向所给内容的 JSON pointer："/tokens/brand"
+  message: string;
 }
 ```
 
-`roles` 按名称把主题角色映射到主题的令牌上：`roles: { popover: "surface" }` 让所有用 `popover` 绘制的部分（`nsh/base` 的弹出层、
-[`role("popover")`](#role)）用令牌 `surface` 绘制，并在它变化时跟随；而 `"popover": "var(--surface)"` 只会复制一次它的颜色。应用用它
-按自己的方式命名令牌。把角色映射到主题中不存在的令牌名，或在[已声明的令牌](../docs/rust.md#主题文档与类型化键)下映射某个主题文档已经映射的角色，会像无法读取的值一样被拒绝；
-没有任何 UI 集合拥有的角色名会产生构建警告。`updateTheme` 会在已映射的角色之上追加。
+在应用运行时把主题文档 `theme` 设为应用的文档，取代 `nsh.json` 的 `"theme"`（没有时为 UI 集合的文档）。文档就是 NSH 处处读取的主题格式：
+每个令牌带有值类型（`kind`）和值，或对另一个令牌的引用（`"{blue-9}"`），改变值的修饰符及其上下文，它们的应用顺序（`resolutionOrder`），
+以及映射到令牌上的角色（[主题](../docs/rust.md#主题)）。文档从不合并：只有旧文档才有的令牌会消失。核心把它与本轮的其他主题写入一起应用，
+只解析一次：`token()`、引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在本轮之后的那一帧读到新的令牌，本轮中的读取仍得到之前的值。应用的覆盖（[`updateTheme`](#updatetheme-resettheme)、
+`nsh.json` 的 `"themeOverrides"`）保持不变，新文档没有的名称在它生效期间被略过；嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先于它。
+应用用 [`setModifier`](#setmodifier-modifier-modifiers) 选择的上下文，只要新文档还有，就保持选中。传 `null` 恢复应用构建时的文档。
 
-`tokens` 声明主题的令牌：每个令牌保存什么（`kind`）、在设计者的树中的位置（`path`）以及说明（`doc`）
-（`tokens: { "radius-card": { kind: "radius", path: "radius.card" } }`）。声明了令牌的主题按它们读取，每个值都按其令牌的种类读取，
-并取代默认主题：它没有声明的名称会被忽略（[主题文档](../docs/rust.md#主题文档与类型化键)）。`updateTheme` 可以在应用已有的令牌旁边
-声明自己的令牌。
-
-在应用运行时把 `theme` 设为应用的主题，取代 `nsh.json` 的 `"theme"`：格式与它相同，也和它一样叠加在 shadcn/ui 的令牌之上。
-它立即生效：调用之后 `token()` 马上读到新的令牌，引用令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上，两种外观都是。
-嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先于它。传 `null` 恢复应用构建时的主题。应用用 [`setModifier`](#setmodifier-modifier-modifiers) 选择的上下文，只要新主题还有，就保持选中；热重载再次读取主题文件时也是如此。
-
-主题要整个读得懂：有值读不懂时（NSH 不认识的颜色，如 `#zz`、`lab()` 或 `rgb(255 0 0)garbage`；
-指不到颜色的 `var()`；或一种外观下是颜色、另一种外观下却不是颜色的值），
-`setTheme` 抛出 `TypeError`，逐一列出这些值，正在显示的主题保持不变。`em` 单位的字间距这类不属于任何令牌类型的值会被略过，和 `nsh.json`
-的主题一样。新主题请从应用自己的主题出发，只改不同的部分，这样类名引用的令牌都还有值（`up` 在 `nsh.json` 的主题里时的 `bg-up`）。
-Rust：对 `nsh_base::Theme` 调用 `set_tokens(theme.into())`（[主题 token](../docs/tailwind.md#主题-token)）。
+有问题的条目（不符合其类型的值，如颜色的 `"#zz"`；指不到令牌的引用；映射到不存在令牌的角色）会被略过，文档的其余部分照常生效。`setTheme`
+以 `ThemeDiagnostic` 返回它略过的内容以及角色检查的结果（映射到其他类型令牌的角色），并逐条记录日志。不是文档的值，
+或旧 `cssVars` 格式的主题（`legacy-format`：`nsh theme convert` 可以转换它），永远不会生效：当前文档保持不变，`setTheme` 只返回这一条诊断。
+对象和 `null` 以外的参数抛出 `TypeError`。Rust：`set_theme(Some(json))`（[主题](../docs/rust.md#主题)）。
 
 ```tsx
 import { setTheme } from "nsh";
-import theme from "./theme.json"; // nsh.json 的 `"theme"` 指向的文件
+import theme from "./theme.json"; // nsh.json 的 `"theme"` 指向的文档
 
-// 应用的主题，换一个 primary 颜色。
+// 应用的文档，换一个 primary 颜色。
 function brand(color: string) {
-  const { light, dark } = theme.cssVars;
-  setTheme({ cssVars: { ...theme.cssVars, light: { ...light, primary: color }, dark: { ...dark, primary: color } } });
+  const said = setTheme({ ...theme, tokens: { ...theme.tokens, primary: { kind: "color", value: color } } });
+  for (const d of said) console.warn(`${d.code} ${d.pointer}: ${d.message}`);
 }
 
 brand("#e11d48");
-setTheme(null); // 恢复应用的主题
+setTheme(null); // 恢复应用的文档
 ```
 
 <a id="updatetheme-resettheme"></a>
@@ -352,37 +359,37 @@ setTheme(null); // 恢复应用的主题
 ## updateTheme、resetTheme
 
 ```ts
-function updateTheme(theme: ThemeChange): void;
+function updateTheme(patch: ThemePatch): ThemeDiagnostic[];
 function resetTheme(names?: (keyof Tokens | keyof Roles)[]): void;
 
-interface ThemeChange {
-  cssVars?: Theme["cssVars"];
-  roles?: Theme["roles"];
-  tokens?: Theme["tokens"];
-  modifiers?: Record<string, { default?: string; contexts?: Record<string, Partial<Theme["cssVars"]>> }>;
+interface ThemePatch {
+  values?: { [N in keyof Tokens]?: Tokens[N] | `{${string}}` };
+  roles?: Record<string, string>;
 }
 ```
 
-`updateTheme` 在应用运行时修改 `theme` 设置的令牌，其余令牌保持不变；`setTheme` 则替换全部令牌。`theme` 的格式与 `setTheme`
-的相同，读取方式也相同：要整个读得懂（有 NSH 读不懂的值时抛出列出该值的 `TypeError`，任何令牌都不变）。调用之后 `token()`
-马上读到新的值，引用这些令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在下一帧跟上。连续两次更新都会生效，后一次覆盖前一次。
-`var(--name)` 指向本次更新没有设置的令牌时，取该令牌当前显示的值；不属于任何令牌类型的值会被略过，该令牌保持原值。
-嵌入方应用的[主题覆盖](../docs/tailwind.md#主题-token)仍然优先。
+`updateTheme` 在应用运行时把主题补丁 `patch` 合并进应用的覆盖：`values` 按名称设置令牌，每个值都是该令牌类型的值或一个引用；`roles`
+把角色映射到令牌上。对同一令牌或角色，后来的条目替换先前的条目，被文档拒绝的值也是如此（补丁按原样保存，该令牌于是读取下一层），其余保持不变。应用只有一个补丁：`nsh.json` 的 `"themeOverrides"`，
+再按调用顺序合并每次 `updateTheme`。覆盖优先于所选的上下文，引用在覆盖之后才解析，因此对基础令牌（`gray-1`）的覆盖会传到每个引用它的令牌。
+与 `setTheme` 一样，`token()`、引用这些令牌的类名、`nsh/base` 和 Rust 组件的 `theme()` 在本轮之后的那一帧读到新的值。嵌入方应用的
+[主题覆盖](../docs/tailwind.md#主题-token)仍然优先。
 
-更新也会修改主题的[修饰符](#setmodifier-modifier-modifiers)，编辑器就是这样在应用运行时显示对某个上下文的修改。更新中指定的修饰符取它给出的上下文值（叠加在原有值之上）、它新增的上下文以及它指定的 `default`；主题没有的修饰符被整个加在主题的修饰符之后（一个 `default` 和两个或更多上下文）。已选中的上下文保持选中，当前选中的上下文立即显示新的值。某个上下文设置的令牌，把更新的 `cssVars` 值作为自己的值（位于各上下文之下）：选中的上下文仍然设置它，没有上下文设置它时才显示新值。
+补丁从不新增令牌：当前文档没有声明的名称的值（`undeclared-token`），或不符合令牌类型的值（`bad-value`），会被略过，等到声明它的文档生效时再次生效。
+映射到角色不读取的类型的令牌（`role-type`）会被略过，角色读取下一层。`updateTheme` 以 `ThemeDiagnostic` 返回它略过的内容，并逐条记录日志；
+对象以外的参数抛出 `TypeError`。
 
-`resetTheme` 把 `names` 中的令牌恢复为应用主题中的值，即 `nsh.json` 的主题或 `setTheme` 设置的主题；不传名字时恢复全部令牌。
-主题中没有的名字会被移除。没有列出的令牌保持不变。在[已声明的令牌](../docs/rust.md#主题文档与类型化键)下，角色的名称指该角色所映射的令牌，与主题文件中一样。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
+`resetTheme` 从应用的补丁中移除 `names` 中的令牌和角色，让它们重新读取下一层：所选的上下文，否则是文档；不传名字时清空补丁，
+包括 `"themeOverrides"` 的条目。重置从不复制值。Rust：`update_tokens` 和 `reset_tokens`（[主题](../docs/rust.md#主题)）。
 
 ```tsx
 import { resetTheme, updateTheme } from "nsh";
 
-// 换一个品牌色，浅色和深色各一个；主题的其余部分不变。
-updateTheme({ cssVars: { light: { primary: "#e11d48" }, dark: { primary: "#fb7185" } } });
-resetTheme(["primary"]); // 恢复应用的 primary
+// 换一个品牌色；主题的其余部分不变。
+const said = updateTheme({ values: { primary: "#e11d48" } });
+resetTheme(["primary"]); // 恢复文档的 primary
 
-// 在应用运行时编辑 forest 品牌的 accent。
-updateTheme({ modifiers: { brand: { contexts: { forest: { light: { accent: "#15803d" } } } } } });
+// 用文档中的另一个令牌绘制弹出层。
+updateTheme({ roles: { popover: "surface-overlay" } });
 ```
 
 ## tokens
@@ -396,17 +403,16 @@ const tokens: {
   entries(): TokenInfo[];
 };
 
-interface TokenValue { kind: TokenKind; light: string | number; dark: string | number }
-interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string; owner?: string }
+interface TokenValue<K extends TokenKind = TokenKind> { kind: K; value: TokenKindValues[K] }
+interface TokenInfo { name: string; kind: TokenKind; path?: string; doc?: string }
 ```
 
-把应用的设计令牌作为字典，供事先不知道其名称的代码使用：编辑器、工具、智能体。`tokens.get("radius-card")` 是该令牌及其种类
-和每种外观下的值（`{ kind: "radius", light: 12, dark: 12 }`；颜色为 `#rrggbbaa`，字体为字体族名，阴影、渐变和缓动为 CSS，时长为毫秒数，字符串、布尔值照原样，文字样式为其字号及各部分：`{ size: 24, lineHeight: 1.25, fontWeight: 650 }`）。令牌的种类是主题为它
-声明的种类（`radius`、`spacing` 等），否则是它保存的种类（`color`、`number`、`font`、`shadow`、`gradient`）。`tokens.kind(name)` 只给出种类，
-`tokens.names()` 给出所有令牌的名称并排序（`tokens.names({ kind: "radius" })`、`tokens.names({ prefix: "colors-" })`），`tokens.entries()` 给出
-每个令牌及其种类，以及主题声明它时的路径、说明和所有者。四者都是响应式的：`get` 与 [`token()`](#token) 一样跟随它的令牌，其他三个跟随
-令牌的增加、移除或种类变化。NSH 把每个令牌的种类写入 `.nsh/types/nsh/tokens.d.ts`（`interface TokenKinds`），因此
-`tokens.get("radius-card").light` 的类型是 `number`。Rust：`Tokens` 的 `tokens().get_as::<V>(name)`、`kind_name`、`infos` 和 `value_json`。
+把应用的设计令牌作为字典，供事先不知道其名称的代码使用：编辑器、工具、智能体。`tokens.get("radius-card")` 是该令牌的值类型及其值，
+值的形式与 [`token()`](#token) 给出的相同（`{ kind: "number", value: 12 }`）。`tokens.kind(name)` 只给出值类型，`tokens.names()` 给出所有令牌的名称
+并排序（`tokens.names({ kind: "color" })`、`tokens.names({ prefix: "gray-" })`），`tokens.entries()` 给出每个令牌及其值类型，以及文档给出时的
+`path` 和 `doc`。四者都是响应式的：`get` 与 `token()` 一样跟随它的令牌，其他三个跟随另一个文档的名称和类型。NSH 把每个令牌的值类型写入
+`.nsh/types/nsh/tokens.d.ts`（`interface TokenKinds`），因此 `tokens.get("radius-card").value` 的类型是 `number`。Rust：`Tokens` 的
+`tokens().value(name)`、`kind_name`、`infos` 和 `value_json`。
 
 ## setModifier、modifier、modifiers
 
@@ -419,29 +425,26 @@ interface ModifierAxis {
   name: string;
   contexts: string[];
   default: string;
+  selected: string;
 }
 ```
 
-主题的 `modifiers` 是它的其他模式（品牌、密度、对比度），预先计算好：每个修饰符给出它的 `default` 和 `contexts`，每个上下文是它改变的
-那部分 `cssVars`。主题的令牌是它的 `cssVars`，加上每个修饰符所选上下文的值，按文件中的顺序（两个修饰符改变同一令牌时，后者优先）；
-开始时是每个修饰符的默认上下文。
+文档的 `modifiers` 是它的各种模式（浅色和深色、品牌、密度、对比度）：每个修饰符给出它的 `default` 和 `contexts`，每个上下文是它改变的令牌值。
+`resolutionOrder` 按所选上下文的应用顺序列出它们，两个修饰符改变同一令牌时后者优先；开始时每个修饰符显示其默认上下文。
 
 ```json
 "modifiers": {
-  "brand": {
-    "default": "ocean",
-    "contexts": {
-      "ocean": {},
-      "forest": { "light": { "accent": "#16a34a" }, "dark": { "accent": "#4ade80" } }
-    }
-  }
-}
+  "colorMode": { "default": "light", "contexts": { "light": {}, "dark": { "gray-1": "#111111" } } },
+  "brand": { "default": "ocean", "contexts": { "ocean": {}, "forest": { "accent": "{green-9}" } } }
+},
+"resolutionOrder": ["colorMode", "brand"]
 ```
 
-`setModifier("brand", "forest")` 在应用运行时选择一个上下文：调用后 `token()` 立即读取它的令牌，引用令牌的类、`nsh/base` 和 Rust 组件
-在下一帧跟随。主题没有的修饰符或上下文会抛出指明它的 `TypeError`。`modifier("brand")` 是修饰符现在的上下文，`modifiers()` 列出每个
-修饰符及其上下文和默认值；两者都是响应式的。上下文只设置主题已有的令牌，每个都按其种类读取，修饰符需要两个或更多上下文。NSH 把
-修饰符的类型写入 `.nsh/types/nsh/modifiers.d.ts`，因此 `setModifier("brand", "jungle")` 是类型错误。修饰符的条目有 `default` 和 `contexts`，上下文有 `theme`、`light` 和 `dark`：其他成员会被略过并给出说明；主题没有的部分也是如此（主题的部分是 `cssVars`、`tokens`、`modifiers` 和 `roles`）。
+`setModifier("brand", "forest")` 在应用运行时选择一个上下文，与本轮的其他主题写入一起应用：`token()`、引用令牌的类、`nsh/base` 和 Rust 组件在本轮之后的那一帧读到它的值。
+外观本身不是修饰符：用 [`setColorScheme`](#setcolorscheme) 切换外观的应用，也要选择文档的浅色/深色修饰符，才会显示深色值。当前文档没有的修饰符，
+或修饰符没有的上下文，会抛出指明它的 `TypeError`，什么都不改变；这里的文档是本轮中生效的文档，包括紧接在前的 `setTheme`。`modifier("brand")`
+是修饰符现在显示的上下文，`modifiers()` 按 `resolutionOrder` 列出每个修饰符及其上下文、默认值和当前显示的上下文（`selected`）；两者都是响应式的。
+NSH 把修饰符的类型写入 `.nsh/types/nsh/modifiers.d.ts`，因此 `setModifier("brand", "jungle")` 是类型错误。
 Rust：`set_modifier`、`modifier` 和 `modifiers`（[主题文档](../docs/rust.md#主题文档与类型化键)）。
 
 ## appInfo
@@ -1253,8 +1256,8 @@ const ThemeScope: (props: ThemeScopeProps) => JSX.Element;
 interface ThemeScopeProps {
   /** `"light"` 或 `"dark"`；省略时，作用域按其外层视图的外观显示。 */
   appearance?: "light" | "dark";
-  /** 一个主题文件，它的值叠加在作用域外层的令牌之上；省略时，作用域使用外层的令牌绘制。 */
-  theme?: Theme;
+  /** 叠加在作用域外层令牌之上的主题补丁；省略时，作用域使用外层的令牌绘制。 */
+  theme?: ThemePatch;
   /** 在作用域内选择的主题修饰符上下文（`{ brand: "forest" }`），位于它的 `theme` 之下。 */
   modifiers?: { [M in keyof ThemeModifiers]?: ThemeModifiers[M] };
   children?: JSX.Element;
@@ -1262,15 +1265,15 @@ interface ThemeScopeProps {
 }
 ```
 
-一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观、它自己的设计令牌或两者同时显示：浅色页面旁的深色侧边栏，拥有自己 `primary` 的卡片，应用旁的主题预览。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
+一个视图，无论应用和系统的外观如何，它自身及其中的一切都以它自己的外观、它自己的修饰符上下文和设计令牌显示，或同时具备这几者：浅色页面旁的深色侧边栏，拥有自己 `primary` 的卡片，应用旁的主题预览。它是视图，所以它的 `class` 和 `style` 负责布局和绘制。
 
-在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、主题 token 的类（`bg-background`）、组件的主题颜色、[`colorScheme()`](#colorscheme) 和 [`token()`](#token)。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），Android 上的标签栏和桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。
+在作用域内，凡是跟随外观的都跟随作用域的外观：`dark:` 类、[`colorScheme()`](#colorscheme) 和组件的自适应颜色。在 iOS、macOS 和 Web 上，其中的平台控件也跟随它（文本输入的键盘和菜单、Web 视图、表单控件），Android 上的标签栏和桌面后端绘制的滚动指示器同样如此。作用域可以嵌套：由最近的设置了 `appearance` 的作用域决定，没有设置的作用域按其外层视图的外观显示。外观不改变任何令牌：要显示主题的深色值，作用域还要选择主题的浅色/深色修饰符（`modifiers={{ colorMode: "dark" }}`）。
 
-设置了 `theme`（一个主题文件，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）时，主题令牌的类、组件的主题和 [`token()`](#token) 在每种外观下对它设置的令牌使用作用域的值，对其余令牌使用应用的值；它自己没有设置的 `var()` 指向作用域外层的令牌。作用域只设置应用主题已有的令牌：主题没有的名称会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的值开始，应用主题的变化会传到作用域没有设置的每个令牌。
+作用域的令牌是应用的同一个层叠，为它渲染的内容重新解析：它的 `modifiers` 选择叠加在外层所选上下文之上，它的 `theme` 补丁（`{ values, roles }`，与 [`updateTheme`](#updatetheme-resettheme) 接受的相同）位于外层所有补丁之后，引用最后解析。主题令牌的类、组件的主题、[`token()`](#token) 和 [`role()`](#role) 使用作用域的值。补丁只设置当前文档已有的令牌，只映射角色的补丁也会传到读取该角色的地方；文档没有的名称、不符合类型的值，以及映射到其他类型令牌的角色，会被略过并给出警告，所以存在的类在各处都相同。嵌套在内的作用域从外层作用域的令牌开始，应用主题的变化会传到作用域没有设置的每个令牌。
 
-设置了 `modifiers` 时，作用域为自己选择主题[修饰符](#setmodifier-modifier-modifiers)的上下文：在其中，`{ brand: "forest" }` 的令牌取 forest 上下文的值，它的 `theme` 叠加在其上，`modifier("brand")` 返回 `forest`。它没有指定的修饰符保持外层的上下文，所以 `setModifier("density", "compact")` 会传入作用域，嵌套在内的作用域在外层的选择之上加上自己的选择。主题没有的修饰符或上下文会被略过并给出警告；`.nsh/types/nsh/modifiers.d.ts` 的类型使其成为类型错误。作用域的 `theme` 只设置值：其中的 `modifiers` 部分会被略过，并给出指向该 prop 的警告。
+设置了 `modifiers` 时，作用域为自己选择主题[修饰符](#setmodifier-modifier-modifiers)的上下文：在其中，`{ brand: "forest" }` 的令牌取 forest 上下文的值，它的 `theme` 叠加在其上，`modifier("brand")` 返回 `forest`。它没有指定的修饰符保持外层的上下文，所以 `setModifier("density", "compact")` 会传入作用域，嵌套在内的作用域在外层的选择之上加上自己的选择。主题没有的修饰符或上下文会被略过并给出警告；`.nsh/types/nsh/modifiers.d.ts` 的类型使其成为类型错误。
 
-与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(ScopeTheme::file(json)))`，或用 `ScopeTheme::from(tokens)` 传入在 Rust 中构造的令牌，`.modifiers(Some(ScopeModifiers::from(Brand::Forest)))` 使用 `theme_keys!` 生成的修饰符枚举（另一个修饰符用 `.and(Density::Compact)`），或按名称用 `ScopeModifiers::new([("brand", "forest")])`；`dark()`、`color()`、`tokens()`、`token()` 和类型化键的 `get()` 给出读取它们的绑定所在作用域的结果。
+与 CSS 一样，视图继承来的颜色保持不变：作用域要设置自己的背景色和文字颜色。平台绘制的菜单、警告框和面板属于应用，即使由作用域内的视图打开也是如此。Rust：`theme_scope().appearance(ColorScheme::Dark).child(…)` 和 `.theme(Some(Patch::new().value("primary", color)))`（`nsh_core::element` 的 `Patch`，配合 `PatchValues`），`.modifiers(Some(ScopeModifiers::from(Brand::Forest)))` 使用 `theme_keys!` 生成的修饰符枚举（另一个修饰符用 `.and(Density::Compact)`），或按名称用 `ScopeModifiers::new([("brand", "forest")])`；`dark()`、`color()`、`tokens()`、`token()` 和类型化键的 `get()` 给出读取它们的绑定所在作用域的结果。
 
 ```rust tabs
 view().flex_row().flex_1().child(
@@ -1293,7 +1296,7 @@ import { ThemeScope, View } from "nsh";
 
 ```tsx
 // 使用自己品牌色的套餐卡片：其中的 `bg-primary` 和 `token("primary")` 是作用域的值。
-<ThemeScope theme={{ cssVars: { light: { primary: "#7c3aed" }, dark: { primary: "#a78bfa" } } }}>
+<ThemeScope theme={{ values: { primary: "#7c3aed" } }}>
   <View class="rounded-(--radius) bg-primary p-4">
     <Text class="text-primary-foreground">Upgrade</Text>
   </View>

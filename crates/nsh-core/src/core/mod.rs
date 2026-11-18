@@ -5910,8 +5910,16 @@ impl<M: TextEngine> Core<M> {
                 self.set_ui_theme(&json);
                 return Ok(());
             }
-            Prop::UiThemeUpdate(json) => {
-                self.update_ui_theme(&json);
+            Prop::UiThemeUpdate(patch) => {
+                self.update_tokens(Arc::unwrap_or_clone(patch));
+                return Ok(());
+            }
+            Prop::UiThemeDocument(document) => {
+                self.activate(document);
+                return Ok(());
+            }
+            Prop::UiAppTheme(document, overrides) => {
+                self.take_app_theme(document, overrides);
                 return Ok(());
             }
             Prop::UiModifier(name, context) => {

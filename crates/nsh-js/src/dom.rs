@@ -3724,7 +3724,8 @@ unsafe extern "C" fn unmount(
 }
 
 /// `setup(tailwind, theme, appearance, statusBar, app)`: the app's Tailwind
-/// theme and the theme of the Rust components (JSON strings, or null), its
+/// theme and its theme (`{ document, overrides }`, `nsh.json`'s `"theme"`
+/// and `"themeOverrides"`; JSON strings, or null), its
 /// appearance (`"light"` / `"dark"`, or null), the status bar's default
 /// (`nsh.json` `"statusBar"` as JSON, or null) and what `appInfo()` reports
 /// (JSON, or null), before anything renders.
@@ -3742,23 +3743,23 @@ unsafe extern "C" fn setup(
         crate::env::set_app_info(cx, &json);
     }
     let root = dom(cx).root.get();
-    for (i, name) in ["tailwindTheme", "uiTheme"].into_iter().enumerate() {
-        let v = arg(argc, argv, i);
-        // SAFETY: an inline tag check.
-        if unsafe { qjs::JS_IsString(v) }
-            && let Err(e) = set_prop(cx, root, name, v, UNDEFINED)
-        {
-            return e;
-        }
+    let tailwind = arg(argc, argv, 0);
+    // SAFETY: an inline tag check.
+    if unsafe { qjs::JS_IsString(tailwind) }
+        && let Err(e) = set_prop(cx, root, "tailwindTheme", tailwind, UNDEFINED)
+    {
+        return e;
     }
-    // The core makes the theme's tokens when the op above reaches it, after
-    // this turn; the first render, in this turn, reads them already.
+    // The app's theme document and overrides: the core takes them with
+    // this turn's ops, and the first render, in this turn, reads them
+    // already.
     let theme = arg(argc, argv, 1);
     // SAFETY: an inline tag check.
     if unsafe { qjs::JS_IsString(theme) }
         && let Some(json) = string_arg(cx, theme)
+        && let Err(e) = crate::env::take_app_theme(cx, &json)
     {
-        crate::env::take_theme(cx, &json);
+        return e;
     }
     // What this runtime cannot read (a newer NSH's) is left out.
     let status_bar = string_arg(cx, arg(argc, argv, 3))

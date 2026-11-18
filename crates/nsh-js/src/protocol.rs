@@ -1388,6 +1388,86 @@ pub(crate) fn to_json<'js>(value: &Value<'js>) -> rquickjs::Result<nsh_core::Jso
     json(value, 0, &mut entries)
 }
 
+/// `value` as JSON text, as [`to_json`] reads it (its limits, the members
+/// it leaves out), with each object's members in the order JS gives them:
+/// what a theme document or patch is read from (`nsh_theme::read`), whose
+/// order is its own (a modifier's contexts). [`to_json`]'s
+/// `serde_json::Map` sorts them unless serde_json's `preserve_order`
+/// feature is on.
+pub(crate) fn to_json_text<'js>(value: &Value<'js>) -> rquickjs::Result<String> {
+    let mut entries = 0;
+    let mut out = String::new();
+    json_text(value, 0, &mut entries, &mut out)?;
+    Ok(out)
+}
+
+fn json_text<'js>(
+    value: &Value<'js>,
+    depth: usize,
+    entries: &mut usize,
+    out: &mut String,
+) -> rquickjs::Result<()> {
+    let too_big = |cx: &Ctx<'js>| {
+        Exception::throw_range(
+            cx,
+            &format!(
+                "a native component value is nested deeper than {JSON_DEPTH} or has more than {JSON_ENTRIES} entries"
+            ),
+        )
+    };
+    if depth > JSON_DEPTH {
+        return Err(too_big(value.ctx()));
+    }
+    match value.type_of() {
+        Type::Array => {
+            let array = value.as_array().expect("array");
+            // Checked before anything is read: a sparse array is as long
+            // as it says.
+            let len = length(array)? as usize;
+            if len > JSON_ENTRIES - *entries {
+                return Err(too_big(value.ctx()));
+            }
+            *entries += len;
+            out.push('[');
+            for i in 0..len {
+                if i > 0 {
+                    out.push(',');
+                }
+                json_text(&array.get::<Value>(i)?, depth + 1, entries, out)?;
+            }
+            out.push(']');
+        }
+        Type::Object => {
+            let object = value.as_object().expect("object");
+            out.push('{');
+            let mut first = true;
+            for entry in object.props::<String, Value>() {
+                let (key, item) = entry?;
+                *entries += 1;
+                if *entries > JSON_ENTRIES {
+                    return Err(too_big(value.ctx()));
+                }
+                if matches!(
+                    item.type_of(),
+                    Type::Undefined | Type::Function | Type::Symbol
+                ) {
+                    continue;
+                }
+                if !std::mem::take(&mut first) {
+                    out.push(',');
+                }
+                out.push_str(&nsh_core::JsonValue::String(key).to_string());
+                out.push(':');
+                json_text(&item, depth + 1, entries, out)?;
+            }
+            out.push('}');
+        }
+        // A scalar, as `to_json` gives it.
+        _ => out.push_str(&json(value, depth, entries)?.to_string()),
+    }
+    Ok(())
+}
+
 fn json<'js>(
     value: &Value<'js>,
     depth: usize,

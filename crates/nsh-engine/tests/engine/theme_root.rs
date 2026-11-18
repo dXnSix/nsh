@@ -1,7 +1,7 @@
-//! A Rust app's theme file on its root (`Root::theme`): the engine applies
-//! it before the first frame, through the UI set that reads themes, over
-//! the tokens `Root::tokens` gives; it is the app's theme, which
-//! `reset_tokens` goes back to.
+//! A Rust app's theme document on its root (`Root::theme`): the engine
+//! activates it before the first frame, in place of the UI set's; the
+//! root's overrides (`Root::theme_overrides`) are a patch over it, and
+//! `reset_tokens` goes back to the document.
 
 use std::time::Duration;
 
@@ -83,7 +83,7 @@ fn backgrounds(batch: &MountBatch) -> Vec<Color> {
         .collect()
 }
 
-const BLUE: &str = r##"{ "cssVars": { "light": { "primary": "#0000ff" } } }"##;
+const BLUE: &str = r##"{ "tokens": { "primary": { "kind": "color", "value": "#0000ff" } } }"##;
 
 #[test]
 fn a_rust_apps_theme_file_is_in_the_first_frame() {
@@ -92,16 +92,19 @@ fn a_rust_apps_theme_file_is_in_the_first_frame() {
     assert_eq!(backgrounds(&first), vec![Color(0x0000ffff)]);
 }
 
-/// A square of the token `card`, which only the root's tokens change.
+/// A square of the role `card`.
 #[component]
 fn Card() -> impl IntoElement {
     view().size_10().bg(move || theme().card)
 }
 
-/// The theme file replaces the root's tokens: it is read over the UI set's
-/// defaults, not over them.
+/// The root's overrides are a patch over its document: they win for the
+/// tokens it declares (`primary`), and are left out for the ones it lacks
+/// (`card`, which `nsh-base`'s fallback document has, but the app's
+/// document replaces it). Without a document of the app's they are over
+/// the UI set's.
 #[test]
-fn the_theme_file_replaces_the_roots_tokens() {
+fn the_roots_overrides_are_a_patch_over_its_document() {
     let tokens = Patch::new()
         .value("primary", Hsla::from(rgb(0x00ff00)))
         .value("card", Hsla::from(rgb(0xff00ff)));
@@ -112,24 +115,20 @@ fn the_theme_file_replaces_the_roots_tokens() {
             .theme(BLUE),
     );
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(backgrounds(&first), vec![Color(0x0000ffff)]);
+    assert_eq!(backgrounds(&first), vec![Color(0x00ff00ff)]);
     let (_engine, rx) = start(
         Root::new::<Card>(|| ())
             .theme_overrides(tokens.clone())
             .theme(BLUE),
     );
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(
-        backgrounds(&first),
-        vec![Color::from(nsh_base::Theme::default().card)]
-    );
-    // `Root::tokens` alone keeps working.
-    let (_engine, rx) = start(Root::new::<Swatch>(|| ()).theme_overrides(tokens));
+    assert_eq!(backgrounds(&first), Vec::<Color>::new());
+    let (_engine, rx) = start(Root::new::<Card>(|| ()).theme_overrides(tokens));
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(backgrounds(&first), vec![Color(0x00ff00ff)]);
+    assert_eq!(backgrounds(&first), vec![Color(0xff00ffff)]);
 }
 
-/// A reset goes back to the theme file's value.
+/// A reset goes back to the document's value.
 #[test]
 fn a_reset_goes_back_to_the_theme_file() {
     let (_engine, rx) = start(Root::new::<Resets>(|| ()).theme(BLUE));

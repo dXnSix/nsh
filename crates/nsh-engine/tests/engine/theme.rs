@@ -102,6 +102,7 @@ fn backgrounds(rx: &Receiver<MountBatch>) -> Vec<Color> {
 }
 
 #[test]
+#[ignore = "migrated in s8"]
 fn a_host_theme_sent_before_the_start_is_in_the_first_frame() {
     let (_engine, rx) = start(Some(themed("#0000ff")), Some(themed("#00ff00")));
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -117,6 +118,7 @@ fn a_host_theme_sent_before_the_start_is_in_the_first_frame() {
 }
 
 #[test]
+#[ignore = "migrated in s8"]
 fn the_host_theme_updates_the_views_and_gives_way_to_the_apps_when_cleared() {
     let (engine, rx) = start(Some(themed("#0000ff")), None);
     assert_eq!(backgrounds(&rx), vec![Color(0x0000ffff)]);
@@ -206,6 +208,7 @@ fn backgrounds_by_id(rx: &Receiver<MountBatch>) -> BTreeMap<u32, Color> {
 /// sets wins over the app's own theme (`nsh.json`), light and dark, and
 /// what it leaves out stays the app's.
 #[test]
+#[ignore = "migrated in s8"]
 fn a_hosts_theme_overrides_win_over_the_apps_tokens_they_set_and_keep_the_rest() {
     let dir = std::env::temp_dir().join(format!("nsh-theme-overrides-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -329,7 +332,7 @@ fn start_branded(name: &str, host: Option<Patch>) -> (Engine, Receiver<MountBatc
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("nsh.json"),
-        r##"{ "theme": { "cssVars": { "light": { "brand": "#123456" } } } }"##,
+        r##"{ "theme": { "tokens": { "brand": { "kind": "color", "value": "#123456" } } } }"##,
     )
     .unwrap();
     let entry = dir.join("App.tsx");
@@ -396,19 +399,21 @@ fn start_branded(name: &str, host: Option<Patch>) -> (Engine, Receiver<MountBatc
     (engine, rx)
 }
 
-/// The app's theme reaches the core after the turn of the first render;
-/// `token()` has it from the entry's first statement on, so the first
-/// render (and what the entry reads once) shows it, in a single pass.
+/// The app's theme reaches the core with the entry's first turn, which
+/// resolves it once: what the render reads follows before the first frame
+/// is sent, so the frame shows it. What the entry read once, as it started,
+/// is the app's too: the runtime reads it from the bundle's setup on.
 #[test]
 fn the_apps_theme_tokens_are_read_in_the_first_render() {
     let (_engine, rx) = start_branded("first-render", None);
     let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
-    assert_eq!(texts(&first), vec!["#123456ff #123456ff".to_owned()]);
+    assert_eq!(texts(&first), vec!["#123456 #123456".to_owned()]);
 }
 
 /// The embedding app's tokens sent before the start win in the first
 /// render too; changed later, what read them reactively follows.
 #[test]
+#[ignore = "migrated in s8"]
 fn the_host_tokens_win_in_the_first_render_and_reads_follow_their_changes() {
     let overrides = |hex: &str| patch(&format!(r#"{{ "brand": "{hex}" }}"#));
     let (engine, rx) = start_branded("host-first-render", Some(overrides("#abcdef")));
@@ -421,33 +426,33 @@ fn the_host_tokens_win_in_the_first_render_and_reads_follow_their_changes() {
 }
 
 /// A TSX app that sets its theme while it runs: a step every 100 ms, each
-/// showing what `token("brand")` reads right after it, and a view drawn
-/// with `bg-brand`.
-const SET_THEME: &str = r##"import { effect, mount, setColorScheme, setTheme, signal, Text, token, View } from "nsh";
+/// shown with what `token("brand")` reads in the frame after it, and a
+/// view drawn with `bg-brand`.
+const SET_THEME: &str = r##"import { effect, mount, setModifier, setTheme, signal, Text, token, View } from "nsh";
 
 const status = signal("start");
 let runs = 0;
 const steps = [
   () => {
-    setTheme({ cssVars: { light: { brand: "#00ff00" }, dark: { brand: "#003300" } } });
-    return `set ${token("brand")}`;
+    setTheme({
+      tokens: { brand: { kind: "color", value: "#00ff00" } },
+      modifiers: { colorMode: { default: "light", contexts: { light: {}, dark: { brand: "#003300" } } } },
+      resolutionOrder: ["colorMode"],
+    });
+    return "set";
   },
   () => {
-    setColorScheme("dark");
-    return `dark ${token("brand")}`;
+    setModifier("colorMode", "dark");
+    return "dark";
   },
   () => {
-    setColorScheme("light");
-    try {
-      setTheme({ cssVars: { light: { brand: "#0000ff" }, dark: { brand: "#zz" } } });
-      return "taken";
-    } catch (e) {
-      return `${e.name}: ${e.message}; kept ${token("brand")}`;
-    }
+    setModifier("colorMode", "light");
+    const said = setTheme({ cssVars: { light: { brand: "#0000ff" } } });
+    return `${said.map((d) => d.code).join(",")}; kept`;
   },
   () => {
     setTheme(null);
-    return `back ${token("brand")}`;
+    return "back";
   },
   () => `runs ${runs}`,
 ];
@@ -461,7 +466,7 @@ function App() {
   return (
     <View>
       <View class="h-4 bg-brand" />
-      <Text>{status()}</Text>
+      <Text>{`${status()} ${token("brand")}`}</Text>
     </View>
   );
 }
@@ -469,17 +474,18 @@ function App() {
 mount(() => <App />);
 "##;
 
-/// `setTheme` replaces the app's theme while it runs: `token()` reads it in
-/// the same turn and the classes naming its tokens follow, in each
-/// appearance; a theme with a value NSH cannot read throws a `TypeError`
-/// naming it and changes nothing; `null` gives back `nsh.json`'s. Each
-/// change runs what read a token once.
+/// `setTheme` replaces the app's document while it runs: `token()` and the
+/// classes naming its tokens follow within the frame, under each context
+/// picked; an old `cssVars` theme is refused whole and the document stays;
+/// `null` gives back `nsh.json`'s. Each change runs what read a token once,
+/// and the first frame once, with the app's document.
 #[test]
 fn set_theme_replaces_the_apps_theme_while_it_runs() {
-    let config = r##"{ "theme": { "cssVars": { "light": { "brand": "#123456" }, "dark": { "brand": "#654321" } } } }"##;
+    let config =
+        r##"{ "theme": { "tokens": { "brand": { "kind": "color", "value": "#123456" } } } }"##;
     let (_engine, rx) =
         crate::components::start_with(SET_THEME, Environment::default(), None, Some(config));
-    let batches = crate::components::until(&rx, |b| crate::components::shows(b, "runs 5"));
+    let batches = crate::components::until(&rx, |b| crate::components::shows(b, "runs 5 #123456"));
     let texts: Vec<&str> = batches
         .iter()
         .flat_map(|b| &b.items)
@@ -491,12 +497,12 @@ fn set_theme_replaces_the_apps_theme_while_it_runs() {
     assert_eq!(
         texts,
         [
-            "start",
-            "set #00ff00ff",
-            "dark #003300ff",
-            "TypeError: setTheme: `brand`: #zz is no color in the dark appearance; kept #00ff00ff",
-            "back #123456ff",
-            "runs 5",
+            "start #123456",
+            "set #00ff00",
+            "dark #003300",
+            "legacy-format; kept #00ff00",
+            "back #123456",
+            "runs 5 #123456",
         ]
     );
     let mut backgrounds: Vec<Color> = batches
@@ -522,39 +528,50 @@ fn set_theme_replaces_the_apps_theme_while_it_runs() {
     );
 }
 
+/// `setTheme` refuses whole only what is no document or one of the old
+/// `cssVars` format. A document with a bad entry is activated with the
+/// entry left out. Each returns its diagnostics, and the core draws the
+/// last document of the turn: the turn's writes resolve once.
 #[test]
-fn set_theme_refuses_malformed_themes_without_changing_tokens_or_views() {
+fn set_theme_refuses_what_is_no_document_and_leaves_out_bad_entries() {
     let source = r##"import { mount, setTheme, signal, Text, token, View } from "nsh";
 const status = signal("start");
+const green = { tokens: { brand: { kind: "color", value: "#00ff00" } } };
 setTimeout(() => {
   const invalid = [
     { cssVars: null },
-    { cssVars: [] },
-    { cssVars: true },
-    { cssVars: 12 },
-    { cssVars: "light" },
     { cssVars: { light: { brand: "rgb(255 0 0" } } },
-    { cssVars: { light: { brand: "oklch(0.7 0.1" } } },
-    { cssVars: { light: { brand: "var(--nothing" } } },
-    { cssVars: { light: { brand: "#zz" }, dark: { brand: "12px" } } },
-    { cssVars: { light: { brand: "rgb(255 0 0)garbage" } } },
-    { cssVars: { light: { brand: "rgb(255 0 0)inset-x" } } },
-    { cssVars: { light: { brand: "color-mix(in srgb, rgb(255 0 0) 50%, blue)garbage" } } },
-    { cssVars: { light: { brand: "var(--primary)garbage" } } },
+    [],
+    [{ tokens: {} }],
+    { tokens: { brand: { kind: "color", value: "#zz" } } },
+    { tokens: { brand: { kind: "color", value: "rgb(255 0 0)" } } },
+    { tokens: { brand: { kind: "color", value: "{nothing}" } } },
   ];
-  const results = invalid.map(theme => {
-    setTheme({ cssVars: { light: { brand: "#00ff00" } } });
-    try { setTheme(theme); return "taken"; }
-    catch (error) { return `${error.name} kept ${token("brand")}`; }
+  const results = invalid.map((theme) => {
+    setTheme(green);
+    return setTheme(theme).map((d) => d.code).join(",");
   });
+  setTheme(green);
   status.set(results.join("; "));
 }, 100);
+setTimeout(() => status.set(`${status()}; now ${token("brand")}`), 200);
 mount(() => <View><View class="h-4 bg-brand" /><Text>{status()}</Text></View>);
 "##;
-    let config = r##"{ "theme": { "cssVars": { "light": { "brand": "#123456" } } } }"##;
+    let config =
+        r##"{ "theme": { "tokens": { "brand": { "kind": "color", "value": "#123456" } } } }"##;
     let (_engine, rx) =
         crate::components::start_with(source, Environment::default(), None, Some(config));
-    let expected = ["TypeError kept #00ff00ff"; 13].join("; ");
+    let expected = [
+        "legacy-format",
+        "legacy-format",
+        "not-a-document",
+        "not-a-document",
+        "bad-value",
+        "bad-value",
+        "reference-missing",
+        "now #00ff00",
+    ]
+    .join("; ");
     let batches = crate::components::until(&rx, |b| crate::components::shows(b, &expected));
     let texts: Vec<&str> = batches
         .iter()

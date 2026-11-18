@@ -1,20 +1,23 @@
 //! `role()` from TSX: what a theme role draws with, as `token()` gives a
 //! token. Under a design system's theme document it is the token the
-//! document maps the role onto; without one, the token of the role's name. A class reads
-//! a role as a variable (`bg-(--popover)`).
+//! document maps the role onto; without a mapping, the token of the role's
+//! name. A class reads a role as a variable (`bg-(--popover)`).
 
 use nsh_core::{Color, MountBatch, MountItem, element::Registry};
 use nsh_engine::Environment;
 
 use crate::components::{shows, start_with, start_with_sets, until};
 
-/// A design system that calls the popover's surface `overlay`.
+/// A design system that calls the popover's surface `overlay`, with dark
+/// values in its `colorMode` modifier.
 const BRAND: &str = r##"{
-    "cssVars": { "light": { "overlay": "#111111", "status-caution": "#aa5500" },
-                 "dark": { "overlay": "#eeeeee", "status-caution": "#ffcc00" },
-                 "theme": { "corner": "6px" } },
-    "tokens": { "overlay": { "kind": "color" }, "status-caution": { "kind": "color" },
-                "corner": { "kind": "number" } },
+    "tokens": {
+        "overlay": { "kind": "color", "value": "#111111" },
+        "status-caution": { "kind": "color", "value": "#aa5500" },
+        "corner": { "kind": "number", "value": 6 } },
+    "modifiers": { "colorMode": { "default": "light", "contexts": {
+        "light": {}, "dark": { "overlay": "#eeeeee", "status-caution": "#ffcc00" } } } },
+    "resolutionOrder": ["colorMode"],
     "roles": { "popover": "overlay", "warning": "status-caution", "radius": "corner" }
 }"##;
 
@@ -24,11 +27,17 @@ fn brand() -> Vec<Registry> {
     vec![set]
 }
 
-const READS: &str = r##"import { mount, role, signal, Text, token, updateTheme, View } from "nsh";
+/// `app` with the design system's `colorMode` picked as `mode` first.
+fn in_mode(app: &str, mode: &str) -> String {
+    app.replace("__MODE__", mode)
+}
 
+const READS: &str = r##"import { mount, role, setModifier, signal, Text, token, updateTheme, View } from "nsh";
+
+setModifier("colorMode", "__MODE__");
 const step = signal(0);
 setTimeout(() => {
-  updateTheme({ cssVars: { light: { overlay: "#333333" }, dark: { overlay: "#cccccc" } } });
+  updateTheme({ values: { overlay: "#333333" } });
   step.set(1);
 }, 30);
 
@@ -39,58 +48,55 @@ mount(() => (
     <Text>{`warning ${role("warning")}`}</Text>
     <Text>{`radius ${role("radius")}`}</Text>
     <Text>{`border ${role("border")}`}</Text>
-    <Text>{`token ${token("popover" as never)}`}</Text>
+    <Text>{`token ${token("popover")}`}</Text>
   </View>
 ));
 "##;
 
 #[test]
 fn a_role_is_the_token_a_theme_document_maps_it_onto() {
-    for (appearance, popover, warning, changed) in [
-        ("light", "#111111ff", "#aa5500ff", "#333333ff"),
-        ("dark", "#eeeeeeff", "#ffcc00ff", "#ccccccff"),
+    for (mode, popover, warning) in [
+        ("light", "#111111", "#aa5500"),
+        ("dark", "#eeeeee", "#ffcc00"),
     ] {
-        let config = format!(r#"{{ "appearance": "{appearance}" }}"#);
-        let (_engine, rx) =
-            start_with_sets(READS, Environment::default(), None, Some(&config), brand());
+        let app = in_mode(READS, mode);
+        let (_engine, rx) = start_with_sets(&app, Environment::default(), None, None, brand());
         let batches = until(&rx, |b| shows(b, "step 0"));
         let said = |text: String| batches.iter().any(|b| shows(b, &text));
-        assert!(
-            said(format!("popover {popover}")),
-            "{appearance}: {batches:?}"
-        );
-        assert!(
-            said(format!("warning {warning}")),
-            "{appearance}: {batches:?}"
-        );
-        assert!(said("radius 6".into()), "{appearance}: {batches:?}");
+        assert!(said(format!("popover {popover}")), "{mode}: {batches:?}");
+        assert!(said(format!("warning {warning}")), "{mode}: {batches:?}");
+        assert!(said("radius 6".into()), "{mode}: {batches:?}");
         // A role nothing maps and no token answers, and a role's name as a
         // token: there is none of that name here.
-        assert!(said("border undefined".into()), "{appearance}: {batches:?}");
-        assert!(said("token undefined".into()), "{appearance}: {batches:?}");
-        // The token the role reads changes: what read the role follows.
+        assert!(said("border undefined".into()), "{mode}: {batches:?}");
+        assert!(said("token undefined".into()), "{mode}: {batches:?}");
+        // The token the role reads changes (an override wins over the
+        // context): what read the role follows.
         let batches = until(&rx, |b| shows(b, "step 1"));
         assert!(
-            batches
-                .iter()
-                .any(|b| shows(b, &format!("popover {changed}"))),
-            "{appearance}: {batches:?}"
+            batches.iter().any(|b| shows(b, "popover #333333")),
+            "{mode}: {batches:?}"
         );
         // And only it.
         assert!(
             !batches
                 .iter()
                 .any(|b| shows(b, &format!("warning {warning}"))),
-            "{appearance}: {batches:?}"
+            "{mode}: {batches:?}"
         );
     }
 }
 
-const NAMED: &str = r##"import { mount, role, signal, Text, updateTheme, View } from "nsh";
+const NAMED: &str = r##"import { mount, role, setTheme, signal, Text, View } from "nsh";
 
 const step = signal(0);
 setTimeout(() => {
-  updateTheme({ cssVars: { light: { warning: "#b45309" } } });
+  setTheme({
+    tokens: {
+      popover: { kind: "color", value: "#fafafa" },
+      warning: { kind: "color", value: "#b45309" },
+    },
+  });
   step.set(1);
 }, 30);
 
@@ -107,19 +113,23 @@ mount(() => (
 fn without_a_mapping_a_role_is_the_token_of_its_name() {
     let (_engine, rx) = start_with(NAMED, Environment::default(), None, None);
     let batches = until(&rx, |b| shows(b, "step 0"));
-    // shadcn's `popover`; no `warning` in the default theme.
+    // `nsh-base`'s fallback document's `popover`; it has no `warning`.
     assert!(
-        batches.iter().any(|b| shows(b, "popover #ffffffff")),
+        batches.iter().any(|b| shows(b, "popover #ffffff")),
         "{batches:?}"
     );
     assert!(
         batches.iter().any(|b| shows(b, "warning its own")),
         "{batches:?}"
     );
-    // The theme gets a `warning` token: the role reads it.
+    // A document with a `warning` token: the role reads it.
     let batches = until(&rx, |b| shows(b, "step 1"));
     assert!(
-        batches.iter().any(|b| shows(b, "warning #b45309ff")),
+        batches.iter().any(|b| shows(b, "popover #fafafa")),
+        "{batches:?}"
+    );
+    assert!(
+        batches.iter().any(|b| shows(b, "warning #b45309")),
         "{batches:?}"
     );
 }
@@ -129,20 +139,19 @@ const FILE_ROLES: &str = r##"import { mount, role, setTheme, signal, Text, updat
 const step = signal(0);
 const said = signal("none");
 setTimeout(() => {
-  updateTheme({ cssVars: { light: { surface: "#eeeeee" } } });
+  updateTheme({ values: { surface: "#eeeeee" } });
   step.set(1);
 }, 30);
 setTimeout(() => {
-  updateTheme({ cssVars: {}, roles: { warning: "surface" } });
+  updateTheme({ roles: { warning: "surface" } });
   step.set(2);
 }, 60);
 setTimeout(() => {
-  try {
-    setTheme({ cssVars: { light: { surface: "#111111" } }, roles: { popover: "surfce" } });
-    said.set("taken");
-  } catch (e) {
-    said.set(`refused ${(e as Error).name}: ${(e as Error).message}`);
-  }
+  const diagnostics = setTheme({
+    tokens: { surface: { kind: "color", value: "#111111" } },
+    roles: { popover: "surfce" },
+  });
+  said.set(diagnostics.map((d) => `${d.code} ${d.pointer}`).join(", "));
   step.set(3);
 }, 90);
 
@@ -159,42 +168,52 @@ mount(() => (
 #[test]
 fn a_theme_file_maps_roles_onto_its_tokens() {
     let config = r##"{ "theme": {
-        "cssVars": { "light": { "surface": "#fafafa" }, "dark": { "surface": "#171717" } },
+        "tokens": { "surface": { "kind": "color", "value": "#fafafa" } },
         "roles": { "popover": "surface" } } }"##;
     let (_engine, rx) = start_with(FILE_ROLES, Environment::default(), None, Some(config));
     let batches = until(&rx, |b| shows(b, "step 0"));
     assert!(
-        batches.iter().any(|b| shows(b, "popover #fafafaff")),
+        batches.iter().any(|b| shows(b, "popover #fafafa")),
         "{batches:?}"
     );
     // The role follows its token: no copy of the color was taken.
     let batches = until(&rx, |b| shows(b, "step 1"));
     assert!(
-        batches.iter().any(|b| shows(b, "popover #eeeeeeff")),
+        batches.iter().any(|b| shows(b, "popover #eeeeee")),
         "{batches:?}"
     );
-    // `updateTheme` adds to the roles the theme maps.
+    // `updateTheme` adds to the roles the document maps.
     let batches = until(&rx, |b| shows(b, "step 2"));
     assert!(
-        batches.iter().any(|b| shows(b, "warning #eeeeeeff")),
+        batches.iter().any(|b| shows(b, "warning #eeeeee")),
         "{batches:?}"
     );
-    // A role mapped onto no token: `setTheme` refuses the file whole.
+    // A role mapped onto no token: the mapping is left out and returned,
+    // and the document is active with the rest. The app's overrides stay:
+    // its `surface` value, its `warning` mapping.
     let batches = until(&rx, |b| shows(b, "step 3"));
-    let refused =
-        "said refused TypeError: setTheme: `roles.popover`: the theme has no token `surfce`";
-    assert!(batches.iter().any(|b| shows(b, refused)), "{batches:?}");
     assert!(
-        !batches.iter().any(|b| shows(b, "popover #111111ff")),
+        batches
+            .iter()
+            .any(|b| shows(b, "said role-token-missing /roles/popover")),
+        "{batches:?}"
+    );
+    assert!(
+        batches.iter().any(|b| shows(b, "popover undefined")),
+        "{batches:?}"
+    );
+    assert!(
+        !batches.iter().any(|b| shows(b, "popover #111111")),
         "{batches:?}"
     );
 }
 
-const CLASSES: &str = r##"import { mount, signal, Text, updateTheme, View } from "nsh";
+const CLASSES: &str = r##"import { mount, setModifier, signal, Text, updateTheme, View } from "nsh";
 
+setModifier("colorMode", "__MODE__");
 const step = signal(0);
 setTimeout(() => {
-  updateTheme({ cssVars: { light: { overlay: "#333333" }, dark: { overlay: "#cccccc" } } });
+  updateTheme({ values: { overlay: "#333333" } });
   step.set(1);
 }, 30);
 
@@ -234,29 +253,23 @@ fn drawn(batches: &[MountBatch]) -> (Vec<Color>, Vec<f32>) {
 
 #[test]
 fn a_class_reads_a_role_as_a_variable() {
-    for (appearance, popover, warning, changed) in [
-        ("light", 0x1111_11ff, 0xaa55_00ff_u32, 0x3333_33ff),
-        ("dark", 0xeeee_eeff, 0xffcc_00ff, 0xcccc_ccff),
+    for (mode, popover, warning) in [
+        ("light", 0x1111_11ff, 0xaa55_00ff_u32),
+        ("dark", 0xeeee_eeff, 0xffcc_00ff),
     ] {
-        let config = format!(r#"{{ "appearance": "{appearance}" }}"#);
-        let (_engine, rx) = start_with_sets(
-            CLASSES,
-            Environment::default(),
-            None,
-            Some(&config),
-            brand(),
-        );
-        // The type maps `popover` onto `overlay`, `warning` onto
+        let app = in_mode(CLASSES, mode);
+        let (_engine, rx) = start_with_sets(&app, Environment::default(), None, None, brand());
+        // The document maps `popover` onto `overlay`, `warning` onto
         // `status-caution` and `radius` onto `corner`.
         let (backgrounds, radii) = drawn(&until(&rx, |b| shows(b, "step 0")));
         let mut wanted = [Color(popover), Color(warning)];
         wanted.sort_by_key(|c| c.0);
-        assert_eq!(backgrounds, wanted, "{appearance}");
-        assert_eq!(radii, [6.0], "{appearance}");
+        assert_eq!(backgrounds, wanted, "{mode}");
+        assert_eq!(radii, [6.0], "{mode}");
         // `overlay` changes: the view reading it through the role is
         // restyled, the other is not.
         let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 1")));
-        assert_eq!(backgrounds, [Color(changed)], "{appearance}");
+        assert_eq!(backgrounds, [Color(0x3333_33ff)], "{mode}");
     }
 }
 
@@ -264,11 +277,11 @@ const MAPPED_LATER: &str = r##"import { mount, signal, Text, updateTheme, View }
 
 const step = signal(0);
 setTimeout(() => {
-  updateTheme({ cssVars: {}, roles: { warning: "surface" } });
+  updateTheme({ roles: { warning: "surface" } });
   step.set(1);
 }, 30);
 setTimeout(() => {
-  updateTheme({ cssVars: { light: { surface: "#eeeeee" } } });
+  updateTheme({ values: { surface: "#eeeeee" } });
   step.set(2);
 }, 60);
 
@@ -282,12 +295,14 @@ mount(() => (
 
 #[test]
 fn a_class_takes_a_role_mapped_while_the_app_runs() {
-    let config = r##"{ "theme": { "cssVars": { "light": { "surface": "#fafafa" } } } }"##;
+    let config =
+        r##"{ "theme": { "tokens": { "surface": { "kind": "color", "value": "#fafafa" } } } }"##;
     let (_engine, rx) = start_with(MAPPED_LATER, Environment::default(), None, Some(config));
-    // Nothing maps `warning` and the theme has no such token: no class yet.
+    // Nothing maps `warning` and the document has no such token: no class
+    // yet.
     let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 0")));
     assert_eq!(backgrounds, []);
-    // The theme maps it: the class is the token's color, and follows it.
+    // The app maps it: the class is the token's color, and follows it.
     let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 1")));
     assert_eq!(backgrounds, [Color(0xfafa_faff)]);
     let (backgrounds, _) = drawn(&until(&rx, |b| shows(b, "step 2")));
@@ -298,7 +313,7 @@ const RESET: &str = r##"import { mount, resetTheme, role, signal, Text, updateTh
 
 const step = signal(0);
 setTimeout(() => {
-  updateTheme({ cssVars: { light: { popover: "#333333", "status-caution": "#444444" } } });
+  updateTheme({ roles: { popover: "status-caution" }, values: { "status-caution": "#444444" } });
   step.set(1);
 }, 30);
 setTimeout(() => { resetTheme(["popover"]); step.set(2); }, 60);
@@ -312,28 +327,27 @@ mount(() => (
 ));
 "##;
 
+/// `resetTheme` of a role's name removes the app's mapping of the role:
+/// it reads the document's mapping again, and the rest of the patch stays.
 #[test]
 fn reset_theme_takes_a_roles_name() {
-    let config = r#"{ "appearance": "light" }"#;
-    let (_engine, rx) = start_with_sets(RESET, Environment::default(), None, Some(config), brand());
-    // Under the type a role's name in a theme file sets `overlay`.
+    let (_engine, rx) = start_with_sets(RESET, Environment::default(), None, None, brand());
     let batches = until(&rx, |b| shows(b, "step 1"));
     assert!(
-        batches.iter().any(|b| shows(b, "popover #333333ff")),
+        batches.iter().any(|b| shows(b, "popover #444444")),
         "{batches:?}"
     );
     assert!(
-        batches.iter().any(|b| shows(b, "warning #444444ff")),
+        batches.iter().any(|b| shows(b, "warning #444444")),
         "{batches:?}"
     );
-    // And in `resetTheme` it gives `overlay` its default back, and only it.
     let batches = until(&rx, |b| shows(b, "step 2"));
     assert!(
-        batches.iter().any(|b| shows(b, "popover #111111ff")),
+        batches.iter().any(|b| shows(b, "popover #111111")),
         "{batches:?}"
     );
     assert!(
-        !batches.iter().any(|b| shows(b, "warning #aa5500ff")),
+        !batches.iter().any(|b| shows(b, "warning #aa5500")),
         "{batches:?}"
     );
 }

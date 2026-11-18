@@ -635,7 +635,7 @@ pub(super) struct ThemeState {
     /// patterns, collected when the sets are given.
     roles: Arc<RoleTable>,
     /// The last resolve, and the document it resolved.
-    resolved: nsh_theme::Resolved,
+    resolved: Arc<nsh_theme::Resolved>,
     resolved_document: Option<Arc<ThemeDocument>>,
     /// What changed in the last install: what classes, JS and the hosts
     /// were handed.
@@ -1127,21 +1127,37 @@ impl<M: TextEngine> Core<M> {
         overrides: Option<&str>,
     ) -> Vec<Diagnostic> {
         let mut said = Vec::new();
-        if let Some(json) = document {
+        let document = document.and_then(|json| {
             let (document, diagnostics) = crate::element::theme::read_document(json);
             said.extend(diagnostics);
-            if let Some(document) = document {
-                self.components.theme.builtin = Some(Arc::new(document));
-                self.components.theme.pending = true;
-            }
-        }
-        if let Some(json) = overrides {
+            document.map(Arc::new)
+        });
+        let overrides = overrides.map(|json| {
             let (patch, diagnostics) = crate::element::theme::read_patch(json);
             said.extend(diagnostics);
-            self.components.theme.app = Arc::new(patch);
-            self.components.theme.pending = true;
-        }
+            Arc::new(patch)
+        });
+        self.take_app_theme(document, overrides);
         said
+    }
+
+    /// [`Core::set_app_theme`] of a document and overrides read already (a
+    /// script runtime's setup, `Prop::UiAppTheme`); `None` leaves that part
+    /// as it is.
+    pub(crate) fn take_app_theme(
+        &mut self,
+        document: Option<Arc<ThemeDocument>>,
+        overrides: Option<Arc<Patch>>,
+    ) {
+        let state = &mut self.components.theme;
+        if let Some(document) = document {
+            state.builtin = Some(document);
+            state.pending = true;
+        }
+        if let Some(overrides) = overrides {
+            state.app = overrides;
+            state.pending = true;
+        }
     }
 
     /// Activates theme document `json` as the app's (TS: `setTheme`, Rust:
@@ -1166,7 +1182,9 @@ impl<M: TextEngine> Core<M> {
         self.set_theme(Some(json));
     }
 
-    /// Makes `document` the app's document while it runs (`None`: none).
+    /// Makes `document` the app's document while it runs (`None`: none,
+    /// so the built-in document, else the sets', is active again; TS's
+    /// `setTheme`, `Prop::UiThemeDocument`).
     pub(crate) fn activate(&mut self, document: Option<Arc<ThemeDocument>>) {
         let state = &mut self.components.theme;
         state.runtime = document;
@@ -1231,13 +1249,6 @@ impl<M: TextEngine> Core<M> {
             }
         }
         state.pending = true;
-    }
-
-    /// `uiThemeUpdate` on the root (`nsh`'s `updateTheme`): patch `json`
-    /// merged into the app's ([`Core::update_tokens`]).
-    pub(super) fn update_ui_theme(&mut self, json: &str) {
-        let (patch, _) = crate::element::theme::read_patch(json);
-        self.update_tokens(patch);
     }
 
     /// The app's translations ([`crate::i18n`]): what `t!` and TS's `t`
@@ -1355,12 +1366,7 @@ impl<M: TextEngine> Core<M> {
         // diagnostics are its own, and what of the overrides it refuses is
         // said (and kept, for a document that declares it).
         if !same_document(state.resolved_document.as_ref(), Some(&document)) {
-            state.selection.picks.retain(|name, context| {
-                document
-                    .modifiers
-                    .get(name)
-                    .is_some_and(|m| m.contexts.contains_key(context))
-            });
+            crate::element::theme::keep_picks(&mut state.selection, &document);
             state.logged.clear();
             state.resolved_document = Some(document.clone());
             let mut refused = state.app.check(&document);
@@ -1377,8 +1383,11 @@ impl<M: TextEngine> Core<M> {
             patches,
             roles: state.roles.clone(),
         });
-        let resolved =
-            nsh_theme::resolve(&layers.document, &layers.selection, &layers.patch_refs());
+        let resolved = Arc::new(nsh_theme::resolve(
+            &layers.document,
+            &layers.selection,
+            &layers.patch_refs(),
+        ));
         let mut changes = resolved.changed(&state.resolved);
         let mut tokens =
             Tokens::from_resolved(&resolved, layers, Some((&self.components.tokens, &changes)));

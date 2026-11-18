@@ -367,134 +367,43 @@ export interface Context<T> extends Accessor<T> {
 export type Component<P = {}> = (props: P) => JSX.Element;
 
 /**
- * The design tokens of the app's theme by name, and what `token()` gives
- * for each: a color or a font family as a string, a number. nsh declares
- * the app's (`.nsh/types/nsh/tokens.d.ts`, from `nsh.json` `"theme"`).
+ * The design tokens of the app's active theme document by name, and what
+ * `token()` gives for each (`TokenKindValues`). nsh declares the app's
+ * (`.nsh/types/nsh/tokens.d.ts`, from its active document).
  */
 export interface Tokens {}
 
 /**
  * The theme roles the app's UI sets draw with by name, and what `role()`
- * gives for each: a color or a font family as a string, a number. nsh
- * declares them (`.nsh/types/nsh/roles.d.ts`, from the sets' lists).
+ * gives for each. nsh declares them (`.nsh/types/nsh/roles.d.ts`, from the
+ * sets' lists).
  */
 export interface Roles {}
 
 /**
- * A theme, as `nsh.json`'s `"theme"` writes it: shadcn/ui's `cssVars`, the
- * values as CSS writes them (colors, `var(--name)`, `color-mix()`, lengths in
- * `px` or `rem`, font family lists for `font-*`). `theme`'s apply in both
- * appearances, `light`'s in the light one and in the dark one where `dark`
- * leaves them out, `dark`'s in the dark one. `roles` maps theme roles onto
- * its tokens by name (`{ popover: "surface" }`): what draws with the role
- * draws with that token, and follows it. `tokens` declares its tokens
- * (`{ "radius-card": { kind: "radius" } }`): the theme is then read by them,
- * and replaces the default theme.
- */
-export interface Theme {
-  cssVars: {
-    theme?: Record<string, string | number | boolean>;
-    light?: Record<string, string | number | boolean>;
-    dark?: Record<string, string | number | boolean>;
-  };
-  roles?: Record<string, string>;
-  tokens?: Record<string, TokenDeclaration>;
-  modifiers?: Record<string, { default: string; contexts: Record<string, Partial<Theme["cssVars"]>> }>;
-}
-
-/**
- * A change of the app's theme (`updateTheme`): any part of a theme; a
- * modifier it names takes the contexts' values it gives, the contexts it
- * adds and the `default` it names.
- */
-export interface ThemeChange {
-  cssVars?: Theme["cssVars"];
-  roles?: Theme["roles"];
-  tokens?: Theme["tokens"];
-  modifiers?: Record<string, { default?: string; contexts?: Record<string, Partial<Theme["cssVars"]>> }>;
-}
-
-/**
-* The contexts of each theme modifier, by its name (`{ brand: "ocean" |
- * "forest" }`): nsh writes them per app into `.nsh/types/nsh/modifiers.d.ts`
- * from its theme.
+ * The contexts of each modifier of the app's active theme document, by its
+ * name (`{ colorMode: "light" | "dark" }`): nsh writes them per app into
+ * `.nsh/types/nsh/modifiers.d.ts`.
  */
 export interface ThemeModifiers {}
 
-/** A token's kind: the one declared for it, else the kind it is kept as. */
-export type TokenKind =
-  | "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur"
-  | "font" | "shadow" | "gradient" | "string" | "boolean" | "duration" | "easing" | "typography";
-
-/** A text style's value (`typography`): its size and the parts it has. */
-export interface TypographyValue {
-  size: number;
-  lineHeight?: number;
-  letterSpacing?: number;
-  fontWeight?: number;
-}
-
-/** What a token of kind `K` holds in an appearance. */
-export type TokenKindValue<K extends TokenKind> =
-  K extends "typography" ? TypographyValue
-  : K extends "boolean" ? boolean
-  : K extends "color" | "font" | "shadow" | "gradient" | "string" | "easing" ? string
-  : number;
-
 /**
- * A token as `tokens.get` gives it: its kind and its value in each
- * appearance (a color as `#rrggbbaa`, a number in points, a duration in
- * milliseconds, a font family, shadows, gradients and an easing as CSS, a
- * string, a boolean, a text style's size and parts).
- */
-export interface TokenValue<K extends TokenKind = TokenKind> {
-  kind: K;
-  light: TokenKindValue<K>;
-  dark: TokenKindValue<K>;
-}
-
-/** A token as `tokens.entries` lists it. */
-export interface TokenInfo {
-  name: string;
-  kind: TokenKind;
-  /** Its place in the designer's tree, when it is declared with one. */
-  path?: string;
-  doc?: string;
-  /** Who declares it, when it is declared. */
-  owner?: string;
-}
-
-/**
- * The kind of each of the app's tokens, by name: nsh writes them per app
- * into `.nsh/types/nsh/tokens.d.ts` beside `Tokens`.
+ * The value type of each of the app's tokens, by name: nsh writes them per
+ * app into `.nsh/types/nsh/tokens.d.ts` beside `Tokens`.
  */
 export interface TokenKinds {}
 
 /** The token dictionary (`tokens`). */
 export interface TokenDictionary {
-  /** Token `name` with its kind and its value in each appearance; `undefined` when there is none. */
+  /** Token `name` as `{ kind, value }`; `undefined` when there is none. */
   get<N extends keyof TokenKinds>(name: N): TokenValue<TokenKinds[N] & TokenKind>;
   get(name: string): TokenValue | undefined;
-  /** The kind of token `name`. */
+  /** The value type of token `name`. */
   kind(name: string): TokenKind | undefined;
   /** Every token's name, sorted; of `kind`, with `prefix`, when given. */
   names(filter?: { kind?: TokenKind; prefix?: string }): string[];
-  /** Every token, sorted by name, with its kind and what declares it. */
+  /** Every token, sorted by name, with its value type and what the document declares of it. */
   entries(): TokenInfo[];
-}
-
-/** A theme modifier as `modifiers()` lists it. */
-export interface ModifierAxis {
-  name: string;
-  contexts: string[];
-  default: string;
-}
-
-/** A token a theme declares (its `tokens`): what it holds, its place in the designer's tree and its doc. A theme that declares its tokens is read by them. */
-export interface TokenDeclaration {
-  kind: "color" | "number" | "radius" | "spacing" | "text" | "weight" | "tracking" | "leading" | "blur" | "font" | "shadow" | "gradient";
-  path?: string;
-  doc?: string;
 }
 
 /** The app as it was built (`appInfo()`). */
@@ -515,6 +424,135 @@ export interface AppInfo {
    * without `--release`. `false` for release builds: `nsh package`,
    * `nsh publish`, `nsh build --release`. */
   readonly development: boolean;
+}
+"#;
+
+/// `nsh`'s theme types, made from `nsh-theme`'s own lists so none restates
+/// them: `TokenKind` and `TokenKindValues` from its value types (each typed
+/// by `nsh_core::element::token_ts_type`, the mapping `.nsh/types` types
+/// tokens with), `ThemeDiagnosticCode` from its diagnostic codes, and the
+/// document (`Theme`), patch (`ThemePatch`), diagnostic, token and modifier
+/// shapes of `docs/dev/theme-format.md` over them.
+pub(crate) fn theme_types() -> String {
+    use std::fmt::Write as _;
+
+    let union = |names: &mut dyn Iterator<Item = &str>| {
+        names
+            .map(|name| format!("{name:?}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let mut out = String::new();
+    let kinds = union(&mut nsh_theme::ValueType::ALL.iter().map(|t| t.name()));
+    let _ = writeln!(
+        out,
+        "/** A token's value type: the `kind` a theme document declares it with. */\nexport type TokenKind = {kinds};\n"
+    );
+    out.push_str(
+        "/**\n * What a token of each value type holds, as `token()`, `role()` and\n * `tokens.get` give it: its value in the theme format's canonical form,\n * references resolved (a color as `#rrggbb`, or `#rrggbbaa` below full\n * opacity; a duration as `<n>ms`; an easing as it was read, a keyword or\n * its four control points; a compound as an object of its members, those\n * at their default left out).\n */\nexport interface TokenKindValues {\n",
+    );
+    for value_type in nsh_theme::ValueType::ALL {
+        let _ = writeln!(
+            out,
+            "  {}: {};",
+            value_type.name(),
+            nsh_core::element::token_ts_type(value_type)
+        );
+    }
+    out.push_str("}\n\n");
+    let codes = union(&mut nsh_theme::code::ALL.iter().map(|(code, _)| *code));
+    let _ = writeln!(
+        out,
+        "/** A theme diagnostic's code: one per condition, stable for tools to match. */\nexport type ThemeDiagnosticCode = {codes};\n"
+    );
+    out.push_str(THEME_SHAPES);
+    out
+}
+
+/// The shapes [`theme_types`] declares over its generated lists.
+const THEME_SHAPES: &str = r#"/** What a token of value type `K` holds (`TokenKindValues`). */
+export type TokenKindValue<K extends TokenKind> = TokenKindValues[K];
+
+/** A reference to another token in a document or a patch: `"{name}"`. */
+export type TokenReference = `{${string}}`;
+
+/**
+ * A token a theme document declares (its `tokens`): its value type, its
+ * value of that type or a reference to a token of it, its place in a
+ * designer's tree and its doc.
+ */
+export type TokenDeclaration = {
+  [K in TokenKind]: { kind: K; value: TokenKindValues[K] | TokenReference; path?: string; doc?: string };
+}[TokenKind];
+
+/** A modifier a theme document declares: its default context, and each context's values by token name. */
+export interface ThemeModifierDeclaration {
+  default: string;
+  contexts: Record<string, Record<string, unknown>>;
+}
+
+/**
+ * A theme document: tokens with their value
+ * types and values, modifiers whose contexts change token values, the order
+ * they apply in, and roles mapped onto its tokens by name. Documents are
+ * never merged: the active one replaces the others.
+ */
+export interface Theme {
+  $schema?: string;
+  name?: string;
+  tokens?: Record<string, TokenDeclaration>;
+  modifiers?: Record<string, ThemeModifierDeclaration>;
+  resolutionOrder?: string[];
+  roles?: Record<string, string>;
+}
+
+/**
+ * A theme patch (`updateTheme`, a `ThemeScope`'s `theme`): token values by
+ * name, each of the token's value type or a reference, and role mappings
+ * onto tokens by name, over the active document. A patch never adds a
+ * token: a value for a name the document doesn't declare is left out.
+ */
+export interface ThemePatch {
+  values?: { [N in keyof Tokens]?: Tokens[N] | TokenReference } & Record<string, unknown>;
+  roles?: Record<string, string>;
+}
+
+/**
+ * What reading, checking or resolving a theme reports (`setTheme`,
+ * `updateTheme`): an error leaves its entry out, a warning keeps it.
+ * `pointer` is a JSON pointer into what was given (`/tokens/brand`).
+ */
+export interface ThemeDiagnostic {
+  severity: "error" | "warning";
+  code: ThemeDiagnosticCode;
+  pointer: string;
+  message: string;
+}
+
+/** A token as `tokens.get` gives it: its value type and its value. */
+export interface TokenValue<K extends TokenKind = TokenKind> {
+  kind: K;
+  value: TokenKindValues[K];
+}
+
+/** A token as `tokens.entries` lists it. */
+export interface TokenInfo {
+  name: string;
+  kind: TokenKind;
+  /** Its place in a designer's tree, when the document gives one. */
+  path?: string;
+  doc?: string;
+}
+
+/** A modifier of the active theme document as `modifiers()` lists it. */
+export interface ModifierAxis {
+  name: string;
+  /** Its contexts, in the document's order. */
+  contexts: string[];
+  /** The context it shows when none is picked. */
+  default: string;
+  /** The context it shows: the one picked, else `default`. */
+  selected: string;
 }
 "#;
 

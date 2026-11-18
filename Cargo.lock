@@ -4048,10 +4048,10 @@ version = "0.6.0"
 dependencies = [
  "imagesize 0.15.0",
  "nsh-core",
+ "nsh-theme",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.119",
  "ttf-parser",
  "wuff",

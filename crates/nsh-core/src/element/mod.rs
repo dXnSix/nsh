@@ -78,6 +78,7 @@ mod style;
 mod system;
 pub(crate) mod task;
 pub mod theme;
+mod theme_checks;
 pub mod theme_convert;
 #[cfg(test)]
 mod theme_format_describe;

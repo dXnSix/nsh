@@ -54,7 +54,7 @@ pub mod write;
 
 pub use diagnostic::{Diagnostic, Severity, code};
 pub use document::{Context, Map, Modifier, ThemeDocument, Token};
-pub use read::{Read, check, read, read_patch};
+pub use read::{Read, check, object_members, read, read_patch};
 pub use resolve::{Changes, Patch, Resolved, Selection, resolve};
 pub use roles::{RoleDeclaration, RolePattern, check_roles, resolve_role};
 pub use value::{

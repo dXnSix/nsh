@@ -399,14 +399,21 @@ pub fn app_theme(
     dir: &std::path::Path,
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<AppTheme, BundleError> {
-    let config = match std::fs::read_to_string(dir.join("nsh.json")) {
-        Ok(text) => {
-            serde_json::from_str(&text).map_err(|e| BundleError::other(format!("nsh.json: {e}")))?
+    let text = std::fs::read_to_string(dir.join("nsh.json")).ok();
+    let config = match &text {
+        Some(text) => {
+            serde_json::from_str(text).map_err(|e| BundleError::other(format!("nsh.json: {e}")))?
         }
-        Err(_) => serde_json::Value::Null,
+        None => serde_json::Value::Null,
     };
-    let theme = theme_member(dir, &config, "theme")?;
-    let overrides = theme_member(dir, &config, "themeOverrides")?;
+    // The members as written, their order kept: a `serde_json::Value`
+    // sorts an object's members without serde_json's `preserve_order`.
+    let members = text
+        .as_deref()
+        .and_then(|text| nsh_theme::object_members(text).0)
+        .unwrap_or_default();
+    let theme = theme_member(dir, &config, &members, "theme")?;
+    let overrides = theme_member(dir, &config, &members, "themeOverrides")?;
     Ok(read_app_theme(theme.as_ref(), overrides.as_ref(), ui_sets))
 }
 
@@ -511,10 +518,13 @@ fn locate(place: &str, pointer: &str) -> String {
 
 /// `nsh.json`'s member `key` (`"theme"`, `"themeOverrides"`) as `(place,
 /// text)` ([`read_app_theme`]): a file named by a path relative to
-/// `nsh.json`, or the member itself. `Err`: the file cannot be read.
+/// `nsh.json`, or the member itself, as `members` (`nsh.json`'s members
+/// as written, `nsh_theme::object_members`) has it. `Err`: the file cannot
+/// be read.
 fn theme_member(
     dir: &std::path::Path,
     config: &serde_json::Value,
+    members: &[(String, String)],
     key: &str,
 ) -> Result<Option<(String, String)>, BundleError> {
     Ok(match config.get(key) {
@@ -524,7 +534,11 @@ fn theme_member(
             std::fs::read_to_string(dir.join(file))
                 .map_err(|e| BundleError::other(format!("nsh.json: {key}: {file}: {e}")))?,
         )),
-        Some(v) => Some((format!("nsh.json#/{key}"), v.to_string())),
+        Some(v) => {
+            let written = members.iter().find(|(name, _)| name == key);
+            let text = written.map_or_else(|| v.to_string(), |(_, text)| text.clone());
+            Some((format!("nsh.json#/{key}"), text))
+        }
     })
 }
 

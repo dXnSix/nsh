@@ -1,15 +1,20 @@
 //! `ThemeScope` from TSX: a view whose content is shown in an appearance
-//! of its own. `dark:` classes and theme colors take the scope's side in
-//! the core; `colorScheme()` and `token()` read the scope around what
-//! calls them, and a Rust component in a scope reads it too.
+//! of its own, with modifier contexts and a patch of its own. `dark:`
+//! classes take the scope's side in the core; `colorScheme()` and
+//! `token()` read the scope around what calls them, and a Rust component in
+//! a scope reads it too. The appearance alone changes no token: a scope
+//! shows the theme's dark values by picking its `colorMode`.
 
 use nsh_core::{Color, MountBatch, MountItem};
 use nsh_engine::Environment;
 
 use crate::components::{shows, start_with, until};
 
-const THEME: &str = r##"{ "theme": { "cssVars": {
-    "light": { "up": "#00ff00" }, "dark": { "up": "#004400" } } } }"##;
+/// A document whose `colorMode` modifier holds `up`'s dark value.
+const THEME: &str = r##"{ "theme": {
+    "tokens": { "up": { "kind": "color", "value": "#00ff00" } },
+    "modifiers": { "colorMode": { "default": "light", "contexts": { "light": {}, "dark": { "up": "#004400" } } } },
+    "resolutionOrder": ["colorMode"] } }"##;
 
 const SCOPES: &str = r#"import { colorScheme, mount, setColorScheme, signal, Text, ThemeScope, token, View } from "nsh";
 
@@ -64,31 +69,28 @@ fn texts_at(rx: &crossbeam_channel::Receiver<MountBatch>, step: &str) -> Vec<Str
 #[test]
 fn what_a_scope_renders_reads_its_appearance() {
     let (_engine, rx) = start_with(SCOPES, Environment::default(), None, Some(THEME));
-    // The scope is dark in a light app, and so is the scope inside it.
+    // The scope is dark in a light app, and so is the scope inside it;
+    // `up` is the document's, whatever the appearance.
     assert_eq!(
         texts_at(&rx, "step 0"),
         [
-            "in dark #004400ff",
+            "in dark #00ff00",
             "inline dark",
-            "nested dark #004400ff",
-            "out light #00ff00ff"
+            "nested dark #00ff00",
+            "out light #00ff00"
         ]
     );
     // The scope turns light: only what it holds reads again.
     assert_eq!(
         texts_at(&rx, "step 1"),
-        [
-            "in light #00ff00ff",
-            "inline light",
-            "nested light #00ff00ff"
-        ]
+        ["in light #00ff00", "inline light", "nested light #00ff00"]
     );
     // The app turns dark: the scope stays as it says.
-    assert_eq!(texts_at(&rx, "step 2"), ["out dark #004400ff"]);
+    assert_eq!(texts_at(&rx, "step 2"), ["out dark #00ff00"]);
     // Without an appearance of its own it is shown as the app.
     assert_eq!(
         texts_at(&rx, "step 3"),
-        ["in dark #004400ff", "inline dark", "nested dark #004400ff"]
+        ["in dark #00ff00", "inline dark", "nested dark #00ff00"]
     );
 }
 
@@ -162,13 +164,13 @@ fn a_rust_component_in_a_scope_reads_its_appearance() {
     assert_eq!(said, ["swatch light", "swatch dark"]);
 }
 
-const TOKENS: &str = r##"import { mount, signal, Text, ThemeScope, type Theme, token, updateTheme, View } from "nsh";
+const TOKENS: &str = r##"import { mount, signal, Text, ThemeScope, type ThemePatch, token, updateTheme, View } from "nsh";
 import { TokenSwatch } from "test/ui";
 
-const theme = signal<Theme | undefined>({ cssVars: { light: { up: "#7c3aed" }, dark: { up: "#a78bfa" } } });
+const theme = signal<ThemePatch | undefined>({ values: { up: "#7c3aed" } });
 const step = signal(0);
-setTimeout(() => { theme.set({ cssVars: { light: { up: "#db2777" } } }); step.set(1); }, 30);
-setTimeout(() => { updateTheme({ cssVars: { light: { down: "#111111" }, dark: { down: "#111111" } } }); step.set(2); }, 60);
+setTimeout(() => { theme.set({ values: { up: "#db2777" } }); step.set(1); }, 30);
+setTimeout(() => { updateTheme({ values: { down: "#111111" } }); step.set(2); }, 60);
 setTimeout(() => { theme.set(undefined); step.set(3); }, 90);
 
 function Reader(props: { name: string }) {
@@ -186,7 +188,7 @@ mount(() => (
     <ThemeScope theme={theme()}>
       <Reader name="in" />
       <TokenSwatch />
-      <ThemeScope appearance="dark">
+      <ThemeScope modifiers={{ colorMode: "dark" }}>
         <Reader name="dark" />
       </ThemeScope>
     </ThemeScope>
@@ -194,9 +196,13 @@ mount(() => (
 ));
 "##;
 
-const TOKENS_THEME: &str = r##"{ "theme": { "cssVars": {
-    "light": { "up": "#00ff00", "down": "#ff0000" },
-    "dark": { "up": "#004400", "down": "#440000" } } } }"##;
+const TOKENS_THEME: &str = r##"{ "theme": {
+    "tokens": {
+        "up": { "kind": "color", "value": "#00ff00" },
+        "down": { "kind": "color", "value": "#ff0000" } },
+    "modifiers": { "colorMode": { "default": "light", "contexts": {
+        "light": {}, "dark": { "up": "#004400", "down": "#440000" } } } },
+    "resolutionOrder": ["colorMode"] } }"##;
 
 /// The backgrounds the batches up to `step` gave views, sorted.
 fn at(rx: &crossbeam_channel::Receiver<MountBatch>, step: &str) -> (Vec<String>, Vec<Color>) {
@@ -230,51 +236,54 @@ fn at(rx: &crossbeam_channel::Receiver<MountBatch>, step: &str) -> (Vec<String>,
 #[test]
 fn what_a_scope_renders_reads_and_draws_its_tokens() {
     let (_engine, rx) = start_with(TOKENS, Environment::default(), None, Some(TOKENS_THEME));
-    // The scope sets `up` and leaves `down`: in it `token()`, the class
-    // and a Rust component read its `up`, in each appearance.
+    // The scope's patch sets `up` and leaves `down`: in it `token()`, the
+    // class and a Rust component read its `up`. The scope inside it picks
+    // `colorMode: dark`: its `down` is the dark one, its `up` still the
+    // patch's, which wins over a context.
     let (texts, colors) = at(&rx, "step 0");
     assert_eq!(
         texts,
         [
-            "dark #a78bfaff #440000ff",
-            "in #7c3aedff #ff0000ff",
-            "out #00ff00ff #ff0000ff",
+            "dark #7c3aed #440000",
+            "in #7c3aed #ff0000",
+            "out #00ff00 #ff0000",
             "swatch 7c3aed"
         ]
     );
     assert_eq!(
         colors,
-        [Color(0x00ff_00ff), Color(0x7c3a_edff), Color(0xa78b_faff)]
+        [Color(0x00ff_00ff), Color(0x7c3a_edff), Color(0x7c3a_edff)]
     );
-    // The scope's theme changes: only what it holds follows (its dark
-    // value is the light one now).
+    // The scope's patch changes: only what it holds follows.
     let (texts, colors) = at(&rx, "step 1");
     assert_eq!(
         texts,
         [
-            "dark #db2777ff #440000ff",
-            "in #db2777ff #ff0000ff",
+            "dark #db2777 #440000",
+            "in #db2777 #ff0000",
             "swatch db2777"
         ]
     );
     assert_eq!(colors, [Color(0xdb27_77ff), Color(0xdb27_77ff)]);
-    // The app changes a token the scope leaves alone: it reaches into it.
+    // The app's patch changes a token the scope leaves alone: it reaches
+    // into it, over the inner scope's context too.
     let (texts, _) = at(&rx, "step 2");
     assert_eq!(
         texts,
         [
-            "dark #db2777ff #111111ff",
-            "in #db2777ff #111111ff",
-            "out #00ff00ff #111111ff"
+            "dark #db2777 #111111",
+            "in #db2777 #111111",
+            "out #00ff00 #111111"
         ]
     );
-    // Without a theme it is drawn with the app's.
+    // Without a patch it is drawn with the app's tokens; the inner scope's
+    // pick stays.
     let (texts, colors) = at(&rx, "step 3");
     assert_eq!(
         texts,
         [
-            "dark #004400ff #111111ff",
-            "in #00ff00ff #111111ff",
+            "dark #004400 #111111",
+            "in #00ff00 #111111",
             "swatch 00ff00"
         ]
     );

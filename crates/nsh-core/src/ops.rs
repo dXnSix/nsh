@@ -3534,14 +3534,24 @@ pub enum Prop {
     /// The app's Tailwind theme (JSON, on the root).
     #[prop(js = "tailwindTheme", with = crate::js::host_values::tailwind_theme, internal)]
     TailwindTheme(Box<str>),
-    /// The theme of Rust components (`nsh.json` `theme`, JSON), on the
-    /// root.
+    /// A theme document's text, activated as the app's document while it
+    /// runs ([`crate::Core::set_ui_theme`]), on the root.
     #[prop(js = "uiTheme", with = crate::js::host_values::ui_theme, internal)]
     UiTheme(Box<str>),
-    /// Some of the app's design tokens change: those a theme file (JSON,
-    /// the format of [`Prop::UiTheme`]) sets, on the root (`nsh`'s
-    /// `updateTheme`).
-    UiThemeUpdate(Box<str>),
+    /// A theme patch merged into the app's one patch, on the root (`nsh`'s
+    /// `updateTheme`, read by the script runtime).
+    UiThemeUpdate(std::sync::Arc<nsh_theme::Patch>),
+    /// The app's theme document while it runs, read by the script runtime
+    /// (`None`: its built-in document again, else the UI sets'), on the root
+    /// (`nsh`'s `setTheme`).
+    UiThemeDocument(Option<std::sync::Arc<nsh_theme::ThemeDocument>>),
+    /// The app's built-in theme document and its overrides, read by the
+    /// script runtime from the bundle's setup (`nsh.json`'s `"theme"` and
+    /// `"themeOverrides"`; `None`: none), on the root.
+    UiAppTheme(
+        Option<std::sync::Arc<nsh_theme::ThemeDocument>>,
+        Option<std::sync::Arc<nsh_theme::Patch>>,
+    ),
     /// The app's design tokens of these names (`None`: every one) go back
     /// to its theme's, on the root (`nsh`'s `resetTheme`).
     UiThemeReset(Option<Vec<Box<str>>>),

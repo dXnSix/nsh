@@ -293,14 +293,14 @@ view()
   其他类不变。`dark:` 跟随外观（系统的，或 `nsh.json` 的 `"appearance"`），与主题的修饰器无关：选择主题明暗修饰器的
   `dark` 上下文时，主题才显示它的深色值。
 - **主题可以在运行时改变。** 嵌入原生应用的 NSH 应用拿到宿主的主题时，以及主题每次变化时，读取主题的类、读取 `theme()` 的 Rust 绑定和读取 `token()` 的 TSX 代码都会更新，其中类和绑定在原生侧更新。只想加上自己品牌的宿主给出主题覆盖，即其品牌要改的值和角色组成的补丁（[iOS](./ios.md#主题覆盖)、[Android](./android.md#主题覆盖)，桌面端为 `AppView::set_theme_overrides`）。新值会重新解析读取它的类；只把某个角色映射到另一个 token 的补丁会重新解析读取该角色的类。
-- **应用可以换一个主题。** `nsh` 的 [`setTheme(theme)`](../modules/nsh.md#settheme) 在应用运行时把另一份主题文档设为应用的主题，取代它的 `"theme"`，在每个平台和 `nsh test` 里都一样；`setTheme(null)` 恢复应用自己的主题，`token()` 立即读到新的 token。Rust 应用调用 `set_theme(Some(document))`。请从应用自己的主题出发构造新主题，这样类名读取的每个角色都还有 token。
+- **应用可以换一个主题。** `nsh` 的 [`setTheme(theme)`](../modules/nsh.md#settheme) 在应用运行时把另一份主题文档设为应用的主题，取代它的 `"theme"`，在每个平台和 `nsh test` 里都一样；`setTheme(null)` 恢复应用自己的主题，`token()` 在本轮之后的那一帧读到新的 token。Rust 应用调用 `set_theme(Some(document))`。请从应用自己的主题出发构造新主题，这样类名读取的每个角色都还有 token。
 - **与其他类名一样检查。** 既不是默认主题、也不是应用 `"theme"` 中角色的名称，在构建时会报告为未知类（`unknown class 'bg-chart-up'`）。要使用只有宿主或运行时设置的主题提供的 token，在应用的 `"theme"` 里也给它一个值：应用单独运行时显示这个值。
 
 读取主题的类和其他类一样，在它读取的内容每次变化时只解析一次：绘制时的开销与调色板颜色相同。主题不为之提供任何角色的类，首次解析时一次查找即可判定。
 
 ### TSX 中的 `token()`
 
-`nsh` 的 `token(name)` 是令牌的值：颜色是 `#rrggbbaa`，长度是以点为单位的数值，字体是字体族名称。它是响应式的，在组件、memo 或 effect 中读取它的代码会在该令牌变化时（换主题、补丁、选择修饰器的上下文）重新运行，适合类名用不到的地方，例如画布或图表：
+`nsh` 的 `token(name)` 是令牌的值，采用主题格式的规范形式：颜色是 `#rrggbb`（不完全不透明时为 `#rrggbbaa`），长度是以点为单位的数值，字体是字体族列表，阴影、渐变等复合值是由其成员组成的对象（[`token`](../modules/nsh.md#token)）。它是响应式的，在组件、memo 或 effect 中读取它的代码会在该令牌变化时（换主题、补丁、选择修饰器的上下文）重新运行，适合类名用不到的地方，例如画布或图表：
 
 ```tsx
 import { Canvas, token } from "nsh";

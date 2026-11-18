@@ -19,7 +19,7 @@ use std::{
 
 use nsh_core::{
     desktop::Display,
-    element::{AdaptiveShadow, ScopeModifiers, Token, Tokens},
+    element::{Diagnostic, ScopeModifiers, ThemeDocument, Tokens},
     platform::{Appearance, ColorScheme, Environment, Idiom, Os},
 };
 use rquickjs::qjs;
@@ -94,7 +94,8 @@ pub(crate) struct Env {
     appearance: Cell<Appearance>,
     /// The insets context (owned): screens and modals provide theirs.
     insets: Cell<JsValue>,
-    /// The design tokens the app is drawn with ([`set_tokens`]).
+    /// The design tokens the app is drawn with, as the core resolved them
+    /// ([`set_tokens`]).
     tokens: RefCell<Arc<Tokens>>,
     /// A signal of their version (owned), which every `token()` reads:
     /// set when most of the tokens read changed (a new theme).
@@ -114,9 +115,16 @@ pub(crate) struct Env {
     /// value changes and few do: what read a token follows that token,
     /// and a change of another one runs nothing of it.
     token_signals: RefCell<FxHashMap<Box<str>, JsValue>>,
-    /// The theme document the app was built with (`nsh.json`), which
-    /// `setTheme(null)` gives back (`None`: it has none).
-    built_theme: RefCell<Option<String>>,
+    /// The document `setTheme(null)` gives back: the app's built-in one
+    /// (`nsh.json`'s `"theme"`), else the UI sets' the core resolved with
+    /// while no `setTheme` document was active (`None`: none known yet).
+    base_document: RefCell<Option<Arc<ThemeDocument>>>,
+    /// Whether a `setTheme` document is active (until `setTheme(null)`).
+    runtime_theme: Cell<bool>,
+    /// The document a write of this turn activated (the bundle's setup,
+    /// `setTheme`), until the core hands tokens resolved with it: what
+    /// `setModifier` and `updateTheme` are checked against meanwhile.
+    turn_document: RefCell<Option<Arc<ThemeDocument>>>,
     /// The displays the platform reported last.
     displays: RefCell<Vec<Display>>,
     /// What `appInfo()` reports: the build's ([`set_app_info`]).
@@ -155,7 +163,9 @@ impl Default for Env {
             overflowed: Cell::new(false),
             tokens_version: Cell::new(0),
             token_signals: RefCell::default(),
-            built_theme: RefCell::default(),
+            base_document: RefCell::default(),
+            runtime_theme: Cell::new(false),
+            turn_document: RefCell::default(),
             displays: RefCell::default(),
             app: RefCell::default(),
         }
@@ -279,46 +289,62 @@ pub(crate) fn init(cx: *mut JsContext) {
 /// ([`Env::overflow_signal`]).
 const TOKEN_SIGNALS: usize = 1024;
 
-/// Takes in the design tokens the app is drawn with: what read a token
-/// whose value changed runs again, once however many of the tokens it read
-/// changed.
+/// Takes in the design tokens the core draws the app with (after a theme
+/// change, the host's included): what read a token whose value changed
+/// runs again ([`install`]). While no `setTheme` document is active, their
+/// document is the one `setTheme(null)` gives back.
+pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
+    let e = env(cx);
+    e.turn_document.replace(None);
+    if !e.runtime_theme.get()
+        && let Some(document) = tokens.active_document()
+    {
+        e.base_document.replace(Some(document.clone()));
+    }
+    install(cx, tokens);
+}
+
+/// Makes `tokens` what `token()` reads: what read a token whose value
+/// changed runs again, once however many of the tokens it read changed.
 ///
 /// A change of few of the tokens read (`updateTheme` of a color) sets
 /// their own signals. A change of most of them (a new theme) sets the one
 /// signal of all tokens in their place: nearly every reader runs either
 /// way, and one signal runs them in the order they were made, the tree's,
 /// where the names' signals would run them name by name.
-pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
+fn install(cx: *mut JsContext, tokens: Arc<Tokens>) {
     let e = env(cx);
-    if **e.tokens.borrow() == *tokens {
+    let old = e.tokens.replace(tokens.clone());
+    let values = *old != *tokens;
+    // The names, their kinds or the modifiers (their contexts, the ones
+    // shown) changed: what lists them reads them again.
+    let shape = !old.same_names(&tokens) || old.modifiers() != tokens.modifiers();
+    if !values && !shape {
         return;
     }
-    let old = e.tokens.replace(tokens.clone());
     let version = e.tokens_version.get().wrapping_add(1);
     e.tokens_version.set(version);
     // What `token()` reads of a name: its value. A name that came or went
     // differs too.
-    let read = |tokens: &Tokens, name: &str| tokens.get(name);
+    let differs = |name: &str| old.value(name) != tokens.value(name);
     // Collected first: a binding running again may read a new name.
-    let (changed, names): (Vec<JsValue>, usize) = {
+    let (changed, names): (Vec<JsValue>, usize) = if values {
         let signals = e.token_signals.borrow();
         let changed = signals
             .iter()
-            .filter(|(name, _)| read(&old, name) != read(&tokens, name))
+            .filter(|(name, _)| differs(name))
             .map(|(_, signal)| *signal)
             .collect();
         (changed, signals.len())
+    } else {
+        (Vec::new(), 0)
     };
     // The scopes' tokens are made over these, whatever changed.
     let scopes = e.scopes_signal.get();
     // SAFETY: a value the environment owns.
     let scoped = !unsafe { qjs::JS_IsUndefined(scopes) };
     // Roles mapped onto other tokens: what read a role reads another one.
-    // A context picked is read by `modifier()`, of every token.
-    let whole = 2 * changed.len() > names || !old.same_roles(&tokens);
-    // The names, their kinds or the modifiers' contexts changed: what lists
-    // them reads them again.
-    let shape = !old.same_names(&tokens) || old.modifiers() != tokens.modifiers();
+    let whole = values && (2 * changed.len() > names || !old.same_roles(&tokens));
     if whole && !scoped && !shape {
         return reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
     }
@@ -328,7 +354,7 @@ pub(crate) fn set_tokens(cx: *mut JsContext, tokens: Arc<Tokens>) {
         }
         if whole {
             reactive::set_signal(cx, e.tokens_signal.get(), number(version as f32));
-        } else {
+        } else if values {
             for signal in changed {
                 reactive::set_signal(cx, signal, number(version as f32));
             }
@@ -349,9 +375,14 @@ fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> JsValue {
     if let Some(signal) = e.token_signals.borrow().get(name) {
         return *signal;
     }
-    if e.token_signals.borrow().len() >= TOKEN_SIGNALS
-        && e.tokens.borrow().kind_name(name).is_none()
-    {
+    // A theme's name: the tokens', or the document a write of this turn
+    // activated (the app's own, as the entry starts).
+    let named = e.tokens.borrow().kind_name(name).is_some()
+        || e.turn_document
+            .borrow()
+            .as_ref()
+            .is_some_and(|document| document.tokens.get(name).is_some());
+    if e.token_signals.borrow().len() >= TOKEN_SIGNALS && !named {
         e.overflowed.set(true);
         return e.overflow_signal.get();
     }
@@ -360,17 +391,74 @@ fn token_signal(cx: *mut JsContext, e: &Env, name: &str) -> JsValue {
     signal
 }
 
-/// Takes in the app's theme document `json` (`nsh:rt`'s `setup`, the
-/// entry's first statement), which `setTheme(null)` gives back. The core
-/// makes its tokens when the theme's op reaches it, and hands them on.
-pub(crate) fn take_theme(cx: *mut JsContext, json: &str) {
-    env(cx).built_theme.replace(Some(json.to_owned()));
+/// Takes in the app's theme as the bundle ships it (`nsh:rt`'s `setup`,
+/// which the entry's first import runs before any module of the app:
+/// `{ document, overrides }`, `nsh.json`'s `"theme"` and
+/// `"themeOverrides"`): the core takes them with this turn's ops, and
+/// `token()` reads them from here on, as the core installs them
+/// (`Tokens::with_app_theme`): its own install after the turn gives the
+/// same tokens. The built-in document is the one `setTheme(null)` gives
+/// back.
+pub(crate) fn take_app_theme(cx: *mut JsContext, json: &str) -> Result<(), JsValue> {
+    let e = env(cx);
+    let (document, overrides, _) = nsh_core::element::theme::read_app_theme(json);
+    if document.is_none() && overrides.is_none() {
+        return Ok(());
+    }
+    let document = document.map(Arc::new);
+    let overrides = overrides.map(Arc::new);
+    if let Some(document) = &document {
+        e.base_document.replace(Some(document.clone()));
+        e.turn_document.replace(Some(document.clone()));
+    }
+    // What the entry reads from here on: the core's install of them over
+    // the tokens it handed at start (`Tokens::with_app_theme`), which its
+    // own install, after this turn, gives again, so nothing reads twice.
+    if !e.runtime_theme.get() {
+        let current = e.tokens.borrow().clone();
+        install(
+            cx,
+            current.with_app_theme(document.as_ref(), overrides.as_ref()),
+        );
+    }
+    let prop = nsh_core::Prop::UiAppTheme(document, overrides);
+    write_theme(cx, prop)
 }
 
-/// `setTheme(theme)`: the app's theme document is `theme` from now on,
-/// as if `nsh.json` had it; `null` gives back the one the app was built
-/// with, as the entry gave it ([`take_theme`]). The core reads it when this
-/// turn's ops reach it, and `token()` reads its tokens from then on.
+/// Hands the core theme write `prop`, on the root, with this turn's ops:
+/// it resolves the theme once for all of them, and `token()` reads the
+/// result when the core hands the tokens on ([`set_tokens`]).
+fn write_theme(cx: *mut JsContext, prop: nsh_core::Prop) -> Result<(), JsValue> {
+    crate::dom::push_op(
+        cx,
+        nsh_core::Op::SetProp {
+            id: nsh_core::ROOT_ID,
+            prop,
+        },
+    )
+}
+
+/// The document this turn's writes are checked against: the one a write
+/// of this turn activated, else the one the tokens were resolved with.
+fn active_document(e: &Env) -> Arc<ThemeDocument> {
+    let turn = e.turn_document.borrow().clone();
+    turn.or_else(|| e.tokens.borrow().active_document().cloned())
+        .unwrap_or_default()
+}
+
+/// `diagnostics` as `setTheme` and `updateTheme` return them (owned): an
+/// array of `ThemeDiagnostic`s.
+fn diagnostics(cx: *mut JsContext, diagnostics: &[Diagnostic]) -> JsValue {
+    crate::host::json_to_js(cx, &nsh_core::element::theme::diagnostics_json(diagnostics))
+}
+
+/// `setTheme(theme)`: theme document `theme` is the app's from now on, in
+/// place of its built-in one (`nsh.json`'s `"theme"`), else the UI sets';
+/// `null` gives that one back. The core activates it with this turn's ops,
+/// and `token()` reads its tokens once the core hands them on. Returns the
+/// read's diagnostics and the role checks of its mappings; a text that is
+/// no document, or one of the old `cssVars` format, keeps the active
+/// document.
 unsafe extern "C" fn set_theme(
     cx: *mut JsContext,
     _this: JsValue,
@@ -381,31 +469,41 @@ unsafe extern "C" fn set_theme(
     let v = arg(argc, argv, 0);
     // SAFETY: inline tag checks.
     let nullish = unsafe { qjs::JS_IsNull(v) || qjs::JS_IsUndefined(v) };
-    // SAFETY: an inline tag check.
-    let object = unsafe { qjs::JS_IsObject(v) };
-    let json = if nullish {
-        e.built_theme.borrow().clone()
-    } else if object {
-        match to_json(cx, v) {
-            Ok(json) => Some(json.to_string()),
-            Err(exception) => return exception,
+    if nullish {
+        e.runtime_theme.set(false);
+        let base = e.base_document.borrow().clone();
+        e.turn_document.replace(base);
+        if let Err(err) = write_theme(cx, nsh_core::Prop::UiThemeDocument(None)) {
+            return err;
         }
-    } else {
-        return type_error(cx, "setTheme: expected a theme document or null");
+        return reactive::finish_value(cx, diagnostics(cx, &[]));
+    }
+    // SAFETY: an inline tag check.
+    if !unsafe { qjs::JS_IsObject(v) } {
+        return type_error(
+            cx,
+            "setTheme: expected a theme document (an object) or null",
+        );
+    }
+    let json = match to_json_text(cx, v) {
+        Ok(json) => json,
+        Err(exception) => return exception,
     };
-    if let Some(json) = json {
-        let op = nsh_core::Op::SetProp {
-            id: nsh_core::ROOT_ID,
-            prop: nsh_core::Prop::UiTheme(json.into()),
-        };
-        if let Err(err) = crate::dom::push_op(cx, op) {
+    let (document, mut said) = nsh_core::element::theme::read_document(&json);
+    if let Some(document) = document {
+        let document = Arc::new(document);
+        said.extend(e.tokens.borrow().check_document(&document));
+        e.runtime_theme.set(true);
+        e.turn_document.replace(Some(document.clone()));
+        if let Err(err) = write_theme(cx, nsh_core::Prop::UiThemeDocument(Some(document))) {
             return err;
         }
     }
-    reactive::finish_value(cx, UNDEFINED)
+    reactive::finish_value(cx, diagnostics(cx, &said))
 }
 
-/// `v` as JSON (a theme, a list of names); `Err`: the exception thrown.
+/// `v` as JSON (a theme, a list of names), walked in Rust; `Err`: the
+/// exception thrown.
 fn to_json(cx: *mut JsContext, v: JsValue) -> Result<serde_json::Value, JsValue> {
     // SAFETY: a context reference and a dup for the converter.
     let value = unsafe {
@@ -415,10 +513,23 @@ fn to_json(cx: *mut JsContext, v: JsValue) -> Result<serde_json::Value, JsValue>
     crate::protocol::to_json(&value).map_err(|_| qjs::JS_EXCEPTION)
 }
 
-/// `updateTheme(patch)`: the tokens and roles theme patch `patch` sets
-/// change, the others stay (`setTheme` replaces them all). The core merges
-/// it into the app's patch when this turn's ops reach it, in order, so two
-/// updates compose.
+/// `v` as JSON text (a theme document or patch), walked in Rust with each
+/// object's members in the order JS gives them, which a document keeps
+/// (a modifier's contexts); `Err`: the exception thrown.
+fn to_json_text(cx: *mut JsContext, v: JsValue) -> Result<String, JsValue> {
+    // SAFETY: a context reference and a dup for the converter.
+    let value = unsafe {
+        let rcx = rquickjs::Ctx::from_raw(ptr::NonNull::new_unchecked(cx));
+        rquickjs::Value::from_raw(rcx, qjs::JS_DupValue(cx, v))
+    };
+    crate::protocol::to_json_text(&value).map_err(|_| qjs::JS_EXCEPTION)
+}
+
+/// `updateTheme(patch)`: theme patch `patch` (`{ values, roles }`) is
+/// merged into the app's one patch, a later entry replacing an earlier
+/// one, with this turn's ops; `token()` reads the result once the core
+/// hands it on. Returns its diagnostics: what reading it and the active
+/// document refuse, and the role checks of its mappings.
 unsafe extern "C" fn update_theme(
     cx: *mut JsContext,
     _this: JsValue,
@@ -428,24 +539,24 @@ unsafe extern "C" fn update_theme(
     let v = arg(argc, argv, 0);
     // SAFETY: an inline tag check.
     if !unsafe { qjs::JS_IsObject(v) } {
-        return type_error(cx, "updateTheme: expected a theme patch");
+        return type_error(cx, "updateTheme: expected a theme patch (an object)");
     }
-    let json = match to_json(cx, v) {
-        Ok(json) => json.to_string(),
+    let json = match to_json_text(cx, v) {
+        Ok(json) => json,
         Err(exception) => return exception,
     };
-    let op = nsh_core::Op::SetProp {
-        id: nsh_core::ROOT_ID,
-        prop: nsh_core::Prop::UiThemeUpdate(json.into()),
-    };
-    if let Err(err) = crate::dom::push_op(cx, op) {
+    let e = env(cx);
+    let (patch, mut said) = nsh_core::element::theme::read_patch(&json);
+    said.extend(e.tokens.borrow().check_patch(&active_document(e), &patch));
+    if let Err(err) = write_theme(cx, nsh_core::Prop::UiThemeUpdate(Arc::new(patch))) {
         return err;
     }
-    reactive::finish_value(cx, UNDEFINED)
+    reactive::finish_value(cx, diagnostics(cx, &said))
 }
 
 /// `resetTheme(names?)`: the app's overrides of the tokens and roles
-/// `names` (none given: every one) go, so they read the layer below.
+/// `names` (none given: every one) go, with this turn's ops, so they read
+/// the layer below.
 unsafe extern "C" fn reset_theme(
     cx: *mut JsContext,
     _this: JsValue,
@@ -472,19 +583,17 @@ unsafe extern "C" fn reset_theme(
             None => return type_error(cx, EXPECTED),
         }
     };
-    let op = nsh_core::Op::SetProp {
-        id: nsh_core::ROOT_ID,
-        prop: nsh_core::Prop::UiThemeReset(names),
-    };
-    if let Err(err) = crate::dom::push_op(cx, op) {
+    if let Err(err) = write_theme(cx, nsh_core::Prop::UiThemeReset(names)) {
         return err;
     }
     reactive::finish_value(cx, UNDEFINED)
 }
 
-/// `setModifier(name, context)`: the theme's modifier `name` takes the
-/// context `context`, the tokens its contexts set following when this
-/// turn's ops reach the core.
+/// `setModifier(name, context)`: the active document's modifier `name`
+/// shows context `context`, with this turn's ops; `token()` reads its
+/// values once the core hands them on. The document is the one active in
+/// this turn, a `setTheme` of it included: a modifier or context it lacks
+/// throws a `TypeError` naming it, and nothing changes.
 unsafe extern "C" fn set_modifier(
     cx: *mut JsContext,
     _this: JsValue,
@@ -497,29 +606,24 @@ unsafe extern "C" fn set_modifier(
     let (Some(name), Some(context)) = (name, context) else {
         return type_error(cx, EXPECTED);
     };
-    let known = env(cx)
-        .tokens
-        .borrow()
-        .modifiers()
-        .into_iter()
-        .find(|m| *m.name == *name);
-    let Some(modifier) = known else {
-        return type_error(
-            cx,
-            &format!("setModifier: the theme has no modifier `{name}`"),
-        );
-    };
-    if !modifier.contexts.iter().any(|c| **c == *context) {
-        return type_error(
-            cx,
-            &format!("setModifier: the modifier `{name}` has no context `{context}`"),
-        );
+    let document = active_document(env(cx));
+    match nsh_core::element::theme::unknown_pick(&document, &name, &context) {
+        Some(said) if said.code == nsh_theme::code::UNKNOWN_MODIFIER => {
+            return type_error(
+                cx,
+                &format!("setModifier: the theme has no modifier `{name}`"),
+            );
+        }
+        Some(_) => {
+            return type_error(
+                cx,
+                &format!("setModifier: the modifier `{name}` has no context `{context}`"),
+            );
+        }
+        None => {}
     }
-    let op = nsh_core::Op::SetProp {
-        id: nsh_core::ROOT_ID,
-        prop: nsh_core::Prop::UiModifier(name.into(), context.into()),
-    };
-    if let Err(err) = crate::dom::push_op(cx, op) {
+    let prop = nsh_core::Prop::UiModifier(name.into(), context.into());
+    if let Err(err) = write_theme(cx, prop) {
         return err;
     }
     reactive::finish_value(cx, UNDEFINED)
@@ -555,8 +659,8 @@ unsafe extern "C" fn modifier(
     }
 }
 
-/// `modifiers()`: the theme's modifiers, each with its contexts and
-/// default.
+/// `modifiers()`: the active document's modifiers in `resolutionOrder`,
+/// each with its contexts, its default and the context it shows.
 unsafe extern "C" fn modifiers(
     cx: *mut JsContext,
     _this: JsValue,
@@ -575,14 +679,15 @@ unsafe extern "C" fn modifiers(
                 "name": &*axis.name,
                 "contexts": axis.contexts.iter().map(|c| &**c).collect::<Vec<_>>(),
                 "default": &*axis.default,
+                "selected": &*axis.selected,
             })
         })
         .collect();
     crate::host::json_to_js(cx, &serde_json::Value::Array(list))
 }
 
-/// `tokens.get(name)`: token `name` with its kind and its value in each
-/// appearance (`Tokens::value_json`), tracked as `token()` tracks it.
+/// `tokens.get(name)`: token `name` as `{ kind, value }`, its value in the
+/// canonical form (`Tokens::value_json`), tracked as `token()` tracks it.
 unsafe extern "C" fn tokens_get(
     cx: *mut JsContext,
     _this: JsValue,
@@ -699,7 +804,7 @@ pub(crate) const TOKENS_EXPORT: crate::modules::Item = (
     "tokens",
     Export::Value(make_tokens),
     Ts::value(
-        "The app's design tokens by name, reactive, for code that does not know\ntheir names ahead (an editor, a tool, an agent): `get` a token with its\nkind and its value in each appearance, `kind` of a token, `names` of\nevery token (of a kind, with a prefix), `entries` with each one's kind and\nwhat declares it.",
+        "The app's design tokens by name, reactive, for code that does not know\ntheir names ahead (an editor, a tool, an agent): `get` a token as\n`{ kind, value }` (its value as `token()` gives it), `kind` of a token,\n`names` of every token (of a kind, with a prefix), `entries` with each\none's kind and what the document declares of it.",
         "TokenDictionary",
     ),
 );
@@ -709,7 +814,7 @@ pub(crate) const SET_MODIFIER_EXPORT: crate::modules::Item = (
     "setModifier",
     Export::Function(set_modifier, 2),
     Ts::function(
-        "Gives the theme's modifier `name` (`\"brand\"`) the context `context`\n(`\"forest\"`): the tokens its contexts set take that context's values,\n`token()` reads them at once, and classes naming tokens, `nsh/base` and\nRust components follow with the next frame. A modifier or context the\ntheme has not throws a `TypeError` naming it.",
+        "Shows the context `context` (`\"forest\"`) of the active theme document's\nmodifier `name` (`\"brand\"`): the tokens its contexts set take that\ncontext's values with the turn's other theme writes: `token()`, classes\nnaming tokens, `nsh/base` and Rust components read them in the frame\nafter the turn, a read in the same turn the values before it. Overrides\n(`updateTheme`) still win over a context. A modifier or context the active\ndocument lacks (a `setTheme` of this turn counts) throws a `TypeError`\nnaming it, and nothing changes.",
         &["<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void"],
     ),
 );
@@ -719,7 +824,7 @@ pub(crate) const MODIFIER_EXPORT: crate::modules::Item = (
     "modifier",
     Export::Function(modifier, 1),
     Ts::function(
-        "The context the theme's modifier `name` has now, reactive; `undefined`\nwhen the theme has no such modifier.",
+        "The context the active theme document's modifier `name` shows, reactive:\nthe one picked (`setModifier`), else its default; `undefined` when the\ndocument has no such modifier.",
         &["<M extends keyof ThemeModifiers>(name: M): ThemeModifiers[M] | undefined"],
     ),
 );
@@ -729,7 +834,7 @@ pub(crate) const MODIFIERS_EXPORT: crate::modules::Item = (
     "modifiers",
     Export::Function(modifiers, 0),
     Ts::function(
-        "The theme's modifiers in its file's order, reactive: each one's name, its\ncontexts and the context it has when nothing else is picked.",
+        "The active theme document's modifiers in its `resolutionOrder`, reactive:\neach one's name, its contexts, the context it shows when none is picked\n(`default`) and the one it shows (`selected`).",
         &["(): ModifierAxis[]"],
     ),
 );
@@ -746,8 +851,8 @@ pub(crate) const SET_THEME_EXPORT: crate::modules::Item = (
     "setTheme",
     Export::Function(set_theme, 1),
     Ts::function(
-        "Makes `theme` the app's theme while it runs, in place of `nsh.json`'s\n`\"theme\"` and over shadcn/ui's tokens as that one is: `token()` reads it\nat once, and classes naming tokens, `nsh/base` and Rust components'\n`theme()` follow with the next frame. An embedding app's theme overrides\nstill win. `null` gives back the theme the app was built with. The\ncontexts the app picked (`setModifier`) stay picked where the new theme\nhas them. The theme is read whole: a value NSH cannot read (a color it does not know, a value\nthat is no color in one appearance where the other's is) throws a\n`TypeError` naming it, and the theme shown stays.",
-        &["(theme: Theme | null): void"],
+        "Makes theme document `theme` (its tokens with their value types, its\nmodifiers and its roles) the app's while it runs, in place of its built-in\none (`nsh.json`'s `\"theme\"`), else the UI sets', with the turn's other\ntheme writes: `token()`, classes naming tokens, `nsh/base` and Rust\ncomponents read it in the frame after the turn. `null` gives the built-in\none back. The modifier contexts picked stay picked where the new document\nhas them, and the app's overrides (`updateTheme`) stay, those\nfor names it lacks left out while it is active. A bad entry is left out;\nwhat it returns names each one, with the role checks. A text that is no\ndocument, or one of the old `cssVars` format (`nsh theme convert`\nconverts it), keeps the active document and returns its diagnostic.\nAnything but an object or `null` throws a `TypeError`.",
+        &["(theme: Theme | null): ThemeDiagnostic[]"],
     ),
 );
 
@@ -756,8 +861,8 @@ pub(crate) const UPDATE_THEME_EXPORT: crate::modules::Item = (
     "updateTheme",
     Export::Function(update_theme, 1),
     Ts::function(
-        "Changes the tokens `theme` sets while the app runs, keeping the others\n(`setTheme` replaces them all): `token()` reads them at once, and classes\nnaming tokens, `nsh/base` and Rust components' `theme()` follow with the\nnext frame. Two updates in a row both take, the later over the earlier. An\nembedding app's theme overrides still win. Its `modifiers` change the\ntheme's: the values a context sets, a context or modifier added, a\n`default` moved, the contexts picked staying picked. A token a context sets\ntakes the change's value as its own, under the contexts. The theme is read\nwhole, as `setTheme`'s: a value NSH cannot read throws a `TypeError`\nnaming it, and no token changes.",
-        &["(theme: ThemeChange): void"],
+        "Merges theme patch `patch` into the app's overrides while it runs, a\nlater entry replacing an earlier one for the same token or role\n(a value refused still replaces an earlier one, as a patch is kept as\ngiven), with the turn's other theme writes: `token()`, classes naming\ntokens, `nsh/base` and Rust components read the result in the frame after\nthe turn. Overrides win over the\nmodifier contexts picked, and an embedding app's still win over them. A\nvalue for a name the active document doesn't declare, or one that doesn't\nfit its type, is left out (and applies once a document that declares it is\nactive); a role mapped onto a token of a type it doesn't read is left out,\nand the role reads the layer below. What it returns names each. Anything\nbut an object throws a `TypeError`.",
+        &["(patch: ThemePatch): ThemeDiagnostic[]"],
     ),
 );
 
@@ -766,7 +871,7 @@ pub(crate) const RESET_THEME_EXPORT: crate::modules::Item = (
     "resetTheme",
     Export::Function(reset_theme, 1),
     Ts::function(
-        "Puts the tokens `names` back to their values in the app's theme\n(`nsh.json`'s `\"theme\"`, or the one `setTheme` set), undoing `updateTheme`\nfor them; without names, every token. A name the theme does not have is\nremoved. The other tokens stay as they are. A role's name names the token\nthe app's theme documents map it onto, as it does in a theme file.",
+        "Removes the tokens and roles `names` from the app's overrides\n(`nsh.json`'s `\"themeOverrides\"` and what `updateTheme` merged), so they\nread the layer below: the picked context's value, else the active\ndocument's; without names, every override. A reset never copies values.",
         &["(names?: (keyof Tokens | keyof Roles)[]): void"],
     ),
 );
@@ -808,7 +913,7 @@ fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
     };
     let tracked = scoped.is_none();
     let tokens = scoped.unwrap_or_else(|| e.tokens.borrow().clone());
-    // A role reads the token a theme maps it onto, when that has a value.
+    // A role reads the token it resolves to (`Tokens::role_json`).
     let mapped = name
         .as_deref()
         .filter(|_| role)
@@ -823,27 +928,25 @@ fn read_token(cx: *mut JsContext, name: Option<String>, role: bool) -> JsValue {
     let Some(name) = name else {
         return UNDEFINED;
     };
-    let name = mapped
-        .filter(|token| tokens.get(token).is_some())
-        .unwrap_or(name);
-    match tokens.get(&name) {
-        Some(Token::Color(c)) => {
-            let c = nsh_core::Color::from(c);
-            string(cx, &format!("#{:08x}", c.0))
-        }
-        Some(Token::Number(n)) => number(n),
-        Some(Token::Font(f)) => string(cx, &f),
-        // Box shadows as CSS writes them.
-        Some(Token::Shadow(s)) => {
-            string(cx, &AdaptiveShadow::new(s.iter().cloned(), []).css(false))
-        }
-        // A gradient as CSS writes it.
-        Some(Token::Gradient(g)) => string(cx, &g.css()),
-        Some(Token::String(s)) => string(cx, &s),
-        Some(Token::Boolean(b)) => boolean(b),
-        // An easing as CSS writes it.
-        Some(Token::Easing(e)) => string(cx, &e.css()),
-        _ => UNDEFINED,
+    let value = if role {
+        tokens.role_json(&name)
+    } else {
+        tokens.json(&name)
+    };
+    match value {
+        Some(json) => token_value(cx, json),
+        None => UNDEFINED,
+    }
+}
+
+/// A token's canonical JSON form (`Tokens::json`) as JS (owned), a scalar
+/// made at once.
+fn token_value(cx: *mut JsContext, json: serde_json::Value) -> JsValue {
+    match json {
+        serde_json::Value::String(s) => string(cx, &s),
+        serde_json::Value::Number(n) => qjs::JS_NewFloat64(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::Bool(b) => boolean(b),
+        json => crate::host::json_to_js(cx, &json),
     }
 }
 
@@ -852,7 +955,7 @@ pub(crate) const ROLE_EXPORT: crate::modules::Item = (
     "role",
     Export::Function(role, 1),
     Ts::function(
-        "What the theme role `name` draws with in the appearance shown, reactive,\nas `token()` gives a token: the token the app's theme maps the role onto\n(a theme document's `\"roles\"`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `overlay`'s color where the app calls that\nsurface `overlay`. The names are the roles the app's UI sets list.",
+        "What the theme role `name` draws with, reactive, as `token()` gives a\ntoken: the token the app's overrides or its active theme document map the\nrole onto (`\"roles\"`), else the token of the role's name, else\n`undefined`. A component written against a role is themed by any design\nsystem: `role(\"popover\")` is `surface-overlay`'s color where the theme\nmaps it there. The names are the roles the app's UI sets list.",
         &["<K extends keyof Roles>(name: K): Roles[K] | undefined"],
     ),
 );
@@ -862,7 +965,7 @@ pub(crate) const TOKEN_EXPORT: crate::modules::Item = (
     "token",
     Export::Function(token, 1),
     Ts::function(
-        "The design token `name` of the app's theme (`nsh.json` `\"theme\"`, over\nshadcn/ui's tokens) in the appearance shown, reactive: a color as\n`#rrggbbaa`, a number (a length in points, a duration in milliseconds), a\nfont family, box shadows, gradients and an easing as CSS writes them, a\nstring, a boolean. The names are\nthe theme's CSS variables without `--`, which classes name too\n(`bg-primary`, `bg-up/30`, `rounded-(--radius)`).",
+        "The design token `name` of the app's active theme document, reactive, in\nthe theme format's canonical form with references resolved: a color as\n`#rrggbb` (`#rrggbbaa` below full opacity), a number, a font family, a\nstring, a boolean, a duration as `<n>ms`, an easing as it was read (a\nkeyword, `\"ease-in\"`, or its four control points), a text style, shadow,\ngradient, blur, border or transition as an object of its members;\n`undefined` when the document has none. Classes name the same tokens\n(`bg-primary`, `rounded-(--radius-card)`).",
         &["<K extends keyof Tokens>(name: K): Tokens[K]"],
     ),
 );
@@ -1092,8 +1195,8 @@ pub(crate) fn make_scope_tokens(
         None
     };
     let patch = if has_theme {
-        let json = match to_json(cx, theme) {
-            Ok(json) => json.to_string(),
+        let json = match to_json_text(cx, theme) {
+            Ok(json) => json,
             Err(exception) => return exception,
         };
         Some(nsh_theme::read_patch(&json).0)

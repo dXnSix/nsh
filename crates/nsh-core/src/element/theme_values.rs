@@ -428,38 +428,50 @@ fn theme_duration(d: Duration) -> nsh_theme::Duration {
 
 fn theme_easing(e: CubicBezier) -> nsh_theme::Easing {
     let [a, b, c, d] = e.0;
-    nsh_theme::Easing::Bezier([f64::from(a), f64::from(b), f64::from(c), f64::from(d)])
+    nsh_theme::Easing::Bezier([decimal(a), decimal(b), decimal(c), decimal(d)])
+}
+
+/// `v` as the shortest decimal that reads back as it (`0.1`, not the
+/// widening `0.10000000149011612`): what a document wrote, read as an `f32`.
+fn decimal(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(f64::from(v))
+}
+
+/// An angle of `v` degrees, kept from radians: rounded to a ten-thousandth
+/// of a degree, so `135` reads back as `135`.
+fn degrees(v: f32) -> f64 {
+    (f64::from(v) * 1e4).round() / 1e4
 }
 
 /// `token` as `nsh-theme`'s literal: what a patch's entry for it holds.
 pub(crate) fn value_of(token: &Token) -> Value {
     match token {
         Token::Color(c) => Value::Color(theme_color(*c)),
-        Token::Number(n) => Value::Number(f64::from(*n)),
+        Token::Number(n) => Value::Number(decimal(*n)),
         Token::Font(f) => Value::Font(nsh_theme::Font::new(&**f)),
         Token::String(s) => Value::String(s.clone()),
         Token::Boolean(b) => Value::Boolean(*b),
         Token::Duration(d) => Value::Duration(theme_duration(*d)),
         Token::Easing(e) => Value::Easing(theme_easing(*e)),
         Token::Typography(t) => {
-            let mut out = nsh_theme::Typography::new(f64::from(t.size.0));
+            let mut out = nsh_theme::Typography::new(decimal(t.size.0));
             if let Some(family) = &t.font_family {
                 out = out.with_font_family(nsh_theme::Font::new(&**family));
             }
             if let Some(weight) = t.font_weight {
-                out = out.with_font_weight(f64::from(weight));
+                out = out.with_font_weight(decimal(weight));
             }
             match t.line_height {
                 Some(LineHeight::Multiple(m)) => {
-                    out = out.with_line_height(nsh_theme::LineHeight::Multiple(f64::from(m)));
+                    out = out.with_line_height(nsh_theme::LineHeight::Multiple(decimal(m)));
                 }
                 Some(LineHeight::Points(p)) => {
-                    out = out.with_line_height(nsh_theme::LineHeight::Px(f64::from(p.0)));
+                    out = out.with_line_height(nsh_theme::LineHeight::Px(decimal(p.0)));
                 }
                 _ => {}
             }
             if let Some(spacing) = t.letter_spacing {
-                out = out.with_letter_spacing(f64::from(spacing.0));
+                out = out.with_letter_spacing(decimal(spacing.0));
             }
             Value::Typography(out)
         }
@@ -468,9 +480,9 @@ pub(crate) fn value_of(token: &Token) -> Value {
                 .iter()
                 .map(|l| {
                     nsh_theme::ShadowLayer::new(theme_packed(l.color))
-                        .with_offset(f64::from(l.offset_x.0), f64::from(l.offset_y.0))
-                        .with_blur(f64::from(l.blur.0))
-                        .with_spread(f64::from(l.spread.0))
+                        .with_offset(decimal(l.offset_x.0), decimal(l.offset_y.0))
+                        .with_blur(decimal(l.blur.0))
+                        .with_spread(decimal(l.spread.0))
                         .with_inset(l.inset)
                 })
                 .collect(),
@@ -478,10 +490,10 @@ pub(crate) fn value_of(token: &Token) -> Value {
         Token::Gradient(g) => {
             let kind = match g.kind {
                 GradientKind::Linear { angle } => nsh_theme::GradientKind::Linear {
-                    angle: Member::Value(f64::from(angle.to_degrees())),
+                    angle: Member::Value(degrees(angle.to_degrees())),
                 },
                 GradientKind::Conic { from, .. } => nsh_theme::GradientKind::Conic {
-                    from: Member::Value(f64::from(from.to_degrees())),
+                    from: Member::Value(degrees(from.to_degrees())),
                 },
                 GradientKind::Radial { .. } => nsh_theme::GradientKind::Radial,
                 // A corner's angle depends on the box: downwards.
@@ -494,7 +506,7 @@ pub(crate) fn value_of(token: &Token) -> Value {
                 .iter()
                 .map(|stop| {
                     let position = match stop.position {
-                        Some(DefiniteLength::Fraction(p)) => Some(Member::Value(f64::from(p.0))),
+                        Some(DefiniteLength::Fraction(p)) => Some(Member::Value(decimal(p.0))),
                         _ => None,
                     };
                     nsh_theme::GradientStop::new(theme_packed(stop.color), position)
@@ -507,11 +519,11 @@ pub(crate) fn value_of(token: &Token) -> Value {
                 BlurKind::Background => nsh_theme::BlurKind::Background,
                 BlurKind::Layer => nsh_theme::BlurKind::Layer,
             },
-            f64::from(b.radius.0),
+            decimal(b.radius.0),
         )),
         Token::Border(b) => Value::Border(nsh_theme::Border::new(
             theme_color(b.color),
-            f64::from(b.width.0),
+            decimal(b.width.0),
             match b.style {
                 BorderStyle::Solid => nsh_theme::BorderStyle::Solid,
                 BorderStyle::Dashed => nsh_theme::BorderStyle::Dashed,

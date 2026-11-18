@@ -75,6 +75,11 @@ pub struct Tokens {
     roles: FxHashMap<Box<str>, Option<Box<str>>>,
     /// What they were resolved from (`None`: made of values alone).
     layers: Option<Arc<ThemeLayers>>,
+    /// What resolving the layers gave, shared with the core: each value in
+    /// nsh-theme's form, which keeps what the typed values drop (an
+    /// easing's keyword), for [`Tokens::json`]. Not compared: the values
+    /// are made of it.
+    resolved: Option<Arc<Resolved>>,
     /// Whether the app has a theme of its own ([`Tokens::is_themed`]): not
     /// a token, so not compared.
     themed: bool,
@@ -422,7 +427,8 @@ pub(crate) fn merge_role(
 
 /// The core's own roles and Tailwind's patterns, for tokens resolved
 /// without a core ([`Tokens::resolve`]).
-static CORE_ROLES: LazyLock<Arc<RoleTable>> = LazyLock::new(|| Arc::new(RoleTable::default()));
+pub(crate) static CORE_ROLES: LazyLock<Arc<RoleTable>> =
+    LazyLock::new(|| Arc::new(RoleTable::default()));
 
 /// A token's value: one variant per value type
 /// ([`nsh_theme::ValueType`]), each in its Rust type
@@ -459,6 +465,27 @@ pub enum Token {
 }
 
 impl Token {
+    /// Its value in the theme format's JSON form
+    /// (`docs/dev/theme-format.md`, "Value types"; `nsh_theme::Value::to_json`)
+    /// as this typed value holds it: a color as `#rrggbb` (`#rrggbbaa`
+    /// below full opacity), a number, a font family, a string, a boolean, a
+    /// duration as `<n>ms`, an easing as `[x1, y1, x2, y2]` (the typed
+    /// value keeps no keyword), a compound as an object of its members (a
+    /// shadow as an array of layers) with those at their default left out.
+    /// A value is resolved: it holds no reference. TS's reads give
+    /// [`Tokens::json`], which keeps the form the value was read in.
+    ///
+    /// ```
+    /// use nsh_core::{color::rgb, element::Token};
+    ///
+    /// let token = Token::Color(rgb(0x3e63dd).into());
+    /// assert_eq!(token.to_json(), serde_json::json!("#3e63dd"));
+    /// assert_eq!(Token::Number(12.5).to_json(), serde_json::json!(12.5));
+    /// ```
+    pub fn to_json(&self) -> crate::JsonValue {
+        super::theme_values::value_of(self).to_json()
+    }
+
     /// Its value type.
     pub fn value_type(&self) -> ValueType {
         match self {
@@ -531,15 +558,18 @@ impl CubicBezier {
 }
 
 /// A modifier of the active theme document, as [`super::modifiers`] lists
-/// it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// it (TS's `modifiers()`, `ModifierAxis`).
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModifierAxis {
     /// Its name (`brand`).
     pub name: Box<str>,
-    /// Its contexts (`ocean`, `forest`).
+    /// Its contexts (`ocean`, `forest`), in the document's order.
     pub contexts: Vec<Box<str>>,
     /// The context picked when nothing else is.
     pub default: Box<str>,
+    /// The context it shows: the one picked, else its default.
+    pub selected: Box<str>,
 }
 
 impl Tokens {
@@ -560,7 +590,7 @@ impl Tokens {
             roles: CORE_ROLES.clone(),
         });
         let (tokens, resolved) = Tokens::resolve_layers(layers);
-        (tokens, resolved.diagnostics)
+        (tokens, resolved.diagnostics.clone())
     }
 
     /// [`Tokens::resolve`] with the roles `declarations` declare besides the
@@ -584,15 +614,18 @@ impl Tokens {
         });
         let (tokens, resolved) = Tokens::resolve_layers(layers);
         let roles = tokens.check_roles(&resolved);
-        let mut diagnostics = resolved.diagnostics;
+        let mut diagnostics = resolved.diagnostics.clone();
         diagnostics.extend(roles);
         (tokens, diagnostics)
     }
 
     /// The tokens of `layers`, and what resolving them gave.
-    pub(crate) fn resolve_layers(layers: Arc<ThemeLayers>) -> (Tokens, Resolved) {
-        let resolved =
-            nsh_theme::resolve(&layers.document, &layers.selection, &layers.patch_refs());
+    pub(crate) fn resolve_layers(layers: Arc<ThemeLayers>) -> (Tokens, Arc<Resolved>) {
+        let resolved = Arc::new(nsh_theme::resolve(
+            &layers.document,
+            &layers.selection,
+            &layers.patch_refs(),
+        ));
         let tokens = Tokens::from_resolved(&resolved, layers, None);
         (tokens, resolved)
     }
@@ -601,7 +634,7 @@ impl Tokens {
     /// tokens before and what changed since), only the changed names are
     /// converted; the others are taken from `previous`.
     pub(crate) fn from_resolved(
-        resolved: &Resolved,
+        resolved: &Arc<Resolved>,
         layers: Arc<ThemeLayers>,
         previous: Option<(&Tokens, &nsh_theme::Changes)>,
     ) -> Tokens {
@@ -637,6 +670,7 @@ impl Tokens {
             values,
             roles,
             layers: Some(layers),
+            resolved: Some(resolved.clone()),
             themed: false,
         }
     }
@@ -770,19 +804,24 @@ impl Tokens {
         )
     }
 
-    /// The active document's modifiers, each with its contexts and
-    /// default, in its order.
+    /// The active document's modifiers, each with its contexts, its
+    /// default and the context it shows, in `resolutionOrder` (the order
+    /// their contexts apply in).
     pub fn modifiers(&self) -> Vec<ModifierAxis> {
         let Some(document) = self.document() else {
             return Vec::new();
         };
         document
-            .modifiers
+            .resolution_order
             .iter()
-            .map(|(name, modifier)| ModifierAxis {
-                name: name.into(),
-                contexts: modifier.contexts.keys().map(Into::into).collect(),
-                default: modifier.default.as_str().into(),
+            .filter_map(|name| {
+                let modifier = document.modifiers.get(name)?;
+                Some(ModifierAxis {
+                    name: name.as_str().into(),
+                    contexts: modifier.contexts.keys().map(Into::into).collect(),
+                    default: modifier.default.as_str().into(),
+                    selected: self.modifier(name)?.into(),
+                })
             })
             .collect()
     }
@@ -940,6 +979,27 @@ impl Tokens {
         (!refused).then_some(role)
     }
 
+    /// Token `name`'s value in the theme format's canonical JSON form
+    /// (`docs/dev/theme-format.md`, "Value types"), as TS's `token()` and
+    /// `tokens.get` give it on every script runtime: the value as the
+    /// core resolved it (references resolved, a compound as an object of
+    /// its members, those at their default left out), in the form it was
+    /// read (an easing's keyword stays a keyword, a transition's easing
+    /// too), from nsh-theme's resolved value; tokens made of values alone
+    /// give their typed value's ([`Token::to_json`]). `None`: there is
+    /// none.
+    pub fn json(&self, name: &str) -> Option<crate::JsonValue> {
+        let token = self.values.get(name)?;
+        let resolved = self.resolved.as_deref().and_then(|r| r.values.get(name));
+        Some(resolved.map_or_else(|| token.to_json(), nsh_theme::Value::to_json))
+    }
+
+    /// What the role named `name` reads ([`Tokens::role_by_name`]) as
+    /// [`Tokens::json`] gives it: TS's `role()`.
+    pub fn role_json(&self, name: &str) -> Option<crate::JsonValue> {
+        self.json(self.role_target(name)?)
+    }
+
     /// The token the role named `name` reads, whatever its type: the token
     /// it resolves to ([`Tokens::role`]), `None` when there is none or the
     /// token of its own name has the wrong type.
@@ -1045,10 +1105,13 @@ fn resolve_roles(layers: &ThemeLayers) -> FxHashMap<Box<str>, Option<Box<str>>> 
 #[cfg(test)]
 impl Tokens {
     pub(crate) fn insert(&mut self, name: &str, token: Token) {
+        // Values set by hand: their JSON is the typed values'.
+        self.resolved = None;
         self.values.insert(name.into(), token);
     }
 
     pub(crate) fn remove_named(&mut self, name: &str) {
+        self.resolved = None;
         self.values.remove(name);
     }
 

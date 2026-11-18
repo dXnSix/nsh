@@ -395,6 +395,7 @@ fn path_of(specifier: &str) -> String {
 /// What the core's tables add to one of nsh's modules.
 fn generated(module: &str) -> String {
     match module {
+        "nsh" => crate::modules::theme_types(),
         "nsh/animated" => nsh_core::js::animation::declarations(),
         "nsh/canvas" => nsh_core::js::canvas::declarations(),
         "nsh/desktop" => nsh_core::desktop::window::declarations(),
@@ -1715,5 +1716,80 @@ declare const text: "export default ignored";
                 .expect("the module's names");
             assert_eq!(actual, declared.join(","), "{specifier}");
         }
+    }
+
+    /// `nsh`'s declarations.
+    fn nsh_types() -> String {
+        type_definitions(&[])
+            .into_iter()
+            .find(|(path, _)| path == "nsh/index.d.ts")
+            .expect("nsh/index.d.ts")
+            .1
+    }
+
+    /// `TokenKind` and `TokenKindValues` come from `nsh-theme`'s value
+    /// types, each typed by the mapping `.nsh/types` types tokens with.
+    #[test]
+    fn theme_token_kinds_are_nsh_themes_value_types() {
+        let ts = nsh_types();
+        let kinds: Vec<String> = nsh_theme::ValueType::ALL
+            .iter()
+            .map(|t| format!("{:?}", t.name()))
+            .collect();
+        assert!(
+            ts.contains(&format!("export type TokenKind = {};", kinds.join(" | "))),
+            "{ts}"
+        );
+        for value_type in nsh_theme::ValueType::ALL {
+            let line = format!(
+                "  {}: {};",
+                value_type.name(),
+                nsh_core::element::token_ts_type(value_type)
+            );
+            assert!(ts.contains(&line), "{line}");
+        }
+        // No type has the old format's member.
+        assert!(!ts.contains("cssVars:") && !ts.contains("cssVars?:"));
+    }
+
+    /// The document, patch and diagnostic shapes are declared, the codes
+    /// from `nsh-theme`'s list, and the writes return diagnostics.
+    #[test]
+    fn theme_documents_patches_and_diagnostics_are_declared() {
+        let ts = nsh_types();
+        for shape in [
+            "export interface Theme {",
+            "export interface ThemePatch {",
+            "export interface ThemeDiagnostic {",
+            "export type TokenDeclaration = {",
+            "export interface ModifierAxis {",
+            "  selected: string;",
+            "resolutionOrder?: string[];",
+        ] {
+            assert!(ts.contains(shape), "{shape}");
+        }
+        for (code, _) in nsh_theme::code::ALL {
+            assert!(ts.contains(&format!("{code:?}")), "{code}");
+        }
+        assert!(
+            ts.contains("setTheme(theme: Theme | null): ThemeDiagnostic[];"),
+            "{ts}"
+        );
+        assert!(
+            ts.contains("updateTheme(patch: ThemePatch): ThemeDiagnostic[];"),
+            "{ts}"
+        );
+    }
+
+    /// `setModifier` and `modifier` are typed by the app's modifiers and
+    /// their contexts (`ThemeModifiers`, `.nsh/types/nsh/modifiers.d.ts`).
+    #[test]
+    fn set_modifier_is_typed_by_the_theme_modifiers() {
+        let ts = nsh_types();
+        assert!(
+            ts.contains("setModifier<M extends keyof ThemeModifiers>(name: M, context: ThemeModifiers[M]): void;"),
+            "{ts}"
+        );
+        assert!(ts.contains("export interface ThemeModifiers {}"));
     }
 }

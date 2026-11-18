@@ -39,30 +39,31 @@ pub(crate) fn refused(diagnostics: &[Diagnostic]) -> bool {
         .any(|d| d.code == code::NOT_A_DOCUMENT || d.code == code::LEGACY_FORMAT)
 }
 
-/// Reads theme document `text` and logs its diagnostics: the document
-/// (`None` when it is refused whole, [`refused`]) and the diagnostics.
-pub(crate) fn read_document(text: &str) -> (Option<ThemeDocument>, Vec<Diagnostic>) {
+/// Reads theme document `text` and logs its diagnostics (`nsh::theme`):
+/// the document (`None` when it is refused whole: no document,
+/// `not-a-document`, or one of the old `cssVars` format, `legacy-format`)
+/// and the diagnostics. The script runtimes read TS's `setTheme` with it.
+pub fn read_document(text: &str) -> (Option<ThemeDocument>, Vec<Diagnostic>) {
     let read = nsh_theme::read(text);
     report(&read.diagnostics);
     let document = (!refused(&read.diagnostics)).then_some(read.document);
     (document, read.diagnostics)
 }
 
-/// Reads patch `text` (the app's or the host's overrides) and logs its
-/// diagnostics. Text that is no patch gives an empty one.
-pub(crate) fn read_patch(text: &str) -> (nsh_theme::Patch, Vec<Diagnostic>) {
+/// Reads patch `text` (the app's or the host's overrides, TS's
+/// `updateTheme`) and logs its diagnostics (`nsh::theme`). Text that is no
+/// patch gives an empty one.
+pub fn read_patch(text: &str) -> (nsh_theme::Patch, Vec<Diagnostic>) {
     let (patch, diagnostics) = nsh_theme::read_patch(text);
     report(&diagnostics);
     (patch, diagnostics)
 }
 
 /// The warning a pick of `context` for modifier `name` gives in `document`
-/// (`unknown-modifier`, `unknown-context`), `None` when both exist.
-pub(crate) fn unknown_pick(
-    document: &ThemeDocument,
-    name: &str,
-    context: &str,
-) -> Option<Diagnostic> {
+/// (`unknown-modifier`, `unknown-context`), `None` when both exist: what
+/// the core's `set_modifier` logs, and TS's `setModifier` throws as a
+/// `TypeError`.
+pub fn unknown_pick(document: &ThemeDocument, name: &str, context: &str) -> Option<Diagnostic> {
     let Some(modifier) = document.modifiers.get(name) else {
         return Some(Diagnostic::warning(
             code::UNKNOWN_MODIFIER,
@@ -77,6 +78,83 @@ pub(crate) fn unknown_pick(
             format!("The modifier `{name}` has no context `{context}`; the pick is ignored."),
         )
     })
+}
+
+/// Reads the theme a bundle's setup ships (`setup.ui`: `{ "document": …,
+/// "overrides": … }`, each `nsh.json`'s `"theme"` and `"themeOverrides"` as
+/// written, or `null`) and logs its diagnostics: the app's built-in document
+/// (`None`: none, or one refused whole, as [`read_document`] refuses it),
+/// its overrides (`None`: none) and the diagnostics. Text that is no such
+/// object gives one `not-a-document` error and neither.
+pub fn read_app_theme(
+    text: &str,
+) -> (
+    Option<ThemeDocument>,
+    Option<nsh_theme::Patch>,
+    Vec<Diagnostic>,
+) {
+    // Taken apart by nsh-theme, which keeps the members' order (a
+    // `serde_json::Value` sorts them without serde_json's `preserve_order`,
+    // and a document's order is its own: its modifiers' contexts).
+    let (setup, mut said) = nsh_theme::object_members(text);
+    let Some(setup) = setup else {
+        let said = vec![Diagnostic::error(
+            code::NOT_A_DOCUMENT,
+            "",
+            "The app's theme setup is no `{ document, overrides }` object; the app has no theme \
+             of its own.",
+        )];
+        report(&said);
+        return (None, None, said);
+    };
+    report(&said);
+    let part = |key: &str| {
+        setup
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, text)| text.clone())
+            .filter(|text| text.trim() != "null")
+    };
+    let document = part("document").and_then(|text| {
+        let (document, diagnostics) = read_document(&text);
+        said.extend(diagnostics);
+        document
+    });
+    let overrides = part("overrides").map(|text| {
+        let (patch, diagnostics) = read_patch(&text);
+        said.extend(diagnostics);
+        patch
+    });
+    (document, overrides, said)
+}
+
+/// Keeps the picks of `selection` whose modifier and context `document`
+/// has: what activating `document` keeps of the app's picks (the others
+/// show their defaults again).
+pub(crate) fn keep_picks(selection: &mut nsh_theme::Selection, document: &ThemeDocument) {
+    selection.picks.retain(|name, context| {
+        document
+            .modifiers
+            .get(name)
+            .is_some_and(|m| m.contexts.contains_key(context))
+    });
+}
+
+/// `diagnostics` as TS's `setTheme` and `updateTheme` return them: an
+/// array of `{ severity, code, pointer, message }` (`ThemeDiagnostic`), the
+/// same on every script runtime.
+pub fn diagnostics_json(diagnostics: &[Diagnostic]) -> crate::JsonValue {
+    diagnostics
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "severity": d.severity.name(),
+                "code": d.code,
+                "pointer": d.pointer,
+                "message": d.message,
+            })
+        })
+        .collect()
 }
 
 /// A JSON pointer of `parts`, each escaped (`~0`, `~1`).
