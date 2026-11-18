@@ -21,6 +21,10 @@ const GALLERY: &str = include_str!("fixtures/gallery-theme.json");
 /// The compat `base` case's theme (its `nsh.json`'s `"theme"`), which
 /// extended the default.
 const COMPAT_BASE: &str = include_str!("fixtures/compat-base-theme.json");
+/// post-editor's theme before the conversion, which extended the default.
+const POST_EDITOR: &str = include_str!("fixtures/post-editor-theme.json");
+/// gallery-rs' theme before the conversion, which extended the default.
+const GALLERY_RS: &str = include_str!("fixtures/gallery-rs-theme.json");
 /// A theme with modifiers whose contexts differ by appearance.
 const APPEARANCE: &str = include_str!("fixtures/appearance-modifier.json");
 /// A theme document with paths, docs, every old kind, roles and a modifier
@@ -935,6 +939,16 @@ fn equivalence_declared_tokens_and_a_late_default() {
 }
 
 #[test]
+fn equivalence_post_editor_theme_over_the_default() {
+    assert_equivalent(POST_EDITOR, Some(DEFAULT));
+}
+
+#[test]
+fn equivalence_gallery_rs_theme_over_the_default() {
+    assert_equivalent(GALLERY_RS, Some(DEFAULT));
+}
+
+#[test]
 fn equivalence_declared_theme_over_the_default() {
     assert_equivalent(DECLARED, Some(DEFAULT));
 }
@@ -961,5 +975,69 @@ fn equivalence_a_role_var_over_a_declared_base() {
     assert_equivalent(
         r##"{ "cssVars": { "light": { "card": "var(--popover)", "ink": "#222222" } } }"##,
         Some(DECLARED),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The committed conversions: each app theme that extended nsh-base's default
+// is in the repository as the converter writes it over that default.
+
+/// The JSON of `text`, failing with `what`'s name.
+fn json(text: &str, what: &str) -> serde_json::Value {
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("{what}: {e}"))
+}
+
+/// `committed` is `old` converted over the default, as JSON.
+fn assert_committed(old: &str, committed: &serde_json::Value, what: &str) {
+    let (text, diagnostics) = convert(old, Some(DEFAULT));
+    assert!(
+        diagnostics.iter().all(|d| !d.is_error()),
+        "{what}: {diagnostics:#?}"
+    );
+    assert_eq!(
+        &json(&text, what),
+        committed,
+        "{what} is not the converter's output over the default"
+    );
+}
+
+#[test]
+fn committed_nsh_gallery_ui_theme_is_its_conversion_over_the_default() {
+    let committed = include_str!("../../../../../examples/nsh-gallery-ui/theme.json");
+    assert_committed(
+        GALLERY,
+        &json(committed, "nsh-gallery-ui"),
+        "examples/nsh-gallery-ui/theme.json",
+    );
+}
+
+#[test]
+fn committed_post_editor_theme_is_its_conversion_over_the_default() {
+    let committed = include_str!("../../../../../examples/post-editor/theme.json");
+    assert_committed(
+        POST_EDITOR,
+        &json(committed, "post-editor"),
+        "examples/post-editor/theme.json",
+    );
+}
+
+#[test]
+fn committed_gallery_rs_theme_is_its_conversion_over_the_default() {
+    let committed = include_str!("../../../../../examples/gallery-rs/theme.json");
+    assert_committed(
+        GALLERY_RS,
+        &json(committed, "gallery-rs"),
+        "examples/gallery-rs/theme.json",
+    );
+}
+
+#[test]
+fn committed_compat_base_theme_is_its_conversion_over_the_default() {
+    let config = include_str!("../../../../../tests/compat/cases/base/nsh.json");
+    let theme = json(config, "tests/compat/cases/base/nsh.json")["theme"].clone();
+    assert_committed(
+        COMPAT_BASE,
+        &theme,
+        "tests/compat/cases/base/nsh.json's \"theme\"",
     );
 }

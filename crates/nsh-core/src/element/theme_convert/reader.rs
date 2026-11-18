@@ -1401,9 +1401,9 @@ impl Old {
 /// the sets registered.
 enum Provider {
     /// The defaults of a UI set's own reader (none: a file read alone).
-    Source(Store),
+    Source(Box<Store>),
     /// The registered documents' declarations, and their modifiers.
-    Declared(Declarations, Option<Modifiers>),
+    Declared(Box<(Declarations, Option<Modifiers>)>),
 }
 
 /// `Declarations::add_document`: the theme document `json` (`value`) of
@@ -1429,7 +1429,7 @@ fn add_document(
     });
     left_out.extend(said);
     own.defaults = defaults;
-    Ok((Provider::Declared(own, modifiers), left_out))
+    Ok((Provider::Declared(Box::new((own, modifiers))), left_out))
 }
 
 /// Theme file `old` read as the old runtime read an app's theme over `over`,
@@ -1444,7 +1444,7 @@ pub(super) fn read_old(old: &str, over: Option<&str>) -> Result<Old, (bool, Stri
     let mut left_out: Vec<(bool, LeftOut)> = Vec::new();
     let mut base: Option<(&str, JsonValue)> = None;
     let provider = match over {
-        None => Provider::Source(Store::default()),
+        None => Provider::Source(Box::default()),
         Some(json) => {
             let value: JsonValue = serde_json::from_str(json).map_err(|e| (true, not_json(e)))?;
             let (provider, said) = if declares_tokens(&value) {
@@ -1453,7 +1453,7 @@ pub(super) fn read_old(old: &str, over: Option<&str>) -> Result<Old, (bool, Stri
                 // The set's own reader reads its default with
                 // `theme_file::parse` alone: no modifiers.
                 let (tokens, said) = parse(json, &Store::default()).map_err(|e| (true, e))?;
-                (Provider::Source(tokens), said)
+                (Provider::Source(Box::new(tokens)), said)
             };
             left_out.extend(said.into_iter().map(|l| (true, l)));
             base = Some((json, value));
@@ -1480,7 +1480,10 @@ pub(super) fn read_old(old: &str, over: Option<&str>) -> Result<Old, (bool, Stri
             // set's own reader, none (`Declarations::default()`): the file
             // replaces the set's defaults.
             let (set, documents, base_read) = match provider {
-                Provider::Declared(set, documents) => (set, documents, true),
+                Provider::Declared(declared) => {
+                    let (set, documents) = *declared;
+                    (set, documents, true)
+                }
                 Provider::Source(_) => (Declarations::default(), None, false),
             };
             let (mut set, read_out) = set.with_file(&value, APP_THEME);

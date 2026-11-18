@@ -143,7 +143,7 @@ QuickJS 字节码是受信任的输入，只能从你自己应用的文件中加
 
 `AppView::set_locale(Some(locale))` 和 `AppView::set_font_scale(Some(scale))` 用你的应用的语言和文字大小代替系统的设置（`None` 恢复跟随系统）：`locale()`、`Intl`、`fontScale()` 和文字立即跟随（[设备与环境](./device-and-environment.md#在嵌入它的应用中)）。
 
-`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件，其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 恢复应用自己的主题；无法解析的文件返回错误，不做任何改动）。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
+`AppView::set_theme_overrides(Some(json))` 把你的应用的品牌加在应用的[主题](./tailwind.md#主题-token)之上：一个主题补丁 `{ "values": { token: value }, "roles": { role: token } }`，形状与 [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) 接受的相同。对应用主题声明的 token，其值覆盖应用的主题、它选中的上下文（浅色和深色相同）以及应用自己的覆盖，应用的其他 token 保持不变；`bg-primary` 等类名立即更新样式，之后加载的应用一开始就使用它（`None` 清除它并恢复应用自己的主题；不是 JSON 的文本返回错误，不做任何改动）。主题没有声明的名字或不符合其 token 类型的值会被略去并记录日志（[主题覆盖](./ios.md#主题覆盖)）。
 
 原生组件通过 `AppView::register_component` 注册，见[原生组件](./native-components.md#在-windows-上注册rust)。
 `set_ui_sets(sets)` 设置每个引擎提供的 UI 集合：NSH 的（`nsh_base::registry()`）和你的 crate 的（`my_app::registry()`，

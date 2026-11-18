@@ -166,10 +166,12 @@ text size in place of the system's (`None` follows the system's again): `locale(
 follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
 
 `AppView::set_theme_overrides(Some(json))` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens): a
-theme file in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light and dark
-mode while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it
-(`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). The app reads the
-file with its own theme's reader, so a `var(--name)` the file does not set is the default theme's value of that token.
+theme patch, `{ "values": { token: value }, "roles": { role: token } }` as
+[`updateTheme`](../modules/nsh.md#updatetheme-resettheme) takes one, whose values win over the app's theme, the contexts
+it picks (light and dark alike) and its own overrides, for tokens the app's theme declares, while the app's others
+stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it (`None` clears it and gives the
+app its own theme back; text that is not JSON is an error and changes nothing). A name the theme does not declare, or
+a value that does not fit its token, is left out and logged ([Theme overrides](./ios.md#theme-overrides)).
 
 Native components are registered with `AppView::register_component`; see
 [Native components](./native-components.md#registering-on-windows-rust). `set_ui_sets(sets)` sets the UI sets every

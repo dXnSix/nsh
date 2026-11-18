@@ -171,11 +171,13 @@ so only load it from your own app's files.
   text size in place of the system's (`None` follows the system's again): `locale()`, `Intl`, `fontScale()` and text
   follow at once ([Device and environment](./device-and-environment.md#in-an-embedding-app)).
 - `AppView::set_theme_overrides(Some(json), cx)` puts your app's brand over the app's [theme](./tailwind.md#theme-tokens):
-  a theme file in the format of `nsh.json`'s `"theme"`, whose tokens win over the app's of the same names in light
-  and dark mode while the app's others stay; classes such as `bg-primary` restyle at once, and apps loaded later start
-  with it (`None` gives the app its own theme back; a file that does not parse is an error and changes nothing). With
-  a whole theme from `set_theme` / `set_theme_json`, the overrides win over that one's tokens, and each stays when the
-  other changes.
+  a theme patch, `{ "values": { token: value }, "roles": { role: token } }` as
+  [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) takes one, whose values win over the app's theme, the
+  contexts it picks (light and dark alike) and its own overrides, for tokens the theme declares, while the app's others
+  stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it (`None` clears it and gives
+  the app its own theme back; text that is not JSON is an error and changes nothing; a name the theme does not declare
+  is left out and logged). With a whole theme document from `set_theme_json`, the overrides win over
+  that one's tokens, and each stays when the other changes.
 - `AppView::set_reduce_motion(reduce, cx)`, `AppView::set_screen_reader(on, cx)` and `AppView::set_time_zone(zone,
   cx)` do the same for less motion, the screen reader and the time zone (`TimeZone::parse("Asia/Seoul")`):
   `reduceMotion()`, `screenReaderEnabled()` and `localeSettings()`'s `timeZone` follow at once (`Date`'s local times

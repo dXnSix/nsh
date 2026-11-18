@@ -181,7 +181,7 @@ setContentView(column);
 | `setLocale(Locale locale)` | 代替用户设置的语言和地区：`Intl`、`locale()` 和组件立即跟随，此后加载的应用也从它开始。`null` 跟随系统。 |
 | `setFontScale(float scale)` | 代替系统字体大小的文字大小（1 为默认）：文字和输入框按它重新排版，`fontScale()` 读到它，立即生效，此后加载的应用也一样；长度保持原样。`0` 跟随系统。 |
 | `setAdditionalSafeAreaInsets(int left, int top, int right, int bottom)` | 宿主为自己悬浮在视图上方的界面（如盖在内容上的底部标签栏）额外加到安全区的像素，类似 UIKit 的 `additionalSafeAreaInsets`：`safeAreaInsets()` 读到的是系统栏覆盖部分加上它，内容可以滚到这些界面下方、末尾仍不被遮挡；修改后已显示的页面也会跟着更新。全部传 `0` 即移除。须在 UI 线程调用。 |
-| `setThemeOverrides(String json)` | 把宿主的品牌加在应用的[主题](./tailwind.md#主题-token)之上：格式与 `nsh.json` 的 `"theme"` 相同的主题文件。其中的 token 在浅色和深色模式下都覆盖应用的同名 token，应用的其他 token 保持不变。立即生效，并作用于之后加载的应用；`null` 恢复应用自己的主题。文件无法解析时抛出 `IllegalArgumentException`。 |
+| `setThemeOverrides(String json)` | 把宿主的品牌加在应用的[主题](./tailwind.md#主题-token)之上：一个主题补丁 `{ "values": { token: value }, "roles": { role: token } }`，形状与 [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) 接受的相同。对应用主题声明的 token，其值覆盖应用的主题、主题的上下文（浅色和深色）以及应用自己的覆盖，应用的其他 token 保持不变。立即生效，并作用于之后加载的应用；`null` 清除它并恢复应用自己的主题。不是 JSON 的文本抛出 `IllegalArgumentException`。 |
 | `registerFont(byte[] data)` | 注册宿主自带的字体文件（TrueType、OpenType、WOFF 或 WOFF2）。应用在 `fontFamily` 里写它的字体族名，不必把文件打进 bundle。加载前注册的字体在该应用的第一帧就可用；应用运行中注册的，从下一次排版开始使用。`data` 不是字体时抛出 `IllegalArgumentException`。同一文件再注册一次不会重复加入。 |
 | `setStorageDirectory(File dir)` | 接下来加载的应用保存其[存储](../modules/nsh.md#storage)的目录；`null`：应用私有目录内的 `files/nsh/<app id>`，按应用自己的 id。 |
 | `setCacheOptions(NshCacheOptions options)` | 接下来加载的应用保存缓存（[下载的图片](./images-and-assets.md#磁盘缓存)）的位置和每种缓存的大小。用 `NshCacheOptions.builder()` 构建：`location(File)`、`systemLocation()`（默认：缓存目录中的 `nsh`，每个应用在 `<app id>`）或 `noDiskCache()`；`imagesMaxMegabytes(int)`（默认 256）或 `imagesOff()`。 |
@@ -292,17 +292,17 @@ nsh.watchScroll("page", new NshView.ScrollWatcher() {
 
 ## 主题覆盖
 
-嵌入在多个品牌宿主应用中的同一个应用会采用各个宿主的品牌：宿主给出其品牌要改的 token，格式与 `nsh.json` 的 `"theme"` 相同的主题文件（shadcn/ui 的 `cssVars`，值按 CSS 的写法）。它们覆盖应用的同名 token，应用的其他 token 保持不变。在 `dark` 下给出 token 的深色模式值（只在 `light` 或 `theme` 下设置的 token 在两种模式下都是这个颜色）：
+嵌入在多个品牌宿主应用中的同一个应用会采用各个宿主的品牌：宿主以主题补丁给出其品牌要改的 token，`{ "values": { token: value }, "roles": { role: token } }`，形状与 [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) 接受的相同。每个值是其 token 的值类型、按主题格式书写（颜色 `"#e11d48"`，以点为单位的数字 `16`），或指向另一个 token 的引用（`"{blue-9}"`）；`roles` 把角色映射到主题的某个 token。补丁是宿主的一层：它覆盖应用的主题、应用选中的上下文（覆盖值在浅色和深色下相同）以及应用自己的覆盖，引用在它之后解析，所以覆盖一个调色板颜色会影响所有引用它的 token。补丁从不新增 token：应用当前主题没有声明的名字，或不符合其 token 类型的值，会被略去并记录日志（格式见[主题](./rust.md#主题)；仓库中的 `docs/dev/theme-format.md` 给出完整定义）。
 
 ```java
-nsh.setThemeOverrides("{ \"cssVars\": {"
-        + " \"theme\": { \"radius\": \"0.75rem\" },"
-        + " \"light\": { \"primary\": \"#e11d48\", \"primary-foreground\": \"#ffffff\" },"
-        + " \"dark\": { \"primary\": \"#fb7185\", \"primary-foreground\": \"#1c1917\" } } }");
+nsh.setThemeOverrides("{ \"values\": {"
+        + " \"radius\": 12,"
+        + " \"primary\": \"#e11d48\","
+        + " \"primary-foreground\": \"#ffffff\" } }");
 nsh.loadAssetBundle("orders");
 ```
 
-在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(null)` 恢复应用自己的主题。应用用它自己的主题读取器读取这个文件，所以文件没有设置的 `var(--name)` 取默认主题中该令牌的值。
+在加载之前或之后调用都可以：`bg-primary`、`rounded-(--radius)` 等类名立即更新样式，之后加载的每个应用在第一帧就带有这些覆盖。`setThemeOverrides(null)` 清除宿主这一层并恢复应用自己的主题。
 
 ## 应用打开的链接
 
