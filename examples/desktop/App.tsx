@@ -5,7 +5,7 @@
 // bar does not show with the title bar hidden, the bar's buttons open its
 // menus with `Menu.popup` (the shortcuts work everywhere).
 
-import { effect, mount, signal, Text, View } from "nsh";
+import { effect, modifiers, mount, setModifier, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import { colorScheme, platform } from "nsh";
 import { currentWindow, Menu, type MenuItem, titleBar } from "nsh/desktop";
@@ -21,6 +21,13 @@ function App() {
   const hidden = signal(true);
   const say = (line: string) => log.update((l) => [line, ...l].slice(0, 12));
   const dark = () => colorScheme() === "dark";
+  // The theme's dark values (its `colorMode` modifier) with the dark
+  // appearance, which itself changes no token: `nsh/base`'s input reads them.
+  effect(() => {
+    const scheme = colorScheme();
+    const colorMode = modifiers().find((m) => m.name === "colorMode");
+    if (colorMode && colorMode.selected !== scheme) setModifier("colorMode", scheme);
+  });
 
   const menus = (): { label: string; submenu: MenuItem[] }[] => [
     {

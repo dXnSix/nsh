@@ -7,7 +7,7 @@ use std::time::Duration;
 use nsh_base::{AlertDialogAction, AlertDialogOptions, alert_dialog, dialog};
 use nsh_core::{
     animation::{Curve, EaseMode},
-    element::{AdaptiveShadow, AnyElement},
+    element::{AdaptiveColor, AdaptiveShadow, AnyElement, modifier, tokens},
     keymap::When,
     prelude::*,
     time::Instant,
@@ -195,6 +195,23 @@ fn environment() -> AnyElement {
                     .tone(|| if dark() { Tone::Info } else { Tone::Warn })
                     .outline(),
                 ),
+        )
+        // The theme's light/dark modifier, which the gallery picks with the
+        // appearance (`Gallery`), in the theme's text color.
+        .child(
+            text(|| {
+                format!(
+                    "Theme colorMode: {}",
+                    modifier("colorMode").as_deref().unwrap_or("none")
+                )
+            })
+            .text_size(px(12.0))
+            .text_color(|| {
+                tokens()
+                    .color("foreground")
+                    .map_or(colors::TEXT, AdaptiveColor::from)
+            })
+            .font_family(MONO),
         )
         .into_element()
 }

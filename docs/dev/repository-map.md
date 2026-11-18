@@ -41,8 +41,8 @@ crates/
                        docs/dev/rich-editor.md),
                        the popups on the core's overlays (`Popover`, `HoverCard`, `Menu` / `ContextMenu` / `MenuItem` / `MenuSeparator` / `Submenu`,
                        `Tooltip`, `Sheet`; presented per device: docs/dev/components.md "Popups"), written in Rust (the navigation and `Dialog` in `nsh-js`); JS face and declarations made from their specs;
-                       the theme (`theme.rs`: shadcn/ui's tokens and their defaults, `neutral`, read from shadcn's `cssVars` theme
-                       files, which the core keeps as design tokens and no component of `nsh-base` draws with)
+                       the theme (`theme.rs`: shadcn/ui's tokens as roles, and `default-theme.json`, shadcn's `neutral` as the
+                       fallback theme document, its dark values in the `colorMode` modifier; docs/dev/theme-format.md)
   nsh-theme/           The theme document (docs/dev/theme-format.md): its model, reading with diagnostics, writing, editing,
                        layering (`resolve`: tokens, picked contexts, patches, references once), role checks; serde and serde_json only
   nsh-macros/          `#[component]`, derives of Rust components (`Props`, `PropEnum`, `Event`, `JsObject`), `#[methods]`, `#[module]`, `#[class]`,

@@ -1,28 +1,55 @@
 // A case of the API's test suite (docs/dev/compatibility.md): `setTheme`
-// makes another theme the app's while it runs, in place of nsh.json's
-// `"theme"` (which sets `up` and `radius-card` here) and over shadcn's
-// `neutral`, as nsh.json's is. `token()` reads it at once and classes naming
-// its tokens follow, in each appearance, a page's `headerClass` among them;
-// a theme with a value NSH cannot read throws a `TypeError` and the theme
-// in force stays; `null` gives nsh.json's back. Its script checks each.
-import { Text, View, cleanup, setColorScheme, setTheme, signal, token } from "nsh";
+// makes another theme document the app's while it runs, in place of
+// nsh.json's `"theme"` (nsh/base's default tokens with `up` and
+// `radius-card` here): documents are never merged, so a token only nsh.json's
+// has is gone. `token()` reads it from the next turn on and classes naming
+// its tokens follow, at the contexts picked, a page's `headerClass` among
+// them. A bad entry is left out and returned as a diagnostic, and the rest of
+// the document is the app's; a theme of the old format is refused
+// (`legacy-format`) and the theme in force stays; `null` gives nsh.json's
+// back. Its script checks each.
+import { Text, type Theme, type ThemeDiagnostic, View, cleanup, setColorScheme, setModifier, setTheme, signal, token } from "nsh";
 import { NavPage, NavStack, createNavStack } from "nsh/base";
 
 const pages = createNavStack<string>(["page"]);
 
-const brand = { cssVars: { light: { up: "#2563eb" }, dark: { up: "#93c5fd" } } };
+const brand: Theme = {
+  tokens: { up: { kind: "color", value: "#2563eb" } },
+  modifiers: { colorMode: { default: "light", contexts: { light: {}, dark: { up: "#93c5fd" } } } },
+  resolutionOrder: ["colorMode"],
+};
+// A dark value that is no color: that entry is left out, the rest applies.
+const bad: Theme = {
+  tokens: { up: { kind: "color", value: "#16a34a" } },
+  modifiers: { colorMode: { default: "light", contexts: { light: {}, dark: { up: "#zz" } } } },
+  resolutionOrder: ["colorMode"],
+};
+// Each keeps `up` and has one bad entry, but the first: a theme of the old format.
 const malformed = [
-  ["bad-structure", '{"cssVars":null}'],
-  ["bad-function", '{"cssVars":{"light":{"up":"rgb(255 0 0"}}}'],
-  ["bad-length", '{"cssVars":{"light":{"up":"#zz"},"dark":{"up":"12px"}}}'],
-  ["bad-suffix", '{"cssVars":{"light":{"up":"rgb(255 0 0)garbage"}}}'],
+  ["bad-structure", '{"cssVars":null}'], // the old format, which `nsh theme convert` converts
+  ["bad-function", '{"tokens":{"up":{"kind":"color","value":"#16a34a"},"down":{"kind":"color","value":"rgb(255 0 0"}}}'],
+  ["bad-length", '{"tokens":{"up":{"kind":"color","value":"#16a34a"},"down":{"kind":"number","value":"12px"}}}'],
+  ["bad-suffix", '{"tokens":{"up":{"kind":"color","value":"#16a34a"},"down":{"kind":"color","value":"#dc2626garbage"}}}'],
 ] as const;
+
+/** The errors of `said`, each as its code and pointer, or `none`. */
+function errors(said: ThemeDiagnostic[]): string {
+  const out = said.filter((d) => d.severity === "error").map((d) => (d.pointer ? `${d.code} ${d.pointer}` : d.code));
+  return out.length ? out.join(", ") : "none";
+}
+
+/** Shows `scheme`, and the theme's values for it: the appearance alone changes no token. */
+function show(scheme: "light" | "dark") {
+  setColorScheme(scheme);
+  setModifier("colorMode", scheme);
+}
 
 function BaseSetTheme() {
   const result = signal("none");
-  // The next cases see nsh.json's theme in the system's appearance.
+  // The next cases see nsh.json's theme at its defaults in the system's appearance.
   cleanup(() => {
     setTheme(null);
+    setModifier("colorMode", "light");
     setColorScheme("system");
   });
   return (
@@ -39,46 +66,20 @@ function BaseSetTheme() {
           </NavPage>
         )}
       </NavStack>
-      <View
-        testID="set"
-        onPress={() => {
-          setTheme(brand);
-          result.set(`set ${token("up")}`);
-        }}
-      >
+      <View testID="set" onPress={() => result.set(`set ${errors(setTheme(brand))}`)}>
         <Text>Set a theme</Text>
       </View>
-      <View testID="dark" onPress={() => setColorScheme("dark")}>
+      <View testID="dark" onPress={() => show("dark")}>
         <Text>Go dark</Text>
       </View>
-      <View testID="system" onPress={() => setColorScheme("system")}>
-        <Text>Follow the system</Text>
+      <View testID="light" onPress={() => show("light")}>
+        <Text>Go light</Text>
       </View>
-      <View
-        testID="bad"
-        onPress={() => {
-          try {
-            setTheme({ cssVars: { light: { up: "#16a34a" }, dark: { up: "#zz" } } });
-            result.set("taken");
-          } catch (e) {
-            result.set(`refused ${(e as Error).name}`);
-          }
-        }}
-      >
+      <View testID="bad" onPress={() => result.set(`bad ${errors(setTheme(bad))}`)}>
         <Text>Set a theme with a bad value</Text>
       </View>
       {malformed.map(([id, json]) => (
-        <View
-          testID={id}
-          onPress={() => {
-            try {
-              setTheme(JSON.parse(json));
-              result.set(`${id} taken`);
-            } catch (e) {
-              result.set(`${id} refused ${(e as Error).name}`);
-            }
-          }}
-        >
+        <View testID={id} onPress={() => result.set(`${id} ${errors(setTheme(JSON.parse(json)))}`)}>
           <Text>{id}</Text>
         </View>
       ))}

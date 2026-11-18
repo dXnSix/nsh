@@ -1,9 +1,10 @@
 // A case of the API's test suite (docs/dev/compatibility.md): the status
 // roles of `nsh/base`, `success` and `warning`, as a theme sets them. A
 // `TextView`'s tip and warning alerts draw their own colors while the theme
-// has no token of those names, the theme's once `setTheme` gives it them,
-// and their own again with nsh.json's theme back. Its script checks each.
-import { Text, View, cleanup, setTheme } from "nsh";
+// has no token of those names, the theme's once `setTheme` gives it a
+// document with them, and their own again with nsh.json's theme back. Its
+// script checks each.
+import { Text, type Theme, View, cleanup, setTheme } from "nsh";
 import { TextView } from "nsh/base";
 
 const ALERTS = `> [!TIP]
@@ -12,11 +13,12 @@ const ALERTS = `> [!TIP]
 > [!WARNING]
 > Warning text`;
 
-const status = {
-  cssVars: {
-    light: { success: "#15803d", warning: "#b45309" },
-    dark: { success: "#4ade80", warning: "#fcd34d" },
+const status: Theme = {
+  tokens: { success: { kind: "color", value: "#15803d" }, warning: { kind: "color", value: "#b45309" } },
+  modifiers: {
+    colorMode: { default: "light", contexts: { light: {}, dark: { success: "#4ade80", warning: "#fcd34d" } } },
   },
+  resolutionOrder: ["colorMode"],
 };
 
 function BaseStatusRoles() {

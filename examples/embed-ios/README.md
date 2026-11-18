@@ -55,12 +55,14 @@ app.send("message", ["text": "Hello"])               // `host.on("message", …)
 Handlers run on the main thread; an `async throws` handler's result answers the call and an error it throws rejects
 it, and `{ data, reply in … }` answers later with `reply.resolve(_:)` / `reply.reject(_:)`, from any thread.
 
-Theme overrides: "Brand" puts the host's brand over the app's theme. The tokens of a theme file
-(`nsh.json`'s `"theme"` format) win over the app's of the same names, light and dark, and
-classes such as `bg-primary` restyle at once; `nil` gives the app its own theme back:
+Theme overrides: "Brand" puts the host's brand over the app's theme. A theme patch
+(`{ "values": { token: value }, "roles": { role: token } }`, `docs/dev/theme-format.md`) sets tokens
+the app's theme declares, winning over every context the app picks, light and dark, and classes such
+as `bg-primary` restyle at once; a name the theme lacks is left out. `nil` gives the app its own
+theme back:
 
 ```swift
-try app.setThemeOverrides(##"{ "cssVars": { "light": { "primary": "#e11d48" } } }"##)
+try app.setThemeOverrides(##"{ "values": { "primary": "#e11d48" } }"##)
 ```
 
 With `NativeShellDev.xcframework`, `try app.connectDevServer(URL(string: "ws://127.0.0.1:8790/ws")!)`

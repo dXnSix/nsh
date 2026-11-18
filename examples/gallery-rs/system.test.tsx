@@ -44,8 +44,15 @@ test("the environment follows the window and the appearance", async () => {
   expect(texts[texts.indexOf("Bottom") + 1]).toBe("34");
   await app.setViewport(844, 390);
   await app.waitFor("844 × 390 pt");
+  // The theme's light values in the light appearance: the gallery picks its
+  // theme's `colorMode` with the appearance, and draws the line in the
+  // theme's `foreground`.
+  await app.waitFor("text:Theme colorMode: light");
+  expect(app.spanStyle("text:Theme colorMode: light").color).toBe("#101319ff");
   await app.setColorScheme("dark");
   await app.waitFor("Dark scheme");
+  await app.waitFor("text:Theme colorMode: dark");
+  expect(app.spanStyle("text:Theme colorMode: dark").color).toBe("#eeeff1ff");
 });
 
 test("shows what dialogs answer", async () => {

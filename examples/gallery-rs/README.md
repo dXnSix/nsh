@@ -6,7 +6,8 @@ the TSX gallery (`examples/gallery`). The crate's set is the `#[native_module("g
 `native/src/lib.rs`, which registers the crate's `assets/`. A TSX app using a crate's components, modules and classes
 is `examples/rust-exports`.
 
-It has the TSX gallery's design (`ui.tsx`, `icons.tsx`, `theme.json`), following the system's appearance:
+It has the TSX gallery's design (`ui.tsx`, `icons.tsx`, `theme.json`), following the system's appearance (`Gallery`
+picks the theme's `colorMode` with it, so `nsh_base`'s components show the theme's dark values):
 `native/src/ui/` is its Rust form (the palette for light and dark, finishes, icons, `Press`, `Appear`, `Toggle`,
 `Segmented`, `Card`, `Section`, `Button`, ...), which the index and the demos are built with. As in the TSX gallery, a
 wide window (700 pt on desktops, 900 pt elsewhere) shows a sidebar of the demos and the selected one beside it

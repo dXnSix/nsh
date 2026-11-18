@@ -2,7 +2,7 @@
 // in the repository's internal nsh-gallery-ui layer.
 import type { Bounds, JSX, ScrollProps } from "nsh";
 import { Canvas, computed, Image, Scroll, signal, Text, View } from "nsh";
-import { platform, setColorScheme, windowSize } from "nsh";
+import { platform, setColorScheme, setModifier, windowSize } from "nsh";
 import { alpha, Appear, Button, colors, focusedSection, focusRing, hovered, Icon, type IconName, isDark, Press, radius, TERMINAL_COLUMN, TERMINAL_GAP, TERMINAL_ROW, terminal, Tip } from "../nsh-gallery-ui";
 import { LucideIcon } from "./icons";
 import { nav, shownDemo } from "./nav";
@@ -155,10 +155,13 @@ export function DirectionToggle(props: { bar?: boolean }) {
 export type Appearance = "system" | "light" | "dark";
 /** The appearance chosen (the settings' Theme, the toolbar's switch). */
 export const appearance = signal<Appearance>("system");
-/** Shows the gallery in `next` (`setColorScheme`). */
+/** Shows the gallery in `next` (`setColorScheme`), with the theme's values
+ * for it (its `colorMode` modifier) in the same turn; the system's appearance
+ * is followed by `followColorScheme`. */
 export function setAppearance(next: Appearance) {
   appearance.set(next);
   setColorScheme(next);
+  if (next !== "system") setModifier("colorMode", next);
 }
 
 /** Switches the app between light and dark (`setAppearance`), whatever the system shows. */
