@@ -291,8 +291,8 @@
   Win32; GPUI's takes `cx` as well; the iOS `AppView`'s too), Swift `NshAppView.setThemeOverrides(_:)` (C `nsh_app_set_theme_overrides`), Java
   `NshView.setThemeOverrides`. The value is a theme patch (`docs/dev/theme-format.md` section 8):
   `{ "values": { token: value }, "roles": { role: token } }`, each value of its token's value type in the format's
-  forms (`"#e11d48"`, `16`) or a reference (`"{blue-9}"`). The SDK checks on the calling thread that it is JSON: text
-  that is not is an error (Swift throws `NshError`, Java an `IllegalArgumentException`, C returns it) that changes
+  forms (`"#e11d48"`, `16`) or a reference (`"{blue-9}"`). The SDK checks on the calling thread that it is a JSON
+  object: text that is no JSON object is an error (Swift throws `NshError`, Java an `IllegalArgumentException`, C returns it) that changes
   nothing. The patch goes to the engine whole (`EngineControl::set_theme_overrides`, the same layer as `EngineControl::set_tokens`) and
   is the host's layer of the stack (section 9, layer 4): over the document's values, the contexts the app picks and
   the app's own overrides (`themeOverrides`, `updateTheme`), under nothing but a `ThemeScope`'s patch, with
@@ -364,7 +364,7 @@ NSH draws (`src/layers.rs`).
   sheets, popovers and notifications (drawn by `Root` above the content) cover it and take the input, while its app
   keeps running.
 - **The host's theme in NSH.** `AppView::set_theme_json(Some(json), cx)` makes a theme document
-  (`docs/dev/theme-format.md`, as `nsh.json`'s `"theme"`) the app's active one (`EngineControl::set_theme`; `None`
+  (`docs/dev/theme-format.md`, as `nsh.json`'s `"theme"`) the app's active one (`EngineControl::set_theme_document`; `None`
   gives the app its built-in document back), and `set_theme_overrides(Some(patch), cx)` puts a theme patch in the
   host's layer, as above. The surface keeps both and sends them to every engine at start, so apps loaded later have
   them in their first frame, and it is drawn on the resolved `background` role. Classes naming the app's tokens

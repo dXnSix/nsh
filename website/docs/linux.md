@@ -154,7 +154,7 @@ theme patch, `{ "values": { token: value }, "roles": { role: token } }` as
 [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) takes one, whose values win over the app's theme, the contexts
 it picks (light and dark alike) and its own overrides, for tokens the app's theme declares, while the app's others
 stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it (`None` clears it and gives the
-app its own theme back; text that is not JSON is an error and changes nothing). A name the theme does not declare, or
+app its own theme back; text that is no JSON object is an error and changes nothing). A name the theme does not declare, or
 a value that does not fit its token, is left out and logged ([Theme overrides](./ios.md#theme-overrides)).
 
 ### Several windows sharing data

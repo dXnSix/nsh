@@ -175,7 +175,7 @@ so only load it from your own app's files.
   [`updateTheme`](../modules/nsh.md#updatetheme-resettheme) takes one, whose values win over the app's theme, the
   contexts it picks (light and dark alike) and its own overrides, for tokens the theme declares, while the app's others
   stay; classes such as `bg-primary` restyle at once, and apps loaded later start with it (`None` clears it and gives
-  the app its own theme back; text that is not JSON is an error and changes nothing; a name the theme does not declare
+  the app its own theme back; text that is no JSON object is an error and changes nothing; a name the theme does not declare
   is left out and logged). With a whole theme document from `set_theme_json`, the overrides win over
   that one's tokens, and each stays when the other changes.
 - `AppView::set_reduce_motion(reduce, cx)`, `AppView::set_screen_reader(on, cx)` and `AppView::set_time_zone(zone,
