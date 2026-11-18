@@ -176,3 +176,68 @@ pub(crate) extern "C" fn nsh_browser_test_environment() -> u32 {
     let data = engine::environment_data(&environment);
     Bindings::new().json(&data).unwrap().0[0] as u32
 }
+
+thread_local! {
+    /// The core [`nsh_browser_test_turn`] applies the page's theme writes
+    /// in, with `nsh/base`'s sets (their roles), as the engine's.
+    static THEME_CORE: RefCell<Option<nsh_core::Core<nsh_core::ApproxTextEngine>>> =
+        const { RefCell::new(None) };
+}
+
+/// Ends the page's turn as the engine ends one for the theme
+/// (`theme-format.test.mjs`): the theme writes the runtime collected
+/// (`Prop::UiAppTheme`, `UiThemeDocument`, `UiThemeUpdate`, `UiThemeReset`,
+/// `UiModifier` on the root) reach a core, which resolves them once in its
+/// commit, and the tokens it resolved reach the runtime
+/// (`Host::set_tokens`) when they are new. The first call makes the core
+/// with the runtime's sets and `nsh/base`'s, and hands its tokens first
+/// (`Host::initialize`'s). The other ops are dropped.
+#[unsafe(no_mangle)]
+pub(crate) extern "C" fn nsh_browser_test_turn() {
+    use nsh_core::{Op, Prop};
+    use nsh_engine::browser::Host;
+
+    let Some(runtime) = super::REACTIVE.with(|slot| slot.borrow().clone()) else {
+        return;
+    };
+    let ops = std::mem::take(&mut *runtime.bindings.ops.borrow_mut());
+    let tokens = THEME_CORE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let core = slot.get_or_insert_with(|| {
+            let viewport = nsh_core::Size::new(nsh_core::Points(800.0), nsh_core::Points(600.0));
+            let mut core = nsh_core::Core::new(nsh_core::ApproxTextEngine, viewport);
+            let sets: Vec<_> = nsh_core::runtime::registries()
+                .iter()
+                .cloned()
+                .chain([nsh_base::registry()])
+                .collect();
+            core.set_components(nsh_core::element::Registry::merged(&sets));
+            core
+        });
+        let held = runtime.tokens.borrow().clone();
+        let first = held.is_none();
+        for op in ops {
+            let theme = matches!(
+                &op,
+                Op::SetProp {
+                    id: nsh_core::ROOT_ID,
+                    prop: Prop::UiAppTheme(..)
+                        | Prop::UiThemeDocument(_)
+                        | Prop::UiThemeUpdate(_)
+                        | Prop::UiThemeReset(_)
+                        | Prop::UiModifier(..),
+                }
+            );
+            if theme {
+                let _ = core.apply(op);
+            }
+        }
+        let _ = core.commit();
+        let tokens = core.tokens().clone();
+        let new = first || !held.is_some_and(|held| std::sync::Arc::ptr_eq(&held, &tokens));
+        new.then_some(tokens)
+    });
+    if let Some(tokens) = tokens {
+        runtime.set_tokens(tokens);
+    }
+}

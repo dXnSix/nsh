@@ -64,9 +64,17 @@ struct Runtime {
     scope_tokens: RefCell<Vec<Option<std::sync::Arc<nsh_core::element::Tokens>>>>,
     scope_free: RefCell<Vec<usize>>,
     scope_versions: std::cell::Cell<u32>,
-    /// The theme document the app was built with (`setup`), which
-    /// `setTheme(null)` gives back.
-    built_theme: RefCell<Option<String>>,
+    /// The document `setTheme(null)` gives back, as nsh-js's
+    /// (`Env::base_document`): the app's built-in one (`nsh.json`'s
+    /// `"theme"`), else the UI sets' the core resolved with while no
+    /// `setTheme` document was active (`None`: none known yet).
+    base_document: RefCell<Option<std::sync::Arc<nsh_core::element::ThemeDocument>>>,
+    /// Whether a `setTheme` document is active (until `setTheme(null)`).
+    runtime_theme: std::cell::Cell<bool>,
+    /// The document a write of this turn activated (the bundle's setup,
+    /// `setTheme`), until the core hands tokens resolved with it: what
+    /// `setModifier` and `updateTheme` are checked against meanwhile.
+    turn_document: RefCell<Option<std::sync::Arc<nsh_core::element::ThemeDocument>>>,
     host: RefCell<Option<Rc<dyn nsh_core::host_channel::HostBridge>>>,
     wake: RefCell<Option<std::sync::Arc<dyn Fn() + Send + Sync>>>,
     fonts: RefCell<Vec<String>>,
@@ -94,7 +102,9 @@ impl Default for Runtime {
             scope_tokens: RefCell::default(),
             scope_free: RefCell::default(),
             scope_versions: std::cell::Cell::new(0),
-            built_theme: RefCell::default(),
+            base_document: RefCell::default(),
+            runtime_theme: std::cell::Cell::new(false),
+            turn_document: RefCell::default(),
             host: RefCell::default(),
             wake: RefCell::default(),
             fonts: RefCell::default(),
@@ -107,6 +117,49 @@ impl Default for Runtime {
 /// changes (nsh-js's `SCOPE_SLOTS`).
 const SCOPE_SLOTS: f64 = 1_048_576.0;
 
+/// What changed from tokens `old` (`None`: none yet) to `new` for what read
+/// them on the page (`environment.js`'s `changedTokens`), decided as
+/// nsh-js's `install` (`env.rs`) decides it: `names`, the tokens whose
+/// values changed (a name that came or went too) and the roles mapped onto
+/// them; `whole`, the roles were mapped anew (what read a role reads
+/// another token), or there were no tokens before; `shape`, the names,
+/// their kinds or the modifiers (their contexts, the ones shown) changed.
+/// `None`: nothing changed.
+fn token_changes(
+    old: Option<&nsh_core::element::Tokens>,
+    new: &nsh_core::element::Tokens,
+) -> Option<nsh_core::JsonValue> {
+    let Some(old) = old else {
+        return Some(serde_json::json!({ "names": [], "whole": true, "shape": true }));
+    };
+    let values = old != new;
+    let shape = !old.same_names(new) || old.modifiers() != new.modifiers();
+    if !values && !shape {
+        return None;
+    }
+    let mut changed: std::collections::BTreeSet<&str> = new
+        .iter()
+        .filter(|(name, token)| old.value(name) != Some(*token))
+        .map(|(name, _)| name)
+        .chain(
+            old.iter()
+                .filter(|(name, _)| new.value(name).is_none())
+                .map(|(name, _)| name),
+        )
+        .collect();
+    let roles: Vec<&str> = new
+        .roles()
+        .filter(|(_, token)| changed.contains(token))
+        .map(|(role, _)| role)
+        .collect();
+    changed.extend(roles);
+    Some(serde_json::json!({
+        "names": changed.into_iter().collect::<Vec<_>>(),
+        "whole": values && !old.same_roles(new),
+        "shape": shape,
+    }))
+}
+
 impl Runtime {
     /// The tokens a `ThemeScope`'s memo value `named` names.
     fn scope_tokens_named(&self, named: f64) -> Option<std::sync::Arc<nsh_core::element::Tokens>> {
@@ -115,6 +168,67 @@ impl Runtime {
         }
         let slot = (named % SCOPE_SLOTS) as usize;
         self.scope_tokens.borrow().get(slot).cloned().flatten()
+    }
+
+    /// The tokens the core resolved last (none yet: empty ones).
+    fn current_tokens(&self) -> std::sync::Arc<nsh_core::element::Tokens> {
+        self.tokens.borrow().clone().unwrap_or_default()
+    }
+
+    /// The document this turn's writes are checked against, as nsh-js's
+    /// (`env.rs`, `active_document`): the one a write of this turn
+    /// activated, else the one the tokens were resolved with.
+    fn active_document(&self) -> std::sync::Arc<nsh_core::element::ThemeDocument> {
+        let turn = self.turn_document.borrow().clone();
+        turn.or_else(|| self.current_tokens().active_document().cloned())
+            .unwrap_or_default()
+    }
+
+    /// Hands the core theme write `prop`, on the root, with this turn's
+    /// ops: it resolves the theme once for all of them, and `token()`
+    /// reads the result when the core hands the tokens on
+    /// ([`Runtime::take_tokens`]).
+    fn write_theme(&self, prop: nsh_core::Prop) {
+        self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
+            id: nsh_core::ROOT_ID,
+            prop,
+        });
+    }
+
+    /// `json` as a page value (owned).
+    fn json_value(
+        &self,
+        json: &nsh_core::JsonValue,
+    ) -> Result<Value, nsh_core::element::PropError> {
+        Ok(Value(self.bindings.json(json)?.0[0] as u32))
+    }
+
+    /// `diagnostics` as `setTheme` and `updateTheme` return them: an array
+    /// of `ThemeDiagnostic`s (`theme::diagnostics_json`, as nsh-js's).
+    fn diagnostics(
+        &self,
+        diagnostics: &[nsh_core::element::Diagnostic],
+    ) -> Result<Value, nsh_core::element::PropError> {
+        self.json_value(&nsh_core::element::theme::diagnostics_json(diagnostics))
+    }
+
+    /// Takes in the tokens the core draws the app with (after a theme
+    /// change, the host's included), as nsh-js's `set_tokens` (`env.rs`):
+    /// while no `setTheme` document is active, their document is the one
+    /// `setTheme(null)` gives back. Returns what changed for the page's
+    /// readers ([`token_changes`]), `None` when nothing did.
+    pub(super) fn take_tokens(
+        &self,
+        tokens: std::sync::Arc<nsh_core::element::Tokens>,
+    ) -> Option<nsh_core::JsonValue> {
+        self.turn_document.replace(None);
+        if !self.runtime_theme.get()
+            && let Some(document) = tokens.active_document()
+        {
+            self.base_document.replace(Some(document.clone()));
+        }
+        let old = self.tokens.borrow_mut().replace(tokens.clone());
+        token_changes(old.as_deref(), &tokens)
     }
 
     /// Makes `error` the JS exception the call throws (its class, message
@@ -205,10 +319,10 @@ impl Runtime {
                 })
             }
             // `token(name)` (402) and `role(name)` (414), as nsh-js's
-            // (`env.rs`): a role reads the token a theme maps it onto, when
-            // that has a value, else the token of its name.
+            // (`env.rs`, `read_token`): the token's value in the theme
+            // format's canonical form (`Tokens::json`); a role's, the
+            // token it resolves to (`Tokens::role_json`).
             402 | 414 => {
-                use nsh_core::element::Token;
                 let name = args.index(0)?.as_string().unwrap_or_default();
                 // In a `ThemeScope` with tokens, the scope's (its memo's
                 // value names them), else the surface's.
@@ -216,75 +330,106 @@ impl Runtime {
                     .index(2)?
                     .as_number()
                     .and_then(|named| self.scope_tokens_named(named));
-                let tokens = scoped.or_else(|| self.tokens.borrow().clone());
-                let name = tokens
-                    .as_ref()
-                    .filter(|_| op == 414)
-                    .and_then(|t| t.mapped(&name).filter(|token| t.get(token).is_some()))
-                    .map(str::to_owned)
-                    .unwrap_or(name);
-                match tokens.as_ref().and_then(|t| t.get(&name)) {
-                    Some(Token::Number(n)) => Ok(Value::number(n.into())),
-                    Some(Token::Font(f)) => Value::string(&f),
-                    Some(Token::Color(c)) => {
-                        Value::string(&format!("#{:08x}", nsh_core::Color::from(c).0))
-                    }
-                    Some(Token::Shadow(s)) => Value::string(
-                        &nsh_core::element::AdaptiveShadow::new(s.iter().copied(), []).css(false),
-                    ),
-                    Some(Token::Gradient(g)) => Value::string(&g.css()),
-                    Some(Token::String(s)) => Value::string(&s),
-                    // `true` and `false`, as the page's values are kept.
-                    Some(Token::Boolean(b)) => Ok(Value(if b { 3 } else { 2 })),
-                    Some(Token::Easing(e)) => Value::string(&e.css()),
-                    _ => Ok(Value(0)),
+                let tokens = scoped.unwrap_or_else(|| self.current_tokens());
+                let json = if op == 414 {
+                    tokens.role_json(&name)
+                } else {
+                    tokens.json(&name)
+                };
+                match json {
+                    Some(json) => self.json_value(&json),
+                    None => Ok(Value(0)),
                 }
             }
+            // The bundle's setup of the app's theme (`setup.ui`:
+            // `{ document, overrides }`, `nsh.json`'s `"theme"` and
+            // `"themeOverrides"`), as nsh-js's `take_app_theme`: the core
+            // takes them with this turn's ops. The built-in document is the
+            // one `setTheme(null)` gives back. What the entry reads from
+            // here on is the core's install of them over the tokens it
+            // handed at start (`Tokens::with_app_theme`), which its own
+            // install, after this turn, gives again: returns what changed
+            // for the page's readers (`token_changes` as JSON), `undefined`
+            // for nothing.
             403 => {
                 let json = args.index(0)?.as_string().unwrap_or_default();
-                *self.built_theme.borrow_mut() = Some(json);
-                Ok(Value(0))
+                let (document, overrides, _) = nsh_core::element::theme::read_app_theme(&json);
+                if document.is_none() && overrides.is_none() {
+                    return Ok(Value(0));
+                }
+                let document = document.map(std::sync::Arc::new);
+                if let Some(document) = &document {
+                    self.base_document.replace(Some(document.clone()));
+                    self.turn_document.replace(Some(document.clone()));
+                }
+                let overrides = overrides.map(std::sync::Arc::new);
+                let changes = if self.runtime_theme.get() {
+                    None
+                } else {
+                    let current = self.current_tokens();
+                    let tokens = current.with_app_theme(document.as_ref(), overrides.as_ref());
+                    self.tokens.replace(Some(tokens.clone()));
+                    token_changes(Some(&current), &tokens)
+                };
+                self.write_theme(nsh_core::Prop::UiAppTheme(document, overrides));
+                match changes {
+                    Some(changes) => Value::string(&changes.to_string()),
+                    None => Ok(Value(0)),
+                }
             }
-            // `setTheme(theme)`, as nsh-js's (`env.rs`): the app's theme
-            // document from now on; `null`, the one the app was built with.
-            // The core reads it when the turn's ops reach it.
+            // `setTheme(theme)`, as nsh-js's (`env.rs`): theme document
+            // `theme` is the app's from now on, with this turn's ops; `null`
+            // gives the built-in one back. Returns the read's diagnostics
+            // and the role checks of its mappings; a text that is no
+            // document, or a theme of the old format (`legacy-format`),
+            // keeps the active document.
             406 => {
                 use nsh_core::element::JsError;
                 let value = args.index(0)?;
-                let json = if value.is_nullish() {
-                    self.built_theme.borrow().clone()
-                } else if value.is_object() {
-                    Some(protocol::to_json(&compat::Value::new(value))?.to_string())
-                } else {
-                    let message = "setTheme: expected a theme document or null";
-                    return Err(self.throw(JsError::Type(message.into())));
-                };
-                if let Some(json) = json {
-                    self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
-                        id: nsh_core::ROOT_ID,
-                        prop: nsh_core::Prop::UiTheme(json.into()),
-                    });
+                if value.is_nullish() {
+                    self.runtime_theme.set(false);
+                    let base = self.base_document.borrow().clone();
+                    self.turn_document.replace(base);
+                    self.write_theme(nsh_core::Prop::UiThemeDocument(None));
+                    return self.diagnostics(&[]);
                 }
-                Ok(Value(0))
+                if !value.is_object() {
+                    let message = "setTheme: expected a theme document (an object) or null";
+                    return Err(self.throw(JsError::Type(message.into())));
+                }
+                let json = protocol::to_json_text(&compat::Value::new(value))?;
+                let (document, mut said) = nsh_core::element::theme::read_document(&json);
+                if let Some(document) = document {
+                    let document = std::sync::Arc::new(document);
+                    said.extend(self.current_tokens().check_document(&document));
+                    self.runtime_theme.set(true);
+                    self.turn_document.replace(Some(document.clone()));
+                    self.write_theme(nsh_core::Prop::UiThemeDocument(Some(document)));
+                }
+                self.diagnostics(&said)
             }
             // `updateTheme(patch)`, as nsh-js's (`env.rs`): the core merges
-            // the theme patch into the app's when the turn's ops reach it.
+            // the theme patch into the app's one patch with this turn's
+            // ops. Returns its diagnostics: what reading it and the active
+            // document refuse, and the role checks of its mappings.
             409 => {
                 use nsh_core::element::JsError;
                 let value = args.index(0)?;
                 if !value.is_object() {
-                    let message = "updateTheme: expected a theme patch";
+                    let message = "updateTheme: expected a theme patch (an object)";
                     return Err(self.throw(JsError::Type(message.into())));
                 }
-                let json = protocol::to_json(&compat::Value::new(value))?.to_string();
-                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
-                    id: nsh_core::ROOT_ID,
-                    prop: nsh_core::Prop::UiThemeUpdate(json.into()),
-                });
-                Ok(Value(0))
+                let json = protocol::to_json_text(&compat::Value::new(value))?;
+                let (patch, mut said) = nsh_core::element::theme::read_patch(&json);
+                said.extend(
+                    self.current_tokens()
+                        .check_patch(&self.active_document(), &patch),
+                );
+                self.write_theme(nsh_core::Prop::UiThemeUpdate(std::sync::Arc::new(patch)));
+                self.diagnostics(&said)
             }
             // `resetTheme(names?)`, as nsh-js's: the app's overrides of the
-            // names (none: every one) go.
+            // names (none: every one) go, with this turn's ops.
             410 => {
                 use nsh_core::element::JsError;
                 let value = args.index(0)?;
@@ -301,15 +446,14 @@ impl Runtime {
                     };
                     Some(names)
                 };
-                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
-                    id: nsh_core::ROOT_ID,
-                    prop: nsh_core::Prop::UiThemeReset(names),
-                });
+                self.write_theme(nsh_core::Prop::UiThemeReset(names));
                 Ok(Value(0))
             }
             // `setModifier(name, context)`, as nsh-js's (`env.rs`): the
-            // modifier takes the context, or a `TypeError` naming what the
-            // theme has not.
+            // active document's modifier shows the context, with this
+            // turn's ops. The document is the one active in this turn (a
+            // `setTheme` of it counts): a modifier or context it lacks
+            // throws a `TypeError` naming it, and nothing changes.
             415 => {
                 use nsh_core::element::JsError;
                 let name = args.index(0)?.as_string();
@@ -319,28 +463,26 @@ impl Runtime {
                         "setModifier: expected a modifier's name and a context's (strings)";
                     return Err(self.throw(JsError::Type(message.into())));
                 };
-                let current = self.tokens.borrow().clone().unwrap_or_default();
-                let known = current.modifiers().into_iter().find(|m| *m.name == *name);
-                let what = match known {
-                    None => Some(format!("the theme has no modifier `{name}`")),
-                    Some(m) if !m.contexts.iter().any(|c| **c == *context) => {
-                        Some(format!("the modifier `{name}` has no context `{context}`"))
+                let document = self.active_document();
+                let what = match nsh_core::element::theme::unknown_pick(&document, &name, &context)
+                {
+                    Some(said) if said.code == nsh_theme::code::UNKNOWN_MODIFIER => {
+                        Some(format!("the theme has no modifier `{name}`"))
                     }
-                    Some(_) => None,
+                    Some(_) => Some(format!("the modifier `{name}` has no context `{context}`")),
+                    None => None,
                 };
                 if let Some(what) = what {
                     return Err(self.throw(JsError::Type(format!("setModifier: {what}"))));
                 }
-                self.bindings.ops.borrow_mut().push(nsh_core::Op::SetProp {
-                    id: nsh_core::ROOT_ID,
-                    prop: nsh_core::Prop::UiModifier(name.into(), context.into()),
-                });
+                self.write_theme(nsh_core::Prop::UiModifier(name.into(), context.into()));
                 Ok(Value(0))
             }
             // `modifier(name)` (416) and `modifiers()` (417), as nsh-js's: the
-            // context a modifier has now, and every modifier as JSON.
+            // context a modifier shows, and the active document's modifiers
+            // in `resolutionOrder` as JSON.
             416 | 417 => {
-                let tokens = self.tokens.borrow().clone().unwrap_or_default();
+                let tokens = self.current_tokens();
                 if op == 416 {
                     let name = args.index(0)?.as_string().unwrap_or_default();
                     return match tokens.modifier(&name) {
@@ -356,6 +498,7 @@ impl Runtime {
                             "name": &*axis.name,
                             "contexts": axis.contexts.iter().map(|c| &**c).collect::<Vec<_>>(),
                             "default": &*axis.default,
+                            "selected": &*axis.selected,
                         })
                     })
                     .collect();
@@ -430,7 +573,7 @@ impl Runtime {
                     )
                 });
                 let patch = if theme.is_object() {
-                    let json = protocol::to_json(&compat::Value::new(theme))?.to_string();
+                    let json = protocol::to_json_text(&compat::Value::new(theme))?;
                     Some(nsh_theme::read_patch(&json).0)
                 } else {
                     None

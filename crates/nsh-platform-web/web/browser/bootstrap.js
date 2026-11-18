@@ -5466,7 +5466,23 @@
 				temperatureUnit: "fahrenheit"
 			}
 		}).map(([name, value]) => [name, reactive.signal(value)]));
-		const tokens = reactive.signal(0);
+		const tokens = reactive.signal(0), shape = reactive.signal(0), scopes = reactive.signal(0);
+		const TOKEN_SIGNALS = 1024;
+		const named = /* @__PURE__ */ new Map();
+		let overflow, overflowed = false;
+		const kept = () => reactive.runWithOwner ? reactive.runWithOwner(null, () => reactive.signal(0)) : reactive.signal(0);
+		const nameSignal = (name) => {
+			let signal = named.get(name);
+			if (signal) return signal;
+			if (named.size >= TOKEN_SIGNALS) {
+				overflowed = true;
+				return overflow ??= kept();
+			}
+			signal = kept();
+			named.set(name, signal);
+			return signal;
+		};
+		const bump = (signal) => signal.update((value) => value + 1);
 		const insets = reactive.context(() => fields.safeArea());
 		const platform = {
 			name: "web",
@@ -5497,18 +5513,26 @@
 			return around ? around.scheme() : fields.colorScheme();
 		};
 		const readToken = (op, name) => {
-			const around = scoped && scope(), named = around ? around.tokens() : void 0;
-			if (named === void 0) tokens();
+			const around = scoped && scope(), held = around ? around.tokens() : void 0;
+			if (held === void 0) {
+				tokens();
+				if (typeof name === "string") nameSignal(name)();
+			}
 			return invoke(op, [
 				name,
 				shownScheme() === "dark",
-				named ?? null
+				held ?? null
 			]);
 		};
 		const readDictionary = (op, arg) => {
-			const around = scoped && scope(), named = around ? around.tokens() : void 0;
-			if (named === void 0) tokens();
-			return JSON.parse(invoke(op, [arg, named ?? null]));
+			const around = scoped && scope(), held = around ? around.tokens() : void 0;
+			if (held === void 0) {
+				if (op === 418) {
+					tokens();
+					if (typeof arg === "string") nameSignal(arg)();
+				} else shape();
+			}
+			return JSON.parse(invoke(op, [arg, held ?? null]));
 		};
 		const setColorScheme = (scheme) => {
 			if (![
@@ -5542,48 +5566,59 @@
 			screenReaderEnabled: () => fields.screenReader()
 		};
 		let appInfo = readAppInfo("{}");
-		return {
-			api: {
-				...device,
-				...accessibility,
-				appInfo: () => appInfo,
-				safeArea: () => fields.safeArea(),
-				safeAreaInsets: () => insets(),
-				keyboardFrame: () => fields.keyboard(),
-				screenReader: () => fields.screenReader(),
-				token: (name) => readToken(402, name),
-				role: (name) => readToken(414, name),
-				setTheme(theme) {
-					invoke(406, [theme]);
-					tokens.update((value) => value + 1);
-				},
-				updateTheme(theme) {
-					invoke(409, [theme]);
-					tokens.update((value) => value + 1);
-				},
-				resetTheme(names) {
-					invoke(410, [names]);
-					tokens.update((value) => value + 1);
-				},
-				tokens: {
-					get: (name) => readDictionary(418, name) ?? void 0,
-					kind: (name) => readDictionary(419, name) ?? void 0,
-					names: (filter) => readDictionary(420, filter ?? null),
-					entries: () => readDictionary(421, null)
-				},
-				setModifier(name, context) {
-					invoke(415, [name, context]);
-					tokens.update((value) => value + 1);
-				},
-				modifier(name) {
-					tokens();
-					return invoke(416, [name]);
-				},
-				modifiers() {
-					tokens();
-					return JSON.parse(invoke(417, []));
-				}
+		const api = {
+			...device,
+			...accessibility,
+			appInfo: () => appInfo,
+			safeArea: () => fields.safeArea(),
+			safeAreaInsets: () => insets(),
+			keyboardFrame: () => fields.keyboard(),
+			screenReader: () => fields.screenReader(),
+			token: (name) => readToken(402, name),
+			role: (name) => readToken(414, name),
+			setTheme: (theme) => invoke(406, [theme]),
+			updateTheme: (patch) => invoke(409, [patch]),
+			resetTheme(names) {
+				invoke(410, [names]);
 			},
+			tokens: {
+				get: (name) => readDictionary(418, name) ?? void 0,
+				kind: (name) => readDictionary(419, name) ?? void 0,
+				names: (filter) => readDictionary(420, filter ?? null),
+				entries: () => readDictionary(421, null)
+			},
+			setModifier(name, context) {
+				invoke(415, [name, context]);
+			},
+			modifier(name) {
+				shape();
+				return invoke(416, [name]);
+			},
+			modifiers() {
+				shape();
+				return JSON.parse(invoke(417, []));
+			}
+		};
+		const changedTokens = (json) => {
+			let changes = null;
+			try {
+				changes = typeof json === "string" ? JSON.parse(json) : null;
+			} catch {}
+			const names = Array.isArray(changes?.names) ? changes.names : [];
+			const changed = names.map((name) => named.get(name)).filter(Boolean);
+			const whole = !changes || changes.whole === true || 2 * changed.length > named.size;
+			reactive.batch(() => {
+				if (!changes || changes.shape) bump(shape);
+				if (whole) bump(tokens);
+				else {
+					for (const signal of changed) bump(signal);
+					if (overflowed && names.length) bump(overflow);
+				}
+				bump(scopes);
+			});
+		};
+		return {
+			api,
 			insets,
 			host: () => fields.host(),
 			titleBar: () => fields.titleBar(),
@@ -5603,7 +5638,7 @@
 						invoke(413, [slot, false]);
 						return around;
 					}
-					if (around === void 0) tokens();
+					if (around === void 0) scopes();
 					return invoke(411, [
 						slot,
 						object(theme) ? theme : null,
@@ -5640,9 +5675,7 @@
 				});
 				dom.rootProp("layoutDirectionRtl", next.rtl);
 			},
-			changedTokens() {
-				tokens.update((value) => value + 1);
-			},
+			changedTokens,
 			showLocale(tag) {
 				reactive.batch(() => {
 					const settings = reactive.untracked(fields.localeSettings);
@@ -5656,9 +5689,8 @@
 			setup(tailwind, theme, scheme, statusBar, app) {
 				if (typeof tailwind === "string") dom.rootProp("tailwindTheme", tailwind);
 				if (typeof theme === "string") {
-					dom.rootProp("uiTheme", theme);
-					invoke(403, [theme]);
-					tokens.update((value) => value + 1);
+					const changes = invoke(403, [theme]);
+					if (typeof changes === "string") changedTokens(changes);
 				}
 				if ([
 					"light",
