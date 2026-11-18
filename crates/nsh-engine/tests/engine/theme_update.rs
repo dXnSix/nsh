@@ -192,6 +192,7 @@ fn a_rust_app_updates_and_resets_its_tokens() {
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
+        support_dir: None,
         data_dir: None,
         cache: nsh_engine::CacheOptions::off(),
         storage: None,

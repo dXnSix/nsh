@@ -79,6 +79,7 @@ fn start(host: Option<&str>) -> (Engine, Receiver<MountBatch>) {
         limits: nsh_engine::Limits::default(),
         ui_sets: vec![nsh_base::registry(), ds, app],
         runtime: None,
+        support_dir: None,
         data_dir: None,
         cache: nsh_engine::CacheOptions::off(),
         storage: None,
