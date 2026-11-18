@@ -125,7 +125,7 @@ Tailwind's `text-*` classes do. A node with several parts (`heading` then `headi
 `taskMarker`, `taskMarkerChecked`; `tableRow`, `tableHead`; `tableCell`, `tableHeaderCell`) gets their classes in that
 order and their styles merged, later parts winning. The full list is `parts.rs`; a new part is one line of `parts!`.
 Rust views also style parts with typed styles: `provide_context(TextViewParts::new().part(TextViewPart::Code, |s| ..))`
-refines a part's `StyleRefinement` (theme colors stay adaptive) before the app's `classes` and `styles` apply.
+refines a part's `StyleRefinement` (theme colors read there follow the theme's picked contexts, `colorMode` included) before the app's `classes` and `styles` apply.
 
 ## Annotated code
 

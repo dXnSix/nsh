@@ -721,7 +721,7 @@ A node of the native animation graph: a `AnimatedValue`, or a value derived from
 
 | Method | Rust | Description |
 |---|---|---|
-| `interpolate(config)` | `interpolate(&input, &output)`, `interpolate_colors(&input, &colors)`, `interpolate_with(&input, output, Interpolation { … })` | Maps the input through piecewise ranges. `outputRange` holds numbers, colors (`"#ff0000"`, `"rgba(…)"`) or angles (`"45deg"`, `"1rad"`). Outside `inputRange` it clamps by default; `extrapolate` (or `extrapolateLeft` / `extrapolateRight`) can be `"extend"` (continue the line), `"clamp"` or `"identity"` (pass the input through). `easing` shapes each segment. Rust takes numbers, theme colors (which follow the appearance) and angles as degrees for `bind_rotate`. |
+| `interpolate(config)` | `interpolate(&input, &output)`, `interpolate_colors(&input, &colors)`, `interpolate_with(&input, output, Interpolation { … })` | Maps the input through piecewise ranges. `outputRange` holds numbers, colors (`"#ff0000"`, `"rgba(…)"`) or angles (`"45deg"`, `"1rad"`). Outside `inputRange` it clamps by default; `extrapolate` (or `extrapolateLeft` / `extrapolateRight`) can be `"extend"` (continue the line), `"clamp"` or `"identity"` (pass the input through). `easing` shapes each segment. Rust takes numbers, colors (adaptive values follow the appearance; a theme color read in a binding follows the theme's modifiers) and angles as degrees for `bind_rotate`. |
 | `diffClamp(min, max, options?)` | `diff_clamp(min, max)`, `diff_clamp_with(min, max, DiffClamp::snapping())` | Follows the input's changes but keeps the result within `min..max`: a header that hides while content scrolls up and comes back as soon as it scrolls down. `snap: true` settles it at the nearer bound in 200 ms when its scroll view comes to rest, at `max` only once the input reached `max`. Either bound can be a number or an animated value. |
 | `add`, `sub`, `mul`, `div` | `add`, `sub`, `mul`, `div` | Arithmetic with another node or a constant. |
 | `mod(b)` | `modulo(b)` | Modulo, never negative for a positive `b` (keeping angles in 0..360). |
@@ -1177,7 +1177,7 @@ import { horizontalSizeClass, Text } from "nsh";
 const colorScheme: Accessor<"light" | "dark">;
 ```
 
-The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)); in a [`ThemeScope`](#themescope) with an appearance, the scope's. Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
+The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)); in a [`ThemeScope`](#themescope) with an appearance, the scope's. Reactive. Rust: `dark() -> bool`; adaptive style values (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. A theme color holds one value and follows the theme's `colorMode` modifier instead (see [`setModifier`](#setmodifier)). Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
 
 ```rust tabs
 view().flex_1().bg(move || if dark() { black() } else { white() })
