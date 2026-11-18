@@ -673,7 +673,7 @@ fn chat() -> impl IntoElement {
 
 ### 类型化的部件样式
 
-`TextViewParts` 让 Rust 视图用类型化的样式代替类名字符串设定部件样式：每个 `TextViewPart`（对应[上面表格](#styling-the-parts)中的一个部件）得到一个细化其 `StyleRefinement` 的函数。通过 `provide_context` 提供后，它们作用于下面的每个 `TextView`，先于其 `classes` 和 `styles` 应用；其中读取的主题颜色会跟随浅色和深色外观。
+`TextViewParts` 让 Rust 视图用类型化的样式代替类名字符串设定部件样式：每个 `TextViewPart`（对应[上面表格](#styling-the-parts)中的一个部件）得到一个细化其 `StyleRefinement` 的函数。通过 `provide_context` 提供后，它们作用于下面的每个 `TextView`，先于其 `classes` 和 `styles` 应用；其中读取的主题颜色会跟随主题选中的上下文，包括 `colorMode`。
 
 ```rust
 use nsh_base::{TextViewPart, TextViewParts, theme};

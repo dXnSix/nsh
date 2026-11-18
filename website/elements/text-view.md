@@ -752,7 +752,7 @@ fn chat() -> impl IntoElement {
 `TextViewParts` styles parts with typed styles instead of class strings, for Rust views: each `TextViewPart` (one per
 part of the [table above](#styling-the-parts)) gets a function refining its `StyleRefinement`. Given with
 `provide_context`, they apply to every `TextView` below, before its `classes` and `styles`; theme colors read in them
-follow the light and dark appearance.
+follow the theme's picked contexts, its `colorMode` included.
 
 ```rust
 use nsh_base::{TextViewPart, TextViewParts, theme};
