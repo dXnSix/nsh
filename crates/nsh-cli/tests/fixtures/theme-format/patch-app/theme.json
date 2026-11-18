@@ -1,0 +1,8 @@
+{
+  "tokens": {
+    "brand": { "kind": "color", "value": "#123456" },
+    "corner": { "kind": "number", "value": 6 },
+    "link": { "kind": "color", "value": "{brand}" }
+  },
+  "roles": { "primary": "brand" }
+}

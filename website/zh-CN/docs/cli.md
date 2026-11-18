@@ -1,6 +1,6 @@
 ---
 title: 命令行
-description: NSH 的全部子命令与参数：init、build、test、dev、run、package，以及签名相关的 keygen、certify、publish、verify、symbolicate 和 revoke。
+description: NSH 的全部子命令与参数：init、build、test、check、theme、dev、run、package，以及签名相关的 keygen、certify、publish、verify、symbolicate 和 revoke。
 order: 6
 group: start
 ---
@@ -16,6 +16,7 @@ nsh <COMMAND>
   build        Build an app: describe a Rust app's crates, or bundle a TSX app and compile it to QuickJS bytecode
   test         Run an app's tests headless, and its Rust crates' with cargo test
   check        Type check an app with TypeScript's native compiler, and its Rust crates with cargo check
+  theme        Convert old themes to the theme format, and check theme documents and patches
   dev          Serve an app to dev hosts (simulators, devices) and push rebuilds
   run          Like dev, and also run the app in a development host
   package      Package an installable app from the prebuilt runtime
@@ -171,6 +172,18 @@ nsh check [ENTRY] [--tsc <TSC>] [-- <TSC ARGS>...]
 |---|---|
 | `--tsc <TSC>` | 改为运行这个 `tsc`（也可用 `NSH_TSC`），例如 `node_modules` 里的，或者给没有网络的机器准备的副本。 |
 | `-- <TSC ARGS>` | 原样传给 `tsc`，例如 `nsh check -- --pretty false`。 |
+
+## nsh theme
+
+```sh
+nsh theme convert <OLD> [--over <BASE>] [-o <NEW>]
+nsh theme check <FILE> [--app <DIR>]
+nsh theme check --patch <FILE> --app <DIR>
+```
+
+`nsh theme convert` 把旧格式的主题（带 `cssVars` 的）转换为主题文档：文档写入 `NEW`（`-o`），否则写到标准输出，它报告的内容写到标准错误。`--over <BASE>` 把应用的旧主题叠加在它所扩展的旧库默认主题之上转换，得到一份完整的文档，包含基础主题和应用的全部 token；`--over nsh/base` 指 `nsh/base` 的旧默认主题，由 `nsh` 自带。有任何错误时以 1 退出，但无论如何都会写出结果。
+
+`nsh theme check` 读取一份主题文档，在默认值下、以及在每个修饰符各取一个上下文的所有组合下解析它（引用循环会连同形成它的选择一起报告），并检查它的角色：对照核心、`nsh/base` 和 Tailwind 类的角色，或者在 `--app <DIR>` 时对照应用的 UI 集注册的角色（为此会描述应用的 Rust crate）。使用 `--patch` 时，`FILE` 是一个覆盖补丁，对照应用的当前文档（`nsh.json` 的 `"theme"`，否则是它的 UI 集的文档）检查；`--patch` 需要 `--app`。每条诊断打印为 `<severity> <code> <pointer>: <message>`；有任何错误或未映射的必需角色（`role-unmapped`）时以 1 退出，否则以 0 退出。
 
 ## nsh build
 

@@ -1,0 +1,12 @@
+# The crate of the app `tests/cli/theme_format.rs` checks themes against
+# (`nsh theme check --app`): its set registers a required role.
+[package]
+name = "theme-format-role-app"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+nsh-core = { path = "../../../../../nsh-core" }

@@ -3,6 +3,7 @@
 mod dev_idiom;
 #[cfg(unix)]
 mod runtime;
+mod theme_format;
 #[cfg(unix)]
 mod tizen;
 #[cfg(unix)]

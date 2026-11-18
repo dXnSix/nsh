@@ -1,0 +1,18 @@
+{
+  "name": "Valid",
+  "tokens": {
+    "gray-1": { "kind": "color", "value": "#fcfcfc" },
+    "gray-12": { "kind": "color", "value": "#202020" },
+    "surface-app": { "kind": "color", "value": "{gray-1}" },
+    "text-primary": { "kind": "color", "value": "{gray-12}" },
+    "radius-card": { "kind": "number", "value": 8 }
+  },
+  "modifiers": {
+    "colorMode": {
+      "default": "light",
+      "contexts": { "light": {}, "dark": { "gray-1": "#111111", "gray-12": "#eeeeee" } }
+    }
+  },
+  "resolutionOrder": ["colorMode"],
+  "roles": { "background": "surface-app", "foreground": "text-primary", "radius": "radius-card" }
+}

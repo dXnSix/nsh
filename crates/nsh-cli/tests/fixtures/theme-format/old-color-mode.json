@@ -1,0 +1,6 @@
+{
+  "cssVars": { "light": { "surface": "#ffffff" } },
+  "modifiers": {
+    "colorMode": { "default": "light", "contexts": { "light": {}, "dark": {} } }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "Theme types",
+  "tokens": {
+    "brand": { "kind": "color", "value": "#123456", "doc": "The brand's color." },
+    "corner": { "kind": "number", "value": 6 },
+    "link": { "kind": "color", "value": "{brand}" }
+  },
+  "modifiers": {
+    "colorMode": { "default": "light", "contexts": { "light": {}, "dark": { "brand": "#abcdef" } } }
+  },
+  "resolutionOrder": ["colorMode"],
+  "roles": { "primary": "brand" }
+}
