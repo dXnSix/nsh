@@ -37,7 +37,7 @@ pub use self::{
     theme::{Theme, ThemeError},
 };
 pub(crate) use self::{
-    theme::ClassTokens,
+    theme::{ClassTokens, role_patterns},
     utilities::{Decl, Len, Part},
 };
 use crate::{

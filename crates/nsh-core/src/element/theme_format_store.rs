@@ -614,16 +614,16 @@ fn a_role_mapped_twice_logs_and_the_document_loads() {
 
 #[test]
 fn a_role_listed_reading_two_kinds_logs_a_conflict_and_keeps_the_first() {
-    use crate::element::{NumberRole, Role, RoleKind, RoleSpec};
+    use crate::element::{NumberRole, Role};
     let (registry, lines) = logged(|| {
         let mut registry = Registry::ui_set("x/native");
-        registry.roles([RoleSpec::new(Role::<crate::Hsla>::new("banner"), "")]);
-        registry.roles([RoleSpec::new(NumberRole::new("banner"), "")]);
+        registry.roles([Role::<crate::Hsla>::new("banner").declaration("", false)]);
+        registry.roles([NumberRole::new("banner").declaration("", false)]);
         registry
     });
     assert!(said(&lines, code::ROLE_CONFLICT), "{lines:?}");
     assert_eq!(registry.role_specs().len(), 1);
-    assert_eq!(registry.role_specs()[0].role.kind(), RoleKind::Color);
+    assert_eq!(registry.role_specs()[0].value_type, ValueType::Color);
 }
 
 #[test]

@@ -601,6 +601,15 @@ pub fn tokens() -> Arc<Tokens> {
     super::theme_scope::ScopeTokens::nearest().unwrap_or_else(surface_tokens)
 }
 
+/// The design tokens of the nearest [`super::ThemeScope`] around what reads
+/// them, `None` outside one. Reading them subscribes to the scope's
+/// tokens; outside a scope it subscribes to nothing: for a reader that
+/// keeps its own memo of the surface's tokens (`nsh-base`'s `theme()`) and
+/// makes a scope's apart.
+pub fn scope_tokens() -> Option<Arc<Tokens>> {
+    super::theme_scope::ScopeTokens::nearest()
+}
+
 /// The design token `name` where it is read (TS: `token()`): the nearest
 /// [`super::ThemeScope`]'s, else the surface's. Outside a scope, reading it
 /// subscribes to that token alone: what read it runs again only when its
@@ -619,9 +628,9 @@ pub fn role<V: RoleValue>(role: Role<V>) -> Option<V> {
     }
     track_roles();
     let tokens = surface_tokens_untracked();
-    let name = tokens.role_token(role.name(), V::TYPE);
+    let name = tokens.role_target(role.name())?;
     track_token(name);
-    tokens.value(name).and_then(V::from_token)
+    tokens.typed_role(role, name)
 }
 
 /// `f` of token `name` where it is read, subscribing as [`token`] does.

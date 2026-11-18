@@ -900,6 +900,9 @@ pub struct Registry {
     fallback_documents: Arc<Vec<RegisteredTheme>>,
     /// The roles its components draw with ([`Registry::roles`]).
     roles: Arc<Vec<super::RoleSpec>>,
+    /// The set that listed each of [`Self::roles`] (`None`: the app's
+    /// components), for `role-conflict`'s message.
+    role_sets: Arc<Vec<Option<&'static str>>>,
     /// Makes the views' built-in scroll bars ([`Registry::scrollbars_from`]).
     scrollbars: Option<ScrollbarSource>,
     /// The UI sets served under paths of this one's specifier
@@ -1369,8 +1372,8 @@ impl Registry {
                     }
                 }
             }
-            for role in set.roles.iter() {
-                out.add_role(role.clone());
+            for (role, owner) in set.roles.iter().zip(set.role_sets.iter()) {
+                out.add_role(role.clone(), *owner);
             }
             out.scrollbars = out.scrollbars.or(set.scrollbars);
             Arc::make_mut(&mut out.setups).extend(set.setups.iter().cloned());
@@ -1583,45 +1586,39 @@ impl Registry {
         (document, unused)
     }
 
-    /// Lists the roles the set's components draw with, mapped by a theme
-    /// or not (`nsh_base::role::all()`, or a design system's own made with
-    /// [`crate::roles!`]): the toolchain types TS's `role()` from them. A
-    /// role is its name, so one two sets list is one role; it reads one
-    /// kind of value. A role listed again reading another kind logs the
-    /// warning `role-conflict` and keeps the first.
+    /// Registers the roles the set's components draw with, mapped by a
+    /// theme or not (`nsh_base::role::all()`, or a design system's own made
+    /// with [`crate::roles!`]): their declarations ([`super::RoleSpec`]),
+    /// which the toolchain types TS's `role()` from and the core checks a
+    /// theme's mappings against. A role is its name, so one two sets list
+    /// with the same value type is listed once. Listed again with another
+    /// value type, it logs the warning `role-conflict` (naming the role,
+    /// both types and both sets) and the first is kept. Never panics.
     pub fn roles(&mut self, roles: impl IntoIterator<Item = super::RoleSpec>) -> &mut Self {
+        let set = self.specifier();
         for role in roles {
-            self.add_role(role);
+            self.add_role(role, set);
         }
         self
     }
 
-    fn add_role(&mut self, spec: super::RoleSpec) {
-        match self
-            .roles
-            .iter()
-            .find(|r| r.role.name() == spec.role.name())
-        {
-            Some(listed) if listed.role.kind() != spec.role.kind() => {
-                super::theme::report(&[nsh_theme::Diagnostic::warning(
-                    nsh_theme::code::ROLE_CONFLICT,
-                    "",
-                    format!(
-                        "The role `{}` is listed reading a {} and a {}; the first is kept.",
-                        spec.role.name(),
-                        listed.role.kind().name(),
-                        spec.role.kind().name()
-                    ),
-                )]);
-            }
-            Some(_) => {}
-            None => Arc::make_mut(&mut self.roles).push(spec),
+    fn add_role(&mut self, spec: super::RoleSpec, set: Option<&'static str>) {
+        let roles = Arc::make_mut(&mut self.roles);
+        let sets = Arc::make_mut(&mut self.role_sets);
+        if let Some(conflict) = super::tokens::merge_role(roles, sets, spec, set) {
+            super::theme::report(&[conflict]);
         }
     }
 
     /// The roles listed ([`Registry::roles`]), as data.
     pub fn role_specs(&self) -> &[super::RoleSpec] {
         &self.roles
+    }
+
+    /// The set that listed each of [`Registry::role_specs`], in order
+    /// (`None`: the app's components).
+    pub(crate) fn role_sets(&self) -> &[Option<&'static str>] {
+        &self.role_sets
     }
 
     /// The files [`Registry::assets`] ships.

@@ -82,6 +82,8 @@ pub mod theme_convert;
 #[cfg(test)]
 mod theme_format_layers;
 #[cfg(test)]
+mod theme_format_roles;
+#[cfg(test)]
 mod theme_format_signals;
 #[cfg(test)]
 mod theme_format_store;
@@ -229,8 +231,8 @@ pub use self::{
     token_info::TokenInfo,
     token_keys::{TokenError, TokenKey, TokenValue},
     tokens::{
-        AnyRole, CubicBezier, FONT_MONO, FONT_SANS, FontRole, ModifierAxis, NumberRole, Role,
-        RoleKind, RoleSpec, RoleValue, Token, Tokens, role,
+        CubicBezier, FONT_MONO, FONT_SANS, FontRole, ModifierAxis, NumberRole, Role, RoleSpec,
+        RoleValue, Token, Tokens, role,
     },
     ts_alias::TsAlias,
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},

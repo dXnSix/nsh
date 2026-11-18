@@ -28,7 +28,7 @@ use crate::{
         caught,
         responder::ResponderEl,
         services::FetchFailure,
-        tokens::ThemeLayers,
+        tokens::{RoleTable, ThemeLayers},
         view,
         virtual_list::{self, RowFn, SeparatorFn, VirtualListEl},
     },
@@ -630,6 +630,10 @@ pub(super) struct ThemeState {
     app: Arc<Patch>,
     /// The embedding app's patch, over the app's.
     host: Option<Arc<Patch>>,
+    /// The roles the layers' mappings are checked and resolved against:
+    /// the core's own and the served sets' declarations, and Tailwind's
+    /// patterns, collected when the sets are given.
+    roles: Arc<RoleTable>,
     /// The last resolve, and the document it resolved.
     resolved: nsh_theme::Resolved,
     resolved_document: Option<Arc<ThemeDocument>>,
@@ -1056,6 +1060,7 @@ impl<M: TextEngine> Core<M> {
     /// first op. Runs the sets' setup functions ([`Registry::setup`]).
     pub fn set_components(&mut self, registry: Registry) {
         self.take_sets_document(&registry);
+        self.take_sets_roles(&registry);
         {
             let _entered = self.components.runtime.enter();
             registry.run_setups();
@@ -1077,6 +1082,19 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// The roles `registry`'s sets declare, with the core's own: what the
+    /// theme's mappings are checked and resolved against from the next
+    /// install on. A role two of them declare with different value types
+    /// logs `role-conflict`, and the first is kept.
+    fn take_sets_roles(&mut self, registry: &Registry) {
+        let table = RoleTable::of(registry.role_specs(), registry.role_sets());
+        let state = &mut self.components.theme;
+        if *state.roles != table {
+            state.roles = Arc::new(table);
+            state.pending = true;
+        }
+    }
+
     /// Replaces the components of a running core with `registry`, a
     /// superset of what it had (a UI set registered after the app started:
     /// a web runtime's late `nsh_part_*`). What is mounted from then on may
@@ -1091,6 +1109,7 @@ impl<M: TextEngine> Core<M> {
         if self.components.theme.sets.is_none() {
             self.take_sets_document(&registry);
         }
+        self.take_sets_roles(&registry);
         self.components.registry = registry;
         self.install_theme();
     }
@@ -1356,15 +1375,26 @@ impl<M: TextEngine> Core<M> {
             document,
             selection: state.selection.clone(),
             patches,
+            roles: state.roles.clone(),
         });
         let resolved =
             nsh_theme::resolve(&layers.document, &layers.selection, &layers.patch_refs());
+        let mut changes = resolved.changed(&state.resolved);
+        let mut tokens =
+            Tokens::from_resolved(&resolved, layers, Some((&self.components.tokens, &changes)));
+        // The roles as the declarations type them (`resolve_role`): a
+        // wrong-typed mapping over a good one changes nothing.
+        let (roles, roles_moved) = tokens.changed_roles(&self.components.tokens, &changes.tokens);
+        changes.roles = roles;
         // A missing reference was said when the document or the patch was
-        // read; a cycle the layers form is said once per document.
+        // read; a cycle the layers form, and what the role checks find
+        // (every channel comes here), are said once per document.
+        let checked = tokens.check_roles(&resolved);
         let fresh: Vec<Diagnostic> = resolved
             .diagnostics
             .iter()
             .filter(|d| d.code != nsh_theme::code::REFERENCE_MISSING)
+            .chain(&checked)
             .filter(|d| {
                 state
                     .logged
@@ -1373,10 +1403,6 @@ impl<M: TextEngine> Core<M> {
             .cloned()
             .collect();
         crate::element::theme::report(&fresh);
-        let changes = resolved.changed(&state.resolved);
-        let roles_moved = resolved.roles != state.resolved.roles;
-        let mut tokens =
-            Tokens::from_resolved(&resolved, layers, Some((&self.components.tokens, &changes)));
         tokens.set_themed(state.themed());
         state.resolved = resolved;
         state.changes = changes;

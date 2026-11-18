@@ -195,16 +195,13 @@ mod describe_tests {
     /// through a role; none for a class of no token.
     #[test]
     fn the_tokens_a_class_reads_by_name() {
-        use crate::element::{AnyRole, RoleKind, Tokens};
+        use crate::element::Tokens;
         let mut tokens = Tokens::default();
         tokens.set_color("primary", crate::color::rgb(0x111111));
         tokens.set_color("surface", crate::color::rgb(0xffffff));
         tokens.set_number("radius-card", 12.0);
         tokens.set_shadow("shadow-raised", [crate::BoxShadow::default()]);
-        let tokens = tokens.with_roles([(
-            AnyRole::new("popover", RoleKind::Color),
-            "surface".to_owned(),
-        )]);
+        let tokens = tokens.with_roles([("popover", "surface")]);
         let mut theme = Theme::default();
         theme.set_tokens(&tokens);
         let read = |class: &str| describe(&theme, class).unwrap().tokens;

@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use nsh_theme::ValueType;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
@@ -511,6 +512,37 @@ const NAMESPACES: [&str; 8] = [
     "blur",
     "duration",
 ];
+
+/// The roles Tailwind's namespaces name (TW-ROLES' table): each role
+/// prefix and the value types its tokens may have. `text-` takes a color
+/// too, as `text-<n>` names a color of any name.
+const ROLE_NAMESPACES: &[(&str, &[ValueType])] = &[
+    ("radius-", &[ValueType::Number]),
+    ("spacing-", &[ValueType::Number]),
+    (
+        "text-",
+        &[ValueType::Color, ValueType::Typography, ValueType::Number],
+    ),
+    ("font-", &[ValueType::Font]),
+    ("font-weight-", &[ValueType::Number]),
+    ("tracking-", &[ValueType::Number]),
+    ("leading-", &[ValueType::Number]),
+    ("blur-", &[ValueType::Number, ValueType::Blur]),
+    ("duration-", &[ValueType::Duration]),
+    ("ease-", &[ValueType::Easing]),
+    ("shadow-", &[ValueType::Shadow]),
+    (GRADIENTS, &[ValueType::Gradient]),
+];
+
+/// Tailwind's namespaces as role patterns, which the core checks a
+/// theme's role mappings against (`nsh_theme::check_roles`): a mapping such
+/// as `radius-card` is known and type-checked without any set declaring it.
+pub(crate) fn role_patterns() -> Vec<nsh_theme::RolePattern> {
+    ROLE_NAMESPACES
+        .iter()
+        .map(|(prefix, accepts)| nsh_theme::RolePattern::new(*prefix, accepts))
+        .collect()
+}
 
 /// The utilities whose values a namespace's tokens are: each prefix, its
 /// namespace, whether the value is a length (points) or a plain number (a

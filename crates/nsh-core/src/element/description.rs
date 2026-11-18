@@ -176,10 +176,21 @@ impl ClassExtensionDescription {
 pub struct RoleDescription {
     /// Its name (`popover`).
     pub name: String,
-    /// What it reads ([`super::RoleKind::name`]).
+    /// The value type of what it reads ([`super::ValueType::name`]).
     pub kind: String,
-    /// Its doc comment ([`super::RoleSpec::doc_text`]).
+    /// Its doc ([`super::RoleSpec`]'s, empty without one).
     pub doc: String,
+}
+
+impl RoleDescription {
+    /// The description of `spec`.
+    fn of(spec: &super::RoleSpec) -> Self {
+        RoleDescription {
+            name: spec.name.clone(),
+            kind: spec.value_type.name().to_owned(),
+            doc: spec.doc.clone().unwrap_or_default(),
+        }
+    }
 }
 
 /// The roles `sets` list and the core's own ([`super::role::all`]), each
@@ -187,11 +198,7 @@ pub struct RoleDescription {
 /// two sets list reading different kinds.
 pub fn roles(sets: &[SetDescription]) -> Result<Vec<RoleDescription>, String> {
     let core = super::role::all();
-    let own = core.iter().map(|spec| RoleDescription {
-        name: spec.role.name().to_owned(),
-        kind: spec.role.kind().name().to_owned(),
-        doc: spec.doc_text(),
-    });
+    let own = core.iter().map(RoleDescription::of);
     let mut out: Vec<RoleDescription> = Vec::new();
     for role in own.chain(sets.iter().flat_map(|s| s.roles.iter().cloned())) {
         match out.iter().find(|r| r.name == role.name) {
@@ -310,11 +317,7 @@ impl SetDescription {
             roles: registry
                 .role_specs()
                 .iter()
-                .map(|spec| RoleDescription {
-                    name: spec.role.name().to_owned(),
-                    kind: spec.role.kind().name().to_owned(),
-                    doc: spec.doc_text(),
-                })
+                .map(RoleDescription::of)
                 .collect(),
             class_extensions: ClassExtensionDescription::of(registry),
             class_types: registry
@@ -429,7 +432,7 @@ impl SetDescription {
                     let at = format!("{at}.roles[{i}]");
                     let r = object(r, &at)?;
                     let kind = string(r, "kind", &at)?;
-                    if super::RoleKind::from_name(&kind).is_none() {
+                    if super::ValueType::from_name(&kind).is_none() {
                         return Err(format!("{at}.kind: unknown kind {kind:?}"));
                     }
                     Ok(RoleDescription {
@@ -745,7 +748,7 @@ mod theme_documents {
 #[cfg(test)]
 mod set_roles {
     use super::*;
-    use crate::element::{NumberRole, Role, RoleSpec, role};
+    use crate::element::{NumberRole, Role, role};
 
     #[allow(unreachable_pub, reason = "as a UI set's crate writes its roles")]
     mod kit {
@@ -802,7 +805,7 @@ mod set_roles {
             SetDescription::of(&registry).unwrap().roles
         );
         // A kind the reader does not know is refused.
-        let wrong = json.replace("\"kind\":\"number\"", "\"kind\":\"shadow\"");
+        let wrong = json.replace("\"kind\":\"number\"", "\"kind\":\"nope\"");
         let error = Description::from_json(&wrong).unwrap_err();
         assert!(error.contains("unknown kind"), "{error}");
     }
@@ -812,8 +815,8 @@ mod set_roles {
         let mut other = Registry::ui_set("test/other");
         // A role two sets list is one role.
         other.roles([
-            RoleSpec::new(kit::BANNER, " Another set's words for it.\n"),
-            RoleSpec::new(role::POPOVER, ""),
+            kit::BANNER.declaration(" Another set's words for it.\n", false),
+            role::POPOVER.declaration("", false),
         ]);
         let sets = [
             SetDescription::of(&set()).unwrap(),
@@ -851,7 +854,7 @@ mod set_roles {
     #[test]
     fn a_role_listed_with_two_kinds_is_refused() {
         let mut other = Registry::ui_set("test/other");
-        other.roles([RoleSpec::new(NumberRole::new("banner"), "")]);
+        other.roles([NumberRole::new("banner").declaration("", false)]);
         let sets = [
             SetDescription::of(&set()).unwrap(),
             SetDescription::of(&other).unwrap(),
@@ -868,8 +871,8 @@ mod set_roles {
         let banner = merged
             .role_specs()
             .iter()
-            .find(|r| r.role.name() == "banner")
+            .find(|r| r.name == "banner")
             .unwrap();
-        assert_eq!(banner.role.kind(), crate::element::RoleKind::Color);
+        assert_eq!(banner.value_type, crate::element::ValueType::Color);
     }
 }

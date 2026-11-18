@@ -26,7 +26,7 @@ use crate::{
     JsonValue,
     element::{
         JsHost, JsIn, JsOwned, JsValue, Memo, NoEvent, Patch, PropError, Tokens, TsTypes, computed,
-        provide_context, reactive::with_data, use_context,
+        provide_context, reactive::with_data, tokens::ThemeLayers, use_context,
     },
     platform::{Appearance, ColorScheme},
     prelude::*,
@@ -57,16 +57,36 @@ pub(crate) fn scoped(
         }
     }
     let mut patches = layers.patches.clone();
+    let patched = patch.is_some();
     if let Some(patch) = patch {
         said.extend(patch.check(&document));
         patches.push(Arc::new(patch));
     }
-    let (mut tokens, resolved) = Tokens::resolve(document, selection, patches);
+    let (mut tokens, resolved) = Tokens::resolve_layers(Arc::new(ThemeLayers {
+        document,
+        selection,
+        patches,
+        roles: layers.roles.clone(),
+    }));
     said.extend(
         resolved
-            .into_iter()
-            .filter(|d| d.code != nsh_theme::code::REFERENCE_MISSING),
+            .diagnostics
+            .iter()
+            .filter(|d| d.code != nsh_theme::code::REFERENCE_MISSING)
+            .cloned(),
     );
+    // What the role checks find of the scope's patch: what they find of
+    // the stack around it was said where that was installed (checked with
+    // the scope's values, which a patch changes and never removes).
+    if patched {
+        let around_said = around.check_roles(&resolved);
+        said.extend(
+            tokens
+                .check_roles(&resolved)
+                .into_iter()
+                .filter(|d| !around_said.contains(d)),
+        );
+    }
     tokens.set_themed(around.is_themed());
     (Arc::new(tokens), said)
 }

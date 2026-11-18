@@ -260,11 +260,8 @@ mod role_declarations {
     #[test]
     fn roles_are_typed_by_what_they_read_with_their_docs() {
         let kit = described(vec![
-            RoleSpec::new(
-                Role::<nsh_core::Hsla>::new("banner"),
-                " A banner's */ surface.\n",
-            ),
-            RoleSpec::new(NumberRole::new("chip-radius"), ""),
+            Role::<nsh_core::Hsla>::new("banner").declaration(" A banner's */ surface.\n", false),
+            NumberRole::new("chip-radius").declaration("", false),
         ]);
         let declaration = super::roles_declaration(&[kit]).unwrap();
         assert!(
@@ -301,9 +298,9 @@ mod role_declarations {
 
     #[test]
     fn a_role_of_two_kinds_is_an_error() {
-        let a = described(vec![RoleSpec::new(NumberRole::new("banner"), "")]);
+        let a = described(vec![NumberRole::new("banner").declaration("", false)]);
         let mut other = Registry::ui_set("test/other");
-        other.roles([RoleSpec::new(Role::<nsh_core::Hsla>::new("banner"), "")]);
+        other.roles([Role::<nsh_core::Hsla>::new("banner").declaration("", false)]);
         let b = SetDescription::of(&other).unwrap();
         let error = super::roles_declaration(&[a, b]).unwrap_err();
         assert_eq!(
