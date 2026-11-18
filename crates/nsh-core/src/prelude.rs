@@ -50,6 +50,7 @@ pub use crate::element::{
     DevicePixels,
     DialogAnswer,
     DialogCloser,
+    DialogReply,
     DiffClamp,
     EaseMode,
     // Native animation values.

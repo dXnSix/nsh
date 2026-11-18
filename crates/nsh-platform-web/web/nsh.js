@@ -93,6 +93,18 @@ const ARIA_ROLES = {
   search: "searchbox", text: null, summary: "status", togglebutton: "button", dropdownlist: "combobox",
 };
 
+/** Reconcile accessibility props with the element's current attributes. */
+function setAriaAttribute(el, name, value) {
+  const next = value == null || value === false ? null : String(value);
+  if (el.getAttribute(name) === next) return;
+  if (next === null) el.removeAttribute(name);
+  else el.setAttribute(name, next);
+}
+
+/** Elements a browser's Tab stops at without a `tabindex` (`elementTag`'s
+ * links and `web={{ element }}` values). */
+const NATIVE_STOPS = "a[href], button, input, select, textarea, summary, [contenteditable]";
+
 /**
  * The HTML element a view or text is drawn as, from what its props say it
  * is: a heading (`role="header"`, `h1` to `h6` by `accessibilityLevel`,
@@ -141,6 +153,10 @@ const VELOCITY_WINDOW = 100;
  * when no animation frame did (`keepDeadline`, `moveScreens`, ...): more
  * than a frame, so that while the page shows its frames always come first. */
 const LATE_MS = 50;
+/** How long after its time a frame's `requestAnimationFrame` callbacks may
+ * run and still step the native animations at that time (`frameTime`):
+ * later than that, a task held the frame. */
+const FRAME_HELD_MS = 16;
 /** How long a dialog waits for the two frames before it comes in
  * (`present`): far more than two frames, so it only waits that long while
  * frames stop (a hidden tab). */
@@ -238,6 +254,8 @@ const KEYFRAMES = `
    are set, so those are only for browsers without them (Firefox). */
 .nsh-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
 .nsh-scroll::-webkit-scrollbar-track, .nsh-scroll::-webkit-scrollbar-corner { background: transparent; }
+.nsh-scroll::-webkit-scrollbar-track:vertical { margin: var(--nsh-bar-t, 0) 0 var(--nsh-bar-b, 0); }
+.nsh-scroll::-webkit-scrollbar-track:horizontal { margin: 0 var(--nsh-bar-r, 0) 0 var(--nsh-bar-l, 0); }
 .nsh-scroll::-webkit-scrollbar-thumb { border-radius: 3px; background: rgba(128,128,128,.45); }
 @supports not selector(::-webkit-scrollbar) {
   .nsh-scroll { scrollbar-width: thin; scrollbar-color: rgba(128,128,128,.45) transparent; }
@@ -315,6 +333,10 @@ img.nsh-fill { pointer-events: none; }
 .nsh-scroll.nsh-oy.nsh-oy { overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: auto; }
 .nsh-scroll.nsh-oxy.nsh-oxy { overflow: auto; }
 .nsh-scroll.nsh-onone.nsh-onone { overflow: hidden; }
+/* A scroll view whose content fits along its axis has nothing to scroll
+   (\`nsh-fits\`): a swipe along it scrolls the scroll view around it, as on
+   Android, instead of stopping at its \`contain\` and moving nothing. */
+.nsh-scroll.nsh-fits.nsh-fits { overscroll-behavior: auto; }
 .nsh-scroll.nsh-zoom.nsh-zoom { touch-action: none; }
 .nsh-snap-x { scroll-snap-type: x mandatory; }
 .nsh-snap-y { scroll-snap-type: y mandatory; }
@@ -401,6 +423,16 @@ img.nsh-fill { pointer-events: none; }
 .nsh-dialog button.cancel { font-weight: 600; }
 .nsh-desktop .nsh-dialog button.cancel { font-weight: 500; }
 .nsh-dialog button.destructive { color: #ff3b30; }
+.nsh-dialog button:disabled { opacity: .4; }
+.nsh-dialog-input { display: block; box-sizing: border-box; width: calc(100% - 32px); margin: 0 16px 16px; padding: 6px 8px;
+  border: 0.5px solid rgba(0,0,0,.25); border-radius: 7px; background: #fff; color: inherit; outline: none;
+  font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.nsh-dialog h3 + .nsh-dialog-input { margin-top: 14px; }
+.nsh-desktop .nsh-dialog-input { width: 100%; margin: 12px 0 0; padding: 7px 10px; border: 1px solid #e5e5e5;
+  border-radius: 8px; font-size: 14px; }
+.nsh-desktop .nsh-dialog-input:focus { border-color: #a3a3a3; }
+.nsh-dark .nsh-dialog-input { background: rgba(28,28,30,.9); border-color: rgba(255,255,255,.2); }
+.nsh-desktop.nsh-dark .nsh-dialog-input { background: #0a0a0a; border-color: #262626; }
 .nsh-dark .nsh-dialog { background: rgba(44,44,46,.97); color: #fff; }
 .nsh-dark .nsh-dialog button { border-top-color: rgba(255,255,255,.15); color: #0a84ff; }
 .nsh-dark .nsh-dialog button.destructive { color: #ff453a; }
@@ -1313,6 +1345,7 @@ class Player {
         // (the error handed over with `nsh_storage_reply`).
         storage_load: (pp, pl) => this.storage(() => {
           const prefix = this.str(pp, pl);
+          this.followStorage(prefix);
           const entries = Object.create(null);
           for (let i = 0; i < localStorage.length; i++) {
             const key = localStorage.key(i);
@@ -1661,6 +1694,49 @@ class Player {
     return done;
   }
 
+  /**
+   * Follows what other tabs of the origin change in the app's storage,
+   * kept under `prefix` (`storage_load`): a tab gets a `storage` event for
+   * each `localStorage` change the others make, never for its own.
+   */
+  followStorage(prefix) {
+    (this.storagePrefixes ??= new Set()).add(prefix);
+    if (this.storageListener) return;
+    this.storageListener = (e) => this.storageChanged(e);
+    window.addEventListener("storage", this.storageListener);
+  }
+
+  /**
+   * Hands the engine a change another tab made to the app's storage: the
+   * value this tab reads now rather than the event's `newValue`, which a
+   * write this tab made since the other tab's may have replaced. A `key`
+   * of null is `localStorage.clear()`: the engine reads the entries again.
+   */
+  storageChanged(e) {
+    let area;
+    try {
+      area = localStorage;
+    } catch {
+      return;
+    }
+    if (e.storageArea !== area) return;
+    for (const prefix of this.storagePrefixes) {
+      let kind = 2, key = "", value = "";
+      if (e.key !== null) {
+        if (!e.key.startsWith(prefix)) continue;
+        key = e.key.slice(prefix.length);
+        try {
+          value = area.getItem(e.key);
+        } catch {
+          continue;
+        }
+        kind = value === null ? 0 : 1;
+      }
+      this.call((w) => this.withStrings([prefix, key, value ?? ""], (pp, pl, kp, kl, vp, vl) =>
+        w.nsh_storage_changed(pp, pl, kp, kl, vp, vl, kind)));
+    }
+  }
+
   /** Calls `f(ptr, len, ...)` for each string, freeing them afterwards. */
   withStrings(strings, f) {
     const passed = strings.map((s) => {
@@ -1956,6 +2032,9 @@ class Player {
     clearTimeout(this.keeper?.timer);
     this.keeper = null;
     this.browserHost?.stop();
+    this.storagePrefixes?.clear();
+    if (this.storageListener) window.removeEventListener("storage", this.storageListener);
+    this.storageListener = null;
     this.wasm?.nsh_stop();
     } finally { this.stopping = false; }
   }
@@ -2019,8 +2098,24 @@ class Player {
     this.frame = requestAnimationFrame((now) => {
       this.frame = 0;
       this.frameAt = performance.now();
-      this.call((w) => w.nsh_frame(now));
+      this.call((w) => w.nsh_frame(this.frameTime(now)));
     });
+  }
+
+  /**
+   * The time an animation frame steps the native animations at: the
+   * frame's (when it began, so the steps keep the display's pace), unless a
+   * task held the frame, and then when its callbacks run. A press handled
+   * before them runs the app's code, which may mount a sheet and start its
+   * entrance; stepped at the frame's time, that entrance would start before
+   * it was asked for, and its first drawn step would be as far along as the
+   * press took (a slow one showed the sheet nearly in place). Never earlier
+   * than the frame before.
+   */
+  frameTime(now) {
+    const at = this.frameAt - now > FRAME_HELD_MS ? this.frameAt : now;
+    this.steppedAt = Math.max(at, this.steppedAt ?? at);
+    return this.steppedAt;
   }
 
   /** `keepDeadline` once the call into the engine that asked for a frame
@@ -2117,6 +2212,7 @@ class Player {
     document.addEventListener("visibilitychange", changed);
     addEventListener("focus", changed);
     addEventListener("blur", changed);
+    this.watchPageCache(changed);
     visualViewport?.addEventListener("resize", changed);
     visualViewport?.addEventListener("scroll", changed);
     new MutationObserver(changed).observe(document.documentElement, { attributes: true, attributeFilter: ["dir", "lang"] });
@@ -2125,6 +2221,30 @@ class Player {
     this.safeProbe.className = "nsh-probe";
     document.body.append(this.safeProbe);
     if (this.viewportOverlays) this.installFloats();
+  }
+
+  /** A page the browser keeps in its back / forward cache (a `pagehide`
+   * that is `persisted`) is in the background until a `pageshow` brings it
+   * back: the app sees the pair of edges whether or not the browser tells
+   * `visibilitychange` around them. A page that is discarded (`pagehide`
+   * not `persisted`) ends its app instead (`watchPageEnd`). Neither
+   * listener keeps a page out of that cache. */
+  watchPageCache(changed) {
+    const cached = (value) => (event) => {
+      if (!event.persisted) return;
+      this.pageCached = value;
+      changed();
+    };
+    window.addEventListener("pagehide", cached(true));
+    window.addEventListener("pageshow", cached(false));
+  }
+
+  /** The app's state (`lifecycle()`): `background` while the page is
+   * hidden (another tab, a minimized window) or in the back / forward
+   * cache, else whether it has the focus. */
+  lifecycle() {
+    if (this.pageCached || document.visibilityState === "hidden") return "background";
+    return document.hasFocus() ? "active" : "inactive";
   }
 
   /** The page's insets covered by system UI, where they overlap the root
@@ -2174,9 +2294,7 @@ class Player {
       keyboard: this.keyboardHeight(),
       appleKeyboard: APPLE,
       host: Boolean(this.options.host),
-      lifecycle: document.visibilityState === "hidden"
-        ? "background"
-        : document.hasFocus() ? "active" : "inactive",
+      lifecycle: this.lifecycle(),
       timeZone: timeZoneName(),
       screenColor: typeof window.EyeDropper === "function",
       share: webShareAllowed(),
@@ -2622,10 +2740,16 @@ class Player {
     // A stack laid out at no size (`display: none`: a tab not selected) or
     // at one again changes whether it shows (`stackShown`).
     const emptied = el._kind === "stack" && el._frame && !(el._frame[2] > 0 && el._frame[3] > 0) !== !(w > 0 && h > 0);
+    const seen = this.seenByKeys(el);
     el._frame = [x, y, w, h];
+    if (resized && el._kind === "scroll") this.scrollFits(el);
     // No size: nothing of its own shows (`.nsh-empty`).
     el.classList.toggle("nsh-empty", !(w > 0 && h > 0));
     if (emptied) this.syncHistorySoon();
+    if (seen !== this.seenByKeys(el)) {
+      if (el._pressable || el._props?.focusable || el.matches?.(NATIVE_STOPS)) this.updateFocusable(el);
+      if (el._field) this.fieldStop(el);
+    }
     this.placeFrame(el);
     this.readingChanged(el.parentNode);
     if (resized && el._corners) this.placeCorners(el);
@@ -3105,13 +3229,15 @@ class Player {
   /** ARIA attributes from the accessibility props (`op_vp`). */
   updateAria(el) {
     const p = el._props ?? {};
-    const set = (name, value) => (value == null || value === false ? el.removeAttribute(name) : el.setAttribute(name, String(value)));
+    const set = (name, value) => setAriaAttribute(el, name, value);
     const role = ARIA_ROLES[p.role] ?? (p.role && p.role !== "none" ? p.role : el._pressable ? "button" : null);
     // A combo box that is an input is its field, which keeps the focus
     // (`fieldAria`).
     set("role", el._field && p.role === "combobox" ? null : role);
-    set("aria-label", el._field ? null : p.label ?? el._textLabel);
-    set("aria-description", el._field ? null : p.hint);
+    if (!el._field) {
+      set("aria-label", p.label ?? el._textLabel);
+      set("aria-description", p.hint);
+    }
     set("aria-disabled", p.disabled && "true");
     set("aria-selected", p.selected && "true");
     set("aria-checked", p.checked);
@@ -3141,14 +3267,17 @@ class Player {
   /** The stops of the keyboard focus (Tab), as `ViewProps::focus_stop`
    * decides: pressables (Enter and Space press them) unless `focusable`
    * false, and any `focusable` view, pressable or not (its keys reach it
-   * through the app's keymap); never disabled ones or those hidden from
-   * assistive technologies. */
+   * through the app's keymap); never disabled ones, those hidden from
+   * assistive technologies or those with no area (`seenByKeys`). */
   updateFocusable(el) {
     const p = el._props;
-    const focusable = (p?.focusable ?? !!el._pressable) && !p?.disabled && !p?.hidden;
+    const seen = this.seenByKeys(el);
+    const focusable = (p?.focusable ?? !!el._pressable) && !p?.disabled && !p?.hidden && seen;
     if (focusable) el.tabIndex = 0;
-    // Programmatic focus only for what screen-reader focus moved to.
-    else if (el._a11yFocus) el.tabIndex = -1;
+    // Programmatic focus only for what screen-reader focus moved to; an
+    // element Tab reaches without a `tabindex` (a link, `web={{ element }}`)
+    // keeps none while it has no area.
+    else if (el._a11yFocus || (!seen && el.matches?.(NATIVE_STOPS))) el.tabIndex = -1;
     else if (el.hasAttribute("tabindex")) el.removeAttribute("tabindex");
     // No longer a stop with the focus on it: it leaves, as on macOS (browsers
     // move it without a `blur`, which would leave `focus:` on).
@@ -3171,16 +3300,41 @@ class Player {
     this.updateAria(el);
   }
 
+  /** Whether the keyboard reaches view `el` (a Tab stop, an input's
+   * field): it has an area. The core lays out each view of a
+   * `display: none` subtree at no size, which hides nothing in a browser,
+   * so Tab would stop at what it holds; macOS keeps the same rule
+   * (`NshView::seen_by_keys`), and browsers already pass by
+   * `visibility: hidden`. A view before its first frame counts: its props
+   * come first, and the frame then decides. */
+  seenByKeys(el) {
+    const f = el._frame;
+    return !f || (f[2] > 0 && f[3] > 0);
+  }
+
+  /** Input `el`'s field is a Tab stop while its view and its content box
+   * have an area (`seenByKeys`); one that hides with the focus in it gives
+   * the focus up, as a hidden Tab stop does. */
+  fieldStop(el) {
+    const field = el._field;
+    if (!field) return;
+    const c = el._content;
+    const seen = this.seenByKeys(el) && (!c || (c[2] > 0 && c[3] > 0));
+    if (seen) field.removeAttribute("tabindex");
+    else field.tabIndex = -1;
+    if (!seen && document.activeElement === field) field.blur();
+  }
+
   /** The name, description and states of input view `el` go on its `field`:
    * the field is the element screen readers read as the input. */
   fieldAria(el, field) {
     const p = el._props ?? {};
-    const set = (name, value) => (value == null || value === false ? field.removeAttribute(name) : field.setAttribute(name, String(value)));
+    const set = (name, value) => setAriaAttribute(field, name, value);
     set("aria-label", (p.label ?? el._textLabel) || null);
     set("aria-description", p.hint || null);
     // Props may arrive before the field exists; its wrapper then held the name.
-    el.removeAttribute("aria-label");
-    el.removeAttribute("aria-description");
+    setAriaAttribute(el, "aria-label", null);
+    setAriaAttribute(el, "aria-description", null);
     set("aria-invalid", p.invalid && "true");
     // A combo box's field is the combo box: the focus stays in it while
     // its list is open, and its active descendant is the highlighted row.
@@ -4500,6 +4654,7 @@ class Player {
     const el = this.view(id);
     if (!el?._spacer) return;
     el._content = [w, h];
+    this.scrollFits(el);
     this.placeLayer(el);
     this.snapMarkers(el);
     // The last sticky cell travels to the end of the content.
@@ -4533,7 +4688,17 @@ class Player {
     const el = this.view(id);
     if (!el) return;
     const refresh = el._behavior?.refreshIndicator?.height !== behavior.refreshIndicator?.height;
+    const bar = String(this.barInset(el)) !== String(behavior.bar ?? [0, 0, 0, 0]);
     el._behavior = behavior;
+    // The browser's own indicator (phones) keeps its track within the
+    // insets where its scroll bar can be styled (`.nsh-scroll`'s track).
+    if (bar) {
+      const [top, right, bottom, left] = this.barInset(el);
+      el.style.setProperty("--nsh-bar-t", `${top}px`);
+      el.style.setProperty("--nsh-bar-r", `${right}px`);
+      el.style.setProperty("--nsh-bar-b", `${bottom}px`);
+      el.style.setProperty("--nsh-bar-l", `${left}px`);
+    }
     // A refresh in progress keeps the room of the indicator now showing.
     if (refresh && el._refreshing && !el._pulling && el._pull > 0) this.animatePull(el, this.refreshSpace(el));
     if (refresh) this.updateSpinner(el);
@@ -4557,6 +4722,17 @@ class Player {
     const axes = scroll === "hidden" ? "nsh-onone" : zooms ? "nsh-oxy" : el._horizontal ? "nsh-ox" : "nsh-oy";
     swapClass(el, "_overflow", axes);
     el.classList.toggle("nsh-zoom", zooms);
+    this.scrollFits(el);
+  }
+
+  /** Whether the content of scroll view `el` fits along its axis, which
+   * leaves it nothing to scroll (`nsh-fits`): its overscroll is the scroll
+   * view's around it then, as a native Android scroll view hands its parent
+   * what it cannot take. A zoomable view keeps its own. */
+  scrollFits(el) {
+    const axis = el._horizontal ? 0 : 1;
+    const fits = !!el._content && !!el._frame && !this.zooms(el) && el._content[axis] <= el._frame[2 + axis] + 0.5;
+    el.classList.toggle("nsh-fits", fits);
   }
 
   snapMarkers(el) {
@@ -4715,12 +4891,27 @@ class Player {
     const h = !!el._horizontal;
     const view = h ? el.clientWidth : el.clientHeight;
     const total = h ? el.scrollWidth : el.scrollHeight;
-    if (total <= view + 0.5 || view <= 4 * BAR_MARGIN) return null;
-    const track = view - 2 * BAR_MARGIN;
+    // Its track keeps within the view's `scrollbarInset`.
+    const [top, right, bottom, left] = this.barInset(el);
+    const [before, after] = h ? [left, right] : [top, bottom];
+    const room = view - before - after;
+    if (total <= view + 0.5 || room <= 4 * BAR_MARGIN) return null;
+    const track = room - 2 * BAR_MARGIN;
     const len = Math.min(track, Math.max(32, (track * view) / total));
     const max = total - view;
     const t = Math.min(Math.max((h ? el.scrollLeft : el.scrollTop) / max, 0), 1);
-    return [BAR_MARGIN + t * (track - len), len, track - len, max];
+    return [before + BAR_MARGIN + t * (track - len), len, track - len, max];
+  }
+
+  /** `el`'s `scrollbarInset`: `[top, right, bottom, left]`. */
+  barInset(el) {
+    return el._behavior?.bar ?? [0, 0, 0, 0];
+  }
+
+  /** The edge `el`'s bar runs along (its right, or a horizontal view's bottom), moved in by its inset. */
+  barEdge(el) {
+    const [, right, bottom] = this.barInset(el);
+    return el._horizontal ? el.clientHeight - bottom : el.clientWidth - right;
   }
 
   /** Shows `el`'s bar where its content is; it fades after `BAR_HOLD`
@@ -4738,7 +4929,7 @@ class Player {
       el.insertBefore(el._bar, el.firstChild);
     }
     const [start, len] = thumb;
-    const edge = (el._horizontal ? el.clientHeight : el.clientWidth) - BAR_THICK - BAR_MARGIN;
+    const edge = this.barEdge(el) - BAR_THICK - BAR_MARGIN;
     el._bar.firstChild.style.cssText = el._horizontal
       ? `left:${start}px;top:${edge}px;width:${len}px;height:${BAR_THICK}px`
       : `left:${edge}px;top:${start}px;width:${BAR_THICK}px;height:${len}px`;
@@ -4753,7 +4944,8 @@ class Player {
     if (!thumb) return false;
     const r = el.getBoundingClientRect();
     const [x, y] = [e.clientX - r.left, e.clientY - r.top];
-    const [along, across, edge] = el._horizontal ? [x, y, el.clientHeight] : [y, x, el.clientWidth];
+    const [along, across] = el._horizontal ? [x, y] : [y, x];
+    const edge = this.barEdge(el);
     return across >= edge - BAR_GRAB && across <= edge && along >= thumb[0] - 4 && along <= thumb[0] + thumb[1] + 4;
   }
 
@@ -5488,6 +5680,7 @@ class Player {
       el._field = field;
       el.append(field);
       if (el._content) this.placeContent(el);
+      else this.fieldStop(el);
     }
     swapClass(field, "_class", this.styleClass(css));
     this.fieldAria(el, field);
@@ -5781,6 +5974,7 @@ class Player {
     field.style.top = `${y}px`;
     field.style.width = `${w}px`;
     field.style.height = `${h}px`;
+    this.fieldStop(el);
     // Its text may wrap elsewhere now.
     this.caretMoved(el, field);
   }
@@ -7061,7 +7255,10 @@ class Player {
       case "zoomTo": if (el) this.zoomCommand(el, ...args); break;
       case "setResponder": this.responderBlocks = !!args[0]; break;
       case "clearResponder": this.responderBlocks = false; break;
-      case "dialog": this.dialog(args[0], args[1], args[2], args[3], args[4] ?? [], args[5] ?? true, args[6] ?? false); break;
+      case "dialog":
+        this.dialog(args[0], args[1], args[2], args[3], args[4] ?? [], args[5] ?? true, args[6] ?? false,
+          args[7] ?? null, args[8] ?? null, args[9] ?? false, args[10] ?? false);
+        break;
       case "closeDialog": this.closeDialog(args[0]); break;
       case "reload": {
         const frame = el?._frameEl;
@@ -8357,9 +8554,13 @@ class Player {
    * buttons in a row, the last regular one the default), otherwise as
    * iOS's alert and action sheet. Answers the button's index, -1 when
    * dismissed (a click beside it, or Escape, when cancelable); Escape
-   * presses the cancel button if any (`keyDown`, `_cancel`).
+   * presses the cancel button if any (`keyDown`, `_cancel`). An alert with
+   * `input` (not null) has a text field starting with it, focused, its
+   * text answered as `value`: Enter in it presses the default button, and
+   * while a `required` field is empty only the cancel buttons are enabled.
    */
-  dialog(dialogId, title, message, buttons, styles, cancelable, sheet) {
+  dialog(dialogId, title, message, buttons, styles, cancelable, sheet, input = null, placeholder = null,
+    selectAll = false, required = false) {
     // `AlertDialog` always brings the app's actions: no label of NSH's own.
     const list = buttons;
     const style = (i) => styles[i] ?? "default";
@@ -8385,8 +8586,10 @@ class Player {
       if (restore?.isConnected) restore.focus({ preventScroll: true });
       return true;
     };
+    let field = null;
     const close = (index) => {
-      if (takeDown()) this.event(ROOT_ID, "onDialog", { id: dialogId, index });
+      if (!takeDown()) return;
+      this.event(ROOT_ID, "onDialog", field ? { id: dialogId, index, value: field.value } : { id: dialogId, index });
     };
     backdrop._dialogId = dialogId;
     backdrop._takeDown = takeDown;
@@ -8444,6 +8647,15 @@ class Player {
         p.textContent = message;
         box.append(p);
       }
+      if (input !== null) {
+        field = document.createElement("input");
+        field.type = "text";
+        field.className = "nsh-dialog-input";
+        field.value = input;
+        if (placeholder !== null) field.placeholder = placeholder;
+        field.setAttribute("aria-label", title ?? message ?? placeholder ?? "");
+        box.append(field);
+      }
       const actions = document.createElement("div");
       // Desktop: up to three in a row; iOS: two side by side.
       const row = desktop ? list.length <= 3 : list.length === 2;
@@ -8461,6 +8673,23 @@ class Player {
       });
       focus ??= actions.firstChild;
       box.append(actions);
+      if (field) {
+        const all = [...actions.children];
+        const enable = () => {
+          if (!required) return;
+          const empty = field.value === "";
+          all.forEach((b, i) => { b.disabled = empty && style(i) !== "cancel"; });
+        };
+        enable();
+        field.addEventListener("input", enable);
+        field.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter" || e.isComposing) return;
+          e.preventDefault();
+          const b = all[preferred];
+          if (b && !b.disabled) close(preferred);
+        });
+        focus = field;
+      }
     }
     backdrop.addEventListener("click", (e) => e.target === backdrop && down === backdrop && cancelable && close(-1));
     backdrop.append(box);
@@ -8469,6 +8698,10 @@ class Player {
     (this.dialogs ??= []).push(backdrop);
     this.scopeFocus();
     focus?.focus({ preventScroll: true });
+    if (field) {
+      if (selectAll) field.select();
+      else field.setSelectionRange(field.value.length, field.value.length);
+    }
   }
 
   /** Takes back the dialog `dialog` showed as `dialogId` (`closeDialog`), reporting nothing: the core answered it. */
