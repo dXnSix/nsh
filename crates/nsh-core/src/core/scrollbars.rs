@@ -217,25 +217,31 @@ impl<M: TextEngine> Core<M> {
                 Points((size.width.0 - inset.left - inset.right).max(0.0)),
                 Points((size.height.0 - inset.top - inset.bottom).max(0.0)),
             );
-            let at = taffy::Point {
-                x: inset.left,
-                y: inset.top,
+            // The bar is a layout root of its own: its relative insets place
+            // it in the view (`emit_frames_in`'s origin only rounds).
+            let at = taffy::Rect {
+                left: taffy::LengthPercentageAuto::length(inset.left),
+                right: taffy::LengthPercentageAuto::auto(),
+                top: taffy::LengthPercentageAuto::length(inset.top),
+                bottom: taffy::LengthPercentageAuto::auto(),
             };
             let mut style = self.layout.style(layout).clone();
             let want = taffy::Size {
                 width: taffy::Dimension::length(size.width.0),
                 height: taffy::Dimension::length(size.height.0),
             };
-            let restyled = style.size != want || style.position != taffy::Position::Relative;
+            let restyled = style.size != want
+                || style.position != taffy::Position::Relative
+                || style.inset != at;
             if restyled {
                 style.size = want;
                 style.position = taffy::Position::Relative;
+                style.inset = at;
                 self.layout.set_style(layout, style);
             }
             // An input's bar follows the input where it moves.
             let bar_node = &self.nodes[bar as usize];
-            let moved = (bar_node.beside != NO_KEY && bar_node.frame.origin != origin)
-                || bar_node.emitted.is_some_and(|(was, _)| was != at);
+            let moved = bar_node.beside != NO_KEY && bar_node.frame.origin != origin;
             if restyled || moved || self.layout.dirty(layout) {
                 self.layout_root(
                     layout,
@@ -244,7 +250,7 @@ impl<M: TextEngine> Core<M> {
                         height: taffy::AvailableSpace::Definite(size.height.0),
                     },
                 );
-                self.emit_frames_in(bar, false, at);
+                self.emit_frames_in(bar, false, taffy::Point::ZERO);
             }
         }
     }
