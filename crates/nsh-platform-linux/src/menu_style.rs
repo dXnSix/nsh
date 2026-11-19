@@ -368,7 +368,9 @@ mod tests {
             &[("colorMode", "dark")],
         ));
         for root in [".nsh-light", ".nsh-dark"] {
-            assert!(sheet.contains(&format!("{root} {{ background-color: rgba(248, 250, 252, 1); }}")));
+            assert!(sheet.contains(&format!(
+                "{root} {{ background-color: rgba(248, 250, 252, 1); }}"
+            )));
             assert!(sheet.contains(&format!(
                 "{root} text popover > contents, {root} textview popover > contents {{ \
                  background-color: rgba(241, 245, 249, 1);"
