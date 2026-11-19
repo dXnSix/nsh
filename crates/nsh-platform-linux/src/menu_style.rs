@@ -15,6 +15,8 @@
 //! applies to every menu, the same under `.nsh-dark` (on the root, around
 //! its context menus, and on the menu bar's slot) as outside it. A role
 //! that resolves to nothing takes the default theme's light value, in both.
+//! `background` (a role of `nsh-base`'s set, not the core's) paints the
+//! root surfaces (`.nsh-light` and `.nsh-dark`) the same way.
 //!
 //! The indicators are drawn by the style sheet itself rather than taken
 //! from the icon theme (Yaru's submenu arrow is a hairline glyph): a
@@ -37,9 +39,14 @@ use nsh_core::{
     element::{Role, Tokens, role},
 };
 
+/// `nsh-base`'s `background` role: the root surfaces' color. Not one of
+/// the core's roles, so named here.
+const BACKGROUND: Role = Role::new("background");
+
 /// The default theme's light colors (`nsh-base`'s, neutral): what a role
 /// that resolves to nothing is drawn in, light and dark.
-const DEFAULTS: [(Role, u32); 6] = [
+const DEFAULTS: [(Role, u32); 7] = [
+    (BACKGROUND, 0xffffff),
     (role::POPOVER, 0xffffff),
     (role::POPOVER_FOREGROUND, 0x0a0a0a),
     (role::ACCENT, 0xf5f5f5),
@@ -48,8 +55,8 @@ const DEFAULTS: [(Role, u32); 6] = [
     (role::BORDER, 0xe5e5e5),
 ];
 
-/// The menus' style sheet for `tokens`: each role's current value, the
-/// same outside `.nsh-dark` and under it.
+/// The menus' and root surfaces' style sheet for `tokens`: each role's
+/// current value, the same in the light slot and the dark one.
 pub(crate) fn css(tokens: &Tokens) -> String {
     let color = |role: Role| {
         tokens.role(role).map(css_color).unwrap_or_else(|| {
@@ -60,18 +67,24 @@ pub(crate) fn css(tokens: &Tokens) -> String {
             format!("#{light:06x}")
         })
     };
+    let background = color(BACKGROUND);
     let (popover, foreground) = (color(role::POPOVER), color(role::POPOVER_FOREGROUND));
     let (accent, accent_foreground) = (color(role::ACCENT), color(role::ACCENT_FOREGROUND));
     let (muted, border) = (color(role::MUTED_FOREGROUND), color(role::BORDER));
     let mut out = String::from(SHAPE);
-    for scope in ["", ".nsh-dark "] {
+    for dark in [false, true] {
+        let scope = if dark { ".nsh-dark " } else { "" };
+        let root_class = if dark { ".nsh-dark" } else { ".nsh-light" };
         out.push_str(&format!(
             "
-{scope}popover.menu > contents {{ background-color: {popover}; color: {foreground}; border-color: {border}; }}
-{scope}popover.menu modelbutton {{ color: {foreground}; }}
+{root_class} {{ background-color: {background}; }}
+{scope}popover.menu > contents, {root_class} text popover > contents, {root_class} textview popover > contents {{ background-color: {popover}; color: {foreground}; border-color: {border}; }}
+{root_class} text popover > arrow, {root_class} textview popover > arrow {{ background-color: {popover}; border-color: {border}; }}
+{scope}popover.menu modelbutton, {root_class} text popover modelbutton, {root_class} textview popover modelbutton {{ color: {foreground}; }}
 {scope}popover.menu modelbutton:hover, {scope}popover.menu modelbutton:selected {{ background-color: {accent}; color: {accent_foreground}; }}
-{scope}popover.menu modelbutton accelerator, {scope}popover.menu modelbutton:disabled {{ color: {muted}; }}
-{scope}popover.menu separator {{ background-color: {border}; }}
+{root_class} text popover modelbutton:hover, {root_class} text popover modelbutton:selected, {root_class} textview popover modelbutton:hover, {root_class} textview popover modelbutton:selected {{ background-color: {accent}; color: {accent_foreground}; }}
+{scope}popover.menu modelbutton accelerator, {scope}popover.menu modelbutton:disabled, {root_class} text popover modelbutton accelerator, {root_class} text popover modelbutton:disabled, {root_class} textview popover modelbutton accelerator, {root_class} textview popover modelbutton:disabled {{ color: {muted}; }}
+{scope}popover.menu separator, {root_class} text popover separator, {root_class} textview popover separator {{ background-color: {border}; }}
 "
         ));
     }
@@ -80,19 +93,20 @@ pub(crate) fn css(tokens: &Tokens) -> String {
 
 /// What does not depend on the colors.
 const SHAPE: &str = "
-popover.menu { padding: 0; }
-popover.menu > contents {
+popover.menu, .nsh-light text popover.background, .nsh-dark text popover.background, .nsh-light textview popover.background, .nsh-dark textview popover.background { padding: 0; }
+popover.menu > contents, .nsh-light text popover.background > contents, .nsh-dark text popover.background > contents, .nsh-light textview popover.background > contents, .nsh-dark textview popover.background > contents {
   padding: 4px; border-radius: 8px; border: 1px solid; background-image: none;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08);
   font-size: 13px;
 }
-popover.menu modelbutton {
+popover.menu modelbutton, .nsh-light text popover modelbutton, .nsh-dark text popover modelbutton, .nsh-light textview popover modelbutton, .nsh-dark textview popover modelbutton {
   min-height: 28px; padding: 0 8px; border-radius: 6px;
   background-image: none; background-color: transparent; box-shadow: none; outline: none;
 }
-popover.menu modelbutton:disabled { filter: none; opacity: 1; }
-popover.menu modelbutton accelerator { margin-left: 24px; }
+popover.menu modelbutton:disabled, .nsh-light text popover modelbutton:disabled, .nsh-dark text popover modelbutton:disabled, .nsh-light textview popover modelbutton:disabled, .nsh-dark textview popover modelbutton:disabled { filter: none; opacity: 1; }
+popover.menu modelbutton accelerator, .nsh-light text popover modelbutton accelerator, .nsh-dark text popover modelbutton accelerator, .nsh-light textview popover modelbutton accelerator, .nsh-dark textview popover modelbutton accelerator { margin-left: 24px; }
 popover.menu separator { min-height: 1px; margin: 4px -4px; }
+.nsh-light text popover separator, .nsh-dark text popover separator, .nsh-light textview popover separator, .nsh-dark textview popover separator { min-height: 1px; min-width: 1px; margin: 4px 0; }
 popover.menu > contents > scrolledwindow > scrollbar.vertical > range > trough > slider { min-height: 16px; }
 popover.menu modelbutton check, popover.menu modelbutton radio, popover.menu modelbutton arrow {
   -gtk-icon-source: none; background-image: none; background-color: transparent;
@@ -163,10 +177,11 @@ mod tests {
             (&[("colorMode", "dark")][..], "rgba(101, 67, 33, 1)"),
         ] {
             let sheet = css(&tokens_of(MAPPED, picks));
-            for scope in ["", ".nsh-dark "] {
+            for (scope, root) in [("", ".nsh-light"), (".nsh-dark ", ".nsh-dark")] {
                 assert!(
                     sheet.contains(&format!(
-                        "\n{scope}popover.menu > contents {{ background-color: {rgba};"
+                        "\n{scope}popover.menu > contents, {root} text popover > contents, \
+                         {root} textview popover > contents {{ background-color: {rgba};"
                     )),
                     "{scope:?} {rgba}: {sheet}"
                 );
@@ -179,13 +194,14 @@ mod tests {
     #[test]
     fn menu_style_draws_an_unresolved_role_in_its_light_default_in_both_slots() {
         let sheet = css(&tokens_of(MAPPED, &[("colorMode", "dark")]));
-        for scope in ["", ".nsh-dark "] {
+        for (scope, root) in [("", ".nsh-light"), (".nsh-dark ", ".nsh-dark")] {
             assert!(sheet.contains(&format!(
                 "\n{scope}popover.menu modelbutton:hover, {scope}popover.menu modelbutton:selected {{ \
                  background-color: #f5f5f5; color: #171717; }}"
             )));
             assert!(sheet.contains(&format!(
-                "\n{scope}popover.menu separator {{ background-color: #e5e5e5; }}"
+                "\n{scope}popover.menu separator, {root} text popover separator, \
+                 {root} textview popover separator {{ background-color: #e5e5e5; }}"
             )));
         }
         assert!(!sheet.contains("#262626"));
@@ -332,5 +348,49 @@ mod tests {
             child = widget.next_sibling();
         }
         None
+    }
+
+    /// The root surfaces and the text editors' popovers take the roles too,
+    /// each its current value in both slots, and the sheet parses.
+    #[test]
+    fn root_surface_and_text_edit_popovers_follow_tokens_and_parse() {
+        let sheet = css(&tokens_of(
+            r##"{
+                "tokens": {
+                    "background": { "kind": "color", "value": "#f8fafc" },
+                    "popover": { "kind": "color", "value": "#f1f5f9" },
+                    "accent": { "kind": "color", "value": "#e2e8f0" }
+                },
+                "modifiers": { "colorMode": { "default": "light", "contexts": {
+                    "light": {}, "dark": { "accent": "#263042" } } } },
+                "resolutionOrder": ["colorMode"]
+            }"##,
+            &[("colorMode", "dark")],
+        ));
+        for root in [".nsh-light", ".nsh-dark"] {
+            assert!(sheet.contains(&format!(
+                "{root} {{ background-color: rgba(248, 250, 252, 1); }}"
+            )));
+            assert!(sheet.contains(&format!(
+                "{root} text popover > contents, {root} textview popover > contents {{ \
+                 background-color: rgba(241, 245, 249, 1);"
+            )));
+            assert!(sheet.contains(&format!(
+                "{root} text popover modelbutton:hover, {root} text popover modelbutton:selected, \
+                 {root} textview popover modelbutton:hover, {root} textview popover modelbutton:selected {{ \
+                 background-color: rgba(38, 48, 66, 1);"
+            )));
+        }
+        crate::gtk_test::run(move || {
+            let provider = gtk::CssProvider::new();
+            let errors = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let seen = errors.clone();
+            provider.connect_parsing_error(move |_, section, error| {
+                seen.borrow_mut()
+                    .push(format!("{}: {error}", section.to_str()));
+            });
+            provider.load_from_string(&sheet);
+            assert!(errors.borrow().is_empty(), "{:?}", errors.borrow());
+        });
     }
 }

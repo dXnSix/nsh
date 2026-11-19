@@ -2755,6 +2755,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(sets(K::ObjectPosition, p))
     }),
     ("tint", |t, v, _| one(setc(K::TintColor, color(t, v)?))),
+    ("accent", |t, v, _| one(setc(K::AccentColor, color(t, v)?))),
 ];
 
 /// Forms without a value: `shadow`, `ring`, `border`, `rounded`, ...
