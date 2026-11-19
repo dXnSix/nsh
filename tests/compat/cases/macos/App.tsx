@@ -4,6 +4,7 @@
 // the steps after it are that case's.
 import { type JSX, View, mount, signal } from "nsh";
 import BaseDock from "./base-dock";
+import BaseDockEdge from "./base-dock-edge";
 import BaseSelectCover from "./base-select-cover";
 import ModAccessDenied from "./mod-access-denied";
 import ModKeymapPass from "./mod-keymap-pass";
@@ -18,6 +19,7 @@ import ApplicationRefused from "./application-refused";
 
 const cases: Record<string, () => JSX.Element> = {
   "base-dock": BaseDock,
+  "base-dock-edge": BaseDockEdge,
   "base-select-cover": BaseSelectCover,
   "desktop-props": DesktopProps,
   "mod-standard-system": ModStandardSystem,
