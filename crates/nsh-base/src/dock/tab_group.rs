@@ -22,11 +22,15 @@
 //! [`super::PaneTree::move_panel`] puts it after taking it out); over a
 //! content frame, its middle merges and its edges split
 //! (`split_placement_at`), except back onto its own group when that would
-//! change nothing. The drop indicator part, an overlay above the area,
-//! covers what the panel would take in the group the target names
-//! ([`super::DropPlaceholderBounds::for_placement`]). The release applies
-//! one move ([`AreaCx::drop_at`]); a gesture the system takes away drops
-//! nothing.
+//! change nothing. Between the two, a band along each edge of the area
+//! where no open dock with panels is docks the panel there
+//! ([`super::dock_area::edge_drop`]; the area's own frame is measured with
+//! the groups). A target in a region the panel's `placements` leave out is
+//! no target. The drop indicator part, an overlay above the area, covers
+//! what the panel would take in the group the target names
+//! ([`super::DropPlaceholderBounds::for_placement`]), or at an edge what
+//! the dock would take. The release applies one move
+//! ([`AreaCx::drop_at`]); a gesture the system takes away drops nothing.
 
 use std::{
     cell::{Cell, RefCell},
@@ -42,9 +46,13 @@ use nsh_core::{
 
 use super::{
     area::Group,
-    dock_area::{AreaCx, DockDropIndicator, DockPanel, DockTab, DropAt, GroupRefs, TabDrag, Zone},
+    dock_area::{
+        AreaCx, DockDropIndicator, DockPanel, DockTab, DropAt, GroupRefs, TabDrag, Zone, dock_key,
+        edge_drop,
+    },
     drag::{DropPlaceholderBounds, split_placement_at},
     layout::{InsertTarget, NodeId, PanelId},
+    state::DockPlacement,
 };
 
 /// How far the pointer moves on a tab before it drags it.
@@ -212,7 +220,7 @@ const DROP_WASH: f32 = 0.12;
 
 /// The drop indicator: while a drag would land on a group, over the part
 /// of its content frame the panel would take (all of it to merge, a half
-/// to split). It is an overlay in the root view, under the drag preview
+/// to split); at an edge, over what the dock there would take. It is an overlay in the root view, under the drag preview
 /// (mounted again after it, `dock_area.rs` `drag_preview`), placed with
 /// the frame the drag measured, so it is drawn above everything in the
 /// area: the handles' lines, which lie over the edges of the groups beside
@@ -290,14 +298,22 @@ pub(crate) fn drop_indicator(a: AreaCx) -> AnyElement {
                     }
                     let target = target.get()?;
                     let value = DockDropIndicator {
-                        group: target.group.as_u64(),
+                        group: target.group.map_or(0, NodeId::as_u64),
                         side: target.side,
                         index: target.index,
+                        dock: target.edge,
+                    };
+                    // Keyed by where it lands, so an edge's and a group's
+                    // never share what the app rendered.
+                    let key = match (target.edge, target.group) {
+                        (Some(edge), _) => format!("dock-{}", dock_key(edge)),
+                        (None, Some(group)) => group.as_u64().to_string(),
+                        (None, None) => return None,
                     };
                     a.props
                         .render_drop_indicator
                         .get()
-                        .map(|r| r.render(target.group.as_u64().to_string(), value).flex_1())
+                        .map(|r| r.render(key, value).flex_1())
                 }))
         },
     )
@@ -461,7 +477,9 @@ impl AreaCx {
             target: None,
         }));
         self.zones.replace(Vec::new());
+        self.frame.replace(None);
         let compact = self.compact.get_untracked();
+        let root = self.root;
         let refs: Vec<GroupRefs> = self.refs.with(|all| {
             all.iter()
                 .filter(|r| r.group.is_none() == compact)
@@ -469,6 +487,7 @@ impl AreaCx {
                 .collect()
         });
         spawn(async move {
+            let frame = root.measure();
             let pending: Vec<_> = refs
                 .iter()
                 .map(|r| {
@@ -486,6 +505,7 @@ impl AreaCx {
                     )
                 })
                 .collect();
+            self.frame.replace(frame.await.map(page_bounds));
             let mut zones = Vec::with_capacity(pending.len());
             for (group, bar, content, tabs) in pending {
                 let bar = bar.await.map(page_bounds);
@@ -537,20 +557,27 @@ impl AreaCx {
         let Some(at) = drag.target else {
             return;
         };
+        if let Some(edge) = at.edge {
+            self.edit(|area| area.dock_panel(drag.panel, edge));
+            return;
+        }
+        let Some(group) = at.group else {
+            return;
+        };
         let target = match at.side {
             Some(placement) => InsertTarget::Split {
-                node: at.group,
+                node: group,
                 placement,
                 size: None,
             },
             None => InsertTarget::Tabs {
-                node: at.group,
+                node: group,
                 ix: at.index,
                 activate: true,
             },
         };
         if self.compact.get_untracked() {
-            self.current.set(Some(at.group));
+            self.current.set(Some(group));
         }
         self.edit(|area| area.move_panel(drag.panel, target));
     }
@@ -559,6 +586,41 @@ impl AreaCx {
     pub(crate) fn cancel_drag(self) {
         self.drag.set(None);
         self.zones.replace(Vec::new());
+        self.frame.replace(None);
+    }
+
+    /// Whether `drag`'s panel may land in tab group `group`'s region.
+    fn may_land(self, drag: &TabDrag, group: NodeId) -> bool {
+        self.area
+            .with(|area| area.placement_of_node(group))
+            .is_some_and(|placement| self.allows(&drag.panel, placement))
+    }
+
+    /// At an edge of the area: the dock there the panel would join, when
+    /// the pointer is in that edge's band (the full presentation only).
+    fn resolve_edge(self, drag: &TabDrag, at: Point<Points>) -> Option<DropAt> {
+        if self.compact.get() {
+            return None;
+        }
+        let frame = self.frame.get()?;
+        DockPlacement::DOCKS.into_iter().find_map(|edge| {
+            let (band, takes) = edge_drop(self, edge, frame)?;
+            if !band.contains(&at) || !self.allows(&drag.panel, edge) {
+                return None;
+            }
+            let group = self.area.with(|area| {
+                area.tree(edge)
+                    .and_then(|tree| tree.panels().next())
+                    .and_then(|panel| area.group_of_panel(panel.as_str()))
+            });
+            Some(DropAt {
+                group,
+                side: None,
+                index: None,
+                content: takes,
+                edge: Some(edge),
+            })
+        })
     }
 
     /// Where `drag` would land with the pointer at `at`.
@@ -576,6 +638,9 @@ impl AreaCx {
         if !self.droppable() {
             return None;
         }
+        if let Some(edge) = self.resolve_edge(drag, at) {
+            return Some(edge);
+        }
         zones.iter().find_map(|zone| {
             let (group, content) = (zone.group?, zone.content?);
             if !content.contains(&at) {
@@ -588,11 +653,15 @@ impl AreaCx {
             if drag.source == Some(group) && (side.is_none() || alone) {
                 return None;
             }
+            if !self.may_land(drag, group) {
+                return None;
+            }
             Some(DropAt {
-                group,
+                group: Some(group),
                 side,
                 index: None,
                 content,
+                edge: None,
             })
         })
     }
@@ -605,14 +674,15 @@ impl AreaCx {
         let (index, others) = slot_at(bar, &zone.tabs, &drag.panel, at);
         match zone.group {
             Some(group) => {
-                if !self.droppable() {
+                if !self.droppable() || !self.may_land(drag, group) {
                     return None;
                 }
                 Some(DropAt {
-                    group,
+                    group: Some(group),
                     side: None,
                     index: Some(index),
                     content: zone.content.unwrap_or(bar),
+                    edge: None,
                 })
             }
             None => {
@@ -620,18 +690,23 @@ impl AreaCx {
                     Some(next) => (next.clone(), false),
                     None => (others.last()?.clone(), true),
                 };
-                self.area.with(|area| {
+                let target = self.area.with(|area| {
                     let group = area.group(area.group_of_panel(neighbor.as_str())?)?;
                     let kept: Vec<&PanelId> =
                         group.panels.iter().filter(|p| **p != drag.panel).collect();
                     let at = kept.iter().position(|p| **p == neighbor)? + usize::from(after);
                     Some(DropAt {
-                        group: group.node,
+                        group: Some(group.node),
                         side: None,
                         index: Some(at),
                         content: bar,
+                        edge: None,
                     })
-                })
+                })?;
+                target
+                    .group
+                    .is_some_and(|group| self.may_land(drag, group))
+                    .then_some(target)
             }
         }
     }

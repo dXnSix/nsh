@@ -141,6 +141,22 @@ content go when the panel leaves the layout (`onPanelRemove`).
 | `closable` | `true` | It may be closed. |
 | `zoomable` | `true` | Its group may zoom while it is displayed. |
 | `visible` | `true` | It shows. A hidden panel keeps its place and comes back there; a group or split whose panels are all hidden takes no room. |
+| `placements` | every region | The regions it may be dropped in or moved to (`"center"`, `"left"`, `"right"`, `"bottom"`). A drag shows no drop indicator where it may not go, and its release does nothing there; `addPanel`, `movePanel` and `splitAt` refuse it and log a warning. Removing or closing it, and the layout the app passes, are not checked. |
+
+Keep documents in the center and tool panels on the edges:
+
+```tsx
+<DockArea
+  layout={layout()}
+  onLayoutChange={(e) => layout.set(e.layout)}
+  panels={[
+    ...files().map((id) => ({ id, placements: ["center"] })),
+    { id: "layers", placements: ["left", "right", "bottom"] },
+    { id: "design", placements: ["left", "right", "bottom"] },
+  ]}
+  renderPanel={(panel) => <Panel id={panel.id} />}
+/>
+```
 
 ## Tabs
 
@@ -192,19 +208,24 @@ A tab dragged over a group shows where it would land, and the drop puts it there
 | A tab bar | Joins that group, between the tabs it is dropped by |
 | The middle of a group's content | Joins that group |
 | An edge of a group's content (its outer 35% on each side) | Splits that group: a new group of its own on that side |
+| The left, right or bottom edge of the area, where no open dock with panels is (a band 32 points deep) | Docks there, as in Visual Studio or Rider: the dock on that edge is made, or opens again at the size it kept, with the panel in its first group |
 
 While a drag hovers, the area shows the drop indicator over the part of the group the panel would take (all of its
 content to join, half of it to split): a part the
 app styles (`dropIndicatorClass`), with content of its own if the app renders some (`renderDropIndicator`, told the
-`group`, the `side` it splits off or the tab bar `index`). It moves to each new place natively, easing there and fading in on another group as the last one fades out (at once when the user asks for less motion). What follows the pointer or finger is the app's too
+`group`, the `side` it splits off or the tab bar `index`; at an edge, the `dock` it docks at, the indicator covering
+what that dock would take). It moves to each new place natively, easing there and fading in on another group as the last one fades out (at once when the user asks for less motion). What follows the pointer or finger is the app's too
 (`renderDragPreview`). A drop is one change of the layout, reported once; a drop that would change nothing changes nothing.
 
-A locked area, a zoomed one, and a group's last panel when nothing sits beside the group drag nothing.
+A locked area, a zoomed one, and the center's last panel when nothing sits beside its group drag nothing. A dock's last
+panel drags out: the dock it leaves closes, empty, and keeps its size for the next panel docked there.
 
 ## Docks
 
 A dock opens and closes without losing its panels or its size: closing it keeps its tree, and opening it shows the
-same groups at the same size. The edge between a dock and the center is a handle the user drags to resize the dock;
+same groups at the same size. A dock whose last panel leaves (dragged out, closed or removed) stays in the layout,
+closed and empty (`open: false`), at its size; a panel dropped at its edge or added with `addPanel` opens it again.
+The edge between a dock and the center is a handle the user drags to resize the dock;
 it stays at least 100 points and the center keeps at least 100 points, and a collapsible dock let go below 50 points
 closes and keeps its size for when it opens. The area always fits its bounds: a dock shows at its `size` within what
 the area leaves it, and when even that does not fit, the docks shrink with the rest and the splits' minimum sizes
@@ -255,11 +276,11 @@ does not have leaves the layout as it is and logs a warning naming the method an
 | Method | Description |
 |---|---|
 | `layout()` | `Promise<DockAreaLayout>`: the layout shown. |
-| `addPanel(panel, placement?, size?)` | Adds a panel to a region (`"center"`, the default, `"left"`, `"right"`, `"bottom"`), into its first tab group, displayed; a missing dock is made, `size` across. A panel the area holds moves there. |
-| `removePanel(panel)` | Removes a panel, whatever its options say. |
-| `closePanel(panel)` | Closes a panel as its tab would: unless the area is locked, the panel is not closable, or it is the last panel of a group with nothing beside it. |
-| `movePanel(panel, target)` | Moves a panel to `target`: `{ group, side?, index?, activate?, size? }`, into tab group `group` (at `index`) or a new group on its `side` (`size` points along the new split). |
-| `splitAt(group, panel, side)` | Puts a panel in a new tab group on a side (`"left"`, `"right"`, `"top"`, `"bottom"`) of a container. |
+| `addPanel(panel, placement?, size?)` | Adds a panel to a region (`"center"`, the default, `"left"`, `"right"`, `"bottom"`), into its first tab group, displayed; a missing dock is made, `size` across, and an empty one opens again. A panel the area holds moves there. A region the panel's `placements` leave out refuses it. |
+| `removePanel(panel)` | Removes a panel, whatever its options say (`placements` included). |
+| `closePanel(panel)` | Closes a panel as its tab would: unless the area is locked, the panel is not closable, or it is the center's last panel, in a group with nothing beside it. |
+| `movePanel(panel, target)` | Moves a panel to `target`: `{ group, side?, index?, activate?, size? }`, into tab group `group` (at `index`) or a new group on its `side` (`size` points along the new split), unless the panel's `placements` leave out that region. |
+| `splitAt(group, panel, side)` | Puts a panel in a new tab group on a side (`"left"`, `"right"`, `"top"`, `"bottom"`) of a container, unless the panel's `placements` leave out its region. |
 | `selectPanel(panel)` | Displays a panel in its group. |
 | `selectTab(group, index)` | Displays a tab of a group. |
 | `toggleDock(placement)`, `setDockOpen(placement, open)` | Opens or closes a dock. |
@@ -331,10 +352,10 @@ rest of the area.
 | `defaultLayout` | `.default_layout(..)` | `DockAreaLayout` | an empty center | The layout at first, when `layout` is not set; the area keeps its own from then on. |
 | `locked` | `.locked(..)` | `boolean` | `false` | No tab drags, drops or closes. |
 | `compact` | `.compact(..)` | `boolean` | by width | The phone presentation (`true`) or the full one (`false`); without it, compact while the area is narrower than 600 points. |
-| `panels` | `.panels(..)` | `DockPanelOptions[]` | `[]` | What each panel allows, by key: `closable`, `zoomable`, `visible`. |
+| `panels` | `.panels(..)` | `DockPanelOptions[]` | `[]` | What each panel allows, by key: `closable`, `zoomable`, `visible`, `placements`. |
 | `renderPanel` | `.render_panel(\|panel\| ..)` | `(panel: DockPanel) => JSX.Element` | none | A panel's content, by its key (`panel.id`). |
 | `renderTab` | `.render_tab(\|tab\| ..)` | `(tab: DockTab) => JSX.Element` | the key | What a tab shows. |
-| `renderDropIndicator` | `.render_drop_indicator(\|drop\| ..)` | `(drop: DockDropIndicator) => JSX.Element` | none | What is inside the drop indicator: `group`, `side`, `index`. |
+| `renderDropIndicator` | `.render_drop_indicator(\|drop\| ..)` | `(drop: DockDropIndicator) => JSX.Element` | none | What is inside the drop indicator: `group`, `side`, `index`, `dock`. |
 | `renderDock` | `.render_dock(\|dock\| ..)` | `(dock: DockInfo) => JSX.Element` | none | A dock's own chrome, before its layout: `placement`, `open` (shown in the current presentation), `size`, `collapsible`. |
 | `renderEmpty` | `.render_empty(\|placement\| ..)` | `(placement: DockPlacement) => JSX.Element` | none | What an empty center shows. |
 | `renderDragPreview` | `.render_drag_preview(\|tab\| ..)` | `(tab: DockTab) => JSX.Element` | none | What follows the pointer or finger while a tab is dragged. |
@@ -376,7 +397,7 @@ rest of the area.
 | A handle's indicator | between a split's groups, at a dock's edge | `handleClass`, `handleStyle` | `group-hover:`, `group-active:` |
 | A handle's thumb | centered on a handle's line | `handleThumbClass`, `handleThumbStyle` | `group-hover:`, `group-active:` (pressed until the drag ends) |
 | A dock | an edge | `dockClass`, `dockStyle`; `renderDock` | |
-| The drop indicator | over a group during a drag | `dropIndicatorClass`, `dropIndicatorStyle`; `renderDropIndicator` | |
+| The drop indicator | over a group, or what a dock at an edge would take, during a drag | `dropIndicatorClass`, `dropIndicatorStyle`; `renderDropIndicator` | |
 | The drag preview | under the pointer or finger | `renderDragPreview` | |
 | The empty center | the center | `renderEmpty` | |
 | A drawer, the sheet, the backdrop | over the center, compact | `drawerClass`, `sheetClass`, `backdropClass` (and their styles) | |

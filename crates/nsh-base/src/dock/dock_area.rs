@@ -57,8 +57,32 @@
 //! edges: [`super::DropPlaceholderBounds`], `split_placement_at`), shows
 //! the drop indicator part over that group (an overlay above the area, so
 //! the handles' lines never cover it), and the release applies one
-//! move. A locked area, a zoomed one, and a group's last panel when
-//! nothing sits beside the group drag nothing.
+//! move. A locked area, a zoomed one, and the center's last panel when
+//! nothing sits beside its group drag nothing.
+//!
+//! # Docking at an edge
+//!
+//! A tool panel docks at any edge, as in Visual Studio or Rider. A dock's
+//! last panel can be dragged out (or closed): the dock it empties stays in
+//! the layout closed and empty, keeping its size (`super::area`), and opens
+//! again when a panel comes back. While a tab is dragged, each edge of the
+//! area (left, right, bottom) where no open dock with panels is offers a
+//! band [`EDGE_DROP_BAND`] deep along it: there the drop indicator covers
+//! what the dock would take (its kept size, or the default one, beside the
+//! docks that show), `renderDropIndicator` hears the edge (`dock`), and
+//! the release makes or reopens that dock with the panel. A tab bar under
+//! the pointer comes before the bands, the bands before the groups'
+//! content frames.
+//!
+//! # Where a panel may go
+//!
+//! A panel's `placements` (`DockPanelOptions`, default every region)
+//! limits the regions it may be dropped in or moved to: over a group of a
+//! region it may not enter, or an edge whose dock it may not join, a drag
+//! shows no indicator and its release does nothing; `addPanel`,
+//! `movePanel` and `splitAt` refuse such a move, logged. Taking a panel out
+//! is not a placement: `removePanel` and `closePanel` do not check it, nor
+//! does a layout the app passes (the app's own word on where panels are).
 //!
 //! # Its bounds
 //!
@@ -79,8 +103,9 @@
 //! group at a time, its tab bar listing every center panel; the side docks
 //! are drawers over the center from their edge and the bottom dock a sheet,
 //! one presented at a time (none at first: `toggleDock` presents one),
-//! dismissed by a press on its backdrop, Escape or back; the layout's
-//! `open` stays the full presentation's. A drag there only reorders tabs.
+//! dismissed by a press on its backdrop, Escape or back, or when its last
+//! panel closes; the layout's `open` stays the full presentation's. A drag
+//! there only reorders tabs: no edge docks.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -139,7 +164,9 @@ pub struct DockTab {
 #[derive(Clone, Debug, Default, PartialEq, JsObject)]
 #[non_exhaustive]
 pub struct DockDropIndicator {
-    /// The id of the tab group it lands on.
+    /// The id of the tab group it lands on. A drop at an edge (`dock`)
+    /// lands in that dock's first tab group; when the dock has none yet
+    /// (it is made, or was emptied) this is 0 and names no group.
     pub group: u64,
     /// The edge of the group it splits off (`null`: into the group).
     #[prop(skip_none)]
@@ -147,6 +174,11 @@ pub struct DockDropIndicator {
     /// The slot in the group's tab bar it goes to, when dropped on the bar.
     #[prop(skip_none)]
     pub index: Option<usize>,
+    /// The edge it docks at (`null`: onto a group): the release makes or
+    /// reopens the dock there with the panel, and the indicator covers what
+    /// the dock would take.
+    #[prop(skip_none)]
+    pub dock: Option<DockPlacement>,
 }
 
 /// A dock, as `renderDock` renders it.
@@ -192,6 +224,15 @@ pub struct DockPanelOptions {
     /// space.
     #[prop(skip_none)]
     pub visible: Option<bool>,
+    /// The regions it may be dropped in or moved to (default every one):
+    /// a drag shows no drop indicator over a region not listed (a group
+    /// there, or the edge of its dock) and its release does nothing there;
+    /// `addPanel`, `movePanel` and `splitAt` refuse it, logged. `["center"]`
+    /// keeps a document in the center, `["left", "right", "bottom"]` a tool
+    /// panel on the edges. Removing a panel (`removePanel`, `closePanel`)
+    /// and the layout the app passes are not checked.
+    #[prop(skip_none)]
+    pub placements: Option<Vec<DockPlacement>>,
 }
 
 impl DockPanelOptions {
@@ -201,6 +242,19 @@ impl DockPanelOptions {
             id: id.into(),
             ..Default::default()
         }
+    }
+
+    /// The options with the panel kept to `placements`.
+    pub fn with_placements(mut self, placements: impl IntoIterator<Item = DockPlacement>) -> Self {
+        self.placements = Some(placements.into_iter().collect());
+        self
+    }
+
+    /// Whether the panel may be dropped in or moved to region `placement`.
+    pub fn allows(&self, placement: DockPlacement) -> bool {
+        self.placements
+            .as_ref()
+            .is_none_or(|placements| placements.contains(&placement))
     }
 }
 
@@ -263,7 +317,8 @@ pub struct DockAreaProps {
     /// drawers and a sheet) when true, the full one when false; by default
     /// compact below 600 points of the area's own width.
     pub compact: Prop<Option<bool>>,
-    /// What each panel allows (closable, zoomable, visible), by key.
+    /// What each panel allows (closable, zoomable, visible, the regions it
+    /// may go to), by key.
     #[prop(default)]
     pub panels: Prop<Vec<DockPanelOptions>>,
     /// A panel's content, keyed by its id: it keeps its state as the panel
@@ -275,7 +330,7 @@ pub struct DockAreaProps {
     /// of them.
     pub render_tab: Prop<Option<Renderer<DockTab>>>,
     /// What shows where a drag would land, placed over the part of the
-    /// group it would take.
+    /// group it would take (at an edge: over what the dock would take).
     pub render_drop_indicator: Prop<Option<Renderer<DockDropIndicator>>>,
     /// A dock's own chrome (a title strip, a collapse button), before its
     /// layout.
@@ -406,7 +461,9 @@ impl DockAreaApi {
 
     /// Adds panel `panel` to region `placement` (default the center): into
     /// its first tab group, displayed; a dock missing there is made,
-    /// `size` across. A panel the area holds moves there.
+    /// `size` across, and an empty one (its last panel left) opens again. A
+    /// panel the area holds moves there. A region the panel's `placements`
+    /// leave out refuses it.
     pub fn add_panel(
         &self,
         panel: PanelId,
@@ -414,10 +471,13 @@ impl DockAreaApi {
         size: Option<Points>,
     ) {
         let placement = placement.unwrap_or(DockPlacement::Center);
-        self.a.edit(|area| area.add_panel(panel, placement, size));
+        if self.a.may_enter("addPanel", &panel, Some(placement)) {
+            self.a.edit(|area| area.add_panel(panel, placement, size));
+        }
     }
 
-    /// Removes panel `panel`, whatever its options say.
+    /// Removes panel `panel`, whatever its options say (a dock it empties
+    /// closes).
     pub fn remove_panel(&self, panel: PanelId) {
         if self.a.has_panel("removePanel", &panel) {
             self.a.edit(|area| area.remove_panel(panel.as_str()));
@@ -425,8 +485,8 @@ impl DockAreaApi {
     }
 
     /// Closes panel `panel` as its tab would: unless the area is locked,
-    /// the panel is not closable, or it is the last panel of a group with
-    /// nothing beside it.
+    /// the panel is not closable, or it is the center's last panel, in a
+    /// group with nothing beside it (a dock it empties closes).
     pub fn close_panel(&self, panel: PanelId) {
         if self.a.has_panel("closePanel", &panel) {
             self.a.close(&panel);
@@ -434,23 +494,24 @@ impl DockAreaApi {
     }
 
     /// Moves panel `panel` to `target` (a panel the area does not hold yet
-    /// is added there).
+    /// is added there), unless the panel's `placements` leave out the
+    /// target's region. A dock it empties closes.
     pub fn move_panel(&self, panel: PanelId, target: DockTarget) {
         let target = target.insert_target();
-        let known = match target {
-            InsertTarget::Tabs { node, .. } => self.a.has_group("movePanel", node),
-            InsertTarget::Split { node, .. } => self.a.has_node("movePanel", node),
+        let (known, node) = match target {
+            InsertTarget::Tabs { node, .. } => (self.a.has_group("movePanel", node), node),
+            InsertTarget::Split { node, .. } => (self.a.has_node("movePanel", node), node),
         };
-        if known {
+        if known && self.a.may_enter_node("movePanel", &panel, node) {
             self.a.edit(|area| area.move_panel(panel, target));
         }
     }
 
     /// Puts panel `panel` in a new tab group on the `side` of container
-    /// `group`.
+    /// `group`, unless the panel's `placements` leave out its region.
     pub fn split_at(&self, group: u64, panel: PanelId, side: Placement) {
         let node = NodeId::from_u64(group);
-        if self.a.has_node("splitAt", node) {
+        if self.a.has_node("splitAt", node) && self.a.may_enter_node("splitAt", &panel, node) {
             self.a.edit(|area| area.split_at(node, panel, side, None));
         }
     }
@@ -538,7 +599,8 @@ impl DockAreaApi {
 /// A dockable workspace (`gpui-base`'s `DockArea`): splits of tab groups in
 /// the center and docks on its left, right and bottom edges, which the
 /// user rearranges by dragging tabs between groups, to the edges of a
-/// group (a new split) or onto a tab bar, resizes by dragging the splits'
+/// group (a new split), onto a tab bar or to an edge of the area (a dock
+/// there, as in Visual Studio or Rider), resizes by dragging the splits'
 /// and docks' handles, and closes and zooms through the ref. It owns the
 /// behavior (the drags, run natively, resizing, selection, the rules of
 /// what may move and close, focus of the tab role) and draws nothing: the
@@ -573,6 +635,7 @@ pub(crate) fn area_view(a: AreaCx) -> View {
         // A terminal keeps no percentage height for a box of content: the
         // area grows into its parent's room instead.
         .when(crate::terminal::is_terminal(), |v| v.flex_grow(1.0))
+        .element_ref(&a.root)
         .on_layout(move |frame: &Bounds<Points>| a.size.set(frame.size))
         .child(
             when(
@@ -601,11 +664,15 @@ pub(crate) struct TabDrag {
 /// Where a drag would land.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DropAt {
-    pub(crate) group: NodeId,
+    /// The tab group it lands on (`None`: at an edge whose dock has none).
+    pub(crate) group: Option<NodeId>,
     pub(crate) side: Option<Placement>,
     pub(crate) index: Option<usize>,
-    /// The group's content frame, in the root view's coordinates.
+    /// The group's content frame (at an edge: what the dock would take),
+    /// in the root view's coordinates.
     pub(crate) content: Bounds<Points>,
+    /// The edge it docks at.
+    pub(crate) edge: Option<DockPlacement>,
 }
 
 /// The views of a tab group a drag measures: its tab bar, its tabs and
@@ -655,6 +722,11 @@ pub(crate) struct AreaCx {
     pub(crate) drag: Signal<Option<TabDrag>>,
     pub(crate) zones: Stored<Vec<Zone>>,
     pub(crate) refs: Stored<Vec<GroupRefs>>,
+    /// The area's root view, which a drag measures for its edges.
+    pub(crate) root: ElementRef,
+    /// The area's frame in the root view's coordinates, as the drag
+    /// measured it (`None`: not yet).
+    pub(crate) frame: Stored<Option<Bounds<Points>>>,
     pub(crate) compact: Memo<bool>,
     /// Compact: the center group shown.
     pub(crate) current: Signal<Option<NodeId>>,
@@ -713,6 +785,8 @@ impl AreaCx {
             drag: signal(None),
             zones: stored(Vec::new()),
             refs: stored(Vec::new()),
+            root: element_ref(),
+            frame: stored(None),
             compact,
             current: signal(None),
             presented: signal(None),
@@ -773,6 +847,24 @@ impl AreaCx {
         has
     }
 
+    /// Whether panel `panel` may go to region `placement` (`None`: the
+    /// layout has no such region, which the move itself then refuses).
+    fn may_enter(self, method: &str, panel: &PanelId, placement: Option<DockPlacement>) -> bool {
+        let Some(placement) = placement else {
+            return true;
+        };
+        let allowed = untracked(|| self.allows(panel, placement));
+        if !allowed {
+            log::warn!("DockArea.{method}: panel `{panel}` may not go to {placement:?}");
+        }
+        allowed
+    }
+
+    fn may_enter_node(self, method: &str, panel: &PanelId, node: NodeId) -> bool {
+        let placement = self.latest(|area| area.placement_of_node(node));
+        self.may_enter(method, panel, placement)
+    }
+
     fn has_dock(self, method: &str, placement: DockPlacement) -> bool {
         let has = self.latest(|area| area.dock(placement).is_some());
         if !has {
@@ -826,6 +918,17 @@ impl AreaCx {
     /// Whether panel `panel` shows (tracked).
     pub(crate) fn visible(self, panel: &PanelId) -> bool {
         self.options(panel).visible.unwrap_or(true)
+    }
+
+    /// Whether panel `panel` may be dropped in or moved to region
+    /// `placement` (tracked).
+    pub(crate) fn allows(self, panel: &PanelId, placement: DockPlacement) -> bool {
+        self.props.panels.with(|panels| {
+            panels
+                .iter()
+                .find(|options| options.id == *panel)
+                .is_none_or(|options| options.allows(placement))
+        })
     }
 
     /// Whether tab group `node`'s tabs can be dragged out of it and closed
@@ -947,6 +1050,20 @@ impl AreaCx {
                 .replace(Some(compact))
                 .is_some_and(|was| was != compact)
             {
+                untracked(|| self.presented.set(None));
+            }
+        });
+        // A presented drawer or sheet whose last panel left (closed through
+        // the ref) is dismissed, as the full presentation closes the dock.
+        effect(move || {
+            let Some(placement) = self.presented.get() else {
+                return;
+            };
+            let empty = self.area.with(|area| {
+                area.dock(placement)
+                    .is_none_or(|pane| pane.tree.panels().next().is_none())
+            });
+            if empty {
                 untracked(|| self.presented.set(None));
             }
         });
@@ -1371,6 +1488,75 @@ fn fit_dock(a: AreaCx, placement: DockPlacement, size: Points) -> Points {
         return size;
     }
     dock_sizing(a, placement).clamp(size).min(across)
+}
+
+/// How deep the band along each edge of the area is where a drag docks
+/// the panel at that edge.
+pub(crate) const EDGE_DROP_BAND: Points = px(32.0);
+
+/// Where a drop at edge `placement` of the area (its frame `frame`, in the
+/// root view's coordinates) would dock the panel: the band the pointer is
+/// in for it, and what the dock would take (its kept size, or the default
+/// one, fitted as the dock frame fits it; the bottom dock between the side
+/// docks that show). `None` when an open dock with panels is there already
+/// (its groups take the drop), or the area is not laid out.
+pub(crate) fn edge_drop(
+    a: AreaCx,
+    placement: DockPlacement,
+    frame: Bounds<Points>,
+) -> Option<(Bounds<Points>, Bounds<Points>)> {
+    if frame.size.width <= Points::ZERO || frame.size.height <= Points::ZERO {
+        return None;
+    }
+    let (taken, size) = a.area.with(|area| match area.dock(placement) {
+        Some(pane) => (
+            pane.dock.is_open() && pane.tree.panels().next().is_some(),
+            pane.dock.size(),
+        ),
+        None => (false, super::Dock::DEFAULT_SIZE),
+    });
+    if taken {
+        return None;
+    }
+    let shown = |p: DockPlacement| {
+        a.area
+            .with(|area| {
+                area.dock(p)
+                    .filter(|pane| pane.dock.is_open())
+                    .map(|pane| pane.dock.size())
+            })
+            .map_or(Points::ZERO, |size| fit_dock(a, p, size))
+    };
+    let size = fit_dock(a, placement, size);
+    let band = EDGE_DROP_BAND.min(
+        match placement {
+            DockPlacement::Bottom => frame.size.height,
+            _ => frame.size.width,
+        } * 0.25,
+    );
+    let (x, y) = (frame.origin.x, frame.origin.y);
+    let (w, h) = (frame.size.width, frame.size.height);
+    let rect = |x: Points, y: Points, w: Points, h: Points| Bounds {
+        origin: Point::new(x, y),
+        size: Size::new(w.max(Points::ZERO), h.max(Points::ZERO)),
+    };
+    Some(match placement {
+        DockPlacement::Left => (rect(x, y, band, h), rect(x, y, size, h)),
+        DockPlacement::Right => (
+            rect(x + w - band, y, band, h),
+            rect(x + w - size, y, size, h),
+        ),
+        DockPlacement::Bottom => {
+            let left = shown(DockPlacement::Left);
+            let right = shown(DockPlacement::Right);
+            let across = w - left - right;
+            (
+                rect(x + left, y + h - band, across, band),
+                rect(x + left, y + h - size, across, size),
+            )
+        }
+        DockPlacement::Center => return None,
+    })
 }
 
 fn collapsible(a: AreaCx, placement: DockPlacement) -> bool {

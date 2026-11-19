@@ -121,6 +121,22 @@ mount(App);
 | `closable` | `true` | 可以关闭。 |
 | `zoomable` | `true` | 它显示时，它的组可以放大。 |
 | `visible` | `true` | 显示。隐藏的面板保留位置，重新显示时回到原处；所有面板都隐藏的组或分栏不占空间。 |
+| `placements` | 所有区域 | 它可以放入或移到的区域（`"center"`、`"left"`、`"right"`、`"bottom"`）。拖动到它不能去的地方时不显示放置指示，松手也什么都不做；`addPanel`、`movePanel` 和 `splitAt` 拒绝它并记录警告。移除或关闭它，以及应用传入的布局，都不受检查。 |
+
+让文档留在中心区域，工具面板留在边上：
+
+```tsx
+<DockArea
+  layout={layout()}
+  onLayoutChange={(e) => layout.set(e.layout)}
+  panels={[
+    ...files().map((id) => ({ id, placements: ["center"] })),
+    { id: "layers", placements: ["left", "right", "bottom"] },
+    { id: "design", placements: ["left", "right", "bottom"] },
+  ]}
+  renderPanel={(panel) => <Panel id={panel.id} />}
+/>
+```
 
 <a id="tabs"></a>
 
@@ -171,16 +187,17 @@ let area!: DockAreaRef;
 | 标签栏上 | 加入那个组，位于放下处两侧的标签页之间 |
 | 组内容的中间 | 加入那个组 |
 | 组内容的边缘（每侧外沿 35%） | 分开那个组：在那一侧新建一个只有它的组 |
+| 区域的左、右或下边缘，那里没有打开且有面板的停靠区（沿边 32 点宽的一条） | 停靠到那里，和 Visual Studio、Rider 一样：创建那条边上的停靠区，或以它保留的尺寸重新打开，面板放进它的第一个组 |
 
-拖动悬停时，区域在面板将占据的那部分组上显示放置指示（加入时是全部内容，分开时是一半）：这是由应用设置样式的部件（`dropIndicatorClass`），应用也可以绘制其中的内容（`renderDropIndicator`，它会得到 `group`、要分出的 `side` 或标签栏的 `index`）。放置指示以原生方式移到每个新位置：缓动过去，换到另一个组时淡入，上一个组的淡出（用户要求减少动态效果时直接到位）。跟随指针或手指的内容也属于应用（`renderDragPreview`）。一次放下是布局的一次改动，只报告一次；不会带来变化的放下什么也不改变。
+拖动悬停时，区域在面板将占据的那部分组上显示放置指示（加入时是全部内容，分开时是一半）：这是由应用设置样式的部件（`dropIndicatorClass`），应用也可以绘制其中的内容（`renderDropIndicator`，它会得到 `group`、要分出的 `side` 或标签栏的 `index`；在边缘时得到要停靠的 `dock`，放置指示覆盖那个停靠区将占据的部分）。放置指示以原生方式移到每个新位置：缓动过去，换到另一个组时淡入，上一个组的淡出（用户要求减少动态效果时直接到位）。跟随指针或手指的内容也属于应用（`renderDragPreview`）。一次放下是布局的一次改动，只报告一次；不会带来变化的放下什么也不改变。
 
-锁定的区域、放大的区域，以及旁边没有其他内容的组里的最后一个面板，都不能拖动。
+锁定的区域、放大的区域，以及中心区域里旁边没有其他内容的组的最后一个面板，都不能拖动。停靠区的最后一个面板可以拖出：它离开的停靠区关闭、变空，并保留尺寸，等下一个停靠到那里的面板。
 
 <a id="docks"></a>
 
 ## 停靠区
 
-停靠区打开和关闭时不会丢失它的面板和尺寸：关闭时保留它的树，打开时以同样的尺寸显示同样的组。停靠区与中心区域之间的边缘是一个手柄，用户拖动它调整停靠区的大小；停靠区至少 100 点，中心区域至少保留 100 点，可折叠的停靠区在小于 50 点时松手会关闭，并保留尺寸供下次打开。区域从不超出自己的边界：停靠区按它的 `size` 显示，但不超过区域给它留下的空间；空间连这些都不够时，停靠区和其他部分一起缩小，分栏的最小尺寸也会让步。`renderDock` 在停靠区的布局之前绘制它自己的装饰（标题栏、折叠按钮），它会得到 `placement`、`open`、`size` 和 `collapsible`；`dockClass` 为它的框架设置样式。
+停靠区打开和关闭时不会丢失它的面板和尺寸：关闭时保留它的树，打开时以同样的尺寸显示同样的组。最后一个面板离开（拖出、关闭或移除）的停靠区留在布局中，关闭且为空（`open: false`），保留尺寸；在它的边缘放下面板，或用 `addPanel` 添加面板，会让它重新打开。停靠区与中心区域之间的边缘是一个手柄，用户拖动它调整停靠区的大小；停靠区至少 100 点，中心区域至少保留 100 点，可折叠的停靠区在小于 50 点时松手会关闭，并保留尺寸供下次打开。区域从不超出自己的边界：停靠区按它的 `size` 显示，但不超过区域给它留下的空间；空间连这些都不够时，停靠区和其他部分一起缩小，分栏的最小尺寸也会让步。`renderDock` 在停靠区的布局之前绘制它自己的装饰（标题栏、折叠按钮），它会得到 `placement`、`open`、`size` 和 `collapsible`；`dockClass` 为它的框架设置样式。
 
 应用可以通过 ref 打开、关闭停靠区和调整它的大小（`toggleDock`、`setDockOpen`、`setDockSize`），这些方法在两种呈现方式中都可用；也可以在传入的布局中写停靠区的 `open` 和 `size`（`open` 属于完整方式）。停靠区每次显示或隐藏时，`onDockOpenChange` 都会报告，以布局的 `open` 为基准（一开始就是紧凑方式的区域会把布局中打开的每个停靠区报告为隐藏），所以从布局的 `open` 开始、只跟随 `onDockOpenChange` 的切换按钮总能显示停靠区的状态：
 
@@ -221,11 +238,11 @@ const terminalOpen = signal(true);
 | 方法 | 说明 |
 |---|---|
 | `layout()` | `Promise<DockAreaLayout>`：当前显示的布局。 |
-| `addPanel(panel, placement?, size?)` | 把面板加到一个区域（`"center"`，默认，`"left"`、`"right"`、`"bottom"`）的第一个标签组并显示它；停靠区不存在时创建它，横跨 `size`。区域里已有的面板会移到那里。 |
-| `removePanel(panel)` | 移除面板，不管它的选项怎么说。 |
-| `closePanel(panel)` | 像它的标签页那样关闭面板：除非区域已锁定、面板不可关闭，或者它是旁边没有其他内容的组里的最后一个面板。 |
-| `movePanel(panel, target)` | 把面板移到 `target`：`{ group, side?, index?, activate?, size? }`，放进标签组 `group`（在 `index` 处），或在它的 `side` 新建一个组（沿新分栏 `size` 点）。 |
-| `splitAt(group, panel, side)` | 在一个容器的某一侧（`"left"`、`"right"`、`"top"`、`"bottom"`）新建标签组放入面板。 |
+| `addPanel(panel, placement?, size?)` | 把面板加到一个区域（`"center"`，默认，`"left"`、`"right"`、`"bottom"`）的第一个标签组并显示它；停靠区不存在时创建它，横跨 `size`，空的停靠区会重新打开。区域里已有的面板会移到那里。面板的 `placements` 不包含的区域会拒绝它。 |
+| `removePanel(panel)` | 移除面板，不管它的选项怎么说（包括 `placements`）。 |
+| `closePanel(panel)` | 像它的标签页那样关闭面板：除非区域已锁定、面板不可关闭，或者它是中心区域里旁边没有其他内容的组的最后一个面板。 |
+| `movePanel(panel, target)` | 把面板移到 `target`：`{ group, side?, index?, activate?, size? }`，放进标签组 `group`（在 `index` 处），或在它的 `side` 新建一个组（沿新分栏 `size` 点），除非面板的 `placements` 不包含那个区域。 |
+| `splitAt(group, panel, side)` | 在一个容器的某一侧（`"left"`、`"right"`、`"top"`、`"bottom"`）新建标签组放入面板，除非面板的 `placements` 不包含它所在的区域。 |
 | `selectPanel(panel)` | 在面板所在的组里显示它。 |
 | `selectTab(group, index)` | 显示一个组的某个标签页。 |
 | `toggleDock(placement)`、`setDockOpen(placement, open)` | 打开或关闭停靠区。 |
@@ -280,10 +297,10 @@ const terminalOpen = signal(true);
 | `defaultLayout` | `.default_layout(..)` | `DockAreaLayout` | 空的中心区域 | 没有设置 `layout` 时的初始布局；此后区域自己保存布局。 |
 | `locked` | `.locked(..)` | `boolean` | `false` | 不能拖动、放下或关闭标签页。 |
 | `compact` | `.compact(..)` | `boolean` | 按宽度 | 手机呈现方式（`true`）或完整方式（`false`）；不设置时，区域宽度小于 600 点为紧凑方式。 |
-| `panels` | `.panels(..)` | `DockPanelOptions[]` | `[]` | 按键设置每个面板允许什么：`closable`、`zoomable`、`visible`。 |
+| `panels` | `.panels(..)` | `DockPanelOptions[]` | `[]` | 按键设置每个面板允许什么：`closable`、`zoomable`、`visible`、`placements`。 |
 | `renderPanel` | `.render_panel(\|panel\| ..)` | `(panel: DockPanel) => JSX.Element` | 无 | 面板的内容，按它的键（`panel.id`）。 |
 | `renderTab` | `.render_tab(\|tab\| ..)` | `(tab: DockTab) => JSX.Element` | 面板的键 | 标签页显示的内容。 |
-| `renderDropIndicator` | `.render_drop_indicator(\|drop\| ..)` | `(drop: DockDropIndicator) => JSX.Element` | 无 | 放置指示里的内容：`group`、`side`、`index`。 |
+| `renderDropIndicator` | `.render_drop_indicator(\|drop\| ..)` | `(drop: DockDropIndicator) => JSX.Element` | 无 | 放置指示里的内容：`group`、`side`、`index`、`dock`。 |
 | `renderDock` | `.render_dock(\|dock\| ..)` | `(dock: DockInfo) => JSX.Element` | 无 | 停靠区自己的装饰，位于它的布局之前：`placement`、`open`（在当前呈现方式中是否显示）、`size`、`collapsible`。 |
 | `renderEmpty` | `.render_empty(\|placement\| ..)` | `(placement: DockPlacement) => JSX.Element` | 无 | 中心区域为空时显示的内容。 |
 | `renderDragPreview` | `.render_drag_preview(\|tab\| ..)` | `(tab: DockTab) => JSX.Element` | 无 | 拖动标签页时跟随指针或手指的内容。 |
@@ -329,7 +346,7 @@ const terminalOpen = signal(true);
 | 手柄的指示器 | 分栏的组之间、停靠区的边缘 | `handleClass`、`handleStyle` | `group-hover:`、`group-active:` |
 | 手柄的握把 | 居中在手柄的线上 | `handleThumbClass`、`handleThumbStyle` | `group-hover:`、`group-active:`（直到拖动结束都保持按下） |
 | 停靠区 | 边缘 | `dockClass`、`dockStyle`；`renderDock` | |
-| 放置指示 | 拖动时位于组上方 | `dropIndicatorClass`、`dropIndicatorStyle`；`renderDropIndicator` | |
+| 放置指示 | 拖动时位于组上方，或停靠区在边缘将占据的部分 | `dropIndicatorClass`、`dropIndicatorStyle`；`renderDropIndicator` | |
 | 拖动预览 | 指针或手指下方 | `renderDragPreview` | |
 | 空的中心区域 | 中心区域 | `renderEmpty` | |
 | 抽屉、底部面板、背景层 | 中心区域之上，紧凑方式 | `drawerClass`、`sheetClass`、`backdropClass`（及对应的样式） | |
