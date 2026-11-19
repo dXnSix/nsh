@@ -31,17 +31,16 @@ export function resizableHandleLook(axis: "horizontal" | "vertical") {
 
 /**
  * A `DockArea`'s parts (spread it): groups and docks on the inset, a tab
- * bar over a hairline (its tabs drawn by `DockTab`, 4 pt apart: a tab's
- * margin, since they are a row in the bar's scroll view, which a gap on the
- * bar does not space), the handles' hairlines
- * and thumbs, a drop target edged and tinted in the brand color, the
- * compact presentation's drawer and sheet on the card's surface over the
- * theme's `scrim`, every modal's backdrop.
+ * bar over a hairline (its tabs drawn by `DockTab`, a margin apart: they
+ * scroll in a row of their own, which the bar's `gap` does not space), the
+ * handles' hairlines and thumbs, a drop target edged and tinted in the
+ * brand color, the compact presentation's drawer and sheet on the card's
+ * surface over the theme's `scrim`, every modal's backdrop.
  */
 export const dockClasses = {
   groupClass: "flex-1 bg-inset",
   tabBarClass: "flex-row border-b border-line",
-  tabClass: "group mr-1",
+  tabClass: "group ml-1 first:ml-0",
   contentClass: "flex-1",
   handleClass: "basis-px bg-line",
   handleThumbClass: handleThumb,
