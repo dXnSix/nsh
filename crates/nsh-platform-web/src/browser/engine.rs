@@ -256,6 +256,23 @@ impl Host for Runtime {
             Err(_) => self.notify("tokens", []),
         }
     }
+    /// The page's `colorScheme()` follows the appearance Rust set
+    /// (`environment.js`'s `changedAppearance`), which may already be its
+    /// own: the page does not say.
+    fn set_appearance(&self, appearance: nsh_core::platform::Appearance) -> bool {
+        let name = match appearance {
+            nsh_core::platform::Appearance::System => "system",
+            nsh_core::platform::Appearance::Light => "light",
+            nsh_core::platform::Appearance::Dark => "dark",
+        };
+        match Value::string(name) {
+            Ok(name) => self.notify("appearance", [name]),
+            Err(error) => {
+                invoke(42, 0, error.0.as_ptr() as u32, error.0.len() as u32, 0.0);
+            }
+        }
+        true
+    }
     fn take_fonts(&self, out: &mut Vec<String>) {
         out.append(&mut self.fonts.borrow_mut());
     }

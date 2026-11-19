@@ -742,6 +742,9 @@ set_theme(None); // `nsh.json`'s again
   call's turn, after what JS sent before the call, as TSX's `setModifier` and `updateTheme` do: a builder method
   that picks the app's theme context before `mount` is in the first frame. `set_theme` goes through a module
   function's `cx.set_theme(..)` or TSX's `setTheme`.
+- TSX's `colorScheme()` follows `set_color_scheme` wherever Rust calls it, as it follows `setColorScheme`: as a
+  synchronous call from JS returns, and in the turn after a task or a component sets it. `Appearance::System` shows the
+  system's scheme again.
 
 ### Theme documents and typed keys
 

@@ -250,6 +250,7 @@ export function createBrowserHost(player) {
             case "unrender": components.unrender(...args); break;
             case "environment": env.update(args[0]); break;
             case "tokens": env.changedTokens(args[0]); break;
+            case "appearance": env.changedAppearance(args[0]); break;
             case "animationsFinished": animation?.finished(args[0]); break;
             // A gate ran after the start (`nsh_after_gate`).
             case "registry": modules?.refresh(); for (const watcher of watchers) watcher(); break;

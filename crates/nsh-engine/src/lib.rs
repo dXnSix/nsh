@@ -2384,9 +2384,11 @@ impl<M: TextEngine + 'static> Driver<M> {
         // (`Tokens::with_app_theme`), see the host's layer.
         core.install_theme();
         let js_tokens = core.tokens().clone();
+        let js_appearance = core.appearance();
         let state = State {
             core,
             js_tokens,
+            js_appearance,
             frame_requested: false,
             ops: Vec::new(),
             binds: Vec::new(),
@@ -2954,6 +2956,9 @@ struct State<M: TextEngine> {
     /// The design tokens JS has (`token()`): the core's when they were
     /// last sent.
     js_tokens: Arc<nsh_core::element::Tokens>,
+    /// The app's appearance JS has (`colorScheme()`): the core's when it
+    /// was last sent.
+    js_appearance: nsh_core::platform::Appearance,
     /// What the environment keeps whatever the platform reports
     /// ([`EngineConfig::pinned`]).
     pinned: EnvironmentPins,
@@ -3736,6 +3741,17 @@ impl<M: TextEngine> State<M> {
                 }
                 _ => false,
             };
+            // The app's appearance Rust set (`set_color_scheme` in a task, a
+            // component or a synchronous call from JS) reaches
+            // `colorScheme()` as JS's `setColorScheme` does; what read it
+            // sends its ops in another round. The core's is the one shown.
+            let reappear = match script {
+                Some(script) if self.core.appearance() != self.js_appearance => {
+                    self.js_appearance = self.core.appearance();
+                    script.set_appearance(self.js_appearance)
+                }
+                _ => false,
+            };
             // A language the app asked for reaches the core and JS, whose
             // views follow it in another round.
             let relocale = match self.core.take_locale_request() {
@@ -3755,6 +3771,7 @@ impl<M: TextEngine> State<M> {
                 && self.events.is_empty()
                 && !posted
                 && !retheme
+                && !reappear
                 && !relocale
                 && !more_paced
                 && !urls

@@ -100,6 +100,14 @@ export function createEnvironment(reactive, invoke, dom) {
     dom.rootProp("appearance", scheme);
     fields.colorScheme.set(scheme === "system" ? systemScheme : scheme);
   };
+  // The appearance Rust set (`set_color_scheme`), which the engine's core
+  // already shows (`Host::set_appearance`): `colorScheme()` follows it as
+  // it follows `setColorScheme`, and nothing goes back.
+  const changedAppearance = scheme => {
+    if (!["light", "dark", "system"].includes(scheme) || scheme === appearance) return;
+    appearance = scheme;
+    fields.colorScheme.set(scheme === "system" ? systemScheme : scheme);
+  };
   // The exports nsh-js's `env.rs` declares for `nsh/device` and
   // `nsh/accessibility` (`DEVICE_EXPORTS`, `ACCESSIBILITY_EXPORTS`), which
   // `nsh` serves too: one object each, so the namespaces the runtime
@@ -221,6 +229,7 @@ export function createEnvironment(reactive, invoke, dom) {
     },
     // The engine's new tokens (`Host::set_tokens`): what read them follows.
     changedTokens,
+    changedAppearance,
     // `setLocale`'s language, shown at once; the engine's next environment
     // carries it too.
     showLocale(tag) {

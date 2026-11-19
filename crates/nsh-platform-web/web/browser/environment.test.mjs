@@ -222,6 +222,32 @@ test("the locale settings are the engine's", () => {
   assert.deepEqual(env.api.localeSettings(), settings());
 });
 
+test("an appearance Rust set reaches colorScheme with nothing sent back, and a reset the system's", () => {
+  const sent = [];
+  const reactive = {
+    signal(value) { const read = () => value; read.set = next => { value = next; }; read.update = update => read.set(update(value)); return read; },
+    untracked: fn => fn(), batch: fn => fn(), context: fn => fn,
+  };
+  const env = createEnvironment(reactive, () => undefined, { rootProp: (name, value) => sent.push([name, value]) });
+  env.update(engine({ colorScheme: "dark" }));
+  assert.equal(env.api.colorScheme(), "dark");
+  // The engine's `Host::set_appearance`: the core already shows it.
+  env.changedAppearance("light");
+  assert.equal(env.api.colorScheme(), "light");
+  // The system's changing does not undo it.
+  env.update(engine({ colorScheme: "dark" }));
+  assert.equal(env.api.colorScheme(), "light");
+  env.changedAppearance("system");
+  assert.equal(env.api.colorScheme(), "dark");
+  env.update(engine({ colorScheme: "light" }));
+  assert.equal(env.api.colorScheme(), "light");
+  // What is no appearance is ignored.
+  env.changedAppearance("blue");
+  assert.equal(env.api.colorScheme(), "light");
+  // Only the direction went to the root: no appearance back to the engine.
+  assert.deepEqual(sent.filter(([name]) => name === "appearance"), []);
+});
+
 test("a part is written only when it changed", () => {
   const { env, writes } = environment();
   env.update(engine());

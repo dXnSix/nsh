@@ -5548,6 +5548,15 @@
 			dom.rootProp("appearance", scheme);
 			fields.colorScheme.set(scheme === "system" ? systemScheme : scheme);
 		};
+		const changedAppearance = (scheme) => {
+			if (![
+				"light",
+				"dark",
+				"system"
+			].includes(scheme) || scheme === appearance) return;
+			appearance = scheme;
+			fields.colorScheme.set(scheme === "system" ? systemScheme : scheme);
+		};
 		const device = {
 			horizontalSizeClass: () => fields.horizontalSizeClass(),
 			verticalSizeClass: () => fields.verticalSizeClass(),
@@ -5680,6 +5689,7 @@
 				dom.rootProp("layoutDirectionRtl", next.rtl);
 			},
 			changedTokens,
+			changedAppearance,
 			showLocale(tag) {
 				reactive.batch(() => {
 					const settings = reactive.untracked(fields.localeSettings);

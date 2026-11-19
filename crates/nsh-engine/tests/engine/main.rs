@@ -16,6 +16,7 @@ mod canvas;
 mod class_bench;
 mod class_extensions;
 mod clock;
+mod color_scheme_from_rust;
 mod compiled;
 mod component_bench;
 mod components;

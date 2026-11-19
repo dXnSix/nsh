@@ -388,6 +388,10 @@ mod imp {
             self.host.set_tokens(tokens);
         }
 
+        pub(crate) fn set_appearance(&self, appearance: nsh_core::platform::Appearance) -> bool {
+            self.host.set_appearance(appearance)
+        }
+
         pub(crate) fn take_fonts(&self, out: &mut Vec<String>) {
             self.host.take_fonts(out);
         }
@@ -577,6 +581,10 @@ mod stub {
         }
 
         pub(crate) fn set_tokens(&self, _: Arc<nsh_core::element::Tokens>) {
+            match *self {}
+        }
+
+        pub(crate) fn set_appearance(&self, _: nsh_core::platform::Appearance) -> bool {
             match *self {}
         }
 

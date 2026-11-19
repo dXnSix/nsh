@@ -1228,6 +1228,28 @@ impl Host {
         });
     }
 
+    /// Publishes the app's appearance the core shows to JS (`colorScheme()`
+    /// of `nsh`) when Rust set it (`set_color_scheme`); JS's own
+    /// `setColorScheme` sends it the other way. Whether JS's changed (what
+    /// read it ran again).
+    pub fn set_appearance(&self, appearance: nsh_core::platform::Appearance) -> bool {
+        self.guarded(Phase::Call, || {
+            let changed = self.cx.with(|cx| {
+                let raw = cx.as_raw().as_ptr();
+                let changed = crate::env::show_appearance(raw, appearance);
+                let failed = crate::reactive::finish_value(raw, qjs::JS_UNDEFINED);
+                // SAFETY: an inline tag check.
+                if unsafe { qjs::JS_IsException(failed) } {
+                    self.report(&cx, Err::<(), _>(rquickjs::Error::Exception));
+                }
+                changed
+            });
+            self.run_jobs();
+            changed
+        })
+        .unwrap_or(false)
+    }
+
     /// True if JS asked for a display frame (`requestAnimationFrame`).
     pub fn wants_frame(&self) -> bool {
         !self.shared.frames.borrow().is_empty()

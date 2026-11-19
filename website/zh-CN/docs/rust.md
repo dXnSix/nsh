@@ -658,6 +658,8 @@ set_theme(None); // 恢复 `nsh.json` 的
   `reset_tokens` 和 `reset_all_tokens` 随该调用所在轮次的操作一起发送，排在 JS 在调用之前发送的内容之后，与 TSX 的 `setModifier` 和
   `updateTheme` 一样：在 `mount` 之前选择应用主题上下文的构建器方法会出现在第一帧中。`set_theme` 则通过模块函数的 `cx.set_theme(..)`
   或 TSX 的 `setTheme`。
+- 无论 Rust 在哪里调用 `set_color_scheme`，TSX 的 `colorScheme()` 都会跟随它，与跟随 `setColorScheme` 一样：在来自 JS 的同步调用返回时，
+  以及在任务或组件设置它之后的下一个轮次。`Appearance::System` 会重新显示系统的配色方案。
 
 ### 主题文档与类型化键
 

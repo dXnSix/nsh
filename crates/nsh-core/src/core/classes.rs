@@ -241,6 +241,14 @@ impl<M: TextEngine> Core<M> {
         self.apply_environment(environment);
     }
 
+    /// The appearance the app asks for ([`Core::set_appearance`]), whoever
+    /// set it: JS's `setColorScheme` or Rust's
+    /// [`crate::element::set_color_scheme`]. The engine hands it to JS's
+    /// `colorScheme()` when it changes.
+    pub fn appearance(&self) -> Appearance {
+        self.appearance
+    }
+
     fn apply_class_environment(&mut self, env: ClassEnvironment) {
         if self.class_env == env {
             return;
