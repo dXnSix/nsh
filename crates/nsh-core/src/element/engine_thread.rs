@@ -97,17 +97,25 @@ fn start_boxed(work: Pin<Box<dyn Future<Output = ()>>>) -> Result<(), NotStarted
     }
 }
 
-/// A JS host's way to start core tasks from inside a synchronous call from
-/// JS of its VM, registered once per VM ([`register_call_tasks`]): `nsh-js`
-/// and the web player implement it.
+/// A JS host's way to hand the core ops from inside a synchronous call
+/// from JS of its VM (core tasks, theme writes), registered once per VM
+/// ([`register_call_tasks`]): `nsh-js` and the web player implement it.
 #[doc(hidden)]
 pub trait CallTasks {
-    /// Whether a synchronous call from JS of this VM runs now (a task
-    /// started now goes in order with what JS sent before it).
+    /// Whether a synchronous call from JS of this VM runs now (an op
+    /// queued now goes in order with what JS sent before it).
     fn in_call(&self) -> bool;
+    /// Queues `op` with the ops JS sends in this turn, after what it sent
+    /// before this call.
+    fn push_op(&self, op: crate::Op);
     /// Starts `task` as [`super::CallCx::start`] does: an op after what JS
     /// sent before this call.
-    fn start_task(&self, task: TaskStart);
+    fn start_task(&self, task: TaskStart) {
+        self.push_op(crate::Op::Rust(super::RustOp {
+            call: 0,
+            run: super::RustCall::Task(task),
+        }));
+    }
 }
 
 thread_local! {
@@ -128,8 +136,9 @@ pub fn register_call_tasks(tasks: Weak<dyn CallTasks>) {
 
 /// The VM a synchronous call from JS runs in now: the one VM in a call
 /// (two VMs in calls at once, one's JS calling the other's Rust, leave it
-/// open which one the task belongs to: none).
-fn in_call() -> Option<Rc<dyn CallTasks>> {
+/// open which one the task belongs to: none). The theme writes of
+/// [`super::ambient`] queue their ops through it too.
+pub(super) fn in_call() -> Option<Rc<dyn CallTasks>> {
     let hosts: Vec<Rc<dyn CallTasks>> =
         CALL_TASKS.with(|c| c.borrow().iter().filter_map(Weak::upgrade).collect());
     let mut calling = hosts.into_iter().filter(|t| t.in_call());

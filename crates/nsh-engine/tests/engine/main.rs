@@ -79,6 +79,7 @@ mod theme;
 mod theme_document;
 mod theme_format_host;
 mod theme_format_ts;
+mod theme_in_calls;
 mod theme_modifiers;
 mod theme_overrides;
 mod theme_root;

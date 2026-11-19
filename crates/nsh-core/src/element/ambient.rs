@@ -342,6 +342,34 @@ fn act(action: Action) {
     executor().act(action);
 }
 
+/// [`act`] for theme write `action` (an appearance, a modifier's context,
+/// the overrides): inside a synchronous call from JS, where no runtime is
+/// entered (a `#[class]` member, a class extension, a module function), it
+/// goes as the root's op with the ops of the call's turn, after what JS
+/// sent before the call, as JS's `setColorScheme`, `setModifier`,
+/// `updateTheme` and `resetTheme` send theirs: the core applies it with
+/// that turn's ops, before the turn's commit, so a write made before
+/// `mount` reaches the first frame. Elsewhere, [`act`].
+fn write_theme(action: Action) {
+    if try_executor().is_none()
+        && let Some(calls) = super::engine_thread::in_call()
+    {
+        let prop = match action {
+            Action::Appearance(appearance) => crate::Prop::Appearance(appearance),
+            Action::SetModifier(name, context) => crate::Prop::UiModifier(name, context),
+            Action::UpdateTokens(patch) => crate::Prop::UiThemeUpdate(Arc::new(patch)),
+            Action::ResetTokens(names) => crate::Prop::UiThemeReset(names),
+            action => return act(action),
+        };
+        calls.push_op(crate::Op::SetProp {
+            id: crate::ROOT_ID,
+            prop,
+        });
+        return;
+    }
+    act(action);
+}
+
 /// [`act`] while the engine runs Rust code, else nothing: for cleanups and
 /// handles that may outlive it.
 pub(super) fn act_if_running(action: Action) {
@@ -710,7 +738,8 @@ pub fn set_theme(json: Option<&str>) -> Vec<super::Diagnostic> {
 /// Overrides win over picked modifier contexts. An entry the active
 /// document refuses (a name it does not declare, a value that does not fit
 /// the token's type) is logged and skipped, and kept: it applies when a
-/// document that declares the name is active.
+/// document that declares the name is active. Inside a synchronous call
+/// from JS it goes with the call's turn, as `updateTheme` does.
 ///
 /// ```
 /// use nsh_core::element::{Patch, PatchValues};
@@ -719,17 +748,20 @@ pub fn set_theme(json: Option<&str>) -> Vec<super::Diagnostic> {
 /// # }
 /// ```
 pub fn update_tokens(patch: super::Patch) {
-    act(Action::UpdateTokens(patch));
+    write_theme(Action::UpdateTokens(patch));
 }
 
 /// Gives the theme's modifier `name` (`brand`) the context `context`
 /// (`forest`), in order with the app's other theme actions, and what reads
 /// the tokens it changes follows (TS: `setModifier`). It works from the
 /// app's first turn on: a pick made while the root is built reaches the
-/// first frame. A modifier or context the active document lacks is logged
-/// (`unknown-modifier`, `unknown-context`) and changes nothing.
+/// first frame. Inside a synchronous call from JS (a `#[class]` member, a
+/// class extension's method, a module function) it goes with the call's
+/// turn, as JS's `setModifier` does, so a pick made before `mount` reaches
+/// the first frame too. A modifier or context the active document lacks is
+/// logged (`unknown-modifier`, `unknown-context`) and changes nothing.
 pub fn set_modifier(name: &str, context: &str) {
-    act(Action::SetModifier(name.into(), context.into()));
+    write_theme(Action::SetModifier(name.into(), context.into()));
 }
 
 /// The context the theme's modifier `name` shows where it is read (the
@@ -749,7 +781,7 @@ pub fn modifiers() -> Vec<super::ModifierAxis> {
 /// each as a token and as a role: what they set goes back to the layer
 /// below, and stays so across modifier switches.
 pub fn reset_tokens<S: Into<Box<str>>>(names: impl IntoIterator<Item = S>) {
-    act(Action::ResetTokens(Some(
+    write_theme(Action::ResetTokens(Some(
         names.into_iter().map(Into::into).collect(),
     )));
 }
@@ -757,7 +789,7 @@ pub fn reset_tokens<S: Into<Box<str>>>(names: impl IntoIterator<Item = S>) {
 /// Empties the app's overrides (TS: `resetTheme()`), `themeOverrides`'
 /// entries included.
 pub fn reset_all_tokens() {
-    act(Action::ResetTokens(None));
+    write_theme(Action::ResetTokens(None));
 }
 
 /// The width of `text` on one line in `font` (the CSS `font` shorthand; an
@@ -1655,9 +1687,10 @@ pub(crate) fn act_locale(locale: Option<crate::platform::Locale>) {
 }
 
 /// Shows the surface in `appearance` whatever the system's (TS:
-/// `setColorScheme`).
+/// `setColorScheme`). Inside a synchronous call from JS it goes with the
+/// call's turn, as `setColorScheme`'s op does.
 pub fn set_color_scheme(appearance: Appearance) {
-    act(Action::Appearance(appearance));
+    write_theme(Action::Appearance(appearance));
 }
 
 /// Draws the bar of every scroll view and list whose `scrollbar` is `true`

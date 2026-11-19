@@ -1474,8 +1474,9 @@ impl Functions {
     }
 }
 
-/// Starts core tasks from inside a synchronous call from JS of the VM
-/// (`nsh_core::element::start_task`), as `CallCx::start` does.
+/// Hands the core ops from inside a synchronous call from JS of the VM:
+/// core tasks (`nsh_core::element::start_task`, as `CallCx::start` does)
+/// and Rust's theme writes (`set_modifier`, as JS's `setModifier`).
 impl nsh_core::element::CallTasks for Functions {
     fn in_call(&self) -> bool {
         let cx = self.cx.get();
@@ -1486,16 +1487,12 @@ impl nsh_core::element::CallTasks for Functions {
             && classes(cx).depth.get() > 0
     }
 
-    fn start_task(&self, task: nsh_core::element::TaskStart) {
+    fn push_op(&self, op: nsh_core::Op) {
         let cx = self.cx.get();
         if cx.is_null() {
             return;
         }
-        let op = nsh_core::Op::Rust(RustOp {
-            call: 0,
-            run: RustCall::Task(task),
-        });
-        // Past the op limit the app is stopped: the task goes with it.
+        // Past the op limit the app is stopped: the op goes with it.
         if crate::dom::push_op(cx, op).is_err() {
             let _ = js::take_exception(cx);
         }
