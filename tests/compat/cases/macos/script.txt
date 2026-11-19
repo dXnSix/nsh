@@ -180,6 +180,45 @@ covers [events] DockArea.onLayoutChange
 covers [events] DockArea.onPanelRemove
 covers [events] DockArea.onZoomChange
 covers [events] DockArea.onPanelActiveChange
+# base-dock-edge
+tap id:case-base-dock-edge
+expect Center h([doc*]:150 [notes*])
+expect Left [layers*] open 120
+expect Right none
+# The left dock's only panel drags out, to the band along the right edge
+# (the last 32 points of the 390): the indicator names the edge, and the
+# release makes a right dock at the default size; the left dock stays,
+# closed and empty, at its 120.
+touch start id:tab-layers 10 12
+touch move 40 12
+touch move 380 150
+expect Drop at right
+touch end
+absent Drop at right
+expect Right [layers*] open 200
+expect Left [] closed 120
+expect Center h([doc*]:150 [notes*])
+# The document may stay in the center only: at the left edge no
+# indicator shows and the release moves nothing; the ref refuses it.
+touch start id:tab-doc 10 12
+touch move 40 12
+touch move 10 150
+wait 100
+absent Drop at left
+touch end
+tap id:move-doc
+wait 100
+expect Center h([doc*]:150 [notes*])
+expect Right [layers*] open 200
+# Back to the left edge (the right dock starts at 190): the emptied dock
+# opens again at the size it kept.
+touch start id:tab-layers 10 12
+touch move 40 12
+touch move -180 150
+expect Drop at left
+touch end
+expect Left [layers*] open 120
+expect Right [] closed 200
 # mod-access-denied
 tap id:case-mod-access-denied
 # The app declares files only: the clipboard, the picker, opening URLs and

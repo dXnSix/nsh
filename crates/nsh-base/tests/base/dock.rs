@@ -3,12 +3,16 @@
 //! it, into a tab bar), a split's handle resizes it, and the ref's methods
 //! close panels, toggle docks and zoom; a bar's tabs that do not fit
 //! scroll and the displayed one comes into view; a locked area moves nothing, and
-//! at compact width the center shows one group with every panel's tab.
+//! at compact width the center shows one group with every panel's tab. A
+//! dock's last panel dragged out leaves it closed and empty, a tab dropped
+//! at an edge of the area makes or reopens the dock there, and a panel's
+//! `placements` keep it out of the other regions.
 //! The app controls the layout: what it shows is what the area reported.
 
 use nsh_base::dock::{
-    DockArea, DockAreaApi, DockAreaEvent, DockAreaLayout, DockLayout, DockNode, DockPanel,
-    DockPlacement, DockRegion, DockTab, PanelId, dock_area,
+    DockArea, DockAreaApi, DockAreaEvent, DockAreaLayout, DockDropIndicator, DockLayout, DockNode,
+    DockPanel, DockPanelOptions, DockPlacement, DockRegion, DockTab, DockTarget, PanelId,
+    dock_area,
 };
 use nsh_core::{
     Size, ViewKind,
@@ -62,7 +66,11 @@ fn node_text(node: &DockNode) -> String {
 
 fn layout_text(layout: &DockAreaLayout) -> String {
     let mut out = format!("Layout {}", node_text(&layout.center));
-    for (name, region) in [("left", &layout.left), ("bottom", &layout.bottom)] {
+    for (name, region) in [
+        ("left", &layout.left),
+        ("right", &layout.right),
+        ("bottom", &layout.bottom),
+    ] {
         if let Some(region) = region {
             let open = if region.open.unwrap_or(true) {
                 "open"
@@ -110,6 +118,8 @@ struct WorkspaceProps {
     height: Option<f32>,
     /// The area's `compact`.
     compact: Option<bool>,
+    /// The area's `panels`.
+    panels: Vec<DockPanelOptions>,
 }
 
 /// A dock area of 800 × 600 at the top left (as narrow as the window when
@@ -125,6 +135,7 @@ fn Workspace(props: WorkspaceProps) -> impl IntoElement {
     let docks = signal(Vec::<String>::new());
     let sizes = signal(std::collections::BTreeMap::<String, (f32, f32)>::new());
     let (width, height, compact) = (props.width, props.height, props.compact);
+    let panels = props.panels.clone();
     let zoom = signal(String::from("none"));
     let locked = signal(false);
     let area = component_ref::<DockArea>();
@@ -153,6 +164,7 @@ fn Workspace(props: WorkspaceProps) -> impl IntoElement {
                         .layout(move || layout.get())
                         .locked(move || locked.get())
                         .compact(compact)
+                        .panels(panels)
                         .tab_bar_class("flex-row h-6")
                         .render_tab(|tab: &DockTab| {
                             view()
@@ -177,6 +189,10 @@ fn Workspace(props: WorkspaceProps) -> impl IntoElement {
                                         "files-toggle-bottom",
                                         Box::new(|a| a.toggle_dock(DockPlacement::Bottom)),
                                     ))
+                                    .child(button(
+                                        "files-close",
+                                        Box::new(|a| a.close_panel("files".into())),
+                                    ))
                             });
                             view()
                                 .flex_1()
@@ -188,6 +204,17 @@ fn Workspace(props: WorkspaceProps) -> impl IntoElement {
                                         m.insert(id.clone(), size);
                                     })
                                 })
+                        })
+                        .render_drop_indicator(|drop: &DockDropIndicator| {
+                            let place = match (drop.dock, drop.side) {
+                                (Some(dock), _) => format!("at {dock:?}"),
+                                (None, Some(side)) => format!("{side:?}"),
+                                (None, None) => String::from("into"),
+                            };
+                            view()
+                                .test_id("drop")
+                                .flex_1()
+                                .child(text(format!("Drop {place}")))
                         })
                         .render_empty(|placement: &DockPlacement| {
                             text(format!("Empty {placement:?}"))
@@ -257,6 +284,20 @@ fn Workspace(props: WorkspaceProps) -> impl IntoElement {
                 ))
                 .child(button("remove-x", Box::new(|a| a.remove_panel("x".into()))))
                 .child(button(
+                    "add-c-left",
+                    Box::new(|a| a.add_panel("c".into(), Some(DockPlacement::Left), None)),
+                ))
+                .child(button(
+                    "move-files-to-a",
+                    Box::new(|a| {
+                        if let Some(group) = a.group_of("a".into()) {
+                            let mut target = DockTarget::default();
+                            target.group = group;
+                            a.move_panel("files".into(), target);
+                        }
+                    }),
+                ))
+                .child(button(
                     "remove-all",
                     Box::new(|a| {
                         for panel in ["a", "b", "c"] {
@@ -287,6 +328,17 @@ fn start_in(
     frame: Option<(f32, f32)>,
     compact: Option<bool>,
 ) -> Headless {
+    start_with(layout, width, frame, compact, Vec::new())
+}
+
+/// The same with the area's `panels`.
+fn start_with(
+    layout: DockAreaLayout,
+    width: f32,
+    frame: Option<(f32, f32)>,
+    compact: Option<bool>,
+    panels: Vec<DockPanelOptions>,
+) -> Headless {
     let mut config = EngineConfig {
         viewport: Size::new(px(width), px(900.0)),
         ..EngineConfig::new(Root::new::<Workspace>(move || WorkspaceProps {
@@ -294,6 +346,7 @@ fn start_in(
             width: frame.map(|f| f.0),
             height: frame.map(|f| f.1),
             compact,
+            panels: panels.clone(),
         }))
     };
     config.environment.os = Os::MacOs;
@@ -314,6 +367,7 @@ fn start_manual(layout: DockAreaLayout, width: f32) -> Headless {
             width: None,
             height: None,
             compact: None,
+            panels: Vec::new(),
         }))
     };
     config.environment.os = Os::MacOs;
@@ -665,6 +719,7 @@ fn a_terminals_compact_sheet_gives_its_panel_the_sheets_rows() {
             width: None,
             height: None,
             compact: Some(true),
+            panels: Vec::new(),
         }))
     };
     config.environment.os = Os::Linux;
@@ -702,6 +757,7 @@ fn start_web_phone(layout: DockAreaLayout) -> Headless {
             width: None,
             height: None,
             compact: None,
+            panels: Vec::new(),
         }))
     };
     config.environment.os = Os::Web;
@@ -740,6 +796,7 @@ fn a_compact_bottom_dock_lifted_by_the_keyboard_stays_below_the_status_bar() {
             width: None,
             height: None,
             compact: Some(true),
+            panels: Vec::new(),
         }))
     };
     config.environment.os = Os::Ios;
@@ -867,4 +924,154 @@ fn tabs_that_do_not_fit_scroll_in_their_bar_and_the_displayed_one_comes_into_vie
         },
     )
     .unwrap();
+}
+
+/// The frame of the drop indicator once it is at `at` (it moves there from
+/// where the drag passed, animated).
+fn wait_for_drop_at(app: &mut Headless, at: nsh_core::Bounds<Points>) {
+    app.wait_until(
+        "the drop indicator in place",
+        std::time::Duration::from_secs(5),
+        |screen| {
+            screen
+                .layout_nodes()
+                .iter()
+                .find(|node| node.test_id.as_deref() == Some("drop"))
+                .is_some_and(|node| node.bounds == at)
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}: the indicator is at {:?}", frame_of(app, "drop")));
+}
+
+fn bounds(x: f32, y: f32, w: f32, h: f32) -> nsh_core::Bounds<Points> {
+    nsh_core::Bounds {
+        origin: point(px(x), px(y)),
+        size: Size::new(px(w), px(h)),
+    }
+}
+
+#[test]
+fn a_dock_s_only_panel_dragged_out_leaves_it_closed_and_empty() {
+    let mut app = start(with_files(), 1000.0);
+    app.wait_for("Panel files").unwrap();
+    // From files' tab (40, 12) into the middle of c's group (600 to 800).
+    app.drag("id:tab-files", point(px(660.0), px(288.0)))
+        .unwrap();
+    app.wait_for("Layout h([*a b]:400 [c *files]) left [] closed 200")
+        .unwrap();
+    // Moved, not removed; the dock reported closed.
+    assert!(app.shows("Removed none"));
+    app.wait_for("Docks Left-").unwrap();
+    app.wait_for("Panel files").unwrap();
+    // The center's last panel, its group alone, still stays.
+    app.press("id:close-c").unwrap();
+    app.wait_for("Layout h([*a b]:400 [*files]) left [] closed 200")
+        .unwrap();
+}
+
+#[test]
+fn a_tab_dropped_at_an_edge_of_the_area_docks_it_there() {
+    let mut app = start(two_groups(), 1000.0);
+    // From c's tab (440, 12) into the band along the right edge (768 to
+    // 800): the indicator covers what a right dock would take, 200 wide.
+    app.drag_and_hold("id:tab-c", point(px(350.0), px(288.0)))
+        .unwrap();
+    app.wait_for("Drop at Right").unwrap();
+    wait_for_drop_at(&mut app, bounds(600.0, 0.0, 200.0, 600.0));
+    app.drop_held().unwrap();
+    app.wait_for("Layout h([*a b]:400) right [*c] open 200")
+        .unwrap();
+    assert!(app.shows("Removed none"));
+    app.wait_for("Panel c").unwrap();
+    // The bottom edge: a dock between the side docks that show (the right
+    // one, 200), 200 tall.
+    app.drag_and_hold("id:tab-a", point(px(260.0), px(578.0)))
+        .unwrap();
+    app.wait_for("Drop at Bottom").unwrap();
+    wait_for_drop_at(&mut app, bounds(0.0, 400.0, 600.0, 200.0));
+    app.drop_held().unwrap();
+    app.wait_for("Layout h([*b]:400) right [*c] open 200 bottom [*a] open 200")
+        .unwrap();
+    // A dock with panels takes drops in its groups, not at its edge: a
+    // (its tab at 40, 412) in the right band splits the right dock's group;
+    // the bottom dock it leaves closes.
+    app.drag("id:tab-a", point(px(750.0), px(-112.0))).unwrap();
+    app.wait_for("Layout h([*b]:400) right h([*c] [*a]) open 200 bottom [] closed 200")
+        .unwrap();
+}
+
+#[test]
+fn an_emptied_dock_opens_again_at_its_size_when_a_tab_docks_there() {
+    let mut files = DockRegion::new(DockLayout::tabs().panel("files"));
+    files.size = Some(px(260.0));
+    let layout = two_groups().with_dock(DockPlacement::Left, files);
+    let mut app = start(layout, 1000.0);
+    app.wait_for("Panel files").unwrap();
+    // Into the middle of c's group (660 to 800).
+    app.drag("id:tab-files", point(px(690.0), px(288.0)))
+        .unwrap();
+    app.wait_for("Layout h([*a b]:400 [c *files]) left [] closed 260")
+        .unwrap();
+    // Tab a (40, 12) to the left edge: the dock's kept 260.
+    app.drag_and_hold("id:tab-a", point(px(-30.0), px(288.0)))
+        .unwrap();
+    app.wait_for("Drop at Left").unwrap();
+    wait_for_drop_at(&mut app, bounds(0.0, 0.0, 260.0, 600.0));
+    app.drop_held().unwrap();
+    app.wait_for("Layout h([*b]:400 [c *files]) left [*a] open 260")
+        .unwrap();
+    app.wait_for("Docks Left- Left+").unwrap();
+}
+
+#[test]
+fn a_panel_kept_to_some_regions_is_dropped_and_moved_nowhere_else() {
+    let panels = vec![
+        DockPanelOptions::new("c").with_placements([DockPlacement::Center]),
+        DockPanelOptions::new("files").with_placements([
+            DockPlacement::Left,
+            DockPlacement::Right,
+            DockPlacement::Bottom,
+        ]),
+    ];
+    let mut app = start_with(with_files(), 1000.0, None, None, panels);
+    // As the app wrote it (no size: nothing reported yet).
+    let before = "Layout h([*a b]:400 [*c]) left [*files] open 0";
+    // c (its tab at 640, 12) at the right edge: no indicator, no drop.
+    app.drag_and_hold("id:tab-c", point(px(150.0), px(288.0)))
+        .unwrap();
+    app.wait(std::time::Duration::from_millis(100)).unwrap();
+    assert!(
+        !app.shows("Drop at Right"),
+        "no indicator at the right edge"
+    );
+    app.drop_held().unwrap();
+    // files into the middle of a's group (200 to 600), in the center.
+    app.drag_and_hold("id:tab-files", point(px(360.0), px(288.0)))
+        .unwrap();
+    app.wait(std::time::Duration::from_millis(100)).unwrap();
+    assert!(!app.shows("Drop into"), "no indicator over the center");
+    app.drop_held().unwrap();
+    // The ref's moves refuse it too.
+    app.press("id:add-c-left").unwrap();
+    app.press("id:move-files-to-a").unwrap();
+    app.wait(std::time::Duration::from_millis(100)).unwrap();
+    assert!(app.shows(before), "unchanged: {:?}", app.screen().texts());
+    // Where it may go, it goes: c into a's group.
+    app.drag("id:tab-c", point(px(-240.0), px(288.0))).unwrap();
+    app.wait_for("Layout h([a b *c]:400) left [*files] open 200")
+        .unwrap();
+}
+
+#[test]
+fn at_compact_width_a_drawer_whose_last_panel_closes_is_dismissed() {
+    let mut app = start(with_files(), 400.0);
+    app.wait_for("Docks Left-").unwrap();
+    app.press("id:toggle-left").unwrap();
+    app.wait_for("Panel files").unwrap();
+    app.wait_for("Docks Left- Left+").unwrap();
+    app.press("id:files-close").unwrap();
+    app.wait_for("Removed files").unwrap();
+    app.wait_for("Docks Left- Left+ Left-").unwrap();
+    app.wait_for("Layout h([*a b]:400 [*c]) left [] closed 200")
+        .unwrap();
 }

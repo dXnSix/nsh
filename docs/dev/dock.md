@@ -114,6 +114,23 @@ in the order they open, and the indicator opens once the drag has a target, so t
 row keyed by `AreaCx::indicator_shown`: a region run again keeps its node and its place), placed with the content frame the drag measured, so it draws above the handles, whose lines lie over
 the edges of the groups beside them, and no frame clips it, and the release applies one move (`PaneTree::move_panel` within a tree,
 detach and insert across trees) and one `onLayoutChange`. A gesture the system takes away drops nothing.
+
+Edge drops dock a tool panel at any edge, as Visual Studio and Rider do. The drag also measures the area's own frame
+(`AreaCx::root`), and each edge (left, right, bottom) where no open dock with panels is offers a band
+`EDGE_DROP_BAND` (32 points, at most a quarter of the area) deep along it (`dock_area.rs` `edge_drop`). The pointer
+over a tab bar resolves to the bar first, then to a band, then to a content frame, so an existing dock's groups keep
+taking drops at their own edges. Over a band the indicator covers what the dock would take: its kept size (or the
+default 200) fitted as the dock's frame fits it, full height for a side dock, and for the bottom one the width between
+the side docks that show. `renderDropIndicator` hears `dock` (the edge) with `group` the dock's first tab group, or 0
+when it has none yet. The release is `Area::dock_panel`: into the dock's first group (made at the default size when the
+area has none there) and the dock opens, at the size it kept when it was closed or emptied. The compact presentation
+offers no bands.
+
+A panel's `placements` (`DockPanelOptions`, default every region) is checked wherever a panel enters a region: a
+group's content frame or tab bar, the compact strip's slot, an edge band (`AreaCx::allows`), and the ref's `addPanel`,
+`movePanel` and `splitAt` (`may_enter`, logged when refused). A target the panel may not enter is no target: no
+indicator, and the release does nothing. `removePanel`, `closePanel` and a layout the app passes are not checked: taking
+a panel out is not a placement, and the app's own layout is its word on where panels are.
 In a terminal a press on a tab arms its drag at once, as on the desktops (a terminal's pointer is a mouse), and the
 area grows into its parent's room (`flex-grow: 1`: a terminal keeps no percentage height for a box of content); a
 bottom dock's size is its basis in the column (its rows), and each dock keeps a Cell on the edge its handle hugs for
@@ -122,9 +139,10 @@ drop indicator is the region's outline: a 1-Cell border in the accent (`terminal
 region's outer Cells, over what the group shows, which is not cleared; it has no fill and none of the app's
 indicator parts, and it jumps from Cell to Cell instead of easing (`tab_group.rs` `drop_indicator`).
 
-The rules of what may move are `Area::groups`', as `gpui-base`'s: a locked or zoomed area rearranges nothing, and a
-group with nothing beside it in its tree cannot give its last visible panel away (dragging or closing it would empty
-the region). Selecting tabs, resizing and toggling docks work in a locked area.
+The rules of what may move are `Area::rules`': a locked or zoomed area rearranges nothing, and a group of the center
+with nothing beside it cannot give its last visible panel away (dragging or closing it would empty the center). A
+dock's last panel may leave, unlike `gpui-base`, whose rule held for every region: the dock it empties closes ("Docks").
+Selecting tabs, resizing and toggling docks work in a locked area.
 
 ## Docks
 
@@ -133,6 +151,12 @@ and a collapsible flag. `DockSizing` clamps a resize against the area and the op
 the dock stays at least 100 points and the center keeps 100; a collapsible dock let go below 50 points closes and
 keeps its size. A dock's frame clips, so its edge is a `ResizeHandle` hugging it from inside (`HandleEdge`). A closed
 dock keeps its tree and its size, and reopening restores both.
+
+A dock its last panel leaves (dragged out, closed or removed: `Area::move_panel`, `Area::remove_panel`) stays in the
+area, closed and empty, collapsible or not, instead of going: a dock is its `Dock` paired with its tree, the layout
+(`open: false`, an empty `[]` layout) and the persisted format already carry an empty one, and its size waits there
+for the panel that comes back. An edge drop or `addPanel` into it opens it again; `addPanel` into a closed dock that
+still has panels leaves it closed, as before. A compact drawer or sheet whose last panel closes is dismissed.
 
 The area never exceeds its bounds: its root clips and takes no minimum size from its content, a dock shows at its
 `size` clamped to what the area leaves it (at most the area minus the center's 100 points, as `gpui-base` clamps),
@@ -285,7 +309,7 @@ only to inputs and the surface's bindings, and no event says a view other than a
 | `gpui-base` | NSH |
 |---|---|
 | `PanelId(EntityId)` | `PanelId(SharedString)`: the app's key |
-| `Panel` trait, `PanelView` | the app's `renderPanel` by key; `closable`, `zoomable`, `visible` as data (`panels`, `DockPanelOptions`) |
+| `Panel` trait, `PanelView` | the app's `renderPanel` by key; `closable`, `zoomable`, `visible` as data (`panels`, `DockPanelOptions`), and `placements`, which `gpui-base` has not |
 | `set_active`, `on_removed`, `set_zoomed` hooks | `onPanelActiveChange`, `onPanelRemove`, `onZoomChange`; `DockTab`'s `active`, `zoomed` |
 | `DockAreaRenderer`, `TabGroupRenderer` | the area's render props (`renderTab`, `renderDropIndicator`, `renderDock`, `renderEmpty`, `renderDragPreview`) and `<part>Class` / `<part>Style` |
 | `TabGroupContext`, `DockContext` actions, `DockArea` methods | the behavior the area wraps around rendered parts, and `DockAreaApi` (the ref) |

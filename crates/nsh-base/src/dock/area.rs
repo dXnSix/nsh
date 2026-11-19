@@ -11,10 +11,24 @@
 //! layout when it did. Like the trees, it is plain data, tested without an
 //! engine.
 //!
-//! The rules a tab group's chrome follows are here too ([`Area::groups`]):
-//! a group with nothing beside it in its tree and one visible panel cannot
-//! give that panel away (dragging or closing it would empty the region),
-//! and a locked or zoomed area rearranges nothing.
+//! The rules a tab group's chrome follows are here too ([`Area::rules`]):
+//! a group of the center with nothing beside it and one visible panel
+//! cannot give that panel away (dragging or closing it would empty the
+//! center), and a locked or zoomed area rearranges nothing. A dock's last
+//! panel can leave, as in Visual Studio or Rider.
+//!
+//! # An emptied dock closes
+//!
+//! A dock whose last panel leaves (dragged out, closed, removed) stays in
+//! the area as a closed, empty dock: its [`Dock`] keeps its size (and
+//! `collapsible`), the layout reports it (`open: false`, an empty layout),
+//! and a panel docked there again ([`Area::dock_panel`], an edge drop, or
+//! [`Area::add_panel`]) reopens it at that size. Keeping it, rather than
+//! dropping the dock, is what the model already holds: a dock is its
+//! state paired with its tree, the layout and the persisted format carry an
+//! empty one, and its size needs no other place to wait in. It closes
+//! whether it is collapsible or not: `collapsible` is about dragging its
+//! edge, and an empty dock has nothing to show.
 
 use std::collections::{HashMap, HashSet};
 
@@ -62,7 +76,8 @@ pub(crate) struct GroupRules {
     pub(crate) alone: bool,
     /// Its tabs can be dragged out and closed (`gpui-base`'s
     /// `TabGroup::draggable`): not locked, and not the last visible panel
-    /// of a group alone in its tree.
+    /// of a group alone in the center (a dock's last panel may leave: the
+    /// dock closes).
     pub(crate) draggable: bool,
     /// Panels can be dropped on it.
     pub(crate) droppable: bool,
@@ -195,15 +210,17 @@ impl Area {
         let shown = group.panels.iter().filter(|p| visible(p)).count();
         GroupRules {
             alone: group.alone,
-            draggable: !locked && !(group.alone && shown <= 1),
+            draggable: !locked
+                && !(group.placement == DockPlacement::Center && group.alone && shown <= 1),
             droppable: !locked,
         }
     }
 
     /// Adds `panel` to region `placement`, into its first tab group or a
     /// new one when the region has none (a dock is made for it, `size`
-    /// across, when the area has none there). A panel the area holds
-    /// already moves there instead.
+    /// across, when the area has none there; an empty dock, one its last
+    /// panel left, opens again). A panel the area holds already moves
+    /// there instead.
     pub(crate) fn add_panel(
         &mut self,
         panel: PanelId,
@@ -211,6 +228,9 @@ impl Area {
         size: Option<Points>,
     ) -> bool {
         let created = placement != DockPlacement::Center && self.dock(placement).is_none();
+        let emptied = self
+            .dock(placement)
+            .is_some_and(|pane| pane.tree.panels().next().is_none());
         if created {
             let mut dock = Dock::default();
             if let Some(size) = size {
@@ -262,22 +282,60 @@ impl Area {
         if created && !changed {
             self.docks.retain(|pane| pane.placement != placement);
         }
+        if emptied
+            && changed
+            && let Some(pane) = self.dock_mut(placement)
+        {
+            pane.dock.set_open(true);
+        }
         changed
     }
 
-    /// Removes `panel` wherever it is.
+    /// Docks `panel` at edge `placement`, as a drop on that edge of the
+    /// area does: into the dock's first tab group (a dock is made when the
+    /// area has none there, at its default size), and the dock opens (an
+    /// emptied or closed one at the size it kept).
+    pub(crate) fn dock_panel(&mut self, panel: PanelId, placement: DockPlacement) -> bool {
+        if placement == DockPlacement::Center {
+            return false;
+        }
+        let changed = self.add_panel(panel, placement, None);
+        if changed && let Some(pane) = self.dock_mut(placement) {
+            pane.dock.set_open(true);
+        }
+        changed
+    }
+
+    /// Removes `panel` wherever it is (a dock it empties closes).
     pub(crate) fn remove_panel(&mut self, panel: &str) -> bool {
         let Some(placement) = self.placement_of_panel(panel) else {
             return false;
         };
-        self.tree_mut(placement)
-            .is_some_and(|tree| tree.remove_panel(panel).changed())
+        let removed = self
+            .tree_mut(placement)
+            .is_some_and(|tree| tree.remove_panel(panel).changed());
+        if removed {
+            self.close_if_emptied(placement);
+        }
+        removed
+    }
+
+    /// Closes the dock at `placement` when it holds no panel any more: an
+    /// emptied dock stays, closed, keeping its size for when a panel comes
+    /// back.
+    fn close_if_emptied(&mut self, placement: DockPlacement) {
+        if let Some(pane) = self.dock_mut(placement)
+            && pane.tree.panels().next().is_none()
+        {
+            pane.dock.set_open(false);
+        }
     }
 
     /// Moves `panel` to `target`, in its tree or another (a panel the area
     /// does not hold yet is added there). Across trees it is a detach and
     /// an insert, and both count: an insert the target cannot take leaves
-    /// the panel where it was rather than nowhere.
+    /// the panel where it was rather than nowhere. A dock the move empties
+    /// closes.
     pub(crate) fn move_panel(&mut self, panel: PanelId, target: InsertTarget) -> bool {
         let Some(destination) = self.placement_of_node(target_node(&target)) else {
             return false;
@@ -297,6 +355,9 @@ impl Area {
                 if detached && !inserted {
                     *self = before;
                     return false;
+                }
+                if detached && let Some(source) = source {
+                    self.close_if_emptied(source);
                 }
                 detached || inserted
             }
@@ -492,7 +553,7 @@ mod tests {
     use nsh_core::geometry::px;
 
     use super::*;
-    use crate::dock::{DockLayout, DockRegion};
+    use crate::dock::{DockLayout, DockRegion, PanelKeys};
 
     fn area() -> Area {
         Area::from_layout(
@@ -561,15 +622,113 @@ mod tests {
     }
 
     #[test]
-    fn the_last_panel_of_a_lone_group_stays() {
-        let area = area();
+    fn the_center_s_last_panel_of_a_lone_group_stays_and_a_dock_s_can_leave() {
+        let mut area = area();
+        // A dock's only panel may leave: the dock closes.
         let files = group_of(&area, "files");
         let rules = area.rules(files, false, |_| true);
         assert!(rules.alone);
-        assert!(!rules.draggable);
+        assert!(rules.draggable);
+        assert!(!area.rules(files, true, |_| true).draggable);
         let ab = group_of(&area, "a");
         assert!(area.rules(ab, false, |_| true).draggable);
         assert!(!area.rules(ab, true, |_| true).draggable);
+        // The center's last panel, its group alone, stays.
+        assert!(area.remove_panel("c"));
+        assert!(area.remove_panel("b"));
+        let a = group_of(&area, "a");
+        let rules = area.rules(a, false, |_| true);
+        assert!(rules.alone);
+        assert!(!rules.draggable);
+    }
+
+    #[test]
+    fn a_dock_its_last_panel_leaves_stays_closed_and_empty_keeping_its_size() {
+        let mut area = area();
+        area.set_dock_size(DockPlacement::Left, px(260.));
+        let c = group_of(&area, "c");
+        let target = InsertTarget::Tabs {
+            node: c,
+            ix: None,
+            activate: true,
+        };
+        assert!(area.move_panel("files".into(), target));
+        let left = area.dock(DockPlacement::Left).expect("the dock stays");
+        assert!(left.tree.panels().next().is_none());
+        assert!(!left.dock.is_open());
+        assert_eq!(left.dock.size(), px(260.));
+        // It round-trips as it is: closed, empty, its size kept, through
+        // the layout and the persisted format.
+        assert_eq!(Area::from_layout(&area.to_layout()), area);
+        let state = area.to_layout().to_state(&PanelKeys);
+        let back = Area::from_layout(&DockAreaLayout::from_state(&state, &mut PanelKeys));
+        let left = back.dock(DockPlacement::Left).expect("the persisted dock");
+        assert!(left.tree.panels().next().is_none());
+        assert!(!left.dock.is_open());
+        assert_eq!(left.dock.size(), px(260.));
+        // Closing (removing) a dock's last panel closes it too, collapsible
+        // or not.
+        let mut area = self::area();
+        area.dock_mut(DockPlacement::Left)
+            .unwrap()
+            .dock
+            .set_collapsible(false);
+        assert!(area.remove_panel("files"));
+        assert!(!area.is_dock_open(DockPlacement::Left));
+    }
+
+    #[test]
+    fn a_panel_docked_at_an_edge_makes_or_reopens_the_dock_there() {
+        let mut area = area();
+        // No dock on the right: one is made, open, at the default size.
+        assert!(area.dock_panel("c".into(), DockPlacement::Right));
+        let right = area.dock(DockPlacement::Right).unwrap();
+        assert!(right.dock.is_open());
+        assert_eq!(right.dock.size(), Dock::DEFAULT_SIZE);
+        assert_eq!(
+            right.tree.panels().collect::<Vec<_>>(),
+            [PanelId::from("c")]
+        );
+        let order: Vec<_> = area.docks.iter().map(|pane| pane.placement).collect();
+        assert_eq!(order, [DockPlacement::Left, DockPlacement::Right]);
+        // The left dock emptied (closed, 260 kept) opens again at its size.
+        area.set_dock_size(DockPlacement::Left, px(260.));
+        let right_group = group_of(&area, "c");
+        let target = InsertTarget::Tabs {
+            node: right_group,
+            ix: None,
+            activate: true,
+        };
+        assert!(area.move_panel("files".into(), target));
+        assert!(!area.is_dock_open(DockPlacement::Left));
+        assert!(area.dock_panel("a".into(), DockPlacement::Left));
+        let left = area.dock(DockPlacement::Left).unwrap();
+        assert!(left.dock.is_open());
+        assert_eq!(left.dock.size(), px(260.));
+        assert_eq!(left.tree.panels().collect::<Vec<_>>(), [PanelId::from("a")]);
+        // A closed dock with panels opens with the panel in its group.
+        assert!(area.set_dock_open(DockPlacement::Left, false));
+        assert!(area.dock_panel("b".into(), DockPlacement::Left));
+        let left = area.dock(DockPlacement::Left).unwrap();
+        assert!(left.dock.is_open());
+        assert_eq!(
+            area.group(group_of(&area, "a")).unwrap().panels,
+            ["a", "b"].map(PanelId::from)
+        );
+        // The center is no edge.
+        assert!(!area.dock_panel("a".into(), DockPlacement::Center));
+    }
+
+    #[test]
+    fn adding_to_an_emptied_dock_reopens_it_and_to_a_closed_one_keeps_it_closed() {
+        let mut area = area();
+        assert!(area.remove_panel("files"));
+        assert!(!area.is_dock_open(DockPlacement::Left));
+        assert!(area.add_panel("terminal".into(), DockPlacement::Left, None));
+        assert!(area.is_dock_open(DockPlacement::Left));
+        assert!(area.set_dock_open(DockPlacement::Left, false));
+        assert!(area.add_panel("search".into(), DockPlacement::Left, None));
+        assert!(!area.is_dock_open(DockPlacement::Left));
     }
 
     #[test]
