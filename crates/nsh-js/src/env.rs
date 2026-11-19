@@ -90,8 +90,13 @@ pub(crate) struct Env {
     /// Counts the times a scope's tokens were made: its memo's value is new
     /// each time, so what read `token()` in it runs again.
     scope_versions: Cell<u32>,
-    /// The app's appearance (`nsh.json`, `setColorScheme`).
+    /// The app's appearance (`nsh.json`, `setColorScheme`, Rust's
+    /// `set_color_scheme`).
     appearance: Cell<Appearance>,
+    /// An appearance Rust set inside the synchronous call from JS running
+    /// now (`set_color_scheme`, whose op went with the call's turn), shown
+    /// when the call returns ([`show_appearance_set_in_call`]).
+    appearance_in_call: Cell<Option<Appearance>>,
     /// The insets context (owned): screens and modals provide theirs.
     insets: Cell<JsValue>,
     /// The design tokens the app is drawn with, as the core resolved them
@@ -155,6 +160,7 @@ impl Default for Env {
             scope_free: RefCell::default(),
             scope_versions: Cell::new(0),
             appearance: Cell::new(Appearance::System),
+            appearance_in_call: Cell::new(None),
             insets: Cell::new(UNDEFINED),
             tokens: RefCell::new(Arc::default()),
             tokens_signal: Cell::new(UNDEFINED),
@@ -1290,6 +1296,39 @@ pub(crate) fn set_appearance(cx: *mut JsContext, appearance: Appearance) -> JsVa
     let value = string(cx, scheme(e, &current(cx)));
     reactive::set_signal(cx, e.signals[Part::ColorScheme as usize].get(), value);
     reactive::finish_value(cx, UNDEFINED)
+}
+
+/// Shows the surface in `appearance` the core already has (Rust's
+/// `set_color_scheme`): `colorScheme()` follows it as it follows
+/// `setColorScheme`, and no op goes back. Whether JS's appearance changed.
+pub(crate) fn show_appearance(cx: *mut JsContext, appearance: Appearance) -> bool {
+    let e = env(cx);
+    if e.appearance.replace(appearance) == appearance {
+        return false;
+    }
+    let value = string(cx, scheme(e, &current(cx)));
+    reactive::set_signal(cx, e.signals[Part::ColorScheme as usize].get(), value);
+    true
+}
+
+/// Rust set `appearance` inside the synchronous call from JS running now
+/// (`set_color_scheme`): its op goes with the call's turn, and
+/// `colorScheme()` follows when the call returns
+/// ([`show_appearance_set_in_call`]).
+pub(crate) fn appearance_set_in_call(cx: *mut JsContext, appearance: Appearance) {
+    env(cx).appearance_in_call.set(Some(appearance));
+}
+
+/// As a synchronous call from JS returns `value` (owned, or the
+/// exception): an appearance Rust set in it shows in `colorScheme()` now,
+/// as JS's `setColorScheme` shows its own, and what read it runs (an error
+/// of theirs is the call's).
+pub(crate) fn show_appearance_set_in_call(cx: *mut JsContext, value: JsValue) -> JsValue {
+    let Some(appearance) = env(cx).appearance_in_call.take() else {
+        return value;
+    };
+    show_appearance(cx, appearance);
+    reactive::finish_value(cx, value)
 }
 
 /// `"light"` / `"dark"` / `"system"`.

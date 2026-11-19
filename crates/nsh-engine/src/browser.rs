@@ -96,6 +96,11 @@ pub trait Host {
     fn set_environment(&self, environment: &Environment);
     /// Update design tokens.
     fn set_tokens(&self, tokens: Arc<Tokens>);
+    /// Update the app's appearance the core shows (`colorScheme()`), which
+    /// Rust set (`set_color_scheme`): the page's own `setColorScheme` sends
+    /// it the other way. Whether the page's changed; a host that cannot
+    /// tell says `true`.
+    fn set_appearance(&self, appearance: nsh_core::platform::Appearance) -> bool;
     /// Take fonts registered by loaded modules.
     fn take_fonts(&self, out: &mut Vec<String>);
     /// Whether the browser host needs an animation frame.
@@ -394,6 +399,9 @@ impl Script {
     pub(crate) fn set_perf_stats(&self, _: Option<&nsh_core::platform::PerfStats>) {}
     pub(crate) fn set_tokens(&self, value: Arc<Tokens>) {
         self.0.set_tokens(value);
+    }
+    pub(crate) fn set_appearance(&self, value: nsh_core::platform::Appearance) -> bool {
+        self.0.set_appearance(value)
     }
     pub(crate) fn take_fonts(&self, out: &mut Vec<String>) {
         self.0.take_fonts(out);

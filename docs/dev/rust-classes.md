@@ -249,6 +249,15 @@ For that, two choices of the first version change:
   the first frame; a task the call starts would first run only after it. Outside both they panic as before.
   `set_theme` stays out: JS's `setTheme` also keeps the VM's view of the active document (`turn_document`, the
   base document), which an op alone would not.
+- **The appearance JS reads**: the core's appearance (`Core::appearance`) is the one shown; JS keeps its own
+  (`env.rs` `Env::appearance`, what `colorScheme()` resolves) so `setColorScheme` shows at once. Rust's
+  `set_color_scheme` reaches it two ways. In a synchronous call, `nsh-js`'s `push_op` notes the root's
+  `Prop::Appearance` (`appearance_set_in_call`) and the call shows it as it returns (`run_sync`,
+  `show_appearance_set_in_call`): `colorScheme()` and what read it follow, an error of theirs is the call's, as
+  `setColorScheme` behaves. From a task or a component (the executor's `Action::Appearance`), the engine compares the
+  core's with the one it last gave JS after each commit (`State::js_appearance`) and hands a new one over
+  (`Host::set_appearance`, no op back; the web player's `changedAppearance`), as it hands new tokens; what read it
+  runs in the next round. In the web player a call's write shows that way too, after the turn.
 - **The VM's own state**: `sys.locals.get::<T: Local>()` is one `T` per VM, made on first use and closed
   (`Local::close`) when the VM goes, before its callbacks are released (`process`'s children).
 - **Getters of a module**: `#[getter]` on a function without JS parameters makes it a property of the module's

@@ -647,6 +647,10 @@ name, as `env.rs` does: one signal per name read, one for all when most of them 
 `theme-format.test.mjs` holds the module to `theme_format_ts`' calls and results with `NSH_BROWSER_WASM`, a turn ending
 as the engine ends one (`nsh_browser_test_turn`, `src/browser/fixtures.rs`).
 
+The app's appearance Rust sets (`set_color_scheme`) reaches the page the same way, once the core shows it:
+`Host::set_appearance` sends `"appearance"`, and `environment.js` (`changedAppearance`) shows it in `colorScheme()` as
+`setColorScheme` does, sending nothing back.
+
 ## The protocol
 
 Exports are `nsh_*` functions (`src/lib.rs`); imports are module `nsh` (`src/ffi.rs`). Every export that reaches

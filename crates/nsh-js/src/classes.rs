@@ -763,7 +763,8 @@ impl<'a> CallHost<'a> {
             .unwrap_or_else(|payload| Err(Thrown::Error(panic_message(payload))));
         let depth = &classes(self.cx).depth;
         depth.set(depth.get() - 1);
-        self.finish(result)
+        let value = self.finish(result);
+        crate::env::show_appearance_set_in_call(self.cx, value)
     }
 
     /// Sends the call `make` converts this call's values into as an op
@@ -1491,6 +1492,15 @@ impl nsh_core::element::CallTasks for Functions {
         let cx = self.cx.get();
         if cx.is_null() {
             return;
+        }
+        // Rust's `set_color_scheme`: `colorScheme()` follows when the call
+        // returns, as it follows JS's `setColorScheme`.
+        if let nsh_core::Op::SetProp {
+            id: nsh_core::ROOT_ID,
+            prop: nsh_core::Prop::Appearance(appearance),
+        } = op
+        {
+            crate::env::appearance_set_in_call(cx, appearance);
         }
         // Past the op limit the app is stopped: the op goes with it.
         if crate::dom::push_op(cx, op).is_err() {

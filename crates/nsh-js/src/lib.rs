@@ -23,6 +23,8 @@ mod class_extension_types;
 mod class_extensions;
 mod classes;
 mod clock;
+#[cfg(test)]
+mod color_scheme_from_rust;
 mod components;
 mod console;
 #[cfg(test)]
