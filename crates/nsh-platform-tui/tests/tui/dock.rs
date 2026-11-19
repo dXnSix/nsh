@@ -305,7 +305,13 @@ fn Docked() -> impl IntoElement {
     view()
         .flex_1()
         .child(text(move || {
-            format!("Layout {}", node_text(&layout.get().center))
+            let layout = layout.get();
+            let right = layout
+                .right
+                .as_ref()
+                .map(|dock| format!(" right {}", node_text(&dock.layout)))
+                .unwrap_or_default();
+            format!("Layout {}{right}", node_text(&layout.center))
         }))
         .child(
             view().flex_1().child(
@@ -380,9 +386,11 @@ fn a_tab_dragged_to_a_group_s_right_edge_outlines_the_half_and_splits_there() {
     let (tab_x, tab_y) = find(&terminal, "Tab a").expect("tab a is drawn");
     let (panel_x, panel_y) = find(&terminal, "Panel c").expect("c's panel is drawn");
     // A terminal's pointer is a mouse, so the drag arms at once; it moves
-    // to the right edge of c's content.
+    // into the right edge of c's content (its outer 35%, past column 62 of
+    // the 80), short of the band along the area's right edge (its last 4
+    // Cells), which docks the panel there instead.
     view.handle(mouse(MouseKind::Down(MouseButton::Left), tab_x + 1, tab_y));
-    let (to_x, to_y) = (78, panel_y + 1);
+    let (to_x, to_y) = (70, panel_y + 1);
     for x in (tab_x + 2..=to_x).step_by(4).chain([to_x]) {
         view.handle(mouse(MouseKind::Move, x, to_y));
     }
@@ -425,6 +433,37 @@ fn a_tab_dragged_to_a_group_s_right_edge_outlines_the_half_and_splits_there() {
             .draw(|frame| view.render(frame, frame.area()))
             .unwrap();
     }
+}
+
+/// A tab dropped in the band along the area's right edge (its last 4
+/// Cells, 32 points) docks there: a right dock is made with the panel.
+#[test]
+fn a_tab_dragged_to_the_area_s_right_edge_docks_it_there() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+    view.load(App::Rust(Root::new::<Docked>(|| ()))).unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "Panel c");
+    let (tab_x, tab_y) = find(&terminal, "Tab a").expect("tab a is drawn");
+    let (_, panel_y) = find(&terminal, "Panel c").expect("c's panel is drawn");
+    view.handle(mouse(MouseKind::Down(MouseButton::Left), tab_x + 1, tab_y));
+    let (to_x, to_y) = (78, panel_y + 1);
+    for x in (tab_x + 2..=to_x).step_by(4).chain([to_x]) {
+        view.handle(mouse(MouseKind::Move, x, to_y));
+    }
+    draw_until_true(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "the drop preview's outline did not show",
+        |t| outline_corner(t).is_some(),
+    );
+    view.handle(mouse(MouseKind::Up(MouseButton::Left), to_x, to_y));
+    draw_until(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "Layout h([*b] [*c]) right [*a]",
+    );
 }
 
 /// The dragged tab's label is drawn over the drop preview's outline, not
