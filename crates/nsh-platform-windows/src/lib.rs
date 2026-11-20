@@ -36,6 +36,8 @@ mod chrome;
 mod compose;
 mod decor;
 #[cfg(feature = "dev")]
+mod design;
+#[cfg(feature = "dev")]
 pub mod dev;
 mod file_drop;
 mod file_requests;

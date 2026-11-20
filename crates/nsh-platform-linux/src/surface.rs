@@ -363,6 +363,12 @@ impl Surface {
         self.key
     }
 
+    /// The surfaces of this (main) thread (the design host's windows).
+    #[cfg(feature = "dev")]
+    pub(crate) fn all() -> Vec<Rc<Surface>> {
+        SURFACES.with(|s| s.borrow().values().filter_map(Weak::upgrade).collect())
+    }
+
     /// The surface `key` names, while it exists.
     #[cfg(feature = "dev")]
     pub(crate) fn by_key(key: u64) -> Option<Rc<Surface>> {

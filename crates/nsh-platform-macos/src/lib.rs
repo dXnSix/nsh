@@ -32,6 +32,8 @@ mod canvas;
 mod chrome;
 mod decor;
 #[cfg(feature = "dev")]
+mod design;
+#[cfg(feature = "dev")]
 pub mod dev;
 mod file_drop;
 mod file_requests;

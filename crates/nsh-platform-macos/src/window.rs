@@ -1397,6 +1397,11 @@ fn open_window(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
     });
     let content = options.default_size.map_or(DEFAULT_SIZE, ns_size);
     let window = make_window(mtm, kind, style, content, a.focusable.unwrap_or(true));
+    // A design tool names the app's windows by their ids.
+    #[cfg(feature = "dev")]
+    if crate::design::active() {
+        crate::design::name_window(&window, &options.id);
+    }
     if let Some(panel) = window.downcast_ref::<NSPanel>() {
         // A panel stays when the app is not in front: a test's app never
         // is, and an inspector next to another app's window is common.

@@ -706,6 +706,9 @@ fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::E
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = OleInitialize(None);
     }
+    // Shown in a design tool (`NSH_DESIGN_SOCKET`): before any window opens.
+    #[cfg(feature = "dev")]
+    crate::design::start();
     if let crate::linking::Start::Forwarded = crate::linking::start(
         &options.app_id,
         &options.title,

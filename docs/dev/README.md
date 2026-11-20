@@ -29,6 +29,7 @@ For people working on NSH itself (`AGENTS.md` at the root is the short version a
 | [canvas.md](canvas.md) | `Canvas` |
 | [images.md](images.md) | Loading, decoding, caching, animated images |
 | [sandbox.md](sandbox.md) | VM limits, hardening, capabilities |
+| [design-mode.md](design-mode.md) | Design mode (fork, dev hosts): an app shown and driven in a design tool, `NSH_DESIGN_SOCKET`, the line protocol, the platforms' parts, `nsh/design` |
 | [signed-packages.md](signed-packages.md) | Keys, packages, verification, revocation |
 | [embedding.md](embedding.md) | `nsh package`, the iOS / Android SDKs, native components |
 | [tooling.md](tooling.md) | `.nsh/types`, the dev server, hot reload, symbolication |
