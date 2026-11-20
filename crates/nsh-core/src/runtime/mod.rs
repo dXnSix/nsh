@@ -41,7 +41,10 @@ mod websocket;
 mod webview;
 
 pub use tizen::{TizenHost, TizenServices, TvProduct};
-pub use updater::{PackageVersion, UpdaterHost, UpdaterSink};
+pub use updater::{
+    PackageVersion, UpdatePrompt, UpdatePromptOptions, UpdaterHost, UpdaterSink, prompt_for_update,
+    set_update_presenter,
+};
 
 /// The [`crate::element::Quotas`] kind WebSockets count under: the `websocket`
 /// module's connections and the global `WebSocket`'s (`nsh-js`) share

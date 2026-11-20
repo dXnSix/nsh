@@ -40,6 +40,7 @@ fn code() -> impl IntoElement {
 ```tsx tabs
 import { mount, signal } from "nsh";
 import { Editor } from "nsh/base";
+import { Window } from "nsh/desktop";
 
 const MAIN = `fn main() {
     println!("Hello, world!");
@@ -51,7 +52,11 @@ function App() {
   return <Editor value={source()} onChange={({ value }) => source.set(value)} language="rust" class="flex-1" />;
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
 ```
 
 The editor fills the box the app gives it (`flex-1`, a height) and scrolls its text inside: vertically always,

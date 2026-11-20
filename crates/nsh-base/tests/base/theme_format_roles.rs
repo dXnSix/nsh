@@ -12,7 +12,7 @@ use nsh_base::{DEFAULT_THEME, Theme, role, text_view, theme};
 use nsh_core::{
     Color, Hsla, Size,
     element::{
-        Patch, PatchValues, Root, Tokens, ValueType, effect, set_modifier,
+        Patch, PatchValues, Tokens, ValueType, effect, set_modifier,
         theme_convert::{self, OLD_DEFAULT},
     },
     platform::{Idiom, Os},
@@ -35,7 +35,7 @@ fn transparent() -> Color {
 /// `C` drawn as a desktop app serving nsh-base, with its own theme document
 /// `theme` (`None`: none, nsh-base's fallback is active).
 fn start<C: Component<Props = ()>>(theme: Option<String>) -> Headless {
-    let mut root = Root::of::<C>();
+    let mut root = nsh_testing::windowed_root::<C>();
     if let Some(theme) = theme {
         root = root.theme(theme);
     }

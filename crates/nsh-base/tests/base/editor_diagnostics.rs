@@ -15,7 +15,6 @@ use nsh_base::{
 };
 use nsh_core::{
     Size,
-    element::Root,
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -120,8 +119,10 @@ fn start(classes: EditorClasses) -> Headless {
         // nsh-base's default theme: the faded code is drawn in its
         // `muted-foreground`, unlike the text around it.
         ui_sets: vec![nsh_base::registry()],
-        ..EngineConfig::new(Root::new::<Harness>(move || HarnessProps {
-            classes: classes.clone(),
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<Harness>(move || {
+            HarnessProps {
+                classes: classes.clone(),
+            }
         }))
     };
     config.environment.os = Os::Linux;

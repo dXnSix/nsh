@@ -18,6 +18,7 @@ mod editor;
 mod focus_cell_size;
 mod focus_navigation;
 mod geometry;
+mod image;
 mod keyboard;
 mod menu_bar;
 mod modal_focus;

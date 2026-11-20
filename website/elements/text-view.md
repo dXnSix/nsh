@@ -50,6 +50,7 @@ fn release_notes() -> impl IntoElement {
 ```tsx tabs
 import { mount, Scroll } from "nsh";
 import { TextView } from "nsh/base";
+import { Window } from "nsh/desktop";
 
 const README = `# Release notes
 
@@ -80,7 +81,11 @@ function App() {
   );
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
 ```
 
 In Rust, `text_view()` makes one as `view()` makes a view: a setter per prop (`.markdown(..)`, `.options(..)`,

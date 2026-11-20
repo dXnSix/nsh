@@ -10,7 +10,7 @@ use std::time::Duration;
 use nsh_base::{diff_view, editor::editor, role, text_view};
 use nsh_core::{
     Color, Size,
-    element::{Patch as ThemePatch, PatchValues, Root},
+    element::{Patch as ThemePatch, PatchValues},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -73,7 +73,7 @@ fn start<C: Component<Props = ()>>(
     theme: Option<String>,
     overrides: Option<ThemePatch>,
 ) -> Headless {
-    let mut root = Root::of::<C>();
+    let mut root = nsh_testing::windowed_root::<C>();
     if let Some(theme) = theme {
         root = root.theme(theme);
     }
