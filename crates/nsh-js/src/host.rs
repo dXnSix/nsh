@@ -1622,6 +1622,19 @@ interface ImportMeta {
    * the page's on the web, `asset:/` in packaged mobile apps, so
    * `new URL("./data.json", import.meta.url)` names a file beside it. */
   readonly url: string;
+  /** The app's modules whose paths match `pattern` (`./` and `../` from this
+   * module, `/` from the app's directory; `*`, `**`, `?`, `{a,b}`, and `!` to
+   * leave some out), keyed by path as the pattern names them: each a function
+   * that imports it, or with `eager` the module itself. The patterns and
+   * options are literals: the bundler reads them. */
+  glob<M = Record<string, unknown>>(
+    pattern: string | readonly string[],
+    options?: { eager?: false; import?: string },
+  ): Record<string, () => Promise<M>>;
+  glob<M = Record<string, unknown>>(
+    pattern: string | readonly string[],
+    options: { eager: true; import?: string },
+  ): Record<string, M>;
 }
 
 declare function setTimeout(handler: (...args: any[]) => void, timeout?: number, ...args: any[]): number;

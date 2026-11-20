@@ -26,6 +26,7 @@ import CoreShader from "./core-shader";
 import CoreShaderEffects from "./core-shader-effects";
 import AssetImports from "./asset-imports";
 import ModuleUrl from "./module-url";
+import ModuleGlob from "./module-glob";
 import WebLoad from "./web-load";
 import WebEvaluate from "./web-evaluate";
 import WebAvailable from "./web-available";
@@ -55,6 +56,7 @@ const cases: Record<string, () => JSX.Element> = {
   "core-shader": CoreShader,
   "core-shader-effects": CoreShaderEffects,
   "module-url": ModuleUrl,
+  "module-glob": ModuleGlob,
   "steps": Steps,
   "web-load": WebLoad,
   "web-evaluate": WebEvaluate,

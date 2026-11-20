@@ -724,10 +724,13 @@ impl Plugin for NshPlugin {
             }
         }
         let prologue = if entry { self.prologue() } else { None };
+        // `import.meta.glob` calls become literal imports first.
+        let globbed = crate::glob::expand(args.code, source_type, path, &self.asset_root)
+            .map_err(|detail| self.fail(path, &detail))?;
         let compiled = compile_native(
             path,
             source_type,
-            args.code,
+            globbed.as_deref().unwrap_or(args.code),
             prologue.as_deref(),
             hot_key.as_deref(),
             Some(&self.rel(path)),
