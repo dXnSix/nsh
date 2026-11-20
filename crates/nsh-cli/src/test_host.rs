@@ -32,13 +32,14 @@ const CONNECT: Duration = Duration::from_secs(60);
 /// Starts the apps tests open on `target`'s host; `browser` is the one
 /// `--target web` runs them in (else the one found on this machine); `fps`
 /// has the host log its performance monitor's readings; `device` is the iOS
-/// simulator (name or UDID) or the TV `--target tizen` runs them on (its
-/// `sdb` serial); `display` (one-based) is the display the macOS and GPUI
-/// hosts open their windows on (by default a secondary one when there is
-/// one: [`opens_on_a_display`]); `foreground` lets the apps of the hosts
-/// that run them in the background ([`runs_in_background`]) become the
-/// active app; `idiom` is the one the GPUI host and the web page start them
-/// in ([`DevIdiom::for_test`]), in place of the host's own.
+/// simulator (name or UDID), the Android device (its serial) or the TV
+/// `--target tizen` runs them on (its `sdb` serial); `display` (one-based)
+/// is the display the macOS and GPUI hosts open their windows on (by default
+/// a secondary one when there is one: [`opens_on_a_display`]); `foreground`
+/// lets the apps of the hosts that run them in the background
+/// ([`runs_in_background`]) become the active app; `idiom` is the one the
+/// GPUI host and the web page start them in ([`DevIdiom::for_test`]), in
+/// place of the host's own.
 #[allow(
     clippy::too_many_arguments,
     reason = "the host's options of `nsh test`, one each"
@@ -64,8 +65,8 @@ pub(crate) fn starter(
     {
         anyhow::bail!("--fps goes with --target linux, macos, windows or ios");
     }
-    if device.is_some() && !matches!(target, Target::Ios | Target::Tizen) {
-        anyhow::bail!("--device goes with --target ios or tizen");
+    if device.is_some() && !matches!(target, Target::Ios | Target::Android | Target::Tizen) {
+        anyhow::bail!("--device goes with --target ios, android or tizen");
     }
     if display.is_some() && !opens_on_a_display(target) {
         anyhow::bail!("{DISPLAY_TARGETS}");
@@ -81,7 +82,7 @@ pub(crate) fn starter(
         // The same page with the TV shim, in the TV idiom.
         Target::TizenWeb => return crate::test_web::starter(browser, true, None),
         Target::Ios => return crate::test_ios::starter(work, fps, device),
-        Target::Android => return crate::test_android::starter(work),
+        Target::Android => return crate::test_android::starter(work, device),
         Target::Tizen => return crate::test_tizen::starter(work, device),
         _ => {}
     }
@@ -539,11 +540,11 @@ mod tests {
         }
     }
 
-    /// `--device` names an iOS simulator or the TV `--target tizen` runs
-    /// the apps on: the other targets refuse it before anything is built or
-    /// started.
+    /// `--device` names an iOS simulator, an Android device or the TV
+    /// `--target tizen` runs the apps on: the other targets refuse it before
+    /// anything is built or started.
     #[test]
-    fn a_device_is_for_the_tizen_target_only_or_ios() {
+    fn device_is_for_the_mobile_hosts_and_tizen_only() {
         for target in [
             Target::Macos,
             Target::Linux,
@@ -552,7 +553,6 @@ mod tests {
             Target::Tui,
             Target::Web,
             Target::TizenWeb,
-            Target::Android,
         ] {
             let err = starter(
                 target,
@@ -567,7 +567,7 @@ mod tests {
             .err();
             assert_eq!(
                 err.map(|e| e.to_string()).as_deref(),
-                Some("--device goes with --target ios or tizen"),
+                Some("--device goes with --target ios, android or tizen"),
                 "{target:?}"
             );
         }

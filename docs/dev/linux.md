@@ -174,9 +174,12 @@ bubble back up. What NSH adds:
   (`key_focus::is_stop`), the inputs' editors and each native component's first focusable widget, a scroll view's
   content as it is on screen (`NshView::reading_children`); GTK's own chain, which sorts a container's children by
   position, is not used for them (before 2026-11-10 it was), only inside a native component. Hidden screens are not
-  child visible, and the views under the newest dialog cannot take the focus (`can-focus`). A removed view takes the
-  focus inside it away at once (`input::removed`), as a removed DOM element does, instead of GTK handing it to the next
-  field. Alerts (`system.rs`) move it between their own buttons. A stop (`key_focus::watch`) and an input (`text_input`)
+  child visible, and the views under the newest dialog cannot take the focus (`can-focus`). Closing or releasing a
+  dialog restores the prior keyboard focus inside its window when no other control has taken it and no newer modal
+  remains above it; editor and rich-editor caret sinks reject pointer targeting (`can_target == false`) but still
+  regain keyboard focus, while hidden, zero-sized, disabled, dying or detached targets remain unfocused. A removed
+  view takes the focus inside it away at once (`input::removed`), as a removed DOM element does, instead of GTK
+  handing it to the next field. Alerts (`system.rs`) move it between their own buttons. A stop (`key_focus::watch`) and an input (`text_input`)
   follow the window's `notify::focus-widget` and report `onBlur` in its first handlers and `onFocus` in `after` ones, so
   the view the focus left reports first whichever handler was connected first (before 2026-11-10 a stop's `onFocus`
   could come before the field's `onBlur`, and a field's `onBlur` handler would then undo it). Return and Space press

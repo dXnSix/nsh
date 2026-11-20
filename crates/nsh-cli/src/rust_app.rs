@@ -91,6 +91,27 @@ pub(crate) fn set_release_hosts() {
     RELEASE_HOSTS.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// What `nsh package` names and versions the app (`--id`, `--name`,
+/// `--version`, `--build`), so a Rust app's root reports the package's
+/// identity (`nsh_core::element::app_info`), as a TSX app's `appInfo()`
+/// does; `None`: not packaging, `nsh.json`'s.
+static PACKAGE: std::sync::Mutex<Option<PackageIdentity>> = std::sync::Mutex::new(None);
+
+/// `nsh package`'s identity flags ([`PACKAGE`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PackageIdentity {
+    pub(crate) id: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) version: Option<String>,
+    pub(crate) build: Option<u32>,
+}
+
+/// Makes this command a package of `identity` ([`PACKAGE`]), before the
+/// workspace is written.
+pub(crate) fn set_package_identity(identity: PackageIdentity) {
+    *PACKAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity);
+}
+
 /// The platform crate features `nsh package` builds the release runner
 /// with (`crate::native_features`); `None`: all of them.
 static RUNNER_FEATURES: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
@@ -225,6 +246,31 @@ pub(crate) fn may_make_web_view(app: &RustApp) -> bool {
         })
     }
     app.watched.iter().any(|dir| spells(dir))
+}
+
+/// The cargo arguments that turn web views on in a Rust app's runner
+/// (`rust-<platform>`) on Linux and Windows, the platform crates whose
+/// `webview` is a feature (#2706). A package keeps it when
+/// [`set_runner_features`] chose it; `nsh run`, which chooses nothing, when
+/// the app's code may make a web view ([`may_make_web_view`]), as a package
+/// would, so the development runner does not show a placeholder where the
+/// released one shows the page.
+fn rust_runner_web_view(platform: Platform, may: impl FnOnce() -> bool) -> Vec<&'static str> {
+    let feature = match platform {
+        Platform::Linux => "nsh-platform-linux/webview",
+        Platform::Windows => "nsh-platform-windows/webview",
+        _ => return Vec::new(),
+    };
+    let chosen = RUNNER_FEATURES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|chosen| chosen.iter().any(|f| f == "webview"));
+    if chosen.unwrap_or_else(may) {
+        vec!["--features", feature]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(crate) fn current() -> Option<RustApp> {
@@ -896,6 +942,10 @@ pub(crate) struct RootConfig {
     /// The app's translations (`locales/`) as JSON, written to the
     /// workspace and compiled into the runners.
     translations: Option<PathBuf>,
+    /// What the root reports as the app (`appInfo()`'s JSON): `nsh.json`'s
+    /// in development, the package's when this command packages
+    /// ([`PACKAGE`]).
+    app_info: String,
 }
 
 /// Whether `entry` is a Rust app's (`entry::resolve` gives its `nsh.json`
@@ -1299,6 +1349,8 @@ pub(crate) fn root_config(
         write(&path, &nsh_i18n::translations_json(&translations))?;
         Some(path)
     };
+    let package = PACKAGE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let app_info = app_info_json(dir, config, package)?;
     Ok(RootConfig {
         component,
         theme,
@@ -1311,7 +1363,52 @@ pub(crate) fn root_config(
         application,
         capabilities,
         translations,
+        app_info,
     })
+}
+
+/// What a Rust app's root reports as the app (`appInfo()`'s JSON): in
+/// development (`nsh run`, `nsh dev`, `nsh test`) `nsh.json`'s `"id"`,
+/// `"name"`, `"version"` and `"build"` (`null` where it gives none), as a
+/// TSX app's development build reports them; when this command packages
+/// ([`PACKAGE`]: `package`), the package's identity with the defaults the
+/// package writers use, and not a development build. The workspace is
+/// written again by every command, so a runner never keeps another
+/// command's.
+fn app_info_json(
+    dir: &Path,
+    config: &serde_json::Value,
+    package: Option<PackageIdentity>,
+) -> anyhow::Result<String> {
+    let info = match package {
+        Some(identity) => {
+            let entry = dir.join("nsh.json");
+            let mut app = crate::package::read_config(&entry)?;
+            app.id = identity.id.or(app.id);
+            app.name = identity.name.or(app.name);
+            app.version = identity.version.or(app.version);
+            app.build = identity.build.or(app.build);
+            let info = crate::build::app_info(&entry, &app);
+            serde_json::json!({
+                "id": info.id,
+                "name": info.name,
+                "version": info.version,
+                "build": info.build,
+                "development": false,
+            })
+        }
+        None => {
+            let text = |key: &str| config.get(key).and_then(|v| v.as_str());
+            serde_json::json!({
+                "id": text("id"),
+                "name": text("name"),
+                "version": text("version"),
+                "build": config.get("build").and_then(|v| v.as_u64()),
+                "development": true,
+            })
+        }
+    };
+    Ok(info.to_string())
 }
 
 /// nsh's crates an app's crate may depend on ([`Nsh::of`]; built against a
@@ -1908,6 +2005,7 @@ impl RustApp {
             !rest.starts_with("target")
                 && !rest.starts_with(".nsh")
                 && !rest.starts_with(".git")
+                && !crate::dev::in_nested_checkout(dir, path)
                 && (rest.starts_with("assets")
                     || path.extension().is_some_and(|e| e == "rs")
                     || path.file_name().is_some_and(|n| n == "Cargo.toml"))
@@ -3376,7 +3474,15 @@ opt-level = \"s\"
             if release { "" } else { " (debug)" },
             crate::runtime::other_triple(platform, triple)
         );
-        self.build(&self.workspace, &self.bin(dir), triple, release, &[], &what)
+        let web_view = rust_runner_web_view(platform, || may_make_web_view(self));
+        self.build(
+            &self.workspace,
+            &self.bin(dir),
+            triple,
+            release,
+            &web_view,
+            &what,
+        )
     }
 
     /// Waits until `stop` returns true (or the user stops the command);
@@ -3838,6 +3944,7 @@ pub(crate) fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     if let Some(id) = &root.app_id {
         make.push_str(&format!("\n        .app_id({id:?})"));
     }
+    make.push_str(&format!("\n        .app_info_json({:?})", root.app_info));
     if let Some(translations) = &root.translations {
         make.push_str(&format!(
             "\n        .translations_json(include_str!({:?}))",
@@ -4160,8 +4267,14 @@ mod tests {
 
     use super::{AppCrate, Nsh, RootConfig, RustApp};
 
+    /// Serialises the tests that set [`super::RUNNER_FEATURES`].
+    static RUNNER_FEATURES_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_release_runner_builds_with_the_chosen_features() {
+        let _guard = RUNNER_FEATURES_TEST
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert!(super::runner_feature_args("nsh-platform-windows").is_empty());
         super::set_runner_features(vec!["js".into(), "net".into(), "svg".into(), "plot".into()]);
         let args = super::runner_feature_args("nsh-platform-windows");
@@ -4195,6 +4308,36 @@ mod tests {
             super::runner_feature_args("nsh-platform-android")[2],
             "js,plot,svg"
         );
+        *super::RUNNER_FEATURES.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn a_rust_runner_turns_web_views_on_like_its_package() {
+        use crate::runtime::Platform;
+        let _guard = RUNNER_FEATURES_TEST
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *super::RUNNER_FEATURES.lock().unwrap() = None;
+        // `nsh run`: when the app's code may make a web view (#2706).
+        assert_eq!(
+            super::rust_runner_web_view(Platform::Linux, || true),
+            ["--features", "nsh-platform-linux/webview"]
+        );
+        assert_eq!(
+            super::rust_runner_web_view(Platform::Windows, || true),
+            ["--features", "nsh-platform-windows/webview"]
+        );
+        assert!(super::rust_runner_web_view(Platform::Linux, || false).is_empty());
+        // Web views are no feature on macOS.
+        assert!(super::rust_runner_web_view(Platform::MacOs, || true).is_empty());
+        // A package: what it chose, whatever the scan says.
+        super::set_runner_features(vec!["webview".into()]);
+        assert_eq!(
+            super::rust_runner_web_view(Platform::Linux, || false).len(),
+            2
+        );
+        super::set_runner_features(vec!["js".into()]);
+        assert!(super::rust_runner_web_view(Platform::Linux, || true).is_empty());
         *super::RUNNER_FEATURES.lock().unwrap() = None;
     }
 
@@ -4447,6 +4590,7 @@ mod tests {
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             };
             let app = app(&dir, &[(package, dir.join("native"))], Some(root));
             app.write_workspace().unwrap();
@@ -4717,6 +4861,7 @@ mod tests {
                 application: Some(r#"{"quitMode":"platform"}"#.into()),
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             },
         );
         for line in [
@@ -4730,11 +4875,54 @@ mod tests {
             ".status_bar(",
             ".app_id(\"com.example.app\")",
             ".url_schemes([\"myapp\"])",
+            r#".app_info_json("{}")"#,
             ".status_bar(nsh_core::StatusBarSetting::default().foreground(nsh_core::StatusBarStyle::Light).hidden(false))",
             r#".main_window_json("{\"defaultSize\":{\"width\":900,\"height\":600},\"title\":\"Notes\"}")"#,
         ] {
             assert!(code.contains(line), "no {line:?} in\n{code}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rust_app_reports_nsh_jsons_or_its_packages_identity() {
+        let dir = std::env::temp_dir().join(format!("nsh-rust-app-info-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = |json: &str, package| {
+            std::fs::write(dir.join("nsh.json"), json).unwrap();
+            let config = serde_json::from_str(json).unwrap();
+            let info = super::app_info_json(&dir, &config, package).unwrap();
+            serde_json::from_str::<serde_json::Value>(&info).unwrap()
+        };
+        let json = r#"{ "root": "App", "id": "com.example.orders", "name": "Orders", "version": "2.1.0" }"#;
+        // In development: `nsh.json`'s, as a TSX app's `appInfo()` reports it.
+        assert_eq!(
+            read(json, None),
+            serde_json::json!({
+                "id": "com.example.orders", "name": "Orders", "version": "2.1.0", "build": null,
+                "development": true,
+            })
+        );
+        // A package's, its flags first.
+        let flags = super::PackageIdentity {
+            version: Some("3.0.0".into()),
+            build: Some(9),
+            ..Default::default()
+        };
+        assert_eq!(
+            read(json, Some(flags)),
+            serde_json::json!({
+                "id": "com.example.orders", "name": "Orders", "version": "3.0.0", "build": 9,
+                "development": false,
+            })
+        );
+        // With the package writers' defaults where nothing gives them.
+        let info = read(
+            r#"{ "root": "App", "id": "com.example.orders", "name": "Orders" }"#,
+            Some(super::PackageIdentity::default()),
+        );
+        assert_eq!(info["version"], "1.0.0");
+        assert_eq!(info["build"], 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4798,6 +4986,7 @@ mod tests {
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             }),
         );
         app.write_workspace().unwrap();
@@ -5293,6 +5482,7 @@ mod tests {
             application: None,
             capabilities: None,
             translations: None,
+            app_info: "{}".into(),
         });
         app.tizen_workspace().unwrap();
         let lib = read("tizen/tizen-lib/lib.rs");
@@ -5971,6 +6161,7 @@ panic = \"abort\"
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             }),
         );
         app.write_workspace().unwrap();
@@ -6534,6 +6725,7 @@ panic = \"abort\"
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             }
         }
 

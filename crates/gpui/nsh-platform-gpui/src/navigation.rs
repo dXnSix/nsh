@@ -1426,6 +1426,22 @@ pub(crate) fn focus_scope(surface: &Surface) -> NshView {
     surface.nav.borrow().focus_scope(surface, window)
 }
 
+/// The focus scope of the window input is entering, else of the window
+/// with the keyboard focus (while a batch is applied, which enters none).
+pub(crate) fn active_focus_scope(surface: &Surface) -> NshView {
+    let window = crate::window::entered(surface)
+        .unwrap_or_else(|| crate::window::focused_root(surface));
+    surface.nav.borrow().focus_scope(surface, window)
+}
+
+/// The focus scope of the window `view` shows in, whichever window input
+/// is entering now (none while a batch is applied): its newest modal, else
+/// its whole tree.
+pub(crate) fn focus_scope_of(surface: &Surface, view: &NshView) -> NshView {
+    let window = crate::window::root_of(surface, view);
+    surface.nav.borrow().focus_scope(surface, window)
+}
+
 /// Whether `view` is in the focus scope ([`focus_scope`]): not under the
 /// newest modal.
 pub(crate) fn in_focus_scope(surface: &Surface, view: &NshView) -> bool {

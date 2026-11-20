@@ -120,10 +120,10 @@ pub(crate) fn test(
     if device.is_some()
         && !matches!(
             target,
-            Some(crate::run::Target::Ios | crate::run::Target::Tizen)
+            Some(crate::run::Target::Ios | crate::run::Target::Android | crate::run::Target::Tizen)
         )
     {
-        bail!("--device goes with --target ios or tizen");
+        bail!("--device goes with --target ios, android or tizen");
     }
     if display.is_some() && !target.is_some_and(crate::test_host::opens_on_a_display) {
         bail!("{}", crate::test_host::DISPLAY_TARGETS);
@@ -979,7 +979,7 @@ test src/lib.rs - App (line 3) ... ok
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(
             err.map(|e| e.to_string()).as_deref(),
-            Some("--device goes with --target ios or tizen")
+            Some("--device goes with --target ios, android or tizen")
         );
     }
 

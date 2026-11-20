@@ -234,7 +234,7 @@ impl DevSession {
             {
                 return Err(crate::rust_app::Restart.into());
             }
-            if !is_source(&event) {
+            if !is_source(&event, &self.src_dir) {
                 continue;
             }
             // A Rust change saved with this one (a checkout, a formatter)
@@ -587,9 +587,49 @@ fn glob_watcher(
                 .any(|p| globs.iter().any(|g| g.matches(p)))
             {
                 let _ = tx.send(event);
+                return;
+            }
+            // A directory made under a glob's: inotify watches it only
+            // once it reports it, so the files already written in it come
+            // without events of their own. They are looked for here.
+            if matches!(event.kind, notify::EventKind::Create(_)) {
+                let mut found = Vec::new();
+                for path in &event.paths {
+                    if path.is_dir() && globs.iter().any(|g| path.starts_with(&g.dir)) {
+                        globbed_files(path, &globs, &mut found);
+                    }
+                }
+                if !found.is_empty() {
+                    let mut files = notify::Event::new(notify::EventKind::Create(
+                        notify::event::CreateKind::File,
+                    ));
+                    files.paths = found;
+                    let _ = tx.send(files);
+                }
             }
         }
     })
+}
+
+/// The files below `dir` that `globs` match, into `found`. The directories
+/// the globs' search skips (`node_modules`, `target`, a dot directory) are
+/// not entered unless a pattern names them.
+fn globbed_files(dir: &Path, globs: &[nsh_bundler::GlobDir], found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let skipped = name.starts_with('.') || name == "node_modules" || name == "target";
+            if !skipped || globs.iter().any(|g| g.pattern.contains(name.as_str())) {
+                globbed_files(&path, globs, found);
+            }
+        } else if globs.iter().any(|g| g.matches(&path)) {
+            found.push(path);
+        }
+    }
 }
 
 /// Watches, recursively, the directories of `globs` not `watched` yet. One
@@ -617,15 +657,37 @@ fn watch_globs(
     }
 }
 
-fn is_source(event: &notify::Event) -> bool {
+fn is_source(event: &notify::Event, root: &Path) -> bool {
     event.paths.iter().any(|p| {
         !p.components()
             .any(|c| c.as_os_str() == ".nsh" || c.as_os_str() == "node_modules")
+            && !in_nested_checkout(root, p)
             && matches!(
                 p.extension().and_then(|e| e.to_str()),
                 Some("ts" | "tsx" | "js" | "jsx" | "json")
             )
     })
+}
+
+/// Whether `path` is in another Git checkout kept below `root` (a
+/// `git worktree` or a clone in `.worktrees/`): a directory between them
+/// holds its own `.git`. Its edits are not the app's.
+pub(crate) fn in_nested_checkout(root: &Path, path: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut dir = root.to_path_buf();
+    let mut parts = rest.components().peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            break;
+        }
+        dir.push(part);
+        if dir.join(".git").exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Private IPv4 addresses of physical network interfaces (`en*`; on Linux
@@ -899,5 +961,31 @@ mod tests {
             .unwrap();
         let deadline = Instant::now() + super::DEBOUNCE;
         assert!(!super::rust_changed_until(&rx, deadline, is_rust));
+    }
+
+    #[test]
+    fn edits_in_a_checkout_kept_in_the_app_do_not_rebuild_it() {
+        use notify::{
+            Event, EventKind,
+            event::{DataChange, ModifyKind},
+        };
+
+        let dir = std::env::temp_dir().join(format!("nsh-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join(".worktrees/feature");
+        std::fs::create_dir_all(nested.join("src")).unwrap();
+        std::fs::write(nested.join(".git"), "gitdir: elsewhere\n").unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let saved = |path: std::path::PathBuf| {
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(path)
+        };
+        assert!(super::is_source(&saved(dir.join("App.tsx")), &dir));
+        assert!(super::is_source(&saved(dir.join("src/view.tsx")), &dir));
+        assert!(!super::is_source(&saved(nested.join("App.tsx")), &dir));
+        assert!(!super::is_source(&saved(nested.join("src/view.tsx")), &dir));
+        // The app's own `.git` is not a checkout below it.
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        assert!(super::is_source(&saved(dir.join("App.tsx")), &dir));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
