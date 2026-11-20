@@ -921,7 +921,18 @@ what changed.
   `accessibilityState`); `disabled`, the state flags and projected states hold when either sets them; both sides'
   listeners run, the component's first. The app's element may be a component's host (a `Button` as a popover's
   trigger): its own side is its view's root, the slot's component hears its events first, then its own (touch handlers run from the inner component outward, and both participate in responder negotiation); left on the
-  holder, the slot's presses would never come: the root is the innermost press target. JS's ops on it go through the core (`Core::js_slot_op`), which keeps JS's
+  holder, the slot's presses would never come: the root is the innermost press target. A component that only places
+  its children is looked through (`Core::placed_through`): when its view's root is a view with nothing of its own (no
+  style, class, prop, ref, listener, responder, text or binding) that holds nothing but the place of the children, and
+  the app gave it exactly one element, that element is the target, as deep as such components nest. Such a host draws
+  and hears nothing its view decides (a wrapper that marks a place, a provider of context), so the app's element in it
+  is what the user presses and focuses, and where the app's state classes are; left on the wrapper, the slot's presses
+  would stop at whatever in it listens to presses itself. With no child or several, or with anything of its own on or
+  in its root, the host is the target as any component's. The target follows the wrapper's content as it follows the
+  holder's (`Core::retarget_through`: JS inserting or removing in the wrapper, its view being made), what the app
+  gives the wrapper's host (`class`, `style`, `testID`, the mouse over it) stays on the host, and an overlay anchored
+  to what the slot's element draws goes by the wrapper around the element, so by the element's own box
+  (`Core::content_anchor`). JS's ops on it go through the core (`Core::js_slot_op`), which keeps JS's
   own values and sends the combination, and puts them back when the component's part leaves the element (another
   element joins the holder, the element leaves it, the slot or the component goes). JS's values from before are read
   from the node (accessibility, `disabled`, `pointerEvents`, `focusable`, projected states); another host prop the

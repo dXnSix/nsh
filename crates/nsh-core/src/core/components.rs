@@ -1732,6 +1732,7 @@ impl<M: TextEngine> Core<M> {
                     Placement::Each => self.detach_id(child),
                     Placement::None => self.detach_id(child),
                 }
+                self.retarget_through(parent);
                 Ok(None)
             }
             Op::Remove { parent, child } if self.is_host(parent) => {
@@ -1745,6 +1746,7 @@ impl<M: TextEngine> Core<M> {
                     self.components.mark(parent);
                 }
                 self.unplace(place, child);
+                self.retarget_through(parent);
                 Ok(None)
             }
             Op::SetProp {
@@ -2304,6 +2306,9 @@ impl<M: TextEngine> Core<M> {
             inst.dirty = false;
             let failed = self.render(host, &mut inst);
             self.components.instances.insert(host, inst);
+            // Its view only places its children: a slot it is the one
+            // element of goes through it now.
+            self.retarget_through(host);
             if let Some(message) = failed {
                 self.component_failed(host, message);
             }
@@ -2991,6 +2996,45 @@ impl<M: TextEngine> Core<M> {
         let root = self.reconcile_node(Some(prev), el, part, host, inst);
         inst.root = Some(root);
         self.children_placed(host, inst, old_place);
+    }
+
+    /// Whether the view of the component on host `id` only places its
+    /// children: its root is a view with nothing of its own (no style,
+    /// class, prop, ref, listener, responder, text or binding), and all it
+    /// holds is the place of the children. Such a host draws and hears
+    /// nothing its view decides; false until its view is made.
+    pub(super) fn places_children_only(&self, id: NodeId) -> bool {
+        let Some(inst) = self.components.instances.get(&id) else {
+            return false;
+        };
+        let Some(root) = &inst.root else {
+            return false;
+        };
+        matches!(inst.inner, Inner::Component(_))
+            && inst.rooted.is_none()
+            && inst.above.is_none()
+            && root.part == Part::Node
+            && root.tag == Tag::View
+            && root.text.is_none()
+            && root.attrs == Attrs::default()
+            && root.style.is_empty()
+            && root.events == EventMask::default()
+            && !inst.bound.contains_key(&id)
+            && matches!(&root.children[..], [children] if children.part == Part::Children)
+    }
+
+    /// The app's one element in host `id`, when its component only places
+    /// its children ([`Self::places_children_only`]) and the app gave it
+    /// exactly one: what a slot's props go to in its place
+    /// ([`Self::slot_target_of`]).
+    pub(super) fn placed_through(&self, id: NodeId) -> Option<NodeId> {
+        if !self.places_children_only(id) {
+            return None;
+        }
+        match self.components.instances[&id].js_children[..] {
+            [child] => Some(child),
+            _ => None,
+        }
     }
 
     /// The component whose view makes host `id`'s node: its own, or the

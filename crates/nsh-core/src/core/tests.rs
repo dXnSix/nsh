@@ -51641,3 +51641,6 @@ fn unfocused_keys_follow_named_window_content_changes() {
     c.apply(capture(KeyCapture::None)).unwrap();
     assert_eq!(mounted_content(&c.commit().unwrap()), Some(None));
 }
+
+#[path = "slot_through_tests.rs"]
+mod slot_target_through_components;

@@ -19,6 +19,7 @@ pub(crate) fn registry() -> Registry {
         .register::<Button>()
         .register::<Card>()
         .register::<Disclosure>()
+        .register::<Passage>()
         .register::<Field>()
         .register::<Group>()
         .register::<ListView>()
@@ -184,6 +185,23 @@ pub(crate) fn Disclosure(props: DisclosureProps) -> impl IntoElement {
             })
             .on_press(move |_: &()| open.update(|o| *o = !*o))
     }))
+}
+
+// --- Passage: a view that only places its children --------------------------
+
+/// The app's content, with nothing of its own.
+#[derive(Debug, Clone, PartialEq, Props)]
+pub(crate) struct PassageProps {
+    /// The content.
+    pub(crate) children: Prop<Children>,
+}
+
+/// Its children in its root ([`PassageProps`]), which has no style, prop
+/// or listener: a slot's props go through it to the app's one element in
+/// it.
+#[component]
+pub(crate) fn Passage(props: PassageProps) -> impl IntoElement {
+    view().child(props.children)
 }
 
 // --- Field: a slot placed as it is, in a row -------------------------------
