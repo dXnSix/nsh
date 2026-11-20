@@ -552,3 +552,151 @@ fn nested_hot_components_render_the_stacks_screen() {
     assert!(errors.try_recv().is_err(), "no errors");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+const GLOB_APP: &str = r#"
+import { mount, signal, Text, View } from "nsh";
+import { pages } from "./pages";
+
+const titles = signal("");
+const n = signal(0);
+Promise.allSettled(Object.keys(pages).map((key) => pages[key]())).then((all) =>
+  titles.set(all.map((p: any) => (p.status === "fulfilled" ? p.value.title : "x")).join(",")),
+);
+
+function App() {
+  return (
+    <View>
+      <Text onPress={() => n.set(n() + 1)}>taps {n()}</Text>
+      <Text>pages {titles()}</Text>
+    </View>
+  );
+}
+
+mount(App);
+"#;
+
+/// The engine running `code`, with its batches, failed updates and errors.
+fn start(code: String, map: Option<String>) -> (Engine, Receiver<MountBatch>, Receiver<()>) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let (failed_tx, failed) = crossbeam_channel::unbounded();
+    let (errors_tx, _errors) = crossbeam_channel::unbounded();
+    let mut bundle = Bundle::source(code);
+    if let Some(map) = map {
+        bundle = bundle.with_source_map(map);
+    }
+    let config = EngineConfig {
+        app: nsh_engine::App::Js(bundle),
+        viewport: Size::new(px(390.0), px(844.0)),
+        trace: false,
+        content_culling: false,
+        network: None,
+        websocket: None,
+        refuse_connections: None,
+        filesystem: None,
+        assets: None,
+        environment: Default::default(),
+        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
+        limits: nsh_engine::Limits::default(),
+        ui_sets: Vec::new(),
+        runtime: None,
+        support_dir: None,
+        cache: nsh_engine::CacheOptions::off(),
+        storage: None,
+        clock: Default::default(),
+        context: Default::default(),
+        pinned: Default::default(),
+        clipboard: None,
+        host: Default::default(),
+        picker: None,
+        speech: None,
+        audio: None,
+        windows: None,
+        login_item: None,
+        data_dir: None,
+    };
+    let engine = Engine::start(
+        config,
+        || ApproxTextEngine,
+        ChannelSink(tx, failed_tx, errors_tx),
+    )
+    .unwrap();
+    (engine, rx, failed)
+}
+
+/// An app listing its pages with `import.meta.glob`: a page file added or
+/// removed while it runs is a hot update in place (the module that globs
+/// and its importers run again, their top-level signals kept), and a page
+/// that throws rejects only its own import.
+#[test]
+fn a_glob_takes_files_added_and_removed_in_place() {
+    let dir = std::env::temp_dir().join(format!("nsh-hot-glob-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("pages")).unwrap();
+    std::fs::write(dir.join("App.tsx"), GLOB_APP).unwrap();
+    std::fs::write(
+        dir.join("pages.ts"),
+        "export const pages = import.meta.glob(\"./pages/*.tsx\");\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("pages/A.tsx"), "export const title = \"a\";\n").unwrap();
+
+    let mut bundle =
+        nsh_bundler::bundle_hot(&dir.join("App.tsx"), &[nsh_base::registry().into()]).unwrap();
+    let (code, map) = bundle.script();
+    let (engine, rx, failed) = start(code, map);
+    let control = engine.control();
+    let mut screen = Screen::default();
+    drain(&rx, &mut screen);
+    assert_eq!(screen.texts(), ["pages a", "taps 0"]);
+    control.dispatch_event(
+        screen.find("taps").unwrap(),
+        EventKind::Press,
+        EventPayload::None,
+    );
+    drain(&rx, &mut screen);
+    assert_eq!(screen.texts(), ["pages a", "taps 1"]);
+
+    // A new page comes in place: the app keeps its state.
+    std::fs::write(dir.join("pages/B.tsx"), "export const title = \"b\";\n").unwrap();
+    control.hot_update(update(&dir, &mut bundle, 1).unwrap());
+    drain(&rx, &mut screen);
+    assert_eq!(screen.texts(), ["pages a,b", "taps 1"]);
+
+    // One that throws as it loads rejects its own import alone.
+    std::fs::write(
+        dir.join("pages/C.tsx"),
+        "throw new Error(\"broken page\");\n",
+    )
+    .unwrap();
+    control.hot_update(update(&dir, &mut bundle, 2).unwrap());
+    drain(&rx, &mut screen);
+    assert_eq!(screen.texts(), ["pages a,b,x", "taps 1"]);
+
+    // A page removed leaves the list.
+    std::fs::remove_file(dir.join("pages/A.tsx")).unwrap();
+    std::fs::remove_file(dir.join("pages/C.tsx")).unwrap();
+    control.hot_update(update(&dir, &mut bundle, 3).unwrap());
+    drain(&rx, &mut screen);
+    assert_eq!(screen.texts(), ["pages b", "taps 1"]);
+    assert!(failed.try_recv().is_err(), "no update reloaded the app");
+
+    // A release bundle holds the matched modules and runs each when it is
+    // first imported.
+    std::fs::write(
+        dir.join("pages/C.tsx"),
+        "throw new Error(\"broken page\");\n",
+    )
+    .unwrap();
+    let release = nsh_bundler::bundle(&nsh_bundler::BundleOptions {
+        entry: dir.join("App.tsx"),
+        minify: true,
+        ui_sets: vec![nsh_base::registry().into()],
+        ..Default::default()
+    })
+    .unwrap();
+    let (_engine, rx, _) = start(release.code, None);
+    let mut screen = Screen::default();
+    drain(&rx, &mut screen);
+    assert_eq!(screen.texts(), ["pages b,x", "taps 0"]);
+    let _ = std::fs::remove_dir_all(dir);
+}

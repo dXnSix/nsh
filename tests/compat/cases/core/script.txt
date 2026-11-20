@@ -377,6 +377,11 @@ expect File: asset:/data/model.bin
 tap id:case-module-url
 expect Module URL: true
 covers [nsh:rt] metaUrl
+# module-glob
+tap id:case-module-glob
+expect Glob keys: ./glob/a.ts,./glob/b.ts
+expect Glob eager: a,b
+expect Glob loaded: a,b
 # steps
 tap id:case-steps
 log steps: mounted
