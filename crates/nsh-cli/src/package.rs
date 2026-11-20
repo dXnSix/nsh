@@ -880,11 +880,12 @@ impl AppConfig {
     }
 }
 
-/// Fails when the `nsh.json` next to `entry` asks for NSH versions
-/// (`"nsh": ">=0.5"`) this CLI is not one of, with one message that names
-/// both, before a build fails on what the other version lacks.
+/// Fails when the app's `nsh.json` (beside `entry`, or in `--app`'s
+/// directory) asks for NSH versions (`"nsh": ">=0.5"`) this CLI is not one
+/// of, with one message that names both, before a build fails on what the
+/// other version lacks.
 pub(crate) fn check_nsh_version(entry: &Path) -> anyhow::Result<()> {
-    let dir = entry.parent().unwrap_or(Path::new("."));
+    let dir = &crate::entry::app_dir(entry);
     let path = dir.join("nsh.json");
     let Ok(text) = fs::read_to_string(&path) else {
         return Ok(());
@@ -920,9 +921,10 @@ fn nsh_version_error(required: &serde_json::Value, version: &str) -> Option<Stri
     (!req.matches(&this)).then(|| format!("this app requires nsh {text}; this is nsh {version}"))
 }
 
-/// Reads `nsh.json` next to `entry`, if any; relative paths become absolute.
+/// Reads the app's `nsh.json` (next to `entry`, or in `--app`'s
+/// directory), if any; relative paths become absolute.
 pub(crate) fn read_config(entry: &Path) -> anyhow::Result<AppConfig> {
-    let dir = entry.parent().unwrap_or(Path::new("."));
+    let dir = &crate::entry::app_dir(entry);
     let path = dir.join("nsh.json");
     let Ok(text) = fs::read_to_string(&path) else {
         return Ok(AppConfig {
@@ -1175,9 +1177,7 @@ fn warn_ignored(path: &Path, ignored: &[String]) {
 /// file must be inside the app's directory, symbolic links resolved, as the
 /// page ships it as it is.
 pub(crate) fn web_host_module(entry: &Path, host: &Path) -> anyhow::Result<PathBuf> {
-    // `App.tsx`'s parent is the empty path, which does not canonicalize.
-    let dir = entry.parent().filter(|d| !d.as_os_str().is_empty());
-    let dir = dunce::canonicalize(dir.unwrap_or(Path::new(".")))
+    let dir = dunce::canonicalize(crate::entry::app_dir(entry))
         .with_context(|| format!("the app's directory of {}", entry.display()))?;
     let module = dunce::canonicalize(host)
         .with_context(|| format!("nsh.json web.host {}", host.display()))?;
@@ -1195,9 +1195,8 @@ pub(crate) fn web_host_module(entry: &Path, host: &Path) -> anyhow::Result<PathB
 /// directory name and `com.example.<name>`.
 pub(crate) fn name_and_id(entry: &Path, config: &AppConfig) -> (String, String) {
     let name = config.name.clone().unwrap_or_else(|| {
-        entry
-            .parent()
-            .and_then(|d| d.file_name())
+        crate::entry::app_dir(entry)
+            .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "App".to_owned())
     });

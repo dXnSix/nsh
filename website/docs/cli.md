@@ -79,7 +79,7 @@ Apps whose Rust crates depend on NSH through Git use the checkout Cargo resolves
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop]
+nsh run [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop]
 ```
 
 ```sh
@@ -96,6 +96,7 @@ On the native window and mobile targets, a Rust app (`nsh.json` `"root"`, [Build
 |---|---|---|
 | `--target <TARGET>` | `macos` on macOS, `linux` on Linux, `windows` on Windows | `catalyst`: the Mac Catalyst host, an iPhone-sized window (390×844). `ios`: the host in an iOS simulator. `android`: the host on an Android device or emulator. `macos`: the AppKit host, a 1200×800 window ([macOS](./macos.md)). `linux`: the GTK host, a 390×844 window ([Linux](./linux.md)). `windows`: the Win32 host, a 1200×800 window ([Windows](./windows.md)). `gpui`: the GPUI host, a 1200×800 window, on macOS, Windows or Linux, showing a TSX app as GPUI apps that embed it show it ([GPUI](./gpui.md)). `tui`: the host in the current terminal ([TUI](./tui.md)). `web`: the dev server's page, at the address it prints ([Web](./web.md#develop-in-the-browser)). `tizen-web`: the same page as a Samsung TV's, in the TV idiom, in a browser here and, with `nsh.json` `tizen.signing`, on the TV ([Web](./web.md#samsung-tvs)). `tizen`: NSH's development package on a Samsung TV or the Tizen emulator, natively, installed and connected over `sdb` (needs `nsh.json` `tizen.signing`; [Tizen](./tizen.md)). Any other name runs the platform of that name built outside NSH ([External targets](#external-targets)). |
 | `--device <DEVICE>` | | iOS simulator to use, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. With `tizen-web` and `tizen`: the TV's `sdb` serial (`192.168.1.5:26101`; `tizen`'s default: the only one `sdb devices` lists). |
+| `--app <DIR>` | The entry's directory | The app's directory, for an entry kept outside it, such as a design tool's: `nsh run ~/tool/Stage.tsx --app my-app`. The app's `nsh.json`, crates, assets, translations and `.nsh/` are this directory's, its modules keep the names its own entry gives them, and the session watches it as well as the entry. Without `ENTRY`, the directory's own entry. TSX entries. |
 | `--port <PORT>` | The app's last port, else the first free one from `8790` | Dev server port. Replaces the previous NSH development session on this port after its cleanup completes. |
 | `--release` | | Minify and strip debug info. Release bundles have no hot module replacement: every save reloads the app. An app with a Rust crate also gets an optimized (`--release`) development host, with its crates and NSH's built as in a package. |
 | `--limits [<LIMITS>]` | | Runs the app as an app embedded in another one, within the limits its host app sets: `memory` and `stack` (in `KB`, `MB` or `GB`), `load` and `call` (in `ms` or `s`) and `nodes`, such as `--limits memory=128MB,call=500ms`. The ones left out keep the embedding defaults, which `--limits` alone runs with ([Sandbox and capabilities](./sandbox-and-capabilities.md#limits)). Without it the app runs on its own, as a packaged app does. TSX entries. |
@@ -117,10 +118,10 @@ On Unix, the terminal host exits on SIGHUP, SIGTERM, SIGINT or terminal disconne
 ## nsh dev
 
 ```sh
-nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
+nsh dev [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
 ```
 
-Starts the dev server and opens this system’s native host: AppKit on macOS, GTK on Linux, Win32 on Windows. Choose `--target ios` or `--target android` explicitly for mobile development. `--server-only` serves hosts you start yourself. The server builds the app, watches the entry’s directory, and pushes every rebuild to connected hosts. With `--server-only`, it prints the URL for hosts on this machine and one per LAN address for devices, and, when the web runtime is there, the page browsers open to run the app ([Web](./web.md#develop-in-the-browser)):
+Starts the dev server and opens this system’s native host: AppKit on macOS, GTK on Linux, Win32 on Windows. Choose `--target ios` or `--target android` explicitly for mobile development. `--server-only` serves hosts you start yourself. The server builds the app, watches the entry’s directory (and `--app`'s), and pushes every rebuild to connected hosts. With `--server-only`, it prints the URL for hosts on this machine and one per LAN address for devices, and, when the web runtime is there, the page browsers open to run the app ([Web](./web.md#develop-in-the-browser)):
 
 ```text
 ✓ built App.tsx (3.2 KB js, 9.8 KB bytecode, 21ms)
@@ -130,7 +131,7 @@ Starts the dev server and opens this system’s native host: AppKit on macOS, GT
   browsers on this network: http://192.168.1.20:8790/
 ```
 
-Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--target`, `--device`, `--port`, `--release`, `--limits` and `--idiom` work as for `nsh run`; `--server-only` selects a server without a launched host, and with it `--idiom` (or `nsh.json` `dev.idiom`) sets the idiom of the page it serves to browsers (a GPUI host you start yourself takes `--idiom tv` on its own command line).
+Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--app`, `--target`, `--device`, `--port`, `--release`, `--limits` and `--idiom` work as for `nsh run`; `--server-only` selects a server without a launched host, and with it `--idiom` (or `nsh.json` `dev.idiom`) sets the idiom of the page it serves to browsers (a GPUI host you start yourself takes `--idiom tv` on its own command line).
 
 ## nsh test
 

@@ -260,6 +260,7 @@ fn compile_with(
         ui_sets: crate::ui_sets().to_vec(),
         app,
         asset_root_from: None,
+        app_dir: crate::entry::app_dir_override().map(Path::to_path_buf),
     })?;
     let sources: Vec<(&str, &str)> = std::iter::once((nsh_js::BUNDLE_NAME, bundle.code.as_str()))
         .chain(
@@ -308,7 +309,8 @@ fn compile_with(
 /// app (source and bytecode) plus the modules, to compute later updates.
 pub(crate) fn compile_hot(entry: &Path) -> Result<(Built, nsh_bundler::HotBundle), BuildError> {
     let start = Instant::now();
-    let hot = nsh_bundler::bundle_hot(entry, &crate::ui_sets())?;
+    let hot =
+        nsh_bundler::bundle_hot_in(entry, crate::entry::app_dir_override(), &crate::ui_sets())?;
     let (code, source_map) = hot.script();
     let bytecode = nsh_js::compile_bytecode_with(&code, false, &crate::ui_sets())?;
     let built = Built {
