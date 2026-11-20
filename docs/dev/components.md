@@ -899,6 +899,13 @@ what changed.
   so its view places them, as deep as they are passed on; JS's insertions and removals follow them there, and content
   of the view above that is released leaves the children of every level it was passed on to. When the nested
   component goes, they leave its view and stay (JS's, or the content of the view above).
+- A view gives a nested component a slot of its own as a child the same way
+  (`inset().child(props.header.place(|h| h))`): the slot's holder joins that component's children in its place
+  among them, at mount and whenever the app fills the slot, and leaves them when it empties. It stays the placing
+  view's slot (what the place gives it goes to its target, as anywhere), and is never taken for a slot of the nested
+  component, whatever that one's slots are named: a holder names a slot only of the component JS put it in
+  (`Core::names_slot_of`). To fill a slot of the nested component with it, the view says so:
+  `.fill(name, place)` (below).
 - Named slots: the JS face creates one holder view per slot **the app passes** (`componentSlot`), filled with that
   prop's JSX. `Prop<Option<Slot>>` is `Some` while the holder has children (the core sets it when it fills or
   empties); `place(..)` is a region of it, and the slot's element is the holder: the core places it but never

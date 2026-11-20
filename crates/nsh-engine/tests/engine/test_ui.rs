@@ -1,12 +1,12 @@
 //! A UI set of the tests' own (`test/ui`): small components that exercise
-//! the machinery of Rust components (slots and how their content lays out, children placed one by one,
+//! the machinery of Rust components (slots and how their content lays out, a slot placed as a nested component's child, children placed one by one,
 //! virtualized `items`, `#[prop(lazy)]` children, `#[methods]` refs, events,
 //! waiting for the app's answer to them, inputs) as an app's crate would,
 //! with no UI set of nsh's.
 
 use std::{rc::Rc, time::Duration};
 
-use nsh_base::{dialog, input, theme};
+use nsh_base::{collapsible, dialog, input, theme};
 use nsh_core::{element::Registry, prelude::*};
 
 /// The module the tests' apps import these components from.
@@ -21,6 +21,9 @@ pub(crate) fn registry() -> Registry {
         .register::<Disclosure>()
         .register::<Field>()
         .register::<Group>()
+        .register::<Inset>()
+        .register::<Titled>()
+        .register::<Details>()
         .register::<ListView>()
         .register::<Pick>()
         .register::<Stepper>()
@@ -235,6 +238,61 @@ pub(crate) fn Group(props: GroupProps) -> impl IntoElement {
             )
             .child(row)
     })
+}
+
+// --- Inset, Titled, Details: a slot placed as a nested component's child ----
+
+/// The app's content, with nothing of its own.
+#[derive(Debug, Clone, PartialEq, Props)]
+pub(crate) struct InsetProps {
+    /// The content.
+    pub(crate) children: Prop<Children>,
+}
+
+/// Its children in its root ([`InsetProps`]), which has no style and no
+/// listener.
+#[component]
+pub(crate) fn Inset(props: InsetProps) -> impl IntoElement {
+    view().child(props.children)
+}
+
+/// A title the app passes above its content.
+#[derive(Debug, Clone, PartialEq, Props)]
+pub(crate) struct TitledProps {
+    /// Above the content.
+    pub(crate) title: Prop<Option<Slot>>,
+    /// The content.
+    pub(crate) children: Prop<Children>,
+}
+
+/// The title as the child of a nested [`Inset`], then the children
+/// ([`TitledProps`]).
+#[component]
+pub(crate) fn Titled(props: TitledProps) -> impl IntoElement {
+    view()
+        .child(inset().child(props.title.place(|title| title)))
+        .child(props.children)
+}
+
+/// A summary the app passes over its content.
+#[derive(Debug, Clone, PartialEq, Props)]
+pub(crate) struct DetailsProps {
+    /// What shows either way.
+    pub(crate) summary: Prop<Option<Slot>>,
+    /// What an open collapsible shows after it.
+    pub(crate) children: Prop<Children>,
+}
+
+/// The summary as the child of a nested `nsh/base` `Collapsible`, open,
+/// whose content is the children ([`DetailsProps`]).
+#[component]
+pub(crate) fn Details(props: DetailsProps) -> impl IntoElement {
+    view().child(
+        collapsible()
+            .open(true)
+            .content(view().child(props.children))
+            .child(props.summary.place(|summary| summary)),
+    )
 }
 
 // --- ListView: a virtualized list of the app's rows -------------------------
