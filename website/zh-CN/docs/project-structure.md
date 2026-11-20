@@ -250,6 +250,22 @@ const open = async () => {
 
 设备上的应用只分发一个 bundle，模块已经在里面，promise 会立即兑现。以拆分方式发布的 Web 应用（`nsh build --split`）会把这个模块以及只有它用到的代码放进单独的文件，在 `import()` 第一次请求时才下载（[Web](./web.md#拆分-bundle)）。参数必须是字面量相对路径：打包器需要知道导入的是哪个模块。
 
+要导入路径匹配某个模式的所有模块，可以像在 Vite 中一样使用 `import.meta.glob`。它返回一个对象，键是模式所写形式的文件路径，值是导入该文件的函数：
+
+```tsx
+const pages = import.meta.glob("./pages/*.tsx");
+// { "./pages/About.tsx": () => import("./pages/About.tsx"), "./pages/Home.tsx": … }
+const { Home } = await pages["./pages/Home.tsx"]();
+
+const previews = import.meta.glob("/**/*.preview.tsx"); // 从应用目录开始
+const icons = import.meta.glob("./icons/*.ts", { eager: true, import: "default" });
+```
+
+- 以 `./` 或 `../` 开头的模式相对于当前模块，以 `/` 开头的相对于应用目录。模式可以使用 `*`（名称的任意部分）、`**`（任意层目录）、`?`（一个字符）和 `{a,b}`（二选一）；模式数组可以用 `!` 排除文件（`["./pages/*.tsx", "!./pages/Draft.tsx"]`）。
+- `{ eager: true }` 会提前导入这些模块，值就是模块本身；`import: "name"` 取该导出而不是整个模块。
+- 只有模式明确写出时才会搜索 `node_modules`、`target` 和以 `.` 开头的目录。键按顺序排列。
+- 模式和选项必须是字面量，因为由打包器读取。开发运行期间添加或删除文件时，对象会像编辑代码一样原地更新。
+
 ### NSH 的模块
 
 对 `nsh` 和 `nsh/...` 的导入不会被打包：运行时以原生方式提供它们。
