@@ -846,7 +846,7 @@ pub(crate) fn is_root(entry: &Path) -> bool {
 pub(crate) fn runner_only(entry: &Path) -> anyhow::Result<RustApp> {
     let entry = dunce::canonicalize(entry)
         .with_context(|| format!("entry not found: {}", entry.display()))?;
-    let dir = entry.parent().context("entry has no directory")?;
+    let dir = &dunce::canonicalize(crate::entry::app_dir(&entry))?;
     let nsh = crate::runtime::cli_checkout().map_or(Nsh::Registry, Nsh::Source);
     let watched = watched(&[], nsh.source());
     // A TSX app packaged from flags alone has no `nsh.json`: the runtime's.
@@ -877,7 +877,7 @@ pub(crate) fn runner_only(entry: &Path) -> anyhow::Result<RustApp> {
 pub(crate) fn of(entry: &Path, unify: bool) -> anyhow::Result<Option<RustApp>> {
     let entry = dunce::canonicalize(entry)
         .with_context(|| format!("entry not found: {}", entry.display()))?;
-    let dir = entry.parent().context("entry has no directory")?;
+    let dir = &dunce::canonicalize(crate::entry::app_dir(&entry))?;
     let Ok(text) = fs::read_to_string(dir.join("nsh.json")) else {
         return Ok(None);
     };
