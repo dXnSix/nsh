@@ -55,6 +55,21 @@ app.send("message", ["text": "Hello"])               // `host.on("message", …)
 Handlers run on the main thread; an `async throws` handler's result answers the call and an error it throws rejects
 it, and `{ data, reply in … }` answers later with `reply.resolve(_:)` / `reply.reject(_:)`, from any thread.
 
+Scenes and links: the window lives in a scene, as UIKit's scene life cycle wants. `AppDelegate` names
+`SceneDelegate` in `application(_:configurationForConnecting:options:)`, as NSH's own iOS runner does, so the
+Info.plist needs only `UIApplicationSupportsMultipleScenes` (`false`). The scene hands the links that open the app,
+at launch (`connectionOptions`) and while it runs, to the view, which gives the NSH app the links it claims
+(`UrlScheme.on("open")`):
+
+```swift
+func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+    for context in URLContexts { app.openURL(context.url) }        // a custom scheme's link
+}
+func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+    if let url = userActivity.webpageURL { app.openURL(url) }        // a Universal Link
+}
+```
+
 Theme overrides: "Brand" puts the host's brand over the app's theme. A theme patch
 (`{ "values": { token: value }, "roles": { role: token } }`, `docs/dev/theme-format.md`) sets tokens
 the app's theme declares, winning over every context the app picks, light and dark, and classes such

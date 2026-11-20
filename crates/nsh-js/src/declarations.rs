@@ -296,7 +296,14 @@ pub(crate) const REFS: &[(&str, Option<&str>, &str, &[&str])] = &[
         "ViewRef",
         None,
         "A native node: what `ref` receives, and what an element is. Its methods send commands to its\nview, in order with the changes before them.",
-        &["focus", "blur", "measure", "reveal", "animateLayout"],
+        &[
+            "focus",
+            "blur",
+            "clearSelection",
+            "measure",
+            "reveal",
+            "animateLayout",
+        ],
     ),
     (
         "InputRef",
@@ -575,10 +582,7 @@ fn class_extensions(files: &mut [(String, String)], ui_sets: &[SetDescription]) 
     // Each served set: its file, the classes it exports (JS name, Rust
     // type), its extensions.
     let mut sets: Vec<Served> = Vec::new();
-    for registry in nsh_core::runtime::registries()
-        .iter()
-        .flat_map(Registry::sets)
-    {
+    for registry in Registry::served_sets(nsh_core::runtime::registries()) {
         let Some(specifier) = registry.specifier() else {
             continue;
         };

@@ -4,6 +4,7 @@
 //! hosts and runners built for it.
 
 mod android;
+mod app_extensions;
 mod apple;
 mod bindgen;
 mod build;
@@ -20,6 +21,7 @@ mod nshm;
 mod package;
 mod platforms;
 mod play;
+mod provisioning;
 mod publish_ios;
 mod run;
 mod runtime;
@@ -58,8 +60,19 @@ pub(crate) fn own_sets() -> &'static [Registry] {
     OWN.get_or_init(|| vec![nsh_base::registry()])
 }
 
+/// [`own_sets`] as data, with every set they serve
+/// (`nsh_core::element::description::Description::of`).
+pub(crate) fn own_set_descriptions() -> &'static [SetDescription] {
+    static OWN: OnceLock<Vec<SetDescription>> = OnceLock::new();
+    OWN.get_or_init(|| nsh_core::element::description::Description::of(own_sets()).sets)
+}
+
 /// The UI sets of the command's app, as data ([`set_app_sets`]).
 static UI_SETS: RwLock<Option<Arc<[SetDescription]>>> = RwLock::new(None);
+
+/// The UI sets of the app's crates alone, as their description lists
+/// them ([`set_app_sets`]): each with its crate (`SetDescription::entry`).
+static APP_SETS: RwLock<Option<Arc<[SetDescription]>>> = RwLock::new(None);
 
 /// The UI sets the hosts serve, as data: what bundles import natively,
 /// what bytecode links against, what `.nsh/types` declares. `nsh/base`,
@@ -68,25 +81,32 @@ pub(crate) fn ui_sets() -> Arc<[SetDescription]> {
     if let Some(sets) = &*UI_SETS.read().unwrap_or_else(|e| e.into_inner()) {
         return sets.clone();
     }
-    let sets: Arc<[SetDescription]> = own_sets()
-        .iter()
-        .flat_map(nsh_core::element::Registry::sets)
-        .map(SetDescription::from)
-        .collect();
+    let sets: Arc<[SetDescription]> = own_set_descriptions().into();
     *UI_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(sets.clone());
     sets
+}
+
+/// The sets of the app's crates ([`set_app_sets`]; none without them),
+/// each with its crate's index in `nsh.json` `"rust"`
+/// (`SetDescription::entry`).
+pub(crate) fn app_sets() -> Arc<[SetDescription]> {
+    APP_SETS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
 }
 
 /// Makes [`ui_sets`] `nsh/base` and `app`, the sets of the app's crates
 /// (described again after a change to its Rust code).
 pub(crate) fn set_app_sets(app: Vec<SetDescription>) {
-    let sets: Arc<[SetDescription]> = own_sets()
+    let sets: Arc<[SetDescription]> = own_set_descriptions()
         .iter()
-        .flat_map(nsh_core::element::Registry::sets)
-        .map(SetDescription::from)
-        .chain(app)
+        .cloned()
+        .chain(app.iter().cloned())
         .collect();
     *UI_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(sets);
+    *APP_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(app.into());
 }
 
 #[derive(Parser)]
@@ -182,8 +202,8 @@ enum Command {
         /// (macos, linux, windows, gpui, tui, web, tizen-web, ios, android
         /// and tizen; tui uses an in-memory terminal; web runs them
         /// in a headless Chrome, Edge or Chromium, ios in a simulator,
-        /// android on the first device adb lists, tizen on the TV or
-        /// emulator `sdb devices` lists, or `--device`).
+        /// android on a device or emulator: see --device; tizen on the TV
+        /// or emulator `sdb devices` lists, or `--device`).
         #[arg(long, value_enum)]
         target: Option<run::Target>,
         /// The Chrome, Edge or Chromium executable `--target web` runs the
@@ -195,10 +215,12 @@ enum Command {
         /// `nsh/host` calls of each app the tests open and sends its events.
         #[arg(long, value_name = "JS")]
         web_host: Option<PathBuf>,
-        /// The device the apps run on: with `--target ios` the simulator
-        /// (name or UDID; default: a booted one, else the newest iPhone),
-        /// with `--target tizen` the TV's or emulator's `sdb` serial
-        /// (default: the only one `sdb devices` lists).
+        /// With `--target ios`: the simulator the apps run in (name or
+        /// UDID); default: a booted one, else the newest iPhone. With
+        /// `--target android`: the device or emulator (its serial, as `adb
+        /// devices` lists it); default: the one `ANDROID_SERIAL` names, else
+        /// the first one. With `--target tizen`: the TV's or emulator's
+        /// `sdb` serial; default: the only one `sdb devices` lists.
         #[arg(long, value_name = "DEVICE")]
         device: Option<String>,
         /// With `--target macos` or `gpui`: the display the apps' windows
@@ -275,7 +297,9 @@ enum Command {
         /// Where to run; defaults to this system's native desktop host.
         #[arg(long, value_enum, default_value_t = run::Target::native())]
         target: run::Target,
-        /// iOS simulator to use (name or UDID).
+        /// The iOS simulator to use (name or UDID), or the Android device or
+        /// emulator (its serial, as `adb devices` lists it; default: the one
+        /// `ANDROID_SERIAL` names, else the first one).
         #[arg(long)]
         device: Option<String>,
         /// Serve hot reload to hosts you start yourself.
@@ -334,9 +358,12 @@ enum Command {
         /// Where to run.
         #[arg(long, value_enum, default_value_t = run::Target::native())]
         target: run::Target,
-        /// iOS simulator to use (name or UDID); default: a booted one, else
-        /// the newest iPhone. Tizen: the TV's or emulator's `sdb` serial
-        /// (default: the only one `sdb devices` lists).
+        /// The iOS simulator to use (name or UDID; default: a booted one,
+        /// else the newest iPhone), or the Android device or emulator (its
+        /// serial, as `adb devices` lists it; default: the one
+        /// `ANDROID_SERIAL` names, else the first one). Tizen: the TV's or
+        /// emulator's `sdb` serial (default: the only one `sdb devices`
+        /// lists).
         #[arg(long)]
         device: Option<String>,
         /// Points per terminal Cell, overriding nsh.json tui.pointsPerCell (default: 8x16).
@@ -612,9 +639,11 @@ struct PackageArgs {
     /// (default: `nsh.json` `tizen.signing`).
     #[arg(long)]
     sign: Option<String>,
-    /// Provisioning profile for devices (`.mobileprovision`).
+    /// Provisioning profile for devices (`.mobileprovision`). Repeat it to
+    /// give each app extension (`nsh.json` `ios.extensions`) its own: every
+    /// bundle takes the profile for its identifier.
     #[arg(long)]
-    profile: Option<PathBuf>,
+    profile: Vec<PathBuf>,
     /// Android release keystore (default: the debug key).
     #[arg(long, requires = "key_alias")]
     keystore: Option<PathBuf>,
@@ -645,6 +674,12 @@ struct PackageArgs {
     /// machine at the address it prints).
     #[arg(long)]
     run: bool,
+    /// With --run: the iOS simulator to run the app in (`ios-simulator`;
+    /// name or UDID; default: a booted one, else the newest iPhone) or the
+    /// Android device to install it on (its serial, as `adb devices` lists
+    /// it; default: the one `ANDROID_SERIAL` names, else the first one).
+    #[arg(long, value_name = "DEVICE")]
+    device: Option<String>,
     /// Web: the http(s) URL the site's files are served from, a CDN
     /// (`https://cdn.example.com/app/`), as the page names them; `index.html`
     /// stays at the page's address. Default: next to the page, named
@@ -924,6 +959,15 @@ fn run(mut command: Command) -> anyhow::Result<()> {
         Command::Package(args) => Some(args.target) == package::PackageTarget::desktop(),
         _ => false,
     };
+    // A Rust app's root reports what the package names and versions it.
+    if let Command::Package(args) = &command {
+        rust_app::set_package_identity(rust_app::PackageIdentity {
+            id: args.id.clone(),
+            name: args.name.clone(),
+            version: args.version.clone(),
+            build: args.build,
+        });
+    }
     let app = match command.entry_mut() {
         Some(entry) => rust_app::of(entry, unify)?,
         None => None,
@@ -1128,6 +1172,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 arch,
                 format,
                 run,
+                device,
                 asset_url,
                 probe,
             } = *args;
@@ -1144,7 +1189,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 out: &out,
                 config,
                 sign: sign.as_deref(),
-                profile: profile.as_deref(),
+                profiles: &profile,
                 keystore: keystore.as_deref().map(|k| {
                     (
                         k,
@@ -1157,6 +1202,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 format,
                 arch,
                 run,
+                device: device.as_deref(),
                 asset_url: asset_url.as_deref(),
                 probe,
                 development: false,
@@ -1349,6 +1395,33 @@ mod command_tests {
                 "key.cert"
             ])
             .is_err()
+        );
+    }
+
+    /// An iOS package takes a profile for the app and one for each of its
+    /// extensions.
+    #[test]
+    fn ios_packages_take_several_profiles() {
+        let cli = Cli::try_parse_from([
+            "nsh",
+            "package",
+            "--target",
+            "ios",
+            "--profile",
+            "app.mobileprovision",
+            "--profile",
+            "widget.mobileprovision",
+        ])
+        .unwrap();
+        let Command::Package(args) = cli.command else {
+            panic!("not a package command");
+        };
+        assert_eq!(
+            args.profile,
+            [
+                std::path::PathBuf::from("app.mobileprovision"),
+                "widget.mobileprovision".into()
+            ]
         );
     }
 

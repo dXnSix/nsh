@@ -91,6 +91,27 @@ pub(crate) fn set_release_hosts() {
     RELEASE_HOSTS.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// What `nsh package` names and versions the app (`--id`, `--name`,
+/// `--version`, `--build`), so a Rust app's root reports the package's
+/// identity (`nsh_core::element::app_info`), as a TSX app's `appInfo()`
+/// does; `None`: not packaging, `nsh.json`'s.
+static PACKAGE: std::sync::Mutex<Option<PackageIdentity>> = std::sync::Mutex::new(None);
+
+/// `nsh package`'s identity flags ([`PACKAGE`]).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PackageIdentity {
+    pub(crate) id: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) version: Option<String>,
+    pub(crate) build: Option<u32>,
+}
+
+/// Makes this command a package of `identity` ([`PACKAGE`]), before the
+/// workspace is written.
+pub(crate) fn set_package_identity(identity: PackageIdentity) {
+    *PACKAGE.lock().unwrap_or_else(|e| e.into_inner()) = Some(identity);
+}
+
 /// The platform crate features `nsh package` builds the release runner
 /// with (`crate::native_features`); `None`: all of them.
 static RUNNER_FEATURES: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
@@ -225,6 +246,31 @@ pub(crate) fn may_make_web_view(app: &RustApp) -> bool {
         })
     }
     app.watched.iter().any(|dir| spells(dir))
+}
+
+/// The cargo arguments that turn web views on in a Rust app's runner
+/// (`rust-<platform>`) on Linux and Windows, the platform crates whose
+/// `webview` is a feature (#2706). A package keeps it when
+/// [`set_runner_features`] chose it; `nsh run`, which chooses nothing, when
+/// the app's code may make a web view ([`may_make_web_view`]), as a package
+/// would, so the development runner does not show a placeholder where the
+/// released one shows the page.
+fn rust_runner_web_view(platform: Platform, may: impl FnOnce() -> bool) -> Vec<&'static str> {
+    let feature = match platform {
+        Platform::Linux => "nsh-platform-linux/webview",
+        Platform::Windows => "nsh-platform-windows/webview",
+        _ => return Vec::new(),
+    };
+    let chosen = RUNNER_FEATURES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .map(|chosen| chosen.iter().any(|f| f == "webview"));
+    if chosen.unwrap_or_else(may) {
+        vec!["--features", feature]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(crate) fn current() -> Option<RustApp> {
@@ -896,6 +942,10 @@ pub(crate) struct RootConfig {
     /// The app's translations (`locales/`) as JSON, written to the
     /// workspace and compiled into the runners.
     translations: Option<PathBuf>,
+    /// What the root reports as the app (`appInfo()`'s JSON): `nsh.json`'s
+    /// in development, the package's when this command packages
+    /// ([`PACKAGE`]).
+    app_info: String,
 }
 
 /// Whether `entry` is a Rust app's (`entry::resolve` gives its `nsh.json`
@@ -1299,6 +1349,8 @@ pub(crate) fn root_config(
         write(&path, &nsh_i18n::translations_json(&translations))?;
         Some(path)
     };
+    let package = PACKAGE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let app_info = app_info_json(dir, config, package)?;
     Ok(RootConfig {
         component,
         theme,
@@ -1311,7 +1363,52 @@ pub(crate) fn root_config(
         application,
         capabilities,
         translations,
+        app_info,
     })
+}
+
+/// What a Rust app's root reports as the app (`appInfo()`'s JSON): in
+/// development (`nsh run`, `nsh dev`, `nsh test`) `nsh.json`'s `"id"`,
+/// `"name"`, `"version"` and `"build"` (`null` where it gives none), as a
+/// TSX app's development build reports them; when this command packages
+/// ([`PACKAGE`]: `package`), the package's identity with the defaults the
+/// package writers use, and not a development build. The workspace is
+/// written again by every command, so a runner never keeps another
+/// command's.
+fn app_info_json(
+    dir: &Path,
+    config: &serde_json::Value,
+    package: Option<PackageIdentity>,
+) -> anyhow::Result<String> {
+    let info = match package {
+        Some(identity) => {
+            let entry = dir.join("nsh.json");
+            let mut app = crate::package::read_config(&entry)?;
+            app.id = identity.id.or(app.id);
+            app.name = identity.name.or(app.name);
+            app.version = identity.version.or(app.version);
+            app.build = identity.build.or(app.build);
+            let info = crate::build::app_info(&entry, &app);
+            serde_json::json!({
+                "id": info.id,
+                "name": info.name,
+                "version": info.version,
+                "build": info.build,
+                "development": false,
+            })
+        }
+        None => {
+            let text = |key: &str| config.get(key).and_then(|v| v.as_str());
+            serde_json::json!({
+                "id": text("id"),
+                "name": text("name"),
+                "version": text("version"),
+                "build": config.get("build").and_then(|v| v.as_u64()),
+                "development": true,
+            })
+        }
+    };
+    Ok(info.to_string())
 }
 
 /// nsh's crates an app's crate may depend on ([`Nsh::of`]; built against a
@@ -1908,6 +2005,7 @@ impl RustApp {
             !rest.starts_with("target")
                 && !rest.starts_with(".nsh")
                 && !rest.starts_with(".git")
+                && !crate::dev::in_nested_checkout(dir, path)
                 && (rest.starts_with("assets")
                     || path.extension().is_some_and(|e| e == "rs")
                     || path.file_name().is_some_and(|n| n == "Cargo.toml"))
@@ -3376,7 +3474,15 @@ opt-level = \"s\"
             if release { "" } else { " (debug)" },
             crate::runtime::other_triple(platform, triple)
         );
-        self.build(&self.workspace, &self.bin(dir), triple, release, &[], &what)
+        let web_view = rust_runner_web_view(platform, || may_make_web_view(self));
+        self.build(
+            &self.workspace,
+            &self.bin(dir),
+            triple,
+            release,
+            &web_view,
+            &what,
+        )
     }
 
     /// Waits until `stop` returns true (or the user stops the command);
@@ -3711,8 +3817,10 @@ impl RustApp {
     /// The web runtime's gates of the app's sets: one
     /// `nsh_platform_web::ui_set!` per crate, exporting
     /// [`crate::web::ui_set_gate`] of its specifier, which registers the
-    /// crate's set ([`Self::app_sets`]). `nsh/base` is the runtime's own
-    /// (its parts' `nsh_part_*`).
+    /// crate's set ([`Self::app_sets`]) with its submodules and the sets it
+    /// serves (an import of one of those keeps this gate:
+    /// `web::app_set_gates`). `nsh/base` is the runtime's own (its parts'
+    /// `nsh_part_*`).
     fn set_gates(&self, cfg: &str) -> String {
         self.crates
             .iter()
@@ -3836,6 +3944,7 @@ pub(crate) fn root_fn(cfg: &str, krate: &str, root: &RootConfig) -> String {
     if let Some(id) = &root.app_id {
         make.push_str(&format!("\n        .app_id({id:?})"));
     }
+    make.push_str(&format!("\n        .app_info_json({:?})", root.app_info));
     if let Some(translations) = &root.translations {
         make.push_str(&format!(
             "\n        .translations_json(include_str!({:?}))",
@@ -3941,7 +4050,12 @@ pub(crate) fn theme_warnings(
 
 /// The sets of `crates` (`what` the steps call them) in `text`, the output
 /// of their describe program: a description of this nsh's format and
-/// version, one set per crate, each imported by a specifier of its own.
+/// version. Each set is of the crate whose entry serves it
+/// (`SetDescription::entry`): the crate's own set first, imported by the
+/// crate's specifier, then its submodules and the sets it serves
+/// (`Registry::serve`), each by a specifier of its own
+/// ([`check_specifiers`]). No two sets, nsh's included, may register one
+/// component ([`nsh_core::element::description::component_clash`]).
 fn read_description(
     text: &str,
     crates: &[AppCrate],
@@ -3955,20 +4069,30 @@ fn read_description(
             description.nsh
         );
     }
-    if description.sets.len() != crates.len() {
+    if let Some(set) = description.sets.iter().find(|s| s.entry >= crates.len()) {
         bail!(
-            "the description of {what} has {} UI sets for {} crates",
-            description.sets.len(),
+            "the description of {what} has a UI set ({:?}) of crate {} for {} crates",
+            set.specifier,
+            set.entry + 1,
             crates.len()
         );
     }
     check_specifiers(crates, &description.sets)?;
+    let all: Vec<SetDescription> = crate::own_set_descriptions()
+        .iter()
+        .chain(&description.sets)
+        .cloned()
+        .collect();
+    if let Some(clash) = nsh_core::element::description::component_clash(&all) {
+        bail!("{clash}");
+    }
     Ok(description.sets)
 }
 
-/// Checks the specifiers of `sets` (those of `crates`, in their order):
-/// each is imported by its specifier, so none may be one of nsh's modules
-/// or another crate's.
+/// Checks the specifiers of `sets`, each of the crate of `crates` whose
+/// entry serves it (`SetDescription::entry`): each crate has its own set,
+/// the first of its sets, and every set is imported by its specifier, so
+/// none may be one of nsh's modules or another set's.
 fn check_specifiers(crates: &[AppCrate], sets: &[SetDescription]) -> anyhow::Result<()> {
     let nsh: Vec<&str> = nsh_core::js::NATIVE_MODULES
         .iter()
@@ -3978,26 +4102,45 @@ fn check_specifiers(crates: &[AppCrate], sets: &[SetDescription]) -> anyhow::Res
                 .iter()
                 .filter_map(|r| r.specifier()),
         )
-        .chain(crate::own_sets().iter().filter_map(|r| r.specifier()))
+        .chain(
+            crate::own_set_descriptions()
+                .iter()
+                .map(|s| s.specifier.as_str()),
+        )
         .collect();
-    for (i, (krate, set)) in crates.iter().zip(sets).enumerate() {
-        let specifier = set.specifier.as_str();
-        if nsh.contains(&specifier) {
+    // Each crate's own set: the first its entry lists.
+    let own = |entry: usize| sets.iter().position(|s| s.entry == entry);
+    for (i, krate) in crates.iter().enumerate() {
+        if own(i).is_none() {
             bail!(
-                "the crate {} is imported as {specifier:?}, one of nsh's own modules: give its `#[native_module(\"…\")]` a specifier of its own",
+                "the crate {} has no UI set of its own: another crate of the app has the same set, as its own or one it serves (`Registry::serve`); list the crate in nsh.json \"rust\" or serve its set, not both",
                 krate.package
             );
         }
-        if let Some((other, _)) = crates
-            .iter()
-            .zip(sets)
-            .take(i)
-            .find(|(_, s)| s.specifier == specifier)
-        {
+    }
+    for (k, set) in sets.iter().enumerate() {
+        let specifier = set.specifier.as_str();
+        let krate = &crates[set.entry].package;
+        let is_own = own(set.entry) == Some(k);
+        if nsh.contains(&specifier) {
+            if is_own {
+                bail!(
+                    "the crate {krate} is imported as {specifier:?}, one of nsh's own modules: give its `#[native_module(\"…\")]` a specifier of its own"
+                );
+            }
             bail!(
-                "the crates {} and {} are both imported as {specifier:?}: give each crate of the app a `#[native_module(\"…\")]` specifier of its own",
-                other.package,
-                krate.package
+                "the crate {krate} serves {specifier:?}, one of nsh's own modules: nsh serves it already"
+            );
+        }
+        if let Some(j) = sets[..k].iter().position(|s| s.specifier == specifier) {
+            let other_crate = &crates[sets[j].entry].package;
+            if is_own && own(sets[j].entry) == Some(j) {
+                bail!(
+                    "the crates {other_crate} and {krate} are both imported as {specifier:?}: give each crate of the app a `#[native_module(\"…\")]` specifier of its own"
+                );
+            }
+            bail!(
+                "the crates {other_crate} and {krate} both have a UI set imported as {specifier:?}: a specifier is one module"
             );
         }
     }
@@ -4124,8 +4267,14 @@ mod tests {
 
     use super::{AppCrate, Nsh, RootConfig, RustApp};
 
+    /// Serialises the tests that set [`super::RUNNER_FEATURES`].
+    static RUNNER_FEATURES_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_release_runner_builds_with_the_chosen_features() {
+        let _guard = RUNNER_FEATURES_TEST
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         assert!(super::runner_feature_args("nsh-platform-windows").is_empty());
         super::set_runner_features(vec!["js".into(), "net".into(), "svg".into(), "plot".into()]);
         let args = super::runner_feature_args("nsh-platform-windows");
@@ -4159,6 +4308,36 @@ mod tests {
             super::runner_feature_args("nsh-platform-android")[2],
             "js,plot,svg"
         );
+        *super::RUNNER_FEATURES.lock().unwrap() = None;
+    }
+
+    #[test]
+    fn a_rust_runner_turns_web_views_on_like_its_package() {
+        use crate::runtime::Platform;
+        let _guard = RUNNER_FEATURES_TEST
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *super::RUNNER_FEATURES.lock().unwrap() = None;
+        // `nsh run`: when the app's code may make a web view (#2706).
+        assert_eq!(
+            super::rust_runner_web_view(Platform::Linux, || true),
+            ["--features", "nsh-platform-linux/webview"]
+        );
+        assert_eq!(
+            super::rust_runner_web_view(Platform::Windows, || true),
+            ["--features", "nsh-platform-windows/webview"]
+        );
+        assert!(super::rust_runner_web_view(Platform::Linux, || false).is_empty());
+        // Web views are no feature on macOS.
+        assert!(super::rust_runner_web_view(Platform::MacOs, || true).is_empty());
+        // A package: what it chose, whatever the scan says.
+        super::set_runner_features(vec!["webview".into()]);
+        assert_eq!(
+            super::rust_runner_web_view(Platform::Linux, || false).len(),
+            2
+        );
+        super::set_runner_features(vec!["js".into()]);
+        assert!(super::rust_runner_web_view(Platform::Linux, || true).is_empty());
         *super::RUNNER_FEATURES.lock().unwrap() = None;
     }
 
@@ -4411,6 +4590,7 @@ mod tests {
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             };
             let app = app(&dir, &[(package, dir.join("native"))], Some(root));
             app.write_workspace().unwrap();
@@ -4681,6 +4861,7 @@ mod tests {
                 application: Some(r#"{"quitMode":"platform"}"#.into()),
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             },
         );
         for line in [
@@ -4694,11 +4875,54 @@ mod tests {
             ".status_bar(",
             ".app_id(\"com.example.app\")",
             ".url_schemes([\"myapp\"])",
+            r#".app_info_json("{}")"#,
             ".status_bar(nsh_core::StatusBarSetting::default().foreground(nsh_core::StatusBarStyle::Light).hidden(false))",
             r#".main_window_json("{\"defaultSize\":{\"width\":900,\"height\":600},\"title\":\"Notes\"}")"#,
         ] {
             assert!(code.contains(line), "no {line:?} in\n{code}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rust_app_reports_nsh_jsons_or_its_packages_identity() {
+        let dir = std::env::temp_dir().join(format!("nsh-rust-app-info-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let read = |json: &str, package| {
+            std::fs::write(dir.join("nsh.json"), json).unwrap();
+            let config = serde_json::from_str(json).unwrap();
+            let info = super::app_info_json(&dir, &config, package).unwrap();
+            serde_json::from_str::<serde_json::Value>(&info).unwrap()
+        };
+        let json = r#"{ "root": "App", "id": "com.example.orders", "name": "Orders", "version": "2.1.0" }"#;
+        // In development: `nsh.json`'s, as a TSX app's `appInfo()` reports it.
+        assert_eq!(
+            read(json, None),
+            serde_json::json!({
+                "id": "com.example.orders", "name": "Orders", "version": "2.1.0", "build": null,
+                "development": true,
+            })
+        );
+        // A package's, its flags first.
+        let flags = super::PackageIdentity {
+            version: Some("3.0.0".into()),
+            build: Some(9),
+            ..Default::default()
+        };
+        assert_eq!(
+            read(json, Some(flags)),
+            serde_json::json!({
+                "id": "com.example.orders", "name": "Orders", "version": "3.0.0", "build": 9,
+                "development": false,
+            })
+        );
+        // With the package writers' defaults where nothing gives them.
+        let info = read(
+            r#"{ "root": "App", "id": "com.example.orders", "name": "Orders" }"#,
+            Some(super::PackageIdentity::default()),
+        );
+        assert_eq!(info["version"], "1.0.0");
+        assert_eq!(info["build"], 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4762,6 +4986,7 @@ mod tests {
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             }),
         );
         app.write_workspace().unwrap();
@@ -5257,6 +5482,7 @@ mod tests {
             application: None,
             capabilities: None,
             translations: None,
+            app_info: "{}".into(),
         });
         app.tizen_workspace().unwrap();
         let lib = read("tizen/tizen-lib/lib.rs");
@@ -5935,6 +6161,7 @@ panic = \"abort\"
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             }),
         );
         app.write_workspace().unwrap();
@@ -6126,8 +6353,12 @@ panic = \"abort\"
                 })
                 .collect()
         };
-        let set = |specifier: &'static str| -> SetDescription {
-            nsh_core::element::Registry::ui_set(specifier).into()
+        // The set of the crate at `entry` in `"rust"`.
+        let set = |specifier: &'static str, entry: usize| -> SetDescription {
+            SetDescription {
+                entry,
+                ..nsh_core::element::Registry::ui_set(specifier).into()
+            }
         };
         let text = |sets: Vec<SetDescription>| {
             Description {
@@ -6140,13 +6371,18 @@ panic = \"abort\"
             super::read_description(text, &crates(packages), "the Rust crates")
                 .map_err(|e| e.to_string())
         };
-        let two = text(vec![set("app/charts"), set("app/storage")]);
+        let two = text(vec![set("app/charts", 0), set("app/storage", 1)]);
         let sets = read(&two, &["charts", "storage"]).unwrap();
         assert_eq!(sets[1].specifier, "app/storage");
-        // One set per crate.
+        // A set of each crate, and of no other.
         assert_eq!(
             read(&two, &["charts"]).unwrap_err(),
-            "the description of the Rust crates has 2 UI sets for 1 crates"
+            "the description of the Rust crates has a UI set (\"app/storage\") of crate 2 for 1 crates"
+        );
+        assert!(
+            read(&text(vec![set("app/charts", 0)]), &["charts", "storage"])
+                .unwrap_err()
+                .starts_with("the crate storage has no UI set of its own")
         );
         // Another nsh's description.
         let mut other = Description::from_json(&two).unwrap();
@@ -6163,7 +6399,7 @@ panic = \"abort\"
         );
         // A specifier of nsh's own or of another crate.
         for nsh in ["nsh/base", "nsh", "nsh/mobile"] {
-            let error = read(&text(vec![set(nsh)]), &["charts"]).unwrap_err();
+            let error = read(&text(vec![set(nsh, 0)]), &["charts"]).unwrap_err();
             assert!(
                 error.contains(&format!(
                     "the crate charts is imported as {nsh:?}, one of nsh's own modules"
@@ -6172,7 +6408,7 @@ panic = \"abort\"
             );
         }
         let error = read(
-            &text(vec![set("app/charts"), set("app/charts")]),
+            &text(vec![set("app/charts", 0), set("app/charts", 1)]),
             &["charts", "storage"],
         )
         .unwrap_err();
@@ -6180,6 +6416,175 @@ panic = \"abort\"
             error.contains("the crates charts and storage are both imported as \"app/charts\""),
             "{error}"
         );
+    }
+
+    /// Reads the description of `sets` (the crates' entries' registries) for
+    /// crates named `packages`, as `nsh` reads the describe program's.
+    fn read_sets(
+        sets: &[nsh_core::element::Registry],
+        packages: &[&str],
+    ) -> Result<Vec<nsh_core::element::description::SetDescription>, String> {
+        let crates: Vec<AppCrate> = packages
+            .iter()
+            .map(|p| AppCrate {
+                package: (*p).into(),
+                dir: PathBuf::from("/app").join(p),
+            })
+            .collect();
+        let text = nsh_core::element::description::Description::of(sets).to_json();
+        super::read_description(&text, &crates, "the Rust crates").map_err(|e| e.to_string())
+    }
+
+    /// Sets a crate serves besides its own (`Registry::serve`, its
+    /// submodules), in the description `nsh` reads: each of the crate
+    /// serving it.
+    mod served_sets {
+        use nsh_core::{element::Registry, prelude::*};
+
+        use super::read_sets;
+
+        /// A library's component.
+        #[component]
+        fn Chip() -> impl IntoElement {
+            view()
+        }
+
+        /// A library's set, as its crate's `set()` makes it.
+        fn library() -> Registry {
+            let mut set = Registry::ui_set("acme/ui");
+            set.register::<Chip>();
+            set
+        }
+
+        fn serving(specifier: &'static str, set: Registry) -> Registry {
+            let mut own = Registry::ui_set(specifier);
+            own.serve(set);
+            own
+        }
+
+        fn specifiers(
+            sets: &[nsh_core::element::description::SetDescription],
+        ) -> Vec<(&str, usize)> {
+            sets.iter()
+                .map(|s| (s.specifier.as_str(), s.entry))
+                .collect()
+        }
+
+        #[test]
+        fn a_crate_serves_a_library_set_and_its_submodules() {
+            let mut app = serving("app/native", library());
+            app.submodule(Registry::ui_set("app/native/charts"));
+            let sets = read_sets(&[app], &["app-native"]).unwrap();
+            assert_eq!(
+                specifiers(&sets),
+                [("app/native", 0), ("app/native/charts", 0), ("acme/ui", 0)]
+            );
+        }
+
+        #[test]
+        fn two_crates_serving_one_library_serve_it_once() {
+            let sets = read_sets(
+                &[serving("app/a", library()), serving("app/b", library())],
+                &["a", "b"],
+            )
+            .unwrap();
+            assert_eq!(
+                specifiers(&sets),
+                [("app/a", 0), ("acme/ui", 0), ("app/b", 1)]
+            );
+        }
+
+        #[test]
+        fn a_crate_listed_and_served_is_refused() {
+            // The library's crate in "rust" too, after a crate serving it:
+            // its set is the one served.
+            let error = read_sets(&[serving("app/a", library()), library()], &["a", "acme-ui"])
+                .unwrap_err();
+            assert!(
+                error.starts_with(
+                    "the crate acme-ui has no UI set of its own: another crate of the app has the same set"
+                ),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn a_served_set_of_nsh_is_refused() {
+            for nsh in ["nsh/base", "nsh/base/plot", "nsh/mobile"] {
+                let error = read_sets(
+                    &[serving("app/native", Registry::ui_set(nsh))],
+                    &["app-native"],
+                )
+                .unwrap_err();
+                assert_eq!(
+                    error,
+                    format!(
+                        "the crate app-native serves {nsh:?}, one of nsh's own modules: nsh serves it already"
+                    )
+                );
+            }
+        }
+    }
+
+    /// Two sets registering one component: refused as the description is
+    /// read, naming both, before anything is built with them.
+    mod duplicate_components {
+        use nsh_core::{element::Registry, prelude::*};
+
+        use super::read_sets;
+
+        /// Registered by two sets.
+        #[component]
+        fn Chip() -> impl IntoElement {
+            view()
+        }
+
+        fn with_chip(specifier: &'static str) -> Registry {
+            let mut set = Registry::ui_set(specifier);
+            set.register::<Chip>();
+            set
+        }
+
+        const CHIP: &str = "nsh::rust_app::tests::duplicate_components::Chip";
+
+        #[test]
+        fn a_component_of_two_crates_sets_is_refused() {
+            let error = read_sets(
+                &[with_chip("app/native"), with_chip("app/other")],
+                &["a", "b"],
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!(
+                    "component `{CHIP}` is registered by both `app/native` and `app/other`: register it in one set; a library's set is served with `Registry::serve`"
+                )
+            );
+        }
+
+        #[test]
+        fn a_component_of_a_crates_set_and_a_set_it_serves_is_refused() {
+            let mut app = with_chip("app/native");
+            app.serve(with_chip("acme/ui"));
+            let error = read_sets(&[app], &["app-native"]).unwrap_err();
+            assert_eq!(
+                error,
+                format!(
+                    "component `{CHIP}` is registered by both `app/native` and `acme/ui`: register it in one set; a library's set is served with `Registry::serve`"
+                )
+            );
+        }
+
+        #[test]
+        fn a_component_of_nsh_base_is_refused_in_an_app_set() {
+            let mut app = Registry::ui_set("app/native");
+            app.register::<nsh_base::Button>();
+            let error = read_sets(&[app], &["app-native"]).unwrap_err();
+            assert!(
+                error.contains("is registered by both `nsh/base` and `app/native`"),
+                "{error}"
+            );
+        }
     }
 
     /// The directory `path` of the app's crates, as the generated code
@@ -6320,6 +6725,7 @@ panic = \"abort\"
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             }
         }
 

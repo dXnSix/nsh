@@ -32,6 +32,8 @@ mod types;
 #[cfg(feature = "bundle")]
 pub use bundle::*;
 #[cfg(feature = "bundle")]
+pub use glob::GlobDir;
+#[cfg(feature = "bundle")]
 pub use link::rewrite_imports;
 #[cfg(feature = "bundle")]
 pub use minify::minify_module;
@@ -39,8 +41,8 @@ pub use minify::minify_module;
 pub use natives::{Imported, NativeUse};
 #[cfg(feature = "bundle")]
 pub use types::{
-    TSCONFIG, TSCONFIG_BASE, modifiers_declaration, roles_declaration, tokens_declaration,
-    type_definitions,
+    TSCONFIG, TSCONFIG_BASE, modifiers_declaration, roles_declaration, set_assets_declaration,
+    tokens_declaration, type_definitions,
 };
 
 /// Compiles one module (TSX, JSX, TS or JS, as `name`'s extension says) to

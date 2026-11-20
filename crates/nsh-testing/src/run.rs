@@ -194,6 +194,7 @@ impl nsh_dev::protocol::TestNetwork for HostRoutes {
                 HttpBody::Bytes(request.body)
             },
             follow_redirects: request.follow_redirects,
+            cache: nsh_engine::HttpCache::parse(&request.cache).unwrap_or_default(),
         };
         if self.live {
             self.requests.record(request);
@@ -489,9 +490,11 @@ fn readable_sources(map: &str, dir: &Path) -> String {
     json.to_string()
 }
 
-/// The files `sets` ship, by their path among an app's assets.
+/// The files `sets` and the sets they serve ship, by their path among an
+/// app's assets.
 fn set_files(sets: &[Registry]) -> Vec<(String, PathBuf)> {
-    sets.iter()
+    Registry::served_sets(sets)
+        .into_iter()
         .flat_map(Registry::asset_files)
         .map(|file| (file.path().to_owned(), PathBuf::from(file.source)))
         .collect()

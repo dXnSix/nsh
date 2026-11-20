@@ -38,6 +38,10 @@ pub(crate) struct DevSession {
     hot: std::cell::RefCell<Option<nsh_bundler::HotBundle>>,
     /// Files read by the last good build (imports may be outside the app).
     watch_files: std::cell::RefCell<Vec<PathBuf>>,
+    /// The directories outside the app the last good build's
+    /// `import.meta.glob` patterns search, with their patterns: a watcher
+    /// of their own reports the files they match ([`glob_watcher`]).
+    glob_dirs: Arc<Mutex<Vec<nsh_bundler::GlobDir>>>,
     /// Good builds so far: the first one is "built", the next "rebuilt".
     builds: Cell<u32>,
     /// A Rust app (`nsh.json` `"root"`): nothing to bundle, the hosts run
@@ -97,6 +101,7 @@ impl DevSession {
             devices,
             hot: Default::default(),
             watch_files: Default::default(),
+            glob_dirs: Default::default(),
             builds: Cell::new(0),
             rust_root,
         };
@@ -192,6 +197,7 @@ impl DevSession {
 
     fn watch_until(&self, mut stop: impl FnMut() -> anyhow::Result<bool>) -> anyhow::Result<()> {
         let (tx, rx) = mpsc::channel();
+        let mut globbed = glob_watcher(self.glob_dirs.clone(), tx.clone())?;
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if let Ok(event) = event {
@@ -209,6 +215,8 @@ impl DevSession {
         }
         let mut imported_dirs = HashSet::new();
         self.watch_imports(&mut watcher, &mut imported_dirs)?;
+        let mut glob_dirs = HashSet::new();
+        watch_globs(&mut globbed, &self.glob_dirs, &mut glob_dirs);
         loop {
             if ui::stop_requested() || stop()? {
                 return Ok(());
@@ -226,7 +234,7 @@ impl DevSession {
             {
                 return Err(crate::rust_app::Restart.into());
             }
-            if !is_source(&event) {
+            if !is_source(&event, &self.src_dir) {
                 continue;
             }
             // A Rust change saved with this one (a checkout, a formatter)
@@ -239,6 +247,7 @@ impl DevSession {
             }
             self.rebuild();
             self.watch_imports(&mut watcher, &mut imported_dirs)?;
+            watch_globs(&mut globbed, &self.glob_dirs, &mut glob_dirs);
         }
     }
 
@@ -290,6 +299,7 @@ impl DevSession {
             match build::compile(&self.entry, true) {
                 Ok(built) => {
                     self.watch_files.replace(built.watch_files.clone());
+                    *lock(&self.glob_dirs) = built.glob_dirs.clone();
                     self.serve_assets(&built);
                     let capabilities = built.capabilities_json();
                     let summary = self.summary(&built);
@@ -315,6 +325,7 @@ impl DevSession {
         match build::compile_hot(&self.entry) {
             Ok((built, hot)) => {
                 self.watch_files.replace(built.watch_files.clone());
+                *lock(&self.glob_dirs) = built.glob_dirs.clone();
                 self.serve_assets(&built);
                 let summary = self.summary(&built);
                 // Other capabilities: the app starts again under them.
@@ -551,15 +562,92 @@ fn rust_changed_until(
     false
 }
 
-fn is_source(event: &notify::Event) -> bool {
+/// The lock of `globs`, whatever a thread that held it did.
+fn lock(
+    globs: &Mutex<Vec<nsh_bundler::GlobDir>>,
+) -> std::sync::MutexGuard<'_, Vec<nsh_bundler::GlobDir>> {
+    globs.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A watcher of the directories outside the app that `import.meta.glob`
+/// patterns search ([`watch_globs`]): it sends `tx` the events of the
+/// files `globs` match, in directories new too, and none of the rest of
+/// what it watches (a library's other files, its `target` or
+/// `node_modules`, which the patterns' search skips unless they name them).
+fn glob_watcher(
+    globs: Arc<Mutex<Vec<nsh_bundler::GlobDir>>>,
+    tx: mpsc::Sender<notify::Event>,
+) -> notify::Result<notify::RecommendedWatcher> {
+    notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if let Ok(event) = event {
+            let globs = lock(&globs);
+            if event
+                .paths
+                .iter()
+                .any(|p| globs.iter().any(|g| g.matches(p)))
+            {
+                let _ = tx.send(event);
+            }
+        }
+    })
+}
+
+/// Watches, recursively, the directories of `globs` not `watched` yet. One
+/// that cannot be watched is reported and tried again after the next build.
+fn watch_globs(
+    watcher: &mut impl Watcher,
+    globs: &Mutex<Vec<nsh_bundler::GlobDir>>,
+    watched: &mut HashSet<PathBuf>,
+) {
+    let dirs: Vec<PathBuf> = lock(globs).iter().map(|g| g.dir.clone()).collect();
+    for dir in dirs {
+        if watched.contains(&dir) {
+            continue;
+        }
+        match watcher.watch(&dir, RecursiveMode::Recursive) {
+            Ok(()) => {
+                ui::debug(format!("watching {} for import.meta.glob", ui::path(&dir)));
+                watched.insert(dir);
+            }
+            Err(err) => ui::warn(format!(
+                "cannot watch {} for import.meta.glob: {err}",
+                ui::path(&dir)
+            )),
+        }
+    }
+}
+
+fn is_source(event: &notify::Event, root: &Path) -> bool {
     event.paths.iter().any(|p| {
         !p.components()
             .any(|c| c.as_os_str() == ".nsh" || c.as_os_str() == "node_modules")
+            && !in_nested_checkout(root, p)
             && matches!(
                 p.extension().and_then(|e| e.to_str()),
                 Some("ts" | "tsx" | "js" | "jsx" | "json")
             )
     })
+}
+
+/// Whether `path` is in another Git checkout kept below `root` (a
+/// `git worktree` or a clone in `.worktrees/`): a directory between them
+/// holds its own `.git`. Its edits are not the app's.
+pub(crate) fn in_nested_checkout(root: &Path, path: &Path) -> bool {
+    let Ok(rest) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut dir = root.to_path_buf();
+    let mut parts = rest.components().peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            break;
+        }
+        dir.push(part);
+        if dir.join(".git").exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Private IPv4 addresses of physical network interfaces (`en*`; on Linux
@@ -744,6 +832,67 @@ mod tests {
         assert_eq!(super::short_name(&two, &two[1]), "iOS Simulator (iPad Air)");
     }
 
+    /// A file a glob outside the app matches, added in a directory that is
+    /// new, reaches the session; what the glob's search skips does not.
+    #[test]
+    fn glob_watch_sees_a_file_added_in_a_new_directory_outside_the_app() {
+        use std::{
+            collections::HashSet,
+            path::Path,
+            sync::{Arc, Mutex},
+            time::{Duration, Instant},
+        };
+
+        let top = std::env::temp_dir().join(format!("nsh-glob-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&top);
+        let write = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(&top.join("lib/src/A.preview.tsx"), "export const a = 1;\n");
+        write(
+            &top.join("app/App.tsx"),
+            "import { mount, Text } from \"nsh\";\n\
+             const all = import.meta.glob(\"/../lib/**/*.preview.tsx\");\n\
+             mount(() => <Text>{Object.keys(all).join()}</Text>);\n",
+        );
+        let top = dunce::canonicalize(&top).unwrap();
+        let hot = nsh_bundler::bundle_hot(&top.join("app/App.tsx"), &[]).unwrap();
+        let dirs: Vec<&Path> = hot.glob_dirs.iter().map(|g| g.dir.as_path()).collect();
+        assert_eq!(dirs, [top.join("lib")]);
+
+        let globs = Arc::new(Mutex::new(hot.glob_dirs.clone()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut watcher = super::glob_watcher(globs.clone(), tx).unwrap();
+        let mut watched = HashSet::new();
+        super::watch_globs(&mut watcher, &globs, &mut watched);
+        assert!(watched.contains(&top.join("lib")));
+        // The watcher's stream starts.
+        std::thread::sleep(Duration::from_millis(300));
+        write(&top.join("lib/node_modules/x/C.preview.tsx"), "");
+        write(&top.join("lib/src/new/D.tsx"), "");
+        let added = top.join("lib/src/new/deeper/B.preview.tsx");
+        write(&added, "export const b = 1;\n");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut seen = false;
+        while let Ok(event) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            assert!(
+                !event
+                    .paths
+                    .iter()
+                    .all(|p| p.ends_with("C.preview.tsx") || p.ends_with("D.tsx")),
+                "{event:?}"
+            );
+            if event.paths.contains(&added) {
+                seen = true;
+                break;
+            }
+        }
+        assert!(seen, "no event for {}", added.display());
+        drop(watcher);
+        let _ = std::fs::remove_dir_all(top);
+    }
+
     #[test]
     fn a_rust_change_right_after_a_tsx_change_is_not_lost() {
         use std::{path::Path, time::Instant};
@@ -772,5 +921,31 @@ mod tests {
             .unwrap();
         let deadline = Instant::now() + super::DEBOUNCE;
         assert!(!super::rust_changed_until(&rx, deadline, is_rust));
+    }
+
+    #[test]
+    fn edits_in_a_checkout_kept_in_the_app_do_not_rebuild_it() {
+        use notify::{
+            Event, EventKind,
+            event::{DataChange, ModifyKind},
+        };
+
+        let dir = std::env::temp_dir().join(format!("nsh-nested-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nested = dir.join(".worktrees/feature");
+        std::fs::create_dir_all(nested.join("src")).unwrap();
+        std::fs::write(nested.join(".git"), "gitdir: elsewhere\n").unwrap();
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        let saved = |path: std::path::PathBuf| {
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(path)
+        };
+        assert!(super::is_source(&saved(dir.join("App.tsx")), &dir));
+        assert!(super::is_source(&saved(dir.join("src/view.tsx")), &dir));
+        assert!(!super::is_source(&saved(nested.join("App.tsx")), &dir));
+        assert!(!super::is_source(&saved(nested.join("src/view.tsx")), &dir));
+        // The app's own `.git` is not a checkout below it.
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        assert!(super::is_source(&saved(dir.join("App.tsx")), &dir));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

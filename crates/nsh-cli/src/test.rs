@@ -120,10 +120,10 @@ pub(crate) fn test(
     if device.is_some()
         && !matches!(
             target,
-            Some(crate::run::Target::Ios | crate::run::Target::Tizen)
+            Some(crate::run::Target::Ios | crate::run::Target::Android | crate::run::Target::Tizen)
         )
     {
-        bail!("--device goes with --target ios or tizen");
+        bail!("--device goes with --target ios, android or tizen");
     }
     if display.is_some() && !target.is_some_and(crate::test_host::opens_on_a_display) {
         bail!("{}", crate::test_host::DISPLAY_TARGETS);
@@ -494,9 +494,8 @@ fn build_for_runner(entry: &Path, kind: Entry, work_dir: &Path, n: usize) -> Rep
 fn test_file_bytecode(entry: &Path) -> anyhow::Result<Compiled> {
     let mut sets = crate::ui_sets().to_vec();
     sets.extend(
-        nsh_testing::test_sets()
-            .iter()
-            .flat_map(nsh_core::element::Registry::sets)
+        nsh_core::element::Registry::served_sets(&nsh_testing::test_sets())
+            .into_iter()
             .map(SetDescription::from),
     );
     bytecode_of(entry, &sets, false)
@@ -980,7 +979,7 @@ test src/lib.rs - App (line 3) ... ok
         std::fs::remove_dir_all(&dir).unwrap();
         assert_eq!(
             err.map(|e| e.to_string()).as_deref(),
-            Some("--device goes with --target ios or tizen")
+            Some("--device goes with --target ios, android or tizen")
         );
     }
 

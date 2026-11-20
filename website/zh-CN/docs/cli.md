@@ -94,7 +94,7 @@ nsh run my-app/App.tsx --target web
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--target <TARGET>` | macOS 上为 `macos`，Linux 上为 `linux`，Windows 上为 `windows` | `catalyst`：Mac Catalyst 宿主，一个 iPhone 大小的窗口（390×844）。`ios`：iOS 模拟器中的宿主。`android`：Android 设备或模拟器上的宿主。`macos`：AppKit 宿主，一个 1200×800 的窗口（[macOS](./macos.md)）。`linux`：GTK 宿主，一个 390×844 的窗口（[Linux](./linux.md)）。`windows`：Win32 宿主，一个 1200×800 的窗口（[Windows](./windows.md)）。`gpui`：GPUI 宿主，一个 1200×800 的窗口，可在 macOS、Windows 或 Linux 上运行，以嵌入它的 GPUI 应用的方式显示 TSX 应用（[GPUI](./gpui.md)）。`tui`：当前终端中的宿主（[TUI](./tui.md)）。`web`：开发服务器的页面，地址会打印出来（[Web](./web.md#在浏览器里开发)）。`tizen-web`：同一个页面作为三星电视的页面，以电视 idiom 运行，在本机浏览器中打开；配置了 `nsh.json` 的 `tizen.signing` 时也在电视上运行（[Web](./web.md#三星电视)）。`tizen`：三星电视或 Tizen 模拟器上的 NSH 开发包，原生运行，通过 `sdb` 安装和连接（需要 `nsh.json` 的 `tizen.signing`；[Tizen](./tizen.md)）。其他名字运行在 NSH 之外构建的同名平台（[外部 target](#外部-target)）。 |
-| `--device <DEVICE>` | | 要使用的 iOS 模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定。默认：已启动的模拟器，否则启动最新的 iPhone。使用 `tizen-web` 和 `tizen` 时：电视的 `sdb` 序列号（`192.168.1.5:26101`；`tizen` 默认用 `sdb devices` 列出的唯一一台）。 |
+| `--device <DEVICE>` | | 要使用的 iOS 模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定。默认：已启动的模拟器，否则启动最新的 iPhone。配合 `--target android`：要使用的设备或模拟器，按序列号（`emulator-5554`，即 `adb devices` 列出的）指定。默认：`ANDROID_SERIAL` 指定的那台，否则第一台。使用 `tizen-web` 和 `tizen` 时：电视的 `sdb` 序列号（`192.168.1.5:26101`；`tizen` 默认用 `sdb devices` 列出的唯一一台）。 |
 | `--app <DIR>` | 入口所在目录 | 入口放在应用之外时（例如设计工具的入口）应用的目录：`nsh run ~/tool/Stage.tsx --app my-app`。应用的 `nsh.json`、crate、资源、翻译和 `.nsh/` 都取自这个目录，它的模块保留应用自己的入口给出的名称，会话同时监视它和入口。不给 `ENTRY` 时使用这个目录自己的入口。仅限 TSX 入口。 |
 | `--port <PORT>` | 此应用上次的端口，否则从 `8790` 起第一个空闲端口 | 开发服务器端口。等待此端口上的旧 NSH 开发会话清理完成后接管。 |
 | `--release` | | 压缩代码并去掉调试信息。release 包没有热模块替换：每次保存都会重新加载应用。 |
@@ -107,7 +107,7 @@ nsh run my-app/App.tsx --target web
 | `--display <N>` | 主显示器 | 窗口在哪个显示器上居中打开：`1` 是主显示器（带菜单栏的那个），`2` 是下一个，依此类推；没有这个编号的显示器时在主显示器上打开（`--target macos`，TSX 入口）。 |
 | `--idiom <IDIOM>` | `nsh.json` 的 `dev.idiom`，否则为宿主自己的 | 应用以哪类设备运行：`tv` 让它像在电视上一样运行（`platform.tv`、`tv={{…}}` 属性、移动端行为），从而在本机上构建 10 英尺布局和焦点；`desktop` 让 Web 页面无论浏览器的指针和宽度如何都以桌面界面风格运行（[电视](./platform-specific.md#在桌面上构建电视布局)）。适用于 `--target gpui`（窗口尺寸不变：`--window-size 1920x1080` 显示电视的整个屏幕）和 `--target web`；其他宿主以其设备自己的界面风格运行，会拒绝该参数。 |
 
-使用 `--target android` 时，会选用 `adb devices` 列出的第一台设备；开发服务器的端口通过 `adb reverse` 转发到设备上。参见[快速开始](./getting-started.md)和[开发服务器与调试](./dev-server-and-debugging.md)。
+使用 `--target android` 时，会选用 `--device` 或 `ANDROID_SERIAL` 指定的设备，否则选用 `adb devices` 列出的第一台（连着多台时 `nsh` 会提示用的是哪一台）；开发服务器的端口通过 `adb reverse` 转发到设备上。参见[快速开始](./getting-started.md)和[开发服务器与调试](./dev-server-and-debugging.md)。
 
 新会话最多等待十秒，让旧会话完成清理。多个应用可同时运行，各用自己的端口，再次运行同一应用会替换它之前的会话。`--port` 指定的端口被其他程序或旧版 NSH CLI 占用时，会报错并指出端口；`--port 0` 由操作系统分配空闲端口。`nsh run` 只服务本机，使用 `--target ios`、`android`、`web` 或 `tizen-web` 时也服务局域网。
 使用 `--target tui` 时，应用在当前终端中运行，保存源文件时热更新。CLI 和宿主的诊断日志写入应用的 `.nsh/tui.log`；按 `C-h e` 查看日志与错误，按 Escape 或 `C-g` 关闭面板，按 `r` 重新加载。应用错误会自动打开面板，更新后恢复应用画面。每个单元格默认是 8×16 点；`--points-per-cell 10x20` 优先于 `nsh.json` 中的 `"tui": { "pointsPerCell": "10x20" }`，宽高均须是有限正数，重启运行后生效。Rust 应用在为它生成的终端开发宿主中运行根组件，Rust 代码保存后重新构建并重启。
@@ -153,7 +153,7 @@ nsh test [PATH] [--filter <NAME>] [--trace] [--fps] [--junit <FILE>] [--target <
 | `--junit <FILE>` | 同时把结果以 JUnit XML 报告写入 `FILE`，CI 服务按这种格式展示测试结果：每个测试文件一个 `testsuite`，每个测试一个 `testcase`。 |
 | `--target <TARGET>` | 在该平台的开发 host 上运行测试打开的应用，而不是 headless（`macos`、`linux`、`windows`、`gpui`、`tui`、`web`、`tizen-web`、`ios`、`android` 和 `tizen`；`tui` 在内存终端里运行，`web` 在 headless 的 Chrome、Edge 或 Chromium 里运行，`tizen-web` 也在那里运行，用三星电视的页面和电视 idiom，默认 1920×1080，`tizen` 在 `sdb` 列出或 `--device` 指定的三星电视或模拟器上运行，一次一个应用）：步骤用平台自己的输入执行（[测试](./testing-and-trace.md#在真实平台上运行)），`open` 会按该平台检查它的选项，平台无法满足的选项会被拒绝（`ERR_NSH_TEST_UNSUPPORTED`：iOS、Android 和 Tizen 上的 `width` 与 `height`、属于另一类设备的 `platform`）。crate 的 Rust 测试在本机运行，属于不带 `--target` 的运行。 |
 | `--browser <PATH>` | `--target web` 和 `tizen-web` 运行应用所用的 Chrome、Edge 或 Chromium 可执行文件（默认：本机安装的那个）。 |
-| `--device <DEVICE>` | 应用运行的设备：配合 `--target ios` 是模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定（默认：已启动的模拟器，否则启动最新的 iPhone）；配合 `--target tizen` 是电视或模拟器的 `sdb` 序列号（`192.168.1.5:26101`；默认：`sdb devices` 列出的唯一一台）。 |
+| `--device <DEVICE>` | 应用运行的设备：配合 `--target ios` 是模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定（默认：已启动的模拟器，否则启动最新的 iPhone）；配合 `--target android` 是设备或模拟器，按序列号（`adb devices` 列出的）指定（默认：`ANDROID_SERIAL` 指定的那台，否则第一台）；配合 `--target tizen` 是电视或模拟器的 `sdb` 序列号（`192.168.1.5:26101`；默认：`sdb devices` 列出的唯一一台）。 |
 | `--display <N>` | 配合 `--target macos` 或 `gpui`：应用窗口在哪个显示器上居中打开：`1` 是主显示器（在 macOS 上是带菜单栏的那个），`2` 是下一个，依此类推；没有这个编号的显示器时在主显示器上打开。默认在副显示器（主显示器之外的第一个，且不是它的镜像）上打开，让测试运行占用一块单独的屏幕；只有一个显示器时在主显示器上打开。测试在每个显示器上的运行结果相同。 |
 | `--foreground` | 配合 `--target macos`、`windows`、`gpui` 或 `linux`：让应用成为当前活跃的应用，和用户使用时一样。默认应用在后台运行：窗口照常显示，键盘留在你正在输入的应用里，测试的点击、按键和快捷键直接发给这些窗口。在 Linux 桌面上，后台的按键直接输入到控件里，和 Wayland 上一样；测试 Tab、方向键或输入法时请带上 `--foreground`。在没有人输入的显示器上（Xvfb），Linux 应用无论是否带这个选项都按前台方式运行。依赖应用处于活跃状态的测试（`lifecycle()` 随应用是否活跃而变），或 `examples/gallery/tools/perf.py` 这类性能测量（它会传入该选项），应带上它运行。 |
 | `--idiom <IDIOM>` | 测试打开的应用以哪种界面风格运行，覆盖 `nsh.json` 的 `dev.idiom`，与 `nsh run` 相同：`tv` 让它们像在电视上一样运行（`platform.tv`、`tv={{…}}` 属性），从而在本机上测试电视的布局和焦点；`desktop` 以桌面运行。适用于 `--target gpui` 和 `--target web`（覆盖测试的 `open` 给出的桌面 `platform`）；其他目标和 headless 运行会拒绝该参数，并忽略 `nsh.json` 中的设置，同时给出警告（[电视](./platform-specific.md#在桌面上构建电视布局)）。 |
@@ -229,7 +229,7 @@ nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web|t
 | `--build <BUILD>` | 构建号。 |
 | `--icon <ICON>` | 应用图标：正方形 PNG，最好是 1024×1024。 |
 | `--sign <IDENTITY>` | iOS 设备：代码签名身份，例如 `"Apple Development: …"`。`tizen-web` 和 `tizen`：Tizen SDK 的 `tz` 签名所用的证书配置（默认：`nsh.json` 的 `tizen.signing`）。 |
-| `--profile <FILE>` | iOS 设备：描述文件（`.mobileprovision`），entitlements 取自其中。 |
+| `--profile <FILE>` | iOS 设备：描述文件（`.mobileprovision`），entitlements 取自其中。可以重复传入，给每个应用扩展（`nsh.json` `ios.extensions`）各传一个。 |
 | `--keystore <FILE>` | Android：release keystore。默认使用 `~/.android/debug.keystore` 中的调试密钥（不存在时创建）。 |
 | `--key-alias <ALIAS>` | Android：keystore 中的密钥别名。 |
 | `--keystore-password <PASSWORD>` | Android：keystore 密码，也可从 `NSH_KEYSTORE_PASSWORD` 读取。 |
@@ -237,6 +237,7 @@ nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web|t
 | `--abi <ABI>` | Android：APK 包含的 ABI（`arm64-v8a`、`armeabi-v7a`、`x86_64`），可重复或用逗号分隔。默认：`arm64-v8a` 和 `armeabi-v7a`，加上 `--run` 时还有设备的 ABI。 |
 | `--arch <ARCH>` | 包运行的处理器。macOS：`arm64`（Apple 芯片）、`x86_64`（Intel）或 `universal`（两者合在一个可执行文件里）；默认：本机的。为另一种处理器编 runner 需要它的 Rust target（`rustup target add x86_64-apple-darwin`）。Tizen：TPK 的架构（`armv7l`、`aarch64`、`x86_64`），可重复或用逗号分隔：每个架构一个包，指定多个时还生成用于三星 Seller Office 的多架构 `.zip`；默认：`armv7l`，即电视的架构，加上 `--run` 时为电视的架构。 |
 | `--run` | 打包完成后安装并启动应用：在模拟器中（`ios-simulator`）或在已连接的 Android 设备上；`macos`、`linux` 和 `windows` 则直接启动它；`web` 在本机提供站点服务，并打印其地址；`tizen-web` 和 `tizen` 把签名后的包安装到电视上并启动。 |
+| `--device <DEVICE>` | 配合 `--run`：在哪个模拟器里运行应用（`ios-simulator`），按名称或 UDID 指定，与 `nsh run` 相同；或者装到哪台 Android 设备或模拟器上，按序列号（`adb devices` 列出的）指定。Android 的默认：`ANDROID_SERIAL` 指定的那台，否则第一台。 |
 | `--asset-url <URL>` | Web：站点文件所在的 http(s) 地址（CDN），页面按它引用这些文件；`index.html` 和 `manifest.webmanifest` 仍在页面自己的地址下（和不带它时一样按相对路径引用），CDN 要返回 `Access-Control-Allow-Origin`。默认：放在页面旁边，用相对路径引用。`--run` 从本机直接提供站点，所以不带它。 |
 | `--probe` | `tizen-web`：不打包应用，而是写一个包（`tizen-web/probe/`，有签名配置时签名为 `NshProbe.wgt`），在电视上逐一尝试应用页面加载文件的各种方式（module 脚本、import map、iframe 的 realm、用 CORS 获取的脚本、WebAssembly、页面内容安全策略下的 fetch、三星的 `webapis.js`），并显示每一项的结果。 |
 
@@ -421,6 +422,7 @@ nsh revoke --root <ROOT.secret> [--extend <LIST>] [--sequence <N>] [--key <ID>].
 | 变量 | 使用者 | 说明 |
 |---|---|---|
 | `ANDROID_HOME`、`ANDROID_SDK_ROOT` | Android 目标 | Android SDK 位置。后备路径：`~/Library/Android/sdk`。 |
+| `ANDROID_SERIAL` | Android 目标 | `--device` 没有指定时要使用的设备或模拟器的序列号，与 adb 读取它的方式相同。 |
 | `CARGO_TARGET_DIR` | 带 Rust crate 的应用 | 应用运行器的构建目录。默认为应用的 `target/`。 |
 | `NSH_KEYSTORE_PASSWORD` | `package --target android` | keystore 密码。 |
 | `NSH_RUNTIME` | `run`、`package` | 用来替代 CLI 旁边运行时的运行时目录。 |

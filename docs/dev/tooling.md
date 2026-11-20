@@ -18,7 +18,8 @@
   `nsh/jsx-runtime.d.ts` (where `jsxImportSource` finds `JSX`: no intrinsic elements, so every tag is checked as the
   component it names and generic ones are inferred: `native-pipeline.md`), `nsh/globals.d.ts` (console, timers,
   frames, the web APIs and the control flow components `If` / `Each`), and from the bundler `nsh/assets.d.ts` (what
-  image and font imports give), and the three theme files, built from the active theme document
+  image and font imports give), `nsh/set-assets.d.ts` (`nsh_bundler::set_assets_declaration`: each file the UI sets
+  ship declared by its URL, `asset:/@<package>/<path>`, as importing it gives it), and the three theme files, built from the active theme document
   (`theme-format.md`: the app's `nsh.json` `"theme"`, else the first a UI set registers, else the fallback, under
   `"themeOverrides"`; `nsh_bundler::app_theme`) and the sets' role declarations: `nsh/tokens.d.ts`
   (`nsh_bundler::tokens_declaration`: `interface Tokens` of `nsh`, each token by name with its TS value type (`nsh_core::element::token_ts_type`: the canonical JSON form
@@ -174,6 +175,12 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
   directory are watched too, using the last
   successful bundle's dependencies. The gallery and website demos share `examples/nsh-gallery-ui`; saving one of
   its components or its theme rebuilds the app as saving a file inside the app does.
+- The directories outside the app an `import.meta.glob` pattern searches (`nsh_bundler::Bundle::glob_dirs`: its
+  leading part without a wildcard, with the pattern below it) are watched recursively by a watcher of their own
+  (`dev::glob_watcher`), so a file the pattern matches added there, in a new directory too, rebuilds; it passes on
+  only the events of such files (`GlobDir::matches`: not in `node_modules`, `.nsh`, `target` or a dot directory
+  unless the pattern names it), so a library's own build in its `target/` rebuilds nothing. A directory that cannot
+  be watched is warned of and tried again after the next build.
 - Bytecode version negotiation: the client reports `BYTECODE_VERSION` in its handshake; on a mismatch the server sends JS source instead
   (an empty version, the web host's, asks for source without a warning).
 - Limits: hosts run the app on its own, without limits, unless `--limits` asks for an embedding app's
@@ -414,7 +421,10 @@ views that report it:
   `ScrollDragEnd`, `ScrollEnd`), and fails on one the user cannot scroll (`scrollable={false}`); the model applies `ScrollBy` and `ScrollTo` / `ScrollToEnd` and reports where a
   command moved the view;
 - `drag` (`headless/pointer.rs`): a finger lands on the match's middle (`Screen::bounds_in_root`), rests 100 ms,
-  moves 10 points a frame and lifts, and what takes it is decided as the desktop backends decide it, with
+  moves 10 points a frame and lifts; on a desktop environment or the web it is the mouse (`Headless::pointer`, the
+  pointer `hover` has): its touches say `PointerType::Mouse` and it grabs as a mouse
+  (`GrabOptions::touch` false: no scroll view takes it), as the desktop backends and the web do. What takes it is
+  decided as the desktop backends decide it, with
   `nsh_core::input` over the views from the match out (`Screen::link`: events, tracked states, gesture values, the
   scroll axis, `panActivation`): the views listening to touches hear `Touch` (start, moves, end; the JS responder's
   `SetJsResponder` block keeps native drags from starting), past the slop a pan (`PanStart`, its `pan` values moved
@@ -442,8 +452,8 @@ views that report it:
   On a real target `TestStep::DragAndHold` / `Drop` reach `Native::drag_and_hold` / `drop_at` (Linux; the others
   refuse them for now).
 - `hold_keys` (`headless/keyboard.rs`, `app.keyboard.down` / `up`): the modifiers held, which `press_payload` and
-  hover events carry; a drag's press is a full press payload (its start in the pressed view), and on a desktop a
-  drag presses at once even in a scroll view, as a mouse does. On Linux the agent holds them for its simulated
+  hover events carry; a drag's press is a full press payload (its start in the pressed view), and the mouse's drag
+  presses at once even in a scroll view. On Linux the agent holds them for its simulated
   pointer (`input::hold`); other real targets refuse.
 - `press_key` (`headless/keyboard.rs`, `app.keyboard.press`): the keystroke as `nsh`'s `keymap` parses it for the
   environment's OS; on every environment (a hardware keyboard: phones and tablets have one too) the root's keymap
@@ -878,7 +888,8 @@ the header's back button (the bar button carrying the back chevron's mask); dial
 `UIAlertController`'s button; screenshots are `drawViewHierarchyInRect:` as a PNG; a step waits for finite Core Animation animations and gliding scroll views too.
 The system's appearance is the simulator's: the CLI switches it (`simctl ui appearance`) and restores it after the
 app; the screen keeps its device's size. Android (`nsh-platform-android`, feature `dev`; `TestAgent.java`;
-`nsh-cli/src/test_android.rs`): the CLI installs the host on the first device `adb devices` lists and starts it per
+`nsh-cli/src/test_android.rs`): the CLI installs the host on the device `--device` or `ANDROID_SERIAL` names, else the
+first one `adb devices` lists (`android::device`), and starts it per
 `open` with the dev server's port forwarded (`adb reverse`) and a data directory of its own in the host's cache
 (`dataDir`, emptied as it starts). As `nsh run --target android` does for a TSX app, it passes the variables of its
 environment that the app's `capabilities.process.env` declares as `nsh.env.<name>` string extras
@@ -1015,24 +1026,28 @@ program that describes them, builds the hosts and runners with them, and does ev
 - `rust_app::crates` reads `"rust"` (a string or a non-empty list of strings) and checks the list when the
   workspace is written: a crate listed twice (by any path), two packages of one name (Cargo takes `-` and `_` as
   one) or two crates whose `#[native_module("…")]` has the same specifier (read from the crate's `[lib] path` or
-  `src/lib.rs`) fail with the two paths and what to change. `Registry::merged` refuses two sets registering
-  components or modules of the same name when an engine starts. Crates may depend on each other, or on crates not
-  listed (a shared crate of components), through plain Cargo path dependencies; only listed ones export to TS.
+  `src/lib.rs`) fail with the two paths and what to change. Two sets registering one component are refused as the
+  description is read (`description::component_clash`), as `Registry::merged` would refuse them when an engine
+  starts. A crate may serve a library's set besides its own (`Registry::serve`, `docs/dev/rust-modules.md`).
+  Crates may depend on each other, or on crates not listed (a shared crate of components), through plain Cargo path
+  dependencies; only listed ones export to TS.
 - A Cargo workspace in `<app>/.nsh/rust`, written on every command (files only when they change; the `cli` crate and
   `app.json` earlier versions wrote are removed), each member depending on every listed crate:
   - `describe` (nsh-core and the app's crates, nothing else): calls each crate's entry and prints one JSON document,
     `nsh_core::element::description::Description` (format `FORMAT`, the nsh-core version that wrote it, then per crate in
-    `"rust"`'s order its specifier, exports with their kinds, TypeScript declarations, re-exported runtime values and
-    types, the values nsh-js makes for it, the files it ships, the exports TS sees without a doc comment, which
-    `nsh` warns of as it writes `.nsh/types`, and the theme documents it registers, `theme_documents` (`{ json,
-    fallback }`: each as written, its own `Registry::theme_document`s, then its `fallback_theme_document`s, marked),
-    of which the bundler and `nsh` take the active one as the core does with `description::theme_document`; and the
+    `"rust"`'s order its sets, `Registry::served_sets`: its own, its submodules and the sets it serves, each once,
+    each with its specifier, `entry` (the index of the crate serving it), exports with their kinds, TypeScript
+    declarations, re-exported runtime values and types, the values nsh-js makes for it, the files it ships, the
+    exports TS sees without a doc comment, which `nsh` warns of as it writes `.nsh/types`, and the theme documents
+    it registers, `theme_documents` (`{ json, fallback }`: each as written, its own `Registry::theme_document`s,
+    then its `fallback_theme_document`s, marked), of which the bundler and `nsh` take the active one as the core
+    does with `description::theme_document`; and the
     roles it registers, `roles` (`Registry::roles`: each `RoleDeclaration`'s name, value type, doc and `required`, of
     every role its components draw with, mapped or not), which `description::roles` merges with the core's own. Format
-    7; a description of another format, 6 included, is refused, naming both; and its class
+    8; a description of another format, 7 included, is refused, naming both; and its class
     extensions, `classExtensions` (`ClassExtensionDescription`: the class's name, Rust type and type parameters, the
     method lines and the extension's Rust type), which `.nsh/types` adds to the class's other declarations, with the
-    Rust type of each class it exports, `classTypes`);
+    Rust type of each class it exports, `classTypes`, and of each component it registers, `componentTypes`);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);
   - the hosts and runners, passing the sets after `nsh/base`'s (`vec![nsh_base::registry(), set_app_charts(),
