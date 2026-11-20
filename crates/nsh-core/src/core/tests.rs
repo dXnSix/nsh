@@ -53074,7 +53074,9 @@ fn node_record_sizes() {
     // #1345: the per-node records the core keeps for every node.
     let node = std::mem::size_of::<super::Node>();
     eprintln!("Node {node} B");
-    assert!(node <= 600, "Node grew to {node} bytes");
+    // nshx: 8 bytes over upstream's 600 for the fork's theme scopes
+    // (`appearance`, `scoped_dark`, `token_scope`).
+    assert!(node <= 608, "Node grew to {node} bytes");
 }
 
 #[test]
