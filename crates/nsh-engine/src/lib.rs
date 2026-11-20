@@ -2061,9 +2061,17 @@ const QUIT_GRACE: Duration = Duration::from_millis(20);
 /// dragged; this long after the last the burst is over ([`Core::set_resizing`]).
 const RESIZE_BURST_GAP: Duration = Duration::from_millis(120);
 
+/// `context` with the files `ui_sets` and their submodules ship, which a
+/// library lists while the engine runs it
+/// (`nsh_core::element::served_asset_files`).
+fn served_assets(context: EngineContext, ui_sets: &[nsh_core::element::Registry]) -> EngineContext {
+    let sets = ui_sets.iter().flat_map(nsh_core::element::Registry::sets);
+    context.with(nsh_core::element::ServedAssets::of(sets))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn run<M: TextEngine + 'static, S: MountSink>(
-    config: EngineConfig,
+    mut config: EngineConfig,
     text_engine: M,
     sink: S,
     messages: (Sender<Message>, Receiver<Message>),
@@ -2075,6 +2083,7 @@ fn run<M: TextEngine + 'static, S: MountSink>(
     raise_thread_priority();
     // The thread's time is the engine's from its first line of JS on.
     let _clock = config.clock.enter();
+    config.context = served_assets(std::mem::take(&mut config.context), &config.ui_sets);
     let _context = config.context.enter();
     let Some(mut driver) = Driver::start(config, text_engine, Rc::new(sink), tx, &rx, stop) else {
         return;
@@ -2176,7 +2185,7 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
     /// starts, as [`Engine::start_with`]'s does: the link that launched the
     /// app is there before its code runs.
     pub fn start_with<S: MountSink>(
-        config: EngineConfig,
+        mut config: EngineConfig,
         text_engine: M,
         sink: S,
         setup: impl FnOnce(&EngineControl),
@@ -2191,6 +2200,7 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
         };
         setup(&control);
         let _clock = config.clock.enter();
+        config.context = served_assets(std::mem::take(&mut config.context), &config.ui_sets);
         let _context = config.context.enter();
         let mut driver = Driver::start(config, text_engine, Rc::new(sink), tx, &rx, stop)?;
         driver.state.core.set_download_cleanup(downloads);
@@ -2247,6 +2257,8 @@ impl<M: TextEngine + 'static> LocalEngine<M> {
             .state
             .core
             .extend_components(nsh_core::element::Registry::merged(&sets));
+        // Entered again by every pump.
+        self.driver.context = served_assets(std::mem::take(&mut self.driver.context), ui_sets);
     }
 
     /// Hands one key transition of the focused view `id` to the engine now,

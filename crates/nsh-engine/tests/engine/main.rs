@@ -68,6 +68,7 @@ mod rust_renderers;
 mod rust_scrolling;
 mod rust_styles;
 mod rust_touch;
+mod served_assets;
 mod shader;
 mod shutdown;
 mod split;

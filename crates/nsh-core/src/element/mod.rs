@@ -74,6 +74,7 @@ mod resource;
 pub(crate) mod responder;
 mod rows;
 mod scrollable;
+mod served_assets;
 pub(crate) mod services;
 pub(crate) mod status_bar;
 mod style;
@@ -218,6 +219,7 @@ pub use self::{
     responder::{ClaimRequest, PanGesture, ResponderEvent, TouchClaim},
     rows::{RowAccessor, RowRef, RowText, Rows},
     scrollable::Scrollable,
+    served_assets::{ServedAssets, served_asset_files},
     services::{Fetch, HttpResponse, Prefetch},
     style::{
         AdaptiveColor, AdaptiveGradient, AdaptiveShadow, BorderCurve, FontWeight, LayoutDirection,
