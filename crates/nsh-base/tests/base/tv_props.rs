@@ -12,7 +12,6 @@ use std::{
 use nsh_base::popover;
 use nsh_core::{
     MountItem, NodeId, Size,
-    element::Root,
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -63,7 +62,7 @@ fn TvScreen() -> impl IntoElement {
 fn start(os: Os, idiom: Idiom) -> (Headless, Arc<Mutex<Seen>>) {
     let mut config = EngineConfig {
         viewport: Size::new(px(1280.0), px(720.0)),
-        ..EngineConfig::new(Root::of::<TvScreen>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<TvScreen>())
     };
     config.environment.os = os;
     config.environment.idiom = idiom;

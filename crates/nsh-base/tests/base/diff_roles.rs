@@ -9,7 +9,7 @@ use std::time::Duration;
 use nsh_base::{DiffIndicators, DiffLayout, diff_view, role};
 use nsh_core::{
     Color, Size,
-    element::{Patch, PatchValues, Root},
+    element::{Patch, PatchValues},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -55,7 +55,7 @@ fn Harness() -> impl IntoElement {
 /// The harness drawn with the app's theme document `theme` (`None`:
 /// `nsh/base`'s default) and its overrides `overrides`.
 fn start<C: Component<Props = ()>>(theme: Option<String>, overrides: Option<Patch>) -> Headless {
-    let mut root = Root::of::<C>();
+    let mut root = nsh_testing::windowed_root::<C>();
     if let Some(theme) = theme {
         root = root.theme(theme);
     }

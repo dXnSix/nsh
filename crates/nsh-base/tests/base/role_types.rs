@@ -8,7 +8,7 @@ use std::time::Duration;
 use nsh_base::{DiffIndicators, DiffLayout, diff_view, text_view};
 use nsh_core::{
     Color, Size,
-    element::{Patch, PatchValues, Registry, Root, TokenKey},
+    element::{Patch, PatchValues, Registry, TokenKey},
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -92,7 +92,7 @@ fn start<C: Component<Props = ()>>() -> Headless {
     let mut config = EngineConfig {
         viewport: Size::new(px(900.0), px(700.0)),
         ui_sets: vec![nsh_base::registry(), acme],
-        ..EngineConfig::new(Root::of::<C>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<C>())
     };
     config.environment.os = Os::Linux;
     config.environment.idiom = Idiom::Desktop;

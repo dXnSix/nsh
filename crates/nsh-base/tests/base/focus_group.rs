@@ -11,11 +11,7 @@ use std::{
 
 use nsh_base::focus_group;
 use nsh_core::{
-    MountItem, NodeId, Size,
-    element::{FocusTarget, Root},
-    focus::GroupConfig,
-    platform::Os,
-    prelude::*,
+    MountItem, NodeId, Size, element::FocusTarget, focus::GroupConfig, platform::Os, prelude::*,
 };
 use nsh_engine::EngineConfig;
 use nsh_testing::Headless;
@@ -69,7 +65,7 @@ fn start() -> (Headless, Arc<Mutex<Seen>>) {
     let mut config = EngineConfig {
         viewport: Size::new(px(400.0), px(300.0)),
         clock: nsh_engine::Clock::manual(std::time::SystemTime::now()),
-        ..EngineConfig::new(Root::new::<Row>(|| RowProps {}))
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<Row>(|| RowProps {}))
     };
     config.environment.os = Os::MacOs;
     let mut app = Headless::start(config).expect("the engine starts");

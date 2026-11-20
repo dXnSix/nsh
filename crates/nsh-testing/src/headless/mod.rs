@@ -4628,7 +4628,7 @@ mod tests {
 
         #[test]
         fn return_and_space_press_the_focused_control_before_the_shortcuts() {
-            let mut config = EngineConfig::new(Root::of::<ReturnAllows>());
+            let mut config = EngineConfig::new(crate::windowed_root::<ReturnAllows>());
             config.environment.os = Os::Windows;
             config.environment.idiom = nsh_core::platform::Idiom::Desktop;
             let mut app = Headless::start(config).unwrap();
