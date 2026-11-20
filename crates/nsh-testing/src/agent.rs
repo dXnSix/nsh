@@ -3691,7 +3691,8 @@ mod tests {
 
     #[test]
     fn consecutive_steps_on_a_still_app_skip_redundant_settle() {
-        let (engine, batches) = crate::start(EngineConfig::new(crate::windowed_root::<Tally>())).unwrap();
+        let (engine, batches) =
+            crate::start(EngineConfig::new(crate::windowed_root::<Tally>())).unwrap();
         let model = Arc::new(Model::default());
         let feeding = model.clone();
         std::thread::spawn(move || {

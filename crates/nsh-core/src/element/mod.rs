@@ -165,8 +165,7 @@ pub use self::{
     },
     callback::{
         Callback, CallbackArgs, CallbackHandle, CallbackRet, Exception, JsCall, JsTarget, Settles,
-        Trace,
-        Tracer,
+        Trace, Tracer,
     },
     class::{
         Arg, AsyncCall, Class, ClassDef, ClassInstance, ClassRefs, ClassSpec, Constructor,
