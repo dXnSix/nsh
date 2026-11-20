@@ -1293,6 +1293,9 @@ pub fn run_app(source: AppSource, mut options: AppOptions) -> std::process::Exit
     crate::chrome::set_app_name(&options.title);
     let delegate: Retained<Delegate> = unsafe { msg_send![Delegate::alloc(mtm), init] };
     app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+    // Shown in a design tool (`NSH_DESIGN_SOCKET`): before any window opens.
+    #[cfg(feature = "dev")]
+    crate::design::start(mtm);
 
     // nsh.json `window`: known before the window is made, so its first
     // frame has it.

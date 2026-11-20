@@ -5,7 +5,7 @@
 //! `nsh/desktop`'s `Application`, `nsh/tizen` (Samsung TVs), the
 //! surface-independent `os` metadata,
 //! `net`'s sockets, `websocket`'s connections, `fs/promises`' files and
-//! `nsh/host`'s calls. Their JS face is made
+//! `nsh/host`'s calls, `nsh/design`'s line to a design tool. Their JS face is made
 //! from their specs like a UI set's (`nsh-js` `components.rs`), and so are
 //! their declarations ([`crate::element::declarations`]); `nsh-js` adds what has
 //! to run in JS (the app's listeners, reactive accessors).
@@ -18,6 +18,7 @@ mod accessibility;
 mod android;
 mod audio;
 mod clipboard;
+pub mod design;
 mod desktop;
 mod device;
 mod fonts;
@@ -109,8 +110,10 @@ pub fn registries() -> &'static [Registry] {
         updater.module::<updater::Updater>();
         let mut tizen = Registry::runtime("nsh/tizen");
         tizen.module::<tizen::Tizen>();
+        let mut design = Registry::runtime("nsh/design");
+        design.module::<design::Design>();
         vec![
-            nsh, desktop, mobile, os, net, process, fs, websocket, updater, tizen,
+            nsh, desktop, mobile, os, net, process, fs, websocket, updater, tizen, design,
         ]
     })
 }
