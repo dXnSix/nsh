@@ -797,7 +797,11 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
     // real-window hosts read it (the CLI's `read_config`): an app a test
     // opens below its app's root starts alike headless and in a window.
     // An entry kept outside its app reads them from the app's directory.
-    let config_dir = if options.app_dir.is_some() { &app } else { &cwd };
+    let config_dir = if options.app_dir.is_some() {
+        &app
+    } else {
+        &cwd
+    };
     let main_window = main_window(config_dir)?;
     let application = application(config_dir)?;
     let resolve = ResolveSetup::read(&app)?;
