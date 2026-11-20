@@ -289,3 +289,14 @@ impl<M: TextEngine> Core<M> {
         }
     }
 }
+
+/// What dev tools ask about renders (`core/inspect.rs`).
+#[cfg(feature = "inspect")]
+impl<M: TextEngine> Core<M> {
+    /// The prop whose render function rendered into holder `id`.
+    pub(super) fn dev_render_prop(&self, id: NodeId) -> Option<Arc<str>> {
+        let (slot, _) = self.components.renders.holders.get(&id)?;
+        // The prop, U+001F, the key (`RenderPlace::slot`).
+        slot.split('\u{1f}').next().map(Arc::from)
+    }
+}

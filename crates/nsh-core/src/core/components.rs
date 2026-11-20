@@ -8311,6 +8311,31 @@ fn pixels(n: f64) -> crate::geometry::DevicePixels {
     crate::geometry::DevicePixels(n.round() as i32)
 }
 
+/// What dev tools ask about components' hosts (`core/inspect.rs`).
+#[cfg(feature = "inspect")]
+impl<M: TextEngine> Core<M> {
+    /// The spec of the Rust component node `id` hosts: the one named
+    /// there, whatever its view's root is.
+    pub(super) fn dev_hosted(&self, id: NodeId) -> Option<&Arc<ComponentSpec>> {
+        let inst = self.components.instances.get(&id)?;
+        match inst.inner {
+            Inner::Component(_) => inst.spec.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The prop whose content the script's node `id` holds in a host: a
+    /// named slot's or the rows' holder, or what a render function
+    /// rendered.
+    pub(super) fn dev_given_as(&self, id: NodeId) -> Option<Arc<str>> {
+        self.components
+            .slot_names
+            .get(&id)
+            .cloned()
+            .or_else(|| self.dev_render_prop(id))
+    }
+}
+
 /// Handing a core values without a document: for the core's tests, which
 /// make tokens of values ([`Tokens::to_document`]).
 #[cfg(test)]

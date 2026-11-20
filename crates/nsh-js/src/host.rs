@@ -789,6 +789,14 @@ impl Host {
             .with(|cx| crate::dev_source::instance_props(cx.as_raw().as_ptr(), instance))
     }
 
+    /// The props the Rust component hosted by node `id` was rendered with,
+    /// read as [`Self::instance_props`] reads an instance's. Hot bundles
+    /// keep them for the uses they stamp: none for another node.
+    pub fn host_props(&self, id: NodeId) -> Vec<(String, crate::PropValue)> {
+        self.cx
+            .with(|cx| crate::dev_source::host_props(cx.as_raw().as_ptr(), id))
+    }
+
     /// Moves the ops committed by JS since the last call into `out`.
     pub fn take_ops(&self, out: &mut Vec<Op>) {
         let mut ops = self.shared.ops.borrow_mut();

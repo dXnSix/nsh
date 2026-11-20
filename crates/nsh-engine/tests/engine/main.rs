@@ -22,6 +22,8 @@ mod component_bench;
 mod components;
 mod counter;
 #[cfg(feature = "inspect")]
+mod design_layers;
+#[cfg(feature = "inspect")]
 mod dev_sources;
 mod engine_thread;
 mod errors;

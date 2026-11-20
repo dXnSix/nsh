@@ -19,6 +19,12 @@
 //! [`crate::element::dev_source`], [`crate::element::dev_instances`] and
 //! [`crate::element::dev_instance_props`] are answered in the same round
 //! by the engine, which hands the core its script as [`ScriptSources`].
+//!
+//! A view that hosts a Rust component says so ([`DevNode::component`],
+//! [`DevFlags::host`]): what is under it is the component's view, but for
+//! what the script gave the component ([`DevNode::given`]). A host's detail
+//! has what the component takes ([`DevDetail::component`]), and
+//! [`crate::element::dev_host_props`] what the script passes it.
 
 use std::sync::Arc;
 
@@ -52,8 +58,12 @@ pub struct DevNode {
     pub parent: Option<NodeId>,
     /// Its children, in order.
     pub children: Vec<NodeId>,
-    /// The name of the Rust component whose host it is.
+    /// The name of the component whose host it is: a Rust component's JS
+    /// export (`Button`; [`DevFlags::host`] is set), else a registered
+    /// native component's (kind `native`).
     pub component: Option<Arc<str>>,
+    /// On a node the script gave a Rust component: whose content it is.
+    pub given: Option<DevGiven>,
     /// `class` and `classList` as written, joined by a space.
     pub class: Option<String>,
     /// `testID`.
@@ -68,6 +78,19 @@ pub struct DevNode {
     pub page: Option<Point<Points>>,
     /// What else a tree view shows.
     pub flags: DevFlags,
+}
+
+/// What a node the script made is to the Rust component it is content
+/// of: the node is in that component's view, wherever the view placed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevGiven {
+    /// The component's host: the nearest one above the node that the
+    /// script made too (or that no component's view is around).
+    pub host: NodeId,
+    /// The JS name of the prop the node holds the content of: a named
+    /// slot's or the rows' holder (the glue's node, not the app's), or what
+    /// a render function rendered. `None` for a JSX child.
+    pub slot: Option<Arc<str>>,
 }
 
 /// The states of a node a tree view marks.
@@ -85,6 +108,10 @@ pub struct DevFlags {
     pub overlay: bool,
     /// A dev tool overrides its style.
     pub overridden: bool,
+    /// It hosts a Rust component ([`DevNode::component`]; unnamed for a
+    /// row a component's list wraps): its view made what is under it, but
+    /// for the nodes [`DevNode::given`] it.
+    pub host: bool,
 }
 
 /// A node in full: what a properties panel shows.
@@ -114,6 +141,47 @@ pub struct DevDetail {
     pub cell: Option<crate::CellSlot>,
     /// The layer a dev tool put over its authored values.
     pub dev_override: Option<DevOverride>,
+    /// The Rust component it hosts, as its spec declares it.
+    pub component: Option<DevComponent>,
+}
+
+/// A Rust component as its spec declares it: what a properties panel
+/// offers of it. The values the script passes are the script's
+/// ([`crate::element::dev_host_props`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevComponent {
+    /// Its JS export (`Button`).
+    pub name: String,
+    /// Its props, slots, children, render functions and rows, in the
+    /// spec's order.
+    pub props: Vec<DevPropSpec>,
+    /// Its events.
+    pub events: Vec<DevEventSpec>,
+}
+
+/// One prop of a [`DevComponent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevPropSpec {
+    /// Its JS name.
+    pub name: &'static str,
+    /// What it is: a value, a render function, a named slot, the JSX
+    /// children or virtualized rows.
+    pub kind: crate::element::PropKind,
+    /// Its TypeScript type; empty in a build without the text of
+    /// declarations ([`crate::element::DECLARATIONS`]).
+    pub ts: String,
+    /// It may be left out.
+    pub optional: bool,
+}
+
+/// One event of a [`DevComponent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevEventSpec {
+    /// Its handler's JS name (`onPress`).
+    pub handler: String,
+    /// The TypeScript type of its data (`void` for none); empty in a
+    /// build without the text of declarations.
+    pub data: String,
 }
 
 /// A dev tool's layer over a node's authored values
@@ -243,6 +311,12 @@ pub trait ScriptSources {
     fn instances(&self, id: NodeId) -> Vec<DevInstance>;
     /// The props instance `instance` was rendered with.
     fn props(&self, instance: u32) -> Vec<(String, DevProp)>;
+    /// The props the script passes the Rust component hosted by node `id`,
+    /// read as an instance's are; none where the script keeps none.
+    fn host_props(&self, id: NodeId) -> Vec<(String, DevProp)> {
+        let _ = id;
+        Vec::new()
+    }
 }
 
 /// A question to the core, answered in its next commit.
@@ -265,6 +339,7 @@ pub(crate) enum Request {
     Source(NodeId, crate::element::AnswerSlot<Option<DevSource>>),
     Instances(NodeId, crate::element::AnswerSlot<Vec<DevInstance>>),
     Props(u32, crate::element::AnswerSlot<Vec<(String, DevProp)>>),
+    HostProps(NodeId, crate::element::AnswerSlot<Vec<(String, DevProp)>>),
 }
 
 impl Request {
@@ -272,7 +347,10 @@ impl Request {
     pub(crate) fn is_script(&self) -> bool {
         matches!(
             self,
-            Request::Source(..) | Request::Instances(..) | Request::Props(..)
+            Request::Source(..)
+                | Request::Instances(..)
+                | Request::Props(..)
+                | Request::HostProps(..)
         )
     }
 }

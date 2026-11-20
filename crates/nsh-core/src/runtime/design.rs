@@ -22,8 +22,10 @@
 //! In a dev build (feature `inspect`) the module also reads what the
 //! windows show for the tool: `design.layers()`, the live tree under each
 //! view whose test id starts with a prefix the tool chose, with the
-//! component instances that rendered it; `design.detail()`, one layer in
-//! full; and `design.setOverrides()`, classes and states put on every
+//! component instances that rendered it, a view that hosts a Rust
+//! component as that component and under it what the app gave it;
+//! `design.detail()`, one layer in full, a host with what its component
+//! takes; and `design.setOverrides()`, classes and states put on every
 //! element written at a place in the source, again whenever it is made
 //! anew. Without the hooks they answer nothing.
 //!
@@ -274,20 +276,41 @@ impl Design {
     /// id>: { nodes: [...] } }, gone: [<roots no longer there>] }`, or `null`
     /// when nothing changed or the build has no dev hooks. All roots again
     /// after `setOverrides`. A node is `{ id, parent, kind, name, class,
-    /// testId, text, x, y, width, height, source, hidden, overridden }`; a
-    /// component instance (`kind: "component"`, `{ id, parent, name, key,
-    /// source }`) sits between the nodes it rendered and their parent, its
-    /// id above every node's ([`layers::INSTANCE_IDS`]). Instances whose
-    /// key contains `hide` (the tool's own components) are left out. What a
-    /// Rust component draws inside its host is not listed.
+    /// testId, text, x, y, width, height, source, hidden, overridden,
+    /// slot }`; a component instance (`kind: "component"`, `{ id, parent,
+    /// name, key, source }`) sits between the nodes it rendered and their
+    /// parent, its id above every node's ([`layers::INSTANCE_IDS`]).
+    /// Instances whose key contains `hide` (the tool's own components) are
+    /// left out.
+    ///
+    /// A view that hosts a Rust component is `kind: "host"`, its `name`
+    /// the component's JS export and its `source` where the app wrote it
+    /// (a registered native view stays `kind: "native"`). What the
+    /// component draws inside its host is not listed, the components its
+    /// view nests neither; what the app gave it is, under the host in the
+    /// order the view placed it: its JSX children, and for each prop the
+    /// app fills with content the node holding it, whose `slot` is the
+    /// prop's JS name (a named slot's holder, the list of a rows prop, what
+    /// a render function rendered: the glue's nodes, with no `source`; the
+    /// app's own are under them). A row a component's list wraps lists
+    /// only the app's row.
     pub(crate) async fn layers(prefix: String, hide: Option<String>) -> JsonValue {
         layers::layers(&prefix, hide.as_deref()).await
     }
 
     /// Layer `id` in full: a node's style, box, states, events, role,
-    /// label and source, or a component instance's props (`{ props: [{
-    /// name, value: { kind, value } }] }`); `null` when it is gone or the
-    /// build has no dev hooks.
+    /// label, source and component, or a component instance's props (`{
+    /// props: [{ name, value: { kind, value } }] }`); `null` when it is
+    /// gone or the build has no dev hooks. A host's `component` is what
+    /// its Rust component takes, from its spec: `{ name, props: [{ name,
+    /// kind: "value" | "renderer" | "slot" | "children" | "items", type,
+    /// optional, value }], events: [{ name, type, value }] }` (an event's
+    /// `name` is its handler's; `type` is TypeScript, `null` in a build
+    /// without the text of declarations, as apps' hosts are). `value` is
+    /// what the app passes, read as an instance's props are (a getter is
+    /// `{ kind: "getter" }`, never called; rows by their data, `each`),
+    /// `null` for what it leaves out; hot bundles keep it, so without one
+    /// every `value` is `null`. Other nodes have `component: null`.
     pub(crate) async fn detail(id: f64) -> JsonValue {
         layers::detail(id).await
     }
@@ -341,9 +364,12 @@ pub(crate) mod layers {
         use crate::{
             NodeId,
             element::{
-                dev_instance_props, dev_instances, dev_node, dev_override, dev_source, dev_tree,
+                PropKind, dev_host_props, dev_instance_props, dev_instances, dev_node,
+                dev_override, dev_source, dev_tree,
             },
-            inspect::{DevDetail, DevInstance, DevNode, DevOverride, DevProp, DevSource},
+            inspect::{
+                DevComponent, DevDetail, DevInstance, DevNode, DevOverride, DevProp, DevSource,
+            },
         };
 
         /// An override as the tool asks for it.
@@ -368,6 +394,13 @@ pub(crate) mod layers {
 
         thread_local! {
             static STATE: RefCell<State> = RefCell::default();
+        }
+
+        /// The layers of a root: its nodes in tree order, and the node
+        /// each is listed under where that is not the root.
+        struct Shown<'a> {
+            nodes: Vec<&'a DevNode>,
+            parents: HashMap<NodeId, NodeId>,
         }
 
         /// What the core says of a node besides the tree.
@@ -408,18 +441,19 @@ pub(crate) mod layers {
                     continue;
                 };
                 present.insert(root.to_owned());
-                let nodes = below(node, &by_id);
-                let print = fingerprint(&nodes);
+                let shown = below(node, &by_id);
+                let nodes = &shown.nodes;
+                let print = fingerprint(nodes);
                 let unchanged = STATE.with_borrow(|s| s.seen.get(root) == Some(&print));
                 if unchanged && !dirty {
                     continue;
                 }
                 STATE.with_borrow_mut(|s| s.seen.insert(root.to_owned(), print));
-                let facts = facts(&nodes).await;
-                apply(&nodes, &facts).await;
+                let facts = facts(nodes).await;
+                apply(nodes, &facts).await;
                 roots.insert(
                     root.to_owned(),
-                    json!({ "nodes": list(&nodes, &facts, hide) }),
+                    json!({ "nodes": list(&shown, &facts, hide) }),
                 );
             }
             let gone: Vec<String> = STATE.with_borrow_mut(|s| {
@@ -459,9 +493,9 @@ pub(crate) mod layers {
             let Ok(node) = NodeId::try_from(id) else {
                 return Value::Null;
             };
-            // Both asked before either is awaited: one round trip.
-            let (detail, source) = (dev_node(node), dev_source(node));
-            let (detail, source) = (detail.await, source.await);
+            // All asked before any is awaited: one round trip.
+            let (detail, source, passed) = (dev_node(node), dev_source(node), dev_host_props(node));
+            let (detail, source, passed) = (detail.await, source.await, passed.await);
             let Some(detail) = detail else {
                 return Value::Null;
             };
@@ -478,24 +512,53 @@ pub(crate) mod layers {
                 "role": role(&detail),
                 "label": detail.accessibility.as_ref().and_then(|a| a.label.as_deref()),
                 "source": source.as_ref().map(stamp),
+                "component": detail.component.as_ref().map(|c| component(c, &passed)),
             })
         }
 
-        /// The nodes under `root`, in tree order, without `root` and
-        /// without what a Rust component draws inside its host.
-        fn below<'a>(root: &'a DevNode, by_id: &HashMap<NodeId, &'a DevNode>) -> Vec<&'a DevNode> {
-            let mut out = Vec::new();
-            let mut stack: Vec<NodeId> = root.children.iter().rev().copied().collect();
-            while let Some(id) = stack.pop() {
+        /// The nodes under `root`, in tree order, without `root`. Under a
+        /// host only what the app gave its component is listed, wherever
+        /// the component's view placed it, as the host's own: what the
+        /// view draws is not.
+        fn below<'a>(root: &'a DevNode, by_id: &HashMap<NodeId, &'a DevNode>) -> Shown<'a> {
+            let mut shown = Shown {
+                nodes: Vec::new(),
+                parents: HashMap::new(),
+            };
+            // A node to look at: the layer it would be under, and whether
+            // it is in that layer's component's view.
+            let mut stack: Vec<(NodeId, Option<NodeId>, bool)> = Vec::new();
+            let under = |stack: &mut Vec<_>, node: &DevNode, parent: Option<NodeId>| {
+                let in_view = node.flags.host;
+                stack.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .map(|&child| (child, parent, in_view)),
+                );
+            };
+            under(&mut stack, root, None);
+            while let Some((id, parent, in_view)) = stack.pop() {
                 let Some(node) = by_id.get(&id) else {
                     continue;
                 };
-                out.push(*node);
-                if node.component.is_none() {
-                    stack.extend(node.children.iter().rev().copied());
+                if in_view && node.given.is_none() {
+                    // The view's own: looked through for what it places.
+                    stack.extend(
+                        node.children
+                            .iter()
+                            .rev()
+                            .map(|&child| (child, parent, true)),
+                    );
+                    continue;
                 }
+                shown.nodes.push(*node);
+                if let Some(parent) = parent {
+                    shown.parents.insert(node.id, parent);
+                }
+                under(&mut stack, node, Some(node.id));
             }
-            out
+            shown
         }
 
         /// What the nodes show: their shape, classes, text and frames.
@@ -505,6 +568,7 @@ pub(crate) mod layers {
                 node.id.hash(&mut hasher);
                 node.kind.hash(&mut hasher);
                 node.children.hash(&mut hasher);
+                node.component.hash(&mut hasher);
                 node.class.hash(&mut hasher);
                 node.test_id.hash(&mut hasher);
                 node.text.hash(&mut hasher);
@@ -592,12 +656,11 @@ pub(crate) mod layers {
         /// The layers, parents before children: each node, and each
         /// component instance before the first node it rendered.
         fn list(
-            nodes: &[&DevNode],
+            shown: &Shown<'_>,
             facts: &HashMap<NodeId, Facts>,
             hide: Option<&str>,
         ) -> Vec<Value> {
             let hidden = |key: &str| hide.is_some_and(|h| !h.is_empty() && key.contains(h));
-            let inside: HashSet<NodeId> = nodes.iter().map(|n| n.id).collect();
             let chain = |id: NodeId| -> Vec<&DevInstance> {
                 facts.get(&id).map_or_else(Vec::new, |f| {
                     f.instances
@@ -610,8 +673,8 @@ pub(crate) mod layers {
             let wanted: HashSet<String> = STATE.with_borrow(|s| s.wanted.keys().cloned().collect());
             let mut out = Vec::new();
             let mut made = HashSet::new();
-            for node in nodes {
-                let parent = node.parent.filter(|p| inside.contains(p));
+            for node in &shown.nodes {
+                let parent = shown.parents.get(&node.id).copied();
                 let mine = chain(node.id);
                 let theirs = parent.map(chain).unwrap_or_default();
                 let shared = mine
@@ -640,7 +703,11 @@ pub(crate) mod layers {
                 out.push(json!({
                     "id": u64::from(node.id),
                     "parent": layer_parent,
-                    "kind": if node.component.is_some() { "native" } else { node.kind },
+                    "kind": match node.component {
+                        Some(_) if node.flags.host => "host",
+                        Some(_) => "native",
+                        None => node.kind,
+                    },
                     "name": node.component.as_deref().map_or_else(|| title(node.kind), str::to_owned),
                     "class": node.class,
                     "testId": node.test_id.as_deref(),
@@ -652,6 +719,7 @@ pub(crate) mod layers {
                     "source": source.map(stamp),
                     "hidden": node.flags.hidden || node.flags.culled,
                     "overridden": source.is_some_and(|s| wanted.contains(&key(s))),
+                    "slot": node.given.as_ref().and_then(|g| g.slot.as_deref()),
                 }));
             }
             out
@@ -715,6 +783,54 @@ pub(crate) mod layers {
             let role = detail.accessibility.as_ref()?.role;
             let name = format!("{role:?}");
             (name != "None").then(|| lower_first(&name))
+        }
+
+        /// What a host's component takes, with what the app passes it.
+        fn component(component: &DevComponent, passed: &[(String, DevProp)]) -> Value {
+            let value = |name: &str| passed.iter().find(|(n, _)| n == name).map(|(_, v)| prop(v));
+            let props: Vec<Value> = component
+                .props
+                .iter()
+                .map(|p| {
+                    let kind = match p.kind {
+                        PropKind::Value => "value",
+                        PropKind::Renderer => "renderer",
+                        PropKind::Slot => "slot",
+                        PropKind::Children => "children",
+                        PropKind::Items => "items",
+                    };
+                    // Rows are passed as a list's: the data is `each`.
+                    let passed = match p.kind {
+                        PropKind::Items => value("each"),
+                        _ => value(p.name),
+                    };
+                    json!({
+                        "name": p.name,
+                        "kind": kind,
+                        "type": declared(&p.ts),
+                        "optional": p.optional,
+                        "value": passed,
+                    })
+                })
+                .collect();
+            let events: Vec<Value> = component
+                .events
+                .iter()
+                .map(|e| {
+                    json!({
+                        "name": e.handler,
+                        "type": declared(&e.data),
+                        "value": value(&e.handler),
+                    })
+                })
+                .collect();
+            json!({ "name": component.name, "props": props, "events": events })
+        }
+
+        /// A spec's TypeScript, which only builds with declarations
+        /// carry (`element::DECLARATIONS`).
+        fn declared(ts: &str) -> Option<&str> {
+            (!ts.is_empty()).then_some(ts)
         }
 
         fn prop(value: &DevProp) -> Value {
