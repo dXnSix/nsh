@@ -23,6 +23,7 @@ mod components;
 mod counter;
 #[cfg(feature = "inspect")]
 mod design_layers;
+mod design_mode;
 #[cfg(feature = "inspect")]
 mod dev_sources;
 mod engine_thread;

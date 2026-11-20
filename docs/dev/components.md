@@ -338,6 +338,7 @@ reasons: `reactive-components.md`.
   | `<Window>`, `Window.open`, `currentWindow()`, `WindowRef`'s `set({ title, titleBar, … })`, `setMode`, `setBounds`, `setPlacement`, `close()`, `on(..)`, `titleBar()`, `windowState()`, `displays()`, `Menu.setMenuBar`, `Application.quit()`, `Application.restart()`, `Application.launchAtLogin()`, `Application.setLaunchAtLogin(enabled)` (`nsh/desktop`) | `element::desktop::window()` (a builder: `.id()`, `.kind()`, `.title()`, `.attributes(..)`, `.open(..)`, `.on_open_change(..)`, `.content(..)`), `current_window()` / `main_window()` (a `WindowRef`: `set(WindowAttributes)`, `set_mode(..)`, `set_bounds(..)`, `set_placement(..)`, `close()`, `state()`, `on_close_press(..)`, `on_focus_change(..)`, …), `title_bar()`, `displays()`, `set_menu_bar(..)`, `quit()`, `restart()`, `launch_at_login().await` (a `bool`) / `set_launch_at_login(true).await` (a `Result<(), LaunchAtLoginError>`) in a task (`Action::LoginItem` and the core's backend thread, as JS's); the same window commands and native controls, with title-bar insets forwarded through `element::Environment`; `.window_drag(bool)`, `.window_control(..)` and `.window_resize(..)` on any interactive element mark native title bar regions |
   | `Menu.setApplicationMenu(items)`, `Menu.popup(items, at)` (`nsh/desktop`) | `element::desktop::set_application_menu(vec![MenuItem::submenu(..)])` (`None`: the default menu), `popup_menu(items)` / `popup_menu_at(items, at)` (an `Answer<()>` once it closes); `MenuItem::new(label).shortcut("mod+n").icon(asset!("new.svg")).on_select(f)`, `::role(..)`, `::separator()`, `::submenu(..)`. The same `DesktopCommand`s as JS's; a view's item ids start at 2^31, above JS's, and the core runs a view's handler (under the owner that set the menu, while it lives) when the root's `Menu` event reports it; a context menu closing goes to both sides (`element/menus.rs`) |
   | `pixelRatio()`, `Math.round(x * pixelRatio()) / pixelRatio()`, `platform.os` / `version` / `idiom` / `desktop` / `tv` / `catalyst` | `pixel_ratio()`, `round_to_nearest_pixel(v)`, `os()`, `os_version()`, `idiom()`, `is_desktop()`, `is_tv()`, `is_catalyst()` |
+  | `design.active()` (`nsh/design`) | `design_mode()`: whether a design tool started the app (`design-mode.md`); it does not change, and reading it subscribes to nothing |
   | `Intl.NumberFormat()`, `toLocaleString()` (the user's locale) | `locale()` (a `Locale`: `de-DE`; reading subscribes), formatted with a Rust crate: `Intl` and the locale-aware `toLocale*String`s are JS globals of TS apps |
   | `requestAnimationFrame(cb)`, `cancelAnimationFrame` | `request_animation_frame(\|at\| ..)` returns a `Spawned`; in a task `next_frame().await` (an `Instant`), once per frame in a loop |
   | a view's `direction` style | `.direction(LayoutDirection::Rtl)` (`Styled`); the surface's direction follows the user's language |
@@ -633,6 +634,9 @@ does. The surface's direction follows the user's language: its root's (`Prop::La
 the language), else the platform's; in a Rust app the core sets the root's direction from the language from the start
 and again when it changes. A view's `direction` style sets its subtree's, and each node's resolved direction is what
 layout, text and overlay placement read.
+
+`design_mode()` is not one of those parts: whether a design tool started the app (`design-mode.md`) is the
+process's, set before any surface is made, so it is read from `runtime::design` with no signal.
 
 ## In a terminal
 

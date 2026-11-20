@@ -642,6 +642,17 @@ pub fn is_tv() -> bool {
     idiom() == Idiom::Tv
 }
 
+/// Whether a design tool shows this app: it was started as a design host
+/// (`NSH_DESIGN_SOCKET`, [`crate::runtime::design`]; TS: `design.active()`
+/// of `nsh/design`). A view reads it to show what only someone designing
+/// with the component should see, an empty slot's outline, say. It is set
+/// before any view is made and does not change, so reading it subscribes
+/// to nothing, anywhere, and costs one load; false in every app no design
+/// tool started.
+pub fn design_mode() -> bool {
+    crate::runtime::design::attached()
+}
+
 /// The design tokens the app is drawn with (reading them subscribes to
 /// every token: a change of any reaches what read them; [`token`] reads
 /// one).

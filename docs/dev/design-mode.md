@@ -68,6 +68,25 @@ const detail = await design.detail(layerId);
 design.setOverrides({ "src/Card.tsx:12:5": { class: "gap-4", replace: false, states: 0 } });
 ```
 
+A Rust component asks the same with `design_mode()` (`nsh_core::prelude`): true in an app a design
+tool started, once the platform's design host has connected (`design::connect`, before the app
+starts), false in every other app. It never changes while the app runs, so it is a plain read:
+nothing subscribes, it works outside the reactive runtime too, and an app no tool started pays one
+load for it. A view uses it for what only someone designing with the component should see:
+
+```rust
+#[component]
+fn Section(props: SectionProps) -> impl IntoElement {
+    view()
+        .child(props.children)
+        // An empty section is a place to drop content in a design tool, nothing in the app.
+        .child(when(move || design_mode() && props.children.get().is_empty(), || text("Empty")))
+}
+```
+
+The variable alone does not set it: a host without design mode (a release host, a platform with no
+design host) leaves `design_mode()` and `design.active()` false.
+
 `layers(prefix, hide)` reads, with the dev tool hooks (`inspect`), the live tree under each view whose
 test id starts with `prefix`, keyed by the rest of the test id, with each component instance between
 the nodes it rendered and their parent (ids from `1 << 32`), leaving out instances whose key or call
