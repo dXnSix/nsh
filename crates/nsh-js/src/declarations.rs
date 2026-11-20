@@ -575,10 +575,7 @@ fn class_extensions(files: &mut [(String, String)], ui_sets: &[SetDescription]) 
     // Each served set: its file, the classes it exports (JS name, Rust
     // type), its extensions.
     let mut sets: Vec<Served> = Vec::new();
-    for registry in nsh_core::runtime::registries()
-        .iter()
-        .flat_map(Registry::sets)
-    {
+    for registry in Registry::served_sets(nsh_core::runtime::registries()) {
         let Some(specifier) = registry.specifier() else {
             continue;
         };

@@ -6,6 +6,7 @@ use std::path::Path;
 use nsh_testing::{TestResult, TestRun, compiler, run_file};
 
 mod remote_keys;
+mod start_panic;
 
 fn todo() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/testing/todo")

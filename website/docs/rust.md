@@ -944,6 +944,34 @@ name and a specifier of its own; `nsh` reports a repeated one with the two paths
 `"root"` is a component of the first crate listed. During `nsh run` and `nsh dev`, a change to any of them, or to a
 crate they depend on by path, rebuilds the app and restarts it.
 
+### A library's components
+
+A library of components used by several apps can have a module of its own, so every app (and the library's own
+previews and examples) imports its components by one name. The library's crate makes its set in a plain function,
+and each app's crate serves it from its `#[native_module]` function; the app lists only its own crate in `"rust"`:
+
+```rust
+// The library's crate (acme-ui).
+pub fn set() -> Registry {
+    let mut registry = Registry::ui_set("acme/ui");
+    registry.register::<Chip>();
+    registry
+}
+
+// The app's crate.
+#[native_module("app/native")]
+fn native(registry: &mut Registry) {
+    registry.serve(acme_ui::set());
+}
+```
+
+```tsx
+import { Chip } from "acme/ui";
+```
+
+Two crates of one app may serve the same library: it is served once. A component belongs to one set: `nsh` reports a
+component two sets register, naming both, before it builds anything.
+
 ## Browser APIs on the web
 
 On the web, a crate can call the browser's APIs (a WebSocket, `IndexedDB`, …) through wasm-bindgen and `web-sys`;

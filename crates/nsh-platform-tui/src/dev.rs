@@ -87,10 +87,8 @@ impl DevSession {
             device: format!("Terminal ({})", std::env::consts::OS),
             platform: HostPlatform::Tui,
             bytecode_version: BYTECODE_VERSION.to_owned(),
-            ui_sets: options
-                .ui_sets
-                .iter()
-                .flat_map(nsh_core::element::Registry::sets)
+            ui_sets: nsh_core::element::Registry::served_sets(&options.ui_sets)
+                .into_iter()
                 .filter_map(|set| set.specifier().map(str::to_owned))
                 .collect(),
             tests: true,

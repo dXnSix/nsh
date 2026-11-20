@@ -1022,24 +1022,28 @@ program that describes them, builds the hosts and runners with them, and does ev
 - `rust_app::crates` reads `"rust"` (a string or a non-empty list of strings) and checks the list when the
   workspace is written: a crate listed twice (by any path), two packages of one name (Cargo takes `-` and `_` as
   one) or two crates whose `#[native_module("…")]` has the same specifier (read from the crate's `[lib] path` or
-  `src/lib.rs`) fail with the two paths and what to change. `Registry::merged` refuses two sets registering
-  components or modules of the same name when an engine starts. Crates may depend on each other, or on crates not
-  listed (a shared crate of components), through plain Cargo path dependencies; only listed ones export to TS.
+  `src/lib.rs`) fail with the two paths and what to change. Two sets registering one component are refused as the
+  description is read (`description::component_clash`), as `Registry::merged` would refuse them when an engine
+  starts. A crate may serve a library's set besides its own (`Registry::serve`, `docs/dev/rust-modules.md`).
+  Crates may depend on each other, or on crates not listed (a shared crate of components), through plain Cargo path
+  dependencies; only listed ones export to TS.
 - A Cargo workspace in `<app>/.nsh/rust`, written on every command (files only when they change; the `cli` crate and
   `app.json` earlier versions wrote are removed), each member depending on every listed crate:
   - `describe` (nsh-core and the app's crates, nothing else): calls each crate's entry and prints one JSON document,
     `nsh_core::element::description::Description` (format `FORMAT`, the nsh-core version that wrote it, then per crate in
-    `"rust"`'s order its specifier, exports with their kinds, TypeScript declarations, re-exported runtime values and
-    types, the values nsh-js makes for it, the files it ships, the exports TS sees without a doc comment, which
-    `nsh` warns of as it writes `.nsh/types`, and the theme documents it registers, `theme_documents` (`{ json,
-    fallback }`: each as written, its own `Registry::theme_document`s, then its `fallback_theme_document`s, marked),
-    of which the bundler and `nsh` take the active one as the core does with `description::theme_document`; and the
+    `"rust"`'s order its sets, `Registry::served_sets`: its own, its submodules and the sets it serves, each once,
+    each with its specifier, `entry` (the index of the crate serving it), exports with their kinds, TypeScript
+    declarations, re-exported runtime values and types, the values nsh-js makes for it, the files it ships, the
+    exports TS sees without a doc comment, which `nsh` warns of as it writes `.nsh/types`, and the theme documents
+    it registers, `theme_documents` (`{ json, fallback }`: each as written, its own `Registry::theme_document`s,
+    then its `fallback_theme_document`s, marked), of which the bundler and `nsh` take the active one as the core
+    does with `description::theme_document`; and the
     roles it registers, `roles` (`Registry::roles`: each `RoleDeclaration`'s name, value type, doc and `required`, of
     every role its components draw with, mapped or not), which `description::roles` merges with the core's own. Format
-    7; a description of another format, 6 included, is refused, naming both; and its class
+    8; a description of another format, 7 included, is refused, naming both; and its class
     extensions, `classExtensions` (`ClassExtensionDescription`: the class's name, Rust type and type parameters, the
     method lines and the extension's Rust type), which `.nsh/types` adds to the class's other declarations, with the
-    Rust type of each class it exports, `classTypes`);
+    Rust type of each class it exports, `classTypes`, and of each component it registers, `componentTypes`);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);
   - the hosts and runners, passing the sets after `nsh/base`'s (`vec![nsh_base::registry(), set_app_charts(),

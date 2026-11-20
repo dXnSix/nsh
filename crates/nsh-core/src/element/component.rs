@@ -942,6 +942,9 @@ pub struct Registry {
     /// The UI sets served under paths of this one's specifier
     /// ([`Registry::submodule`]).
     submodules: Arc<Vec<Registry>>,
+    /// The UI sets served with this one under specifiers of their own
+    /// ([`Registry::serve`]).
+    served: Arc<Vec<Registry>>,
     /// What each engine serving the set runs once ([`Registry::setup`]).
     setups: Arc<Vec<Setup>>,
 }
@@ -1220,19 +1223,20 @@ impl Registry {
         defs
     }
 
-    /// The class extensions of `sets` and their submodules
-    /// ([`Registry::sets`]), each once (one registered by two sets is one
-    /// extension), by their class's name, then their type's: the methods a
-    /// host serving those sets puts on its classes.
+    /// The class extensions of `sets`, their submodules and the sets they
+    /// serve ([`Registry::served_sets`]), each once (one registered by two
+    /// sets is one extension), by their class's name, then their type's:
+    /// the methods a host serving those sets puts on its classes.
     ///
     /// # Panics
     ///
     /// When two different extensions in those sets add one name to one
-    /// class: a mistake in the code, caught when the host starts.
+    /// class, or two different sets have one specifier: a mistake in the
+    /// code, caught when the host starts.
     #[track_caller]
     pub fn class_extensions_in(sets: &[Registry]) -> Vec<&'static ClassExtensionDef> {
         let mut out: Vec<(&'static ClassExtensionDef, Option<&'static str>)> = Vec::new();
-        for set in sets.iter().flat_map(Registry::sets) {
+        for set in Self::served_sets(sets) {
             for &def in set.extensions.iter() {
                 if out.iter().any(|(e, _)| (e.type_id)() == (def.type_id)()) {
                     continue;
@@ -1375,8 +1379,9 @@ impl Registry {
         self
     }
 
-    /// The components of all of `sets`, for making them by name (the
-    /// core's view of the sets a host serves). Not a module of its own.
+    /// The components of all of `sets` and the sets they serve
+    /// ([`Registry::served_sets`]), for making them by name (the core's
+    /// view of the sets a host serves). Not a module of its own.
     /// Components of different sets may share an export (JS imports them
     /// from different modules), not a name. Modules and classes are not
     /// in it: their calls carry what they run. Its
@@ -1386,14 +1391,18 @@ impl Registry {
     /// # Panics
     ///
     /// When two sets register the same component or two types of the same
-    /// name, or two sets' class extensions add one name to one class.
+    /// name (naming both sets), two sets' class extensions add one name to
+    /// one class, or two different sets have one specifier.
     #[track_caller]
     pub fn merged(sets: &[Registry]) -> Self {
         let mut out = Self {
             extensions: Arc::new(Self::class_extensions_in(sets)),
             ..Self::default()
         };
-        for set in sets.iter().flat_map(Registry::sets) {
+        // The set that registered each component, for the message of a
+        // second one.
+        let mut owners: FxHashMap<&'static str, Option<&'static str>> = FxHashMap::default();
+        for set in Self::served_sets(sets) {
             // Each set's documents, in set order, never merged: the core
             // activates the first ([`super::theme`](super::theme)).
             for (all, theirs) in [
@@ -1414,8 +1423,13 @@ impl Registry {
             let types = Arc::make_mut(&mut out.types);
             for (name, ty) in set.types.iter() {
                 if let Some(old) = types.insert(name, ty.clone()) {
-                    panic!("{}, by two UI sets", same_name(name, old.id, ty.id, None));
+                    let first = owners.get(name).copied().flatten();
+                    panic!(
+                        "{}",
+                        in_two_sets(name, old.id == ty.id, first, set.specifier())
+                    );
                 }
+                owners.insert(name, set.specifier());
             }
         }
         out
@@ -1471,15 +1485,136 @@ impl Registry {
         self
     }
 
-    /// This set and its submodules ([`Registry::submodule`]), each one
-    /// module apps import: what a host serves and the toolchain declares
-    /// for it.
+    /// Serves UI set `set` wherever this one is served, as a module of its
+    /// own under its own specifier (`acme/ui`), not a path of this set's
+    /// (that is [`Registry::submodule`]): a library's set. The library's
+    /// crate makes it in a plain function (`pub fn set() -> Registry`,
+    /// [`Registry::ui_set`] and its registrations), and the crate of each
+    /// app using the library serves it from its `#[native_module]` entry
+    /// (`registry.serve(acme_ui::set())`): every app imports the library's
+    /// components by the library's specifier, and so do the library's own
+    /// files, with nothing more to list. Hosts, the toolchain and the
+    /// declarations take the set with this one ([`Registry::sets`]); two
+    /// sets serving one library serve it once ([`Registry::served_sets`]).
+    ///
+    /// # Panics
+    ///
+    /// When `set` has no specifier (it is no UI set), or its specifier is
+    /// this set's or a path under it.
+    #[track_caller]
+    pub fn serve(&mut self, set: Registry) -> &mut Self {
+        let Some(served) = set.ui_set else {
+            panic!("a served set is a UI set, with a specifier of its own (`Registry::ui_set`)");
+        };
+        if let Some(own) = self.specifier() {
+            let under = served
+                .strip_prefix(own)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+            assert!(
+                !under,
+                "a served set has a specifier of its own, not this set's or a path under it (a submodule's): {served:?} served by {own:?}"
+            );
+        }
+        Arc::make_mut(&mut self.served).push(set);
+        self
+    }
+
+    /// This set, its submodules ([`Registry::submodule`]), then the sets
+    /// it serves ([`Registry::serve`]), each with theirs: every module apps
+    /// import of it, what a host serves and the toolchain declares for it.
+    /// A set served twice (by this set and one of its submodules) is listed
+    /// twice: a list of sets is flattened with [`Registry::served_sets`].
     pub fn sets(&self) -> Vec<&Registry> {
         let mut out = vec![self];
-        for sub in self.submodules.iter() {
-            out.extend(sub.sets());
+        for set in self.submodules.iter().chain(self.served.iter()) {
+            out.extend(set.sets());
         }
         out
+    }
+
+    /// The UI sets `sets` serve ([`Registry::sets`] of each), flattened, in
+    /// order and each specifier once: the modules a host serving `sets`
+    /// serves and the toolchain describes. A set whose specifier is listed
+    /// already is left out when it is the same set: two crates of one app
+    /// built on one library both serve its set, each made by the library's
+    /// function. Two sets are the same when they export the same: the same
+    /// components, modules, classes, interfaces, class extensions and type
+    /// aliases, by name and Rust type. Registries without a specifier (a
+    /// Rust app's components) are all listed.
+    ///
+    /// # Panics
+    ///
+    /// When another set has a specifier listed already, naming the sets
+    /// serving both: a specifier is one module.
+    #[track_caller]
+    pub fn served_sets(sets: &[Registry]) -> Vec<&Registry> {
+        Self::served_sets_by_entry(sets)
+            .into_iter()
+            .map(|(_, set)| set)
+            .collect()
+    }
+
+    /// [`Registry::served_sets`], each with the index in `sets` of the set
+    /// whose [`Registry::sets`] listed it first (`SetDescription::entry`).
+    #[track_caller]
+    pub(crate) fn served_sets_by_entry(sets: &[Registry]) -> Vec<(usize, &Registry)> {
+        let mut out: Vec<(usize, &Registry)> = Vec::new();
+        for (entry, root) in sets.iter().enumerate() {
+            for set in root.sets() {
+                let listed = set
+                    .specifier()
+                    .and_then(|s| out.iter().find(|(_, o)| o.specifier() == Some(s)));
+                match listed {
+                    None => out.push((entry, set)),
+                    Some((_, listed)) if listed.same_exports(set) => {}
+                    Some((first, _)) => {
+                        let specifier = set.specifier().unwrap_or_default();
+                        let by = |root: &Registry| match root.specifier() {
+                            Some(s) if s == specifier => "listed".to_owned(),
+                            other => format!("served by {}", set_name(other)),
+                        };
+                        panic!(
+                            "two different UI sets are imported as `{specifier}`, one {}, the other {}: a specifier is one module (two versions of one library?)",
+                            by(&sets[*first]),
+                            by(root),
+                        );
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Whether `other` exports what this set does: the same components,
+    /// modules, classes, interfaces, class extensions and type aliases, by
+    /// name and Rust type ([`Registry::served_sets`]).
+    fn same_exports(&self, other: &Registry) -> bool {
+        fn same<K: Eq + std::hash::Hash, V>(
+            a: &FxHashMap<K, V>,
+            b: &FxHashMap<K, V>,
+            eq: impl Fn(&V, &V) -> bool,
+        ) -> bool {
+            a.len() == b.len() && a.iter().all(|(k, v)| b.get(k).is_some_and(|w| eq(v, w)))
+        }
+        let extension = |e: &&'static ClassExtensionDef| (e.type_id)();
+        same(&*self.types, &*other.types, |a, b| a.id == b.id)
+            && same(&*self.modules, &*other.modules, |a, b| {
+                a.type_name == b.type_name
+            })
+            && same(&*self.classes, &*other.classes, |a, b| {
+                (a.spec.def.type_id)() == (b.spec.def.type_id)()
+            })
+            && same(&*self.interfaces, &*other.interfaces, |a, b| {
+                (a.type_id)() == (b.type_id)()
+            })
+            && same(&*self.aliases, &*other.aliases, |a, b| a == b)
+            && self.extensions.len() == other.extensions.len()
+            && self.extensions.iter().all(|e| {
+                other
+                    .extensions
+                    .iter()
+                    .any(|o| extension(o) == extension(e))
+            })
     }
 
     /// Exports `values` `nsh-js` makes for the set (`NavStack`, `NavPage`),
@@ -1812,6 +1947,28 @@ fn same_name(name: &str, old: TypeId, new: TypeId, set: Option<&str>) -> String 
         format!(
             "two different types named `{name}` are registered{} (two versions of one crate?)",
             of_set(set)
+        )
+    }
+}
+
+/// The message of component `name` registered by two UI sets, `first` and
+/// `second` (`same`: one type; else two types of that name): what
+/// [`Registry::merged`] panics with and the toolchain refuses before an
+/// engine starts ([`super::description::component_clash`]).
+pub(crate) fn in_two_sets(
+    name: &str,
+    same: bool,
+    first: Option<&str>,
+    second: Option<&str>,
+) -> String {
+    let (first, second) = (set_name(first), set_name(second));
+    if same {
+        format!(
+            "component `{name}` is registered by both {first} and {second}: register it in one set; a library's set is served with `Registry::serve`"
+        )
+    } else {
+        format!(
+            "two different types named `{name}` are registered, by {first} and {second} (two versions of one crate?)"
         )
     }
 }
@@ -2684,14 +2841,172 @@ mod tests {
         b.register::<other::Stepper>();
         let merged = Registry::merged(&[a.clone(), b]);
         assert_eq!(merged.specs().len(), 2);
-        let twice = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Registry::merged(&[a.clone(), a])
-        }));
-        let message = *twice.unwrap_err().downcast::<String>().unwrap();
-        assert_eq!(
-            message,
-            "component `nsh_core::element::component::tests::Stepper` is registered twice, by two UI sets"
-        );
+    }
+
+    /// The panic of a set served twice with different exports, or of two
+    /// sets registering one component.
+    fn panic_of(f: impl FnOnce()) -> String {
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_err();
+        match failed.downcast::<String>() {
+            Ok(message) => *message,
+            Err(failed) => (*failed.downcast::<&str>().unwrap()).to_owned(),
+        }
+    }
+
+    /// A library's set served by an app's (`Registry::serve`): under its
+    /// own specifier, with the set serving it, once however many serve it.
+    mod serve {
+        use super::*;
+
+        /// A library's set, as its crate's `set()` makes it: anew for each
+        /// set serving it.
+        fn library() -> Registry {
+            let mut plot = Registry::ui_set("acme/ui/plot");
+            plot.class::<Lonely>();
+            let mut set = Registry::ui_set("acme/ui");
+            set.register::<Stepper>().module::<Maker>().submodule(plot);
+            set
+        }
+
+        fn app(specifier: &'static str) -> Registry {
+            let mut app = Registry::ui_set(specifier);
+            app.serve(library());
+            app
+        }
+
+        fn specifiers(sets: &[&Registry]) -> Vec<Option<&'static str>> {
+            sets.iter().map(|s| s.specifier()).collect()
+        }
+
+        #[test]
+        fn a_served_set_comes_after_the_sets_submodules() {
+            let mut app = Registry::ui_set("app/native");
+            app.submodule(Registry::ui_set("app/native/charts"))
+                .serve(library());
+            assert_eq!(
+                specifiers(&app.sets()),
+                [
+                    Some("app/native"),
+                    Some("app/native/charts"),
+                    Some("acme/ui"),
+                    Some("acme/ui/plot")
+                ]
+            );
+            // The library's components join the core's.
+            let merged = Registry::merged(std::slice::from_ref(&app));
+            assert_eq!(merged.specs()[0].export, "Stepper");
+        }
+
+        #[test]
+        fn a_served_set_has_a_specifier_of_its_own() {
+            let refused = |set: Registry| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    Registry::ui_set("app/native").serve(set);
+                }))
+                .is_err()
+            };
+            assert!(refused(Registry::new()));
+            assert!(refused(Registry::ui_set("app/native")));
+            // A path under it is a submodule's.
+            assert!(refused(Registry::ui_set("app/native/charts")));
+            assert!(!refused(Registry::ui_set("app/natives")));
+            // A set without a specifier (a Rust app's) may serve any.
+            Registry::new().serve(library());
+        }
+
+        #[test]
+        fn a_library_served_by_two_sets_is_served_once() {
+            let sets = [app("app/a"), app("app/b")];
+            let served = Registry::served_sets(&sets);
+            assert_eq!(
+                specifiers(&served),
+                [
+                    Some("app/a"),
+                    Some("acme/ui"),
+                    Some("acme/ui/plot"),
+                    Some("app/b")
+                ]
+            );
+            // Its component once, so no clash; its class once.
+            assert_eq!(Registry::merged(&sets).specs().len(), 1);
+            let entries: Vec<_> = Registry::served_sets_by_entry(&sets)
+                .iter()
+                .map(|(entry, set)| (*entry, set.specifier()))
+                .collect();
+            assert_eq!(
+                entries,
+                [
+                    (0, Some("app/a")),
+                    (0, Some("acme/ui")),
+                    (0, Some("acme/ui/plot")),
+                    (1, Some("app/b"))
+                ]
+            );
+            // A set listed twice is one set.
+            let a = app("app/a");
+            assert_eq!(Registry::served_sets(&[a.clone(), a]).len(), 3);
+        }
+
+        #[test]
+        fn two_different_sets_of_one_specifier_are_refused() {
+            let mut other = Registry::ui_set("acme/ui");
+            other.register::<other::Stepper>();
+            let mut b = Registry::ui_set("app/b");
+            b.serve(other.clone());
+            let message = panic_of(|| {
+                Registry::served_sets(&[app("app/a"), b]);
+            });
+            assert_eq!(
+                message,
+                "two different UI sets are imported as `acme/ui`, one served by `app/a`, the other served by `app/b`: a specifier is one module (two versions of one library?)"
+            );
+            // Listed as it is, too.
+            let message = panic_of(|| {
+                Registry::merged(&[app("app/a"), other]);
+            });
+            assert!(
+                message.contains("one served by `app/a`, the other listed"),
+                "{message}"
+            );
+            // A set exporting more is another set.
+            let mut more = library();
+            more.module::<Checks>();
+            let message = panic_of(|| {
+                Registry::served_sets(&[library(), more]);
+            });
+            assert!(message.contains("imported as `acme/ui`"), "{message}");
+        }
+    }
+
+    /// Two sets registering one component: refused naming both, by the core
+    /// as an engine starts.
+    mod duplicate_components {
+        use super::*;
+
+        #[test]
+        fn two_sets_registering_one_component_are_named() {
+            let mut a = Registry::ui_set("test/a");
+            a.register::<Stepper>();
+            let mut c = Registry::ui_set("acme/ui");
+            c.register::<Stepper>();
+            let message = panic_of(|| {
+                Registry::merged(&[a.clone(), c]);
+            });
+            assert_eq!(
+                message,
+                "component `nsh_core::element::component::tests::Stepper` is registered by both `test/a` and `acme/ui`: register it in one set; a library's set is served with `Registry::serve`"
+            );
+            // A Rust app's components are the app's set.
+            let mut root = Registry::new();
+            root.register::<Stepper>();
+            let message = panic_of(|| {
+                Registry::merged(&[root, a]);
+            });
+            assert!(
+                message.contains("registered by both the app's set and `test/a`"),
+                "{message}"
+            );
+        }
     }
 }
 

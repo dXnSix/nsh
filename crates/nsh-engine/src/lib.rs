@@ -2061,9 +2061,12 @@ const QUIT_GRACE: Duration = Duration::from_millis(20);
 /// dragged; this long after the last the burst is over ([`Core::set_resizing`]).
 const RESIZE_BURST_GAP: Duration = Duration::from_millis(120);
 
-/// `context` with the files `ui_sets` and their submodules ship, which a
-/// library lists while the engine runs it
-/// (`nsh_core::element::served_asset_files`).
+/// `context` with the files `ui_sets`, their submodules and the sets they
+/// serve ship, which a library lists while the engine runs it
+/// (`nsh_core::element::served_asset_files`). It flattens with
+/// [`Registry::sets`](nsh_core::element::Registry::sets), not
+/// `served_sets`, so a mistake in the sets surfaces in the start that
+/// reports it, not here: the list is deduplicated by URI.
 fn served_assets(context: EngineContext, ui_sets: &[nsh_core::element::Registry]) -> EngineContext {
     let sets = ui_sets.iter().flat_map(nsh_core::element::Registry::sets);
     context.with(nsh_core::element::ServedAssets::of(sets))
@@ -2085,7 +2088,28 @@ fn run<M: TextEngine + 'static, S: MountSink>(
     let _clock = config.clock.enter();
     config.context = served_assets(std::mem::take(&mut config.context), &config.ui_sets);
     let _context = config.context.enter();
-    let Some(mut driver) = Driver::start(config, text_engine, Rc::new(sink), tx, &rx, stop) else {
+    let sink: Rc<dyn MountSink> = Rc::new(sink);
+    // A panic as the engine starts (two UI sets registering one component:
+    // `Registry::merged`) is a mistake in the code the host was built with.
+    // It is the app's error that it did not start, which the host reports
+    // (a development host on screen, `nsh test` as the test file's
+    // failure), rather than an engine thread ending in silence while the
+    // host waits for its first frame.
+    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Driver::start(config, text_engine, sink.clone(), tx, &rx, stop)
+    }))
+    .unwrap_or_else(|panic| {
+        let reason = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("a panic");
+        let message = format!("the app did not start: {reason}");
+        log::error!("{message}");
+        sink.report(&AppError::new(AppErrorKind::Load, &message));
+        None
+    });
+    let Some(mut driver) = started else {
         return;
     };
     driver.state.core.set_download_cleanup(downloads);
@@ -2547,10 +2571,10 @@ impl<M: TextEngine + 'static> Driver<M> {
                 }
             }
         }
-        // The fonts the UI sets' crates ship, before anything is measured.
-        let fonts = config
-            .ui_sets
-            .iter()
+        // The fonts the UI sets' crates ship (the sets they serve too),
+        // before anything is measured.
+        let fonts = nsh_core::element::Registry::served_sets(&config.ui_sets)
+            .into_iter()
             .flat_map(nsh_core::element::Registry::asset_files)
             .filter(|file| file.kind == nsh_core::element::AssetKind::Font);
         for font in fonts {

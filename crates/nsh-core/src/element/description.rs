@@ -10,7 +10,10 @@
 //! only the app's crates and nsh-core, calls each crate's
 //! `#[native_module]` entry and prints a [`Description`] as JSON
 //! ([`Description::to_json`]), which `nsh` reads back
-//! ([`Description::from_json`]). The document carries its format
+//! ([`Description::from_json`]). It lists every set the entries serve
+//! ([`Registry::served_sets`]: their submodules and the libraries' sets
+//! they serve), each with the entry that serves it
+//! ([`SetDescription::entry`]). The document carries its format
 //! ([`FORMAT`]) and the version of nsh-core that wrote it ([`VERSION`]):
 //! `nsh` takes only its own.
 
@@ -20,7 +23,7 @@ use super::{Registry, RoleDeclaration};
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 7;
+pub const FORMAT: u32 = 8;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -93,6 +96,12 @@ pub struct AssetDescription {
 pub struct SetDescription {
     /// The specifier apps import it by (`nsh/base`, `gallery/native`).
     pub specifier: String,
+    /// The index, in the list of registries [`Description::of`] was given,
+    /// of the one that serves it (the first, when two do): an app's crate,
+    /// whose entry's own set is the first set of that index, then its
+    /// submodules and the sets it serves ([`Registry::serve`]). 0 for a set
+    /// described on its own ([`SetDescription::of`]).
+    pub entry: usize,
     /// Its exports, each name once, in the order a module declares them.
     pub exports: Vec<ExportDescription>,
     /// The TypeScript declarations of its components, modules and classes
@@ -123,6 +132,31 @@ pub struct SetDescription {
     /// The Rust type of each class it exports, by the class's JS name:
     /// what tells an extension's class from another of the same name.
     pub class_types: Vec<ClassTypeDescription>,
+    /// The Rust type of each component it registers, by its export: what
+    /// tells the toolchain two sets register one component
+    /// ([`component_clash`]).
+    pub component_types: Vec<ComponentTypeDescription>,
+}
+
+/// A component a set registers, by its export and its Rust type.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComponentTypeDescription {
+    /// The name JS imports it by.
+    pub name: String,
+    /// Its Rust type, the name the core makes it by
+    /// ([`super::ComponentSpec::name`]: `app::chart::Chart`).
+    pub rust_type: String,
+}
+
+impl ComponentTypeDescription {
+    /// Component `name` (its export) of Rust type `rust_type`.
+    pub fn new(name: impl Into<String>, rust_type: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            rust_type: rust_type.into(),
+        }
+    }
 }
 
 /// A class a set exports, by its JS name and its Rust type.
@@ -192,6 +226,34 @@ impl ThemeDocumentDescription {
             fallback,
         }
     }
+}
+
+/// The first component two of `sets` register, by its Rust type
+/// ([`SetDescription::component_types`]): the message an engine serving
+/// them would panic with as it starts ([`Registry::merged`]), which the
+/// toolchain reports before building anything. `None`: no component is
+/// registered twice.
+pub fn component_clash(sets: &[SetDescription]) -> Option<String> {
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    for (i, set) in sets.iter().enumerate() {
+        // A set listed twice is one set.
+        if sets[..i].iter().any(|s| s.specifier == set.specifier) {
+            continue;
+        }
+        for component in &set.component_types {
+            let rust_type = component.rust_type.as_str();
+            if let Some((_, first)) = seen.iter().find(|(t, _)| *t == rust_type) {
+                return Some(super::component::in_two_sets(
+                    rust_type,
+                    true,
+                    Some(first),
+                    Some(&set.specifier),
+                ));
+            }
+            seen.push((rust_type, &set.specifier));
+        }
+    }
+    None
 }
 
 /// The roles `sets` list and the core's own ([`super::role::all`]), each
@@ -314,6 +376,7 @@ impl SetDescription {
         let strings = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect();
         Some(SetDescription {
             specifier: specifier.to_owned(),
+            entry: 0,
             exports,
             declarations: super::declarations(registry, &[]),
             reexported_values: strings(values),
@@ -348,6 +411,10 @@ impl SetDescription {
                     rust_type: (c.def.type_name)().to_owned(),
                 })
                 .collect(),
+            component_types: specs
+                .iter()
+                .map(|c| ComponentTypeDescription::new(c.export.clone(), c.name))
+                .collect(),
         })
     }
 
@@ -362,6 +429,7 @@ impl SetDescription {
     fn to_value(&self) -> Value {
         json!({
             "specifier": self.specifier,
+            "entry": self.entry,
             "exports": self.exports.iter().map(|e| json!({
                 "name": e.name,
                 "kind": e.kind.as_str(),
@@ -395,6 +463,10 @@ impl SetDescription {
                 "extension": e.extension,
             })).collect::<Vec<_>>(),
             "classTypes": self.class_types.iter().map(|c| json!({
+                "name": c.name,
+                "type": c.rust_type,
+            })).collect::<Vec<_>>(),
+            "componentTypes": self.component_types.iter().map(|c| json!({
                 "name": c.name,
                 "type": c.rust_type,
             })).collect::<Vec<_>>(),
@@ -439,8 +511,14 @@ impl SetDescription {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let entry = set
+            .get("entry")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| format!("{at}: no index entry"))?;
         Ok(SetDescription {
             specifier,
+            entry,
             exports,
             declarations: string(set, "declarations", &at)?,
             reexported_values: strings(reexports, "values", &format!("{at}.reexports"))?,
@@ -509,6 +587,18 @@ impl SetDescription {
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?,
+            component_types: array(set, "componentTypes", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let at = format!("{at}.componentTypes[{i}]");
+                    let c = object(c, &at)?;
+                    Ok(ComponentTypeDescription::new(
+                        string(c, "name", &at)?,
+                        string(c, "type", &at)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
         })
     }
 }
@@ -534,7 +624,8 @@ impl From<Registry> for SetDescription {
 }
 
 /// The document an app's describe program prints: its crates' sets, in the
-/// order `nsh.json` `"rust"` lists the crates.
+/// order `nsh.json` `"rust"` lists the crates, each crate's own set, then
+/// its submodules and the sets it serves ([`SetDescription::entry`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Description {
     /// The version of nsh-core that wrote it ([`VERSION`]).
@@ -544,19 +635,24 @@ pub struct Description {
 }
 
 impl Description {
-    /// The description of `sets`, written by this nsh-core.
+    /// The description of `sets` and every set they serve, each once
+    /// ([`Registry::served_sets`]), with the index in `sets` of the one
+    /// serving it ([`SetDescription::entry`]); written by this nsh-core.
     ///
     /// # Panics
     ///
-    /// When one of `sets` has no specifier (it is no UI set).
+    /// When one of those sets has no specifier (it is no UI set), or two
+    /// different ones have one specifier.
     #[track_caller]
     pub fn of(sets: &[Registry]) -> Description {
         Description {
             nsh: VERSION.to_owned(),
-            sets: sets
-                .iter()
-                .flat_map(Registry::sets)
-                .map(SetDescription::from)
+            sets: Registry::served_sets_by_entry(sets)
+                .into_iter()
+                .map(|(entry, set)| SetDescription {
+                    entry,
+                    ..SetDescription::from(set)
+                })
                 .collect(),
         }
     }
@@ -921,5 +1017,131 @@ mod set_roles {
             .find(|r| r.name == "banner")
             .unwrap();
         assert_eq!(banner.value_type, crate::element::ValueType::Color);
+    }
+}
+
+/// The sets an app's crates serve (`Registry::serve`) in its description:
+/// each once, with the crate that serves it.
+#[cfg(test)]
+mod served {
+    use super::*;
+    use crate::prelude::*;
+
+    /// A library's component.
+    #[component]
+    fn Chip() -> impl IntoElement {
+        view()
+    }
+
+    /// An app's component.
+    #[component]
+    fn Card() -> impl IntoElement {
+        view()
+    }
+
+    fn library() -> Registry {
+        let mut set = Registry::ui_set("acme/ui");
+        set.register::<Chip>();
+        set
+    }
+
+    fn app(specifier: &'static str) -> Registry {
+        let mut app = Registry::ui_set(specifier);
+        app.serve(library());
+        app
+    }
+
+    #[test]
+    fn each_set_is_described_once_with_the_entry_serving_it() {
+        let mut first = app("app/a");
+        first.register::<Card>();
+        let description = Description::of(&[first, app("app/b")]);
+        let sets: Vec<_> = description
+            .sets
+            .iter()
+            .map(|s| (s.specifier.as_str(), s.entry))
+            .collect();
+        assert_eq!(sets, [("app/a", 0), ("acme/ui", 0), ("app/b", 1)]);
+        // Each component with its Rust type.
+        assert_eq!(
+            description.sets[1].component_types,
+            [ComponentTypeDescription::new(
+                "Chip",
+                "nsh_core::element::description::served::Chip"
+            )]
+        );
+        assert_eq!(description.sets[0].component_types[0].name, "Card");
+        // In the JSON, as written.
+        let json = description.to_json();
+        assert!(json.contains("\"entry\":1"), "{json}");
+        assert_eq!(Description::from_json(&json).unwrap(), description);
+        // A set described on its own is its own entry.
+        assert_eq!(SetDescription::from(&library()).entry, 0);
+    }
+
+    #[test]
+    fn a_set_without_its_entry_or_component_types_is_refused() {
+        let json = Description::of(&[app("app/a")]).to_json();
+        let mut value: Value = serde_json::from_str(&json).unwrap();
+        value["sets"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("entry")
+            .unwrap();
+        let error = Description::from_json(&value.to_string()).unwrap_err();
+        assert_eq!(error, "sets[1] (acme/ui): no index entry");
+        let mut value: Value = serde_json::from_str(&json).unwrap();
+        value["sets"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("componentTypes")
+            .unwrap();
+        let error = Description::from_json(&value.to_string()).unwrap_err();
+        assert_eq!(error, "sets[0] (app/a): no list componentTypes");
+        // A description of format 7, before served sets, is refused.
+        let old = json.replace(&format!("\"format\":{FORMAT}"), "\"format\":7");
+        let error = Description::from_json(&old).unwrap_err();
+        assert_eq!(
+            error,
+            "the description is in format 7, and this nsh reads format 8"
+        );
+    }
+}
+
+/// Two sets registering one component, which the toolchain refuses from
+/// the description before an engine starts.
+#[cfg(test)]
+mod duplicate_components {
+    use super::*;
+    use crate::prelude::*;
+
+    /// Registered by two sets.
+    #[component]
+    fn Chip() -> impl IntoElement {
+        view()
+    }
+
+    fn set(specifier: &'static str) -> SetDescription {
+        let mut set = Registry::ui_set(specifier);
+        set.register::<Chip>();
+        SetDescription::from(&set)
+    }
+
+    #[test]
+    fn a_component_two_sets_register_is_named_with_both() {
+        assert_eq!(
+            component_clash(&[set("app/native"), set("acme/ui")]).unwrap(),
+            "component `nsh_core::element::description::duplicate_components::Chip` is registered by both `app/native` and `acme/ui`: register it in one set; a library's set is served with `Registry::serve`"
+        );
+        // One set, or one listed twice, registers it once.
+        assert_eq!(component_clash(&[set("app/native")]), None);
+        assert_eq!(
+            component_clash(&[set("app/native"), set("app/native")]),
+            None
+        );
+        assert_eq!(
+            component_clash(&[set("app/native"), Registry::ui_set("acme/ui").into()]),
+            None
+        );
     }
 }
