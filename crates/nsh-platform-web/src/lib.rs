@@ -889,11 +889,11 @@ pub unsafe extern "C" fn nsh_compile(
 ) -> u32 {
     // SAFETY: guaranteed by the caller.
     let (name, source) = unsafe { (string(name, name_len), string(ptr, len)) };
-    let sets: Vec<nsh_core::element::description::SetDescription> = ui_sets()
-        .iter()
-        .flat_map(nsh_core::element::Registry::sets)
-        .filter_map(nsh_core::element::description::SetDescription::of)
-        .collect();
+    let sets: Vec<nsh_core::element::description::SetDescription> =
+        nsh_core::element::Registry::served_sets(&ui_sets())
+            .into_iter()
+            .filter_map(nsh_core::element::description::SetDescription::of)
+            .collect();
     let result = nsh_bundler::compile_module(&name, &source, &sets);
     let ok = result.is_ok();
     COMPILED.with(|c| *c.borrow_mut() = result.unwrap_or_else(|e| e));

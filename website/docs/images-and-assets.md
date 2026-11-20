@@ -404,6 +404,18 @@ const list = await (await fetch(cities)).json();
 
 A `.json` imported with `?url` stays a file the app reads when it needs it, instead of a value in the script.
 
+### Files a library ships
+
+A library's Rust crate ships its `assets/` directory (`registry.assets(assets!())`) at `asset:/@<package>/<path>`. TSX imports those files by that URL, from the app or from the library's own TSX files, and gets what importing such a file of the app gives:
+
+```tsx
+import logo from "asset:/@acme-ui/images/logo.png"; // { url, size, scales? }, with its @2x and @3x files
+import inter from "asset:/@acme-ui/fonts/Inter.ttf"; // the font's family name
+import intro from "asset:/@acme-ui/media/intro.mp4"; // its URL, as "?url" gives any file's
+```
+
+The build checks the URL against the files the app's UI sets ship and stops at one they do not ship, naming the closest; `.nsh/types` declares every file they ship, so TypeScript types the imports. The files are not copied with the app's own: the library ships them, and its fonts are registered before the first frame. Rust code that lists a library's files at run time, an icon catalog say, reads `served_asset_files()`: the files every UI set the app serves ships, by URL.
+
 ### Reading a file at run time
 
 `fetch` reads a file the app ships by its `asset:/` URL, in TSX and in Rust alike, on every platform. An imported image carries its URL (`url`), a Rust crate's files have theirs from `asset!` (`FileAsset::uri`) and `assets!()`:

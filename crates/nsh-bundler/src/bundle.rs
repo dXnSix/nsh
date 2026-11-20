@@ -146,6 +146,10 @@ pub struct Bundle {
     /// Source and configuration files read by the build, as absolute paths.
     /// Development servers watch these even outside the entry directory.
     pub watch_files: Vec<PathBuf>,
+    /// The directories outside the app that its `import.meta.glob`
+    /// patterns search, sorted: development servers watch them recursively,
+    /// so that a file added there, in a new directory too, is built.
+    pub glob_dirs: Vec<crate::GlobDir>,
     /// The native modules the app imports (`nsh`, `nsh/mobile`,
     /// `nsh/base`, an app's own UI set), sorted: what a host must
     /// serve to run it.
@@ -816,6 +820,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
     let natives = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let globs = Arc::new(Mutex::new(Vec::new()));
     let mut bundler_options = BundlerOptions {
         input: Some(vec![InputItem {
             import: entry.to_string_lossy().into_owned(),
@@ -857,6 +862,9 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
             natives: natives.clone(),
             preloads: None,
             modules: Arc::new(compile::NativeModules::new(&options.ui_sets)),
+            names: Default::default(),
+            globs: globs.clone(),
+            set_assets: Arc::new(plugin::set_assets::SetAssets::new(&options.ui_sets)),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;
@@ -925,6 +933,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         assets,
         asset_root,
         watch_files: watch_files(&bundler, &cwd_root),
+        glob_dirs: glob_dirs(&globs),
         natives: natives.into_iter().collect(),
         native_use,
         entry_native_use,
@@ -975,6 +984,15 @@ fn watch_files(bundler: &rolldown::Bundler, dir: &std::path::Path) -> Vec<PathBu
     files.sort();
     files.dedup();
     files
+}
+
+/// The directories outside the app the build's `import.meta.glob` patterns
+/// searched ([`Bundle::glob_dirs`]), each with its pattern once, sorted.
+fn glob_dirs(globs: &Mutex<Vec<crate::GlobDir>>) -> Vec<crate::GlobDir> {
+    let mut dirs = std::mem::take(&mut *globs.lock().expect("globs lock"));
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 /// The warning for an app that calls the host's functions (`host.call` /
@@ -1051,6 +1069,8 @@ pub struct HotBundle {
     pub asset_root: PathBuf,
     /// Source and configuration files read by the build, as absolute paths.
     pub watch_files: Vec<PathBuf>,
+    /// As in [`Bundle::glob_dirs`].
+    pub glob_dirs: Vec<crate::GlobDir>,
     /// As in [`Bundle::capabilities`].
     pub capabilities: Option<nsh_core::access::Capabilities>,
     /// As in [`Bundle::url_schemes`].
@@ -1237,6 +1257,7 @@ pub async fn bundle_hot_in_async(
     let preloads = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
+    let globs = Arc::new(Mutex::new(Vec::new()));
     let app = app_dir_of(app_dir, &cwd)?;
     // Modules are named from the app's directory when the entry is kept
     // outside it, so that the app's own keep the names they have when its
@@ -1284,6 +1305,9 @@ pub async fn bundle_hot_in_async(
             preloads: Some(preloads.clone()),
             modules: Arc::new(compile::NativeModules::new(ui_sets)),
             split: false,
+            names: Default::default(),
+            globs: globs.clone(),
+            set_assets: Arc::new(plugin::set_assets::SetAssets::new(ui_sets)),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;
@@ -1337,6 +1361,7 @@ pub async fn bundle_hot_in_async(
         assets,
         asset_root: app,
         watch_files: watch_files(&bundler, &cwd),
+        glob_dirs: glob_dirs(&globs),
         capabilities,
         url_schemes,
         elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,

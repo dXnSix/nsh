@@ -3711,8 +3711,10 @@ impl RustApp {
     /// The web runtime's gates of the app's sets: one
     /// `nsh_platform_web::ui_set!` per crate, exporting
     /// [`crate::web::ui_set_gate`] of its specifier, which registers the
-    /// crate's set ([`Self::app_sets`]). `nsh/base` is the runtime's own
-    /// (its parts' `nsh_part_*`).
+    /// crate's set ([`Self::app_sets`]) with its submodules and the sets it
+    /// serves (an import of one of those keeps this gate:
+    /// `web::app_set_gates`). `nsh/base` is the runtime's own (its parts'
+    /// `nsh_part_*`).
     fn set_gates(&self, cfg: &str) -> String {
         self.crates
             .iter()
@@ -3941,7 +3943,12 @@ pub(crate) fn theme_warnings(
 
 /// The sets of `crates` (`what` the steps call them) in `text`, the output
 /// of their describe program: a description of this nsh's format and
-/// version, one set per crate, each imported by a specifier of its own.
+/// version. Each set is of the crate whose entry serves it
+/// (`SetDescription::entry`): the crate's own set first, imported by the
+/// crate's specifier, then its submodules and the sets it serves
+/// (`Registry::serve`), each by a specifier of its own
+/// ([`check_specifiers`]). No two sets, nsh's included, may register one
+/// component ([`nsh_core::element::description::component_clash`]).
 fn read_description(
     text: &str,
     crates: &[AppCrate],
@@ -3955,20 +3962,30 @@ fn read_description(
             description.nsh
         );
     }
-    if description.sets.len() != crates.len() {
+    if let Some(set) = description.sets.iter().find(|s| s.entry >= crates.len()) {
         bail!(
-            "the description of {what} has {} UI sets for {} crates",
-            description.sets.len(),
+            "the description of {what} has a UI set ({:?}) of crate {} for {} crates",
+            set.specifier,
+            set.entry + 1,
             crates.len()
         );
     }
     check_specifiers(crates, &description.sets)?;
+    let all: Vec<SetDescription> = crate::own_set_descriptions()
+        .iter()
+        .chain(&description.sets)
+        .cloned()
+        .collect();
+    if let Some(clash) = nsh_core::element::description::component_clash(&all) {
+        bail!("{clash}");
+    }
     Ok(description.sets)
 }
 
-/// Checks the specifiers of `sets` (those of `crates`, in their order):
-/// each is imported by its specifier, so none may be one of nsh's modules
-/// or another crate's.
+/// Checks the specifiers of `sets`, each of the crate of `crates` whose
+/// entry serves it (`SetDescription::entry`): each crate has its own set,
+/// the first of its sets, and every set is imported by its specifier, so
+/// none may be one of nsh's modules or another set's.
 fn check_specifiers(crates: &[AppCrate], sets: &[SetDescription]) -> anyhow::Result<()> {
     let nsh: Vec<&str> = nsh_core::js::NATIVE_MODULES
         .iter()
@@ -3978,26 +3995,45 @@ fn check_specifiers(crates: &[AppCrate], sets: &[SetDescription]) -> anyhow::Res
                 .iter()
                 .filter_map(|r| r.specifier()),
         )
-        .chain(crate::own_sets().iter().filter_map(|r| r.specifier()))
+        .chain(
+            crate::own_set_descriptions()
+                .iter()
+                .map(|s| s.specifier.as_str()),
+        )
         .collect();
-    for (i, (krate, set)) in crates.iter().zip(sets).enumerate() {
-        let specifier = set.specifier.as_str();
-        if nsh.contains(&specifier) {
+    // Each crate's own set: the first its entry lists.
+    let own = |entry: usize| sets.iter().position(|s| s.entry == entry);
+    for (i, krate) in crates.iter().enumerate() {
+        if own(i).is_none() {
             bail!(
-                "the crate {} is imported as {specifier:?}, one of nsh's own modules: give its `#[native_module(\"…\")]` a specifier of its own",
+                "the crate {} has no UI set of its own: another crate of the app has the same set, as its own or one it serves (`Registry::serve`); list the crate in nsh.json \"rust\" or serve its set, not both",
                 krate.package
             );
         }
-        if let Some((other, _)) = crates
-            .iter()
-            .zip(sets)
-            .take(i)
-            .find(|(_, s)| s.specifier == specifier)
-        {
+    }
+    for (k, set) in sets.iter().enumerate() {
+        let specifier = set.specifier.as_str();
+        let krate = &crates[set.entry].package;
+        let is_own = own(set.entry) == Some(k);
+        if nsh.contains(&specifier) {
+            if is_own {
+                bail!(
+                    "the crate {krate} is imported as {specifier:?}, one of nsh's own modules: give its `#[native_module(\"…\")]` a specifier of its own"
+                );
+            }
             bail!(
-                "the crates {} and {} are both imported as {specifier:?}: give each crate of the app a `#[native_module(\"…\")]` specifier of its own",
-                other.package,
-                krate.package
+                "the crate {krate} serves {specifier:?}, one of nsh's own modules: nsh serves it already"
+            );
+        }
+        if let Some(j) = sets[..k].iter().position(|s| s.specifier == specifier) {
+            let other_crate = &crates[sets[j].entry].package;
+            if is_own && own(sets[j].entry) == Some(j) {
+                bail!(
+                    "the crates {other_crate} and {krate} are both imported as {specifier:?}: give each crate of the app a `#[native_module(\"…\")]` specifier of its own"
+                );
+            }
+            bail!(
+                "the crates {other_crate} and {krate} both have a UI set imported as {specifier:?}: a specifier is one module"
             );
         }
     }
@@ -6126,8 +6162,12 @@ panic = \"abort\"
                 })
                 .collect()
         };
-        let set = |specifier: &'static str| -> SetDescription {
-            nsh_core::element::Registry::ui_set(specifier).into()
+        // The set of the crate at `entry` in `"rust"`.
+        let set = |specifier: &'static str, entry: usize| -> SetDescription {
+            SetDescription {
+                entry,
+                ..nsh_core::element::Registry::ui_set(specifier).into()
+            }
         };
         let text = |sets: Vec<SetDescription>| {
             Description {
@@ -6140,13 +6180,18 @@ panic = \"abort\"
             super::read_description(text, &crates(packages), "the Rust crates")
                 .map_err(|e| e.to_string())
         };
-        let two = text(vec![set("app/charts"), set("app/storage")]);
+        let two = text(vec![set("app/charts", 0), set("app/storage", 1)]);
         let sets = read(&two, &["charts", "storage"]).unwrap();
         assert_eq!(sets[1].specifier, "app/storage");
-        // One set per crate.
+        // A set of each crate, and of no other.
         assert_eq!(
             read(&two, &["charts"]).unwrap_err(),
-            "the description of the Rust crates has 2 UI sets for 1 crates"
+            "the description of the Rust crates has a UI set (\"app/storage\") of crate 2 for 1 crates"
+        );
+        assert!(
+            read(&text(vec![set("app/charts", 0)]), &["charts", "storage"])
+                .unwrap_err()
+                .starts_with("the crate storage has no UI set of its own")
         );
         // Another nsh's description.
         let mut other = Description::from_json(&two).unwrap();
@@ -6163,7 +6208,7 @@ panic = \"abort\"
         );
         // A specifier of nsh's own or of another crate.
         for nsh in ["nsh/base", "nsh", "nsh/mobile"] {
-            let error = read(&text(vec![set(nsh)]), &["charts"]).unwrap_err();
+            let error = read(&text(vec![set(nsh, 0)]), &["charts"]).unwrap_err();
             assert!(
                 error.contains(&format!(
                     "the crate charts is imported as {nsh:?}, one of nsh's own modules"
@@ -6172,7 +6217,7 @@ panic = \"abort\"
             );
         }
         let error = read(
-            &text(vec![set("app/charts"), set("app/charts")]),
+            &text(vec![set("app/charts", 0), set("app/charts", 1)]),
             &["charts", "storage"],
         )
         .unwrap_err();
@@ -6180,6 +6225,175 @@ panic = \"abort\"
             error.contains("the crates charts and storage are both imported as \"app/charts\""),
             "{error}"
         );
+    }
+
+    /// Reads the description of `sets` (the crates' entries' registries) for
+    /// crates named `packages`, as `nsh` reads the describe program's.
+    fn read_sets(
+        sets: &[nsh_core::element::Registry],
+        packages: &[&str],
+    ) -> Result<Vec<nsh_core::element::description::SetDescription>, String> {
+        let crates: Vec<AppCrate> = packages
+            .iter()
+            .map(|p| AppCrate {
+                package: (*p).into(),
+                dir: PathBuf::from("/app").join(p),
+            })
+            .collect();
+        let text = nsh_core::element::description::Description::of(sets).to_json();
+        super::read_description(&text, &crates, "the Rust crates").map_err(|e| e.to_string())
+    }
+
+    /// Sets a crate serves besides its own (`Registry::serve`, its
+    /// submodules), in the description `nsh` reads: each of the crate
+    /// serving it.
+    mod served_sets {
+        use nsh_core::{element::Registry, prelude::*};
+
+        use super::read_sets;
+
+        /// A library's component.
+        #[component]
+        fn Chip() -> impl IntoElement {
+            view()
+        }
+
+        /// A library's set, as its crate's `set()` makes it.
+        fn library() -> Registry {
+            let mut set = Registry::ui_set("acme/ui");
+            set.register::<Chip>();
+            set
+        }
+
+        fn serving(specifier: &'static str, set: Registry) -> Registry {
+            let mut own = Registry::ui_set(specifier);
+            own.serve(set);
+            own
+        }
+
+        fn specifiers(
+            sets: &[nsh_core::element::description::SetDescription],
+        ) -> Vec<(&str, usize)> {
+            sets.iter()
+                .map(|s| (s.specifier.as_str(), s.entry))
+                .collect()
+        }
+
+        #[test]
+        fn a_crate_serves_a_library_set_and_its_submodules() {
+            let mut app = serving("app/native", library());
+            app.submodule(Registry::ui_set("app/native/charts"));
+            let sets = read_sets(&[app], &["app-native"]).unwrap();
+            assert_eq!(
+                specifiers(&sets),
+                [("app/native", 0), ("app/native/charts", 0), ("acme/ui", 0)]
+            );
+        }
+
+        #[test]
+        fn two_crates_serving_one_library_serve_it_once() {
+            let sets = read_sets(
+                &[serving("app/a", library()), serving("app/b", library())],
+                &["a", "b"],
+            )
+            .unwrap();
+            assert_eq!(
+                specifiers(&sets),
+                [("app/a", 0), ("acme/ui", 0), ("app/b", 1)]
+            );
+        }
+
+        #[test]
+        fn a_crate_listed_and_served_is_refused() {
+            // The library's crate in "rust" too, after a crate serving it:
+            // its set is the one served.
+            let error = read_sets(&[serving("app/a", library()), library()], &["a", "acme-ui"])
+                .unwrap_err();
+            assert!(
+                error.starts_with(
+                    "the crate acme-ui has no UI set of its own: another crate of the app has the same set"
+                ),
+                "{error}"
+            );
+        }
+
+        #[test]
+        fn a_served_set_of_nsh_is_refused() {
+            for nsh in ["nsh/base", "nsh/base/plot", "nsh/mobile"] {
+                let error = read_sets(
+                    &[serving("app/native", Registry::ui_set(nsh))],
+                    &["app-native"],
+                )
+                .unwrap_err();
+                assert_eq!(
+                    error,
+                    format!(
+                        "the crate app-native serves {nsh:?}, one of nsh's own modules: nsh serves it already"
+                    )
+                );
+            }
+        }
+    }
+
+    /// Two sets registering one component: refused as the description is
+    /// read, naming both, before anything is built with them.
+    mod duplicate_components {
+        use nsh_core::{element::Registry, prelude::*};
+
+        use super::read_sets;
+
+        /// Registered by two sets.
+        #[component]
+        fn Chip() -> impl IntoElement {
+            view()
+        }
+
+        fn with_chip(specifier: &'static str) -> Registry {
+            let mut set = Registry::ui_set(specifier);
+            set.register::<Chip>();
+            set
+        }
+
+        const CHIP: &str = "nsh::rust_app::tests::duplicate_components::Chip";
+
+        #[test]
+        fn a_component_of_two_crates_sets_is_refused() {
+            let error = read_sets(
+                &[with_chip("app/native"), with_chip("app/other")],
+                &["a", "b"],
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!(
+                    "component `{CHIP}` is registered by both `app/native` and `app/other`: register it in one set; a library's set is served with `Registry::serve`"
+                )
+            );
+        }
+
+        #[test]
+        fn a_component_of_a_crates_set_and_a_set_it_serves_is_refused() {
+            let mut app = with_chip("app/native");
+            app.serve(with_chip("acme/ui"));
+            let error = read_sets(&[app], &["app-native"]).unwrap_err();
+            assert_eq!(
+                error,
+                format!(
+                    "component `{CHIP}` is registered by both `app/native` and `acme/ui`: register it in one set; a library's set is served with `Registry::serve`"
+                )
+            );
+        }
+
+        #[test]
+        fn a_component_of_nsh_base_is_refused_in_an_app_set() {
+            let mut app = Registry::ui_set("app/native");
+            app.register::<nsh_base::Button>();
+            let error = read_sets(&[app], &["app-native"]).unwrap_err();
+            assert!(
+                error.contains("is registered by both `nsh/base` and `app/native`"),
+                "{error}"
+            );
+        }
     }
 
     /// The directory `path` of the app's crates, as the generated code

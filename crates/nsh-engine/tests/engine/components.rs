@@ -75,12 +75,12 @@ fn app_config(
     }
     let ui_sets = vec![nsh_base::registry(), crate::test_ui::registry()];
     // `nsh/base` with its submodules (`nsh/base/plot`).
-    let described: Vec<nsh_core::element::description::SetDescription> = ui_sets
-        .iter()
-        .chain(sets)
-        .flat_map(nsh_core::element::Registry::sets)
-        .map(Into::into)
-        .collect();
+    let all: Vec<_> = ui_sets.iter().chain(sets).cloned().collect();
+    let described: Vec<nsh_core::element::description::SetDescription> =
+        nsh_core::element::Registry::served_sets(&all)
+            .into_iter()
+            .map(Into::into)
+            .collect();
     let bundle = nsh_bundler::bundle(&nsh_bundler::BundleOptions {
         entry,
         minify: false,

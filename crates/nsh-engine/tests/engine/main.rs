@@ -68,10 +68,12 @@ mod rust_renderers;
 mod rust_scrolling;
 mod rust_styles;
 mod rust_touch;
+mod served_assets;
 mod shader;
 mod shutdown;
 mod split;
 mod split_view;
+mod start_panic;
 mod storage;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod system;

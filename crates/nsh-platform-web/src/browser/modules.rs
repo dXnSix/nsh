@@ -44,7 +44,7 @@ impl Modules {
         let _ = Registry::class_extensions_in(registries);
         let new = |key: String| self.described.borrow_mut().insert(key);
         let mut sets = Vec::new();
-        for registry in registries.iter().flat_map(Registry::sets) {
+        for registry in Registry::served_sets(registries) {
             let Some(specifier) = registry.specifier() else {
                 continue;
             };

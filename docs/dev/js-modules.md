@@ -9,7 +9,8 @@ A UI set may serve a family of exports whose names only make sense together as a
 specifier, as `gpui-base`'s `plot` is a module of its crate: a submodule of the set (`Registry::submodule`, such as
 `nsh/base/<family>` of `nsh/base`), served, described and declared wherever the set is (`Registry::sets`: the hosts'
 module tables, the core's components, the toolchain's descriptions, one declaration file per module), so a list of UI
-sets names only the set.
+sets names only the set. A set may serve another under a specifier of its own the same way (`Registry::serve`: a
+library's set, `rust-modules.md`), and a set two others serve is served once (`Registry::served_sets`).
 
 Every module is native: `nsh-js` serves it (`modules.rs`: NSH's own modules by `nsh_core::js::NATIVE_MODULES`, then the
 registries: the runtime's `nsh_core::runtime::registries()` and the UI sets a host serves, `nsh/base` and the app's), and the bundler keeps

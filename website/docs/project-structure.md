@@ -207,6 +207,7 @@ NSH does not need `node_modules`. Instead, every command that builds the app (`i
 | `jsx-runtime.d.ts` | The JSX runtime TypeScript resolves through `jsxImportSource` (the `JSX` namespace) |
 | `globals.d.ts` | `If` and `Each`; `console`, timers, `requestAnimationFrame`, `fetch` and the other [global APIs](../modules/globals.md) |
 | `assets.d.ts` | What importing an image or font gives |
+| `set-assets.d.ts` | Each file the app's UI sets ship, by its URL (`asset:/@<package>/<path>`), as importing it gives it |
 | `tokens.d.ts` | `Tokens`: the tokens of the app's active theme document (its `"theme"`, else its UI sets'), each with its type and doc, which type [`token()`](../modules/nsh.md#token) |
 | `modifiers.d.ts` | `ThemeModifiers`: the active theme document's modifiers, each with its contexts |
 | `roles.d.ts` | `Roles`: the theme roles its UI sets draw with, each with its type and whether a theme must map it, which type [`role()`](../modules/nsh.md#role) |
@@ -266,7 +267,7 @@ const icons = import.meta.glob("./icons/*.ts", { eager: true, import: "default" 
 - A pattern starting with `./` or `../` is relative to the module, one starting with `/` to the app's directory. It can have `*` (any part of a name), `**` (any number of directories), `?` (one character) and `{a,b}` (either); an array of patterns may leave files out with `!` (`["./pages/*.tsx", "!./pages/Draft.tsx"]`).
 - `{ eager: true }` imports the modules up front, so the values are the modules themselves; `import: "name"` takes that export instead of the whole module.
 - `node_modules`, `target` and directories whose name starts with `.` are searched only when a pattern names them. Keys are sorted.
-- The patterns and options must be literals, since the bundler reads them. A file added or removed while the app runs in development changes the object in place, as an edit does.
+- The patterns and options must be literals, since the bundler reads them. A file added or removed while the app runs in development changes the object in place, as an edit does, also in a directory outside the app that a pattern reaches (`"/../lib/**/*.preview.tsx"`) and in a directory new there.
 
 ### NSH's modules
 

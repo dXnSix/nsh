@@ -74,4 +74,6 @@ the nodes it rendered and their parent (ids from `1 << 32`), leaving out instanc
 site contains `hide`; only roots that changed since the last call, all after `setOverrides`, `null`
 when nothing changed. `setOverrides` keys classes and states by where an element was written, so an
 element made again (a list's row, an `If`, a hot reload) gets them again, which a node's own override
-does not survive.
+does not survive. Modules are named there as the development bundle's stamps name them, the same on
+every machine (`native-pipeline.md`): a library's module outside the app by its package
+(`@acme-ui/src/Card.tsx:12:5`), so a tool may keep the keys in files people share.

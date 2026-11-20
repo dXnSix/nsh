@@ -1,8 +1,8 @@
-//! Describe in the theme format (TOOL-TYPES): `FORMAT` 7 carries each set's
-//! theme documents with the fallback marked and its role declarations with
-//! value type, doc and `required`; the toolchain takes the active document
-//! as the core does; a `FORMAT` 6 description is refused, naming both
-//! formats.
+//! Describe in the theme format (TOOL-TYPES): `FORMAT` 7 on (8 now, with
+//! served sets) carries each set's theme documents with the fallback marked
+//! and its role declarations with value type, doc and `required`; the
+//! toolchain takes the active document as the core does; a `FORMAT` 6
+//! description is refused, naming both formats.
 
 use serde_json::Value;
 
@@ -43,11 +43,11 @@ fn set(
 }
 
 #[test]
-fn the_format_is_7() {
-    assert_eq!(FORMAT, 7);
+fn the_format_is_8() {
+    assert_eq!(FORMAT, 8);
     let text = Description::of(&[set("ds/native", Some(OWN), None)]).to_json();
     let value: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(value["format"], 7);
+    assert_eq!(value["format"], 8);
 }
 
 #[test]
@@ -57,10 +57,10 @@ fn a_format_6_description_is_refused_naming_both_formats() {
     value["format"] = 6.into();
     let error = Description::from_json(&value.to_string()).unwrap_err();
     assert!(error.contains("format 6"), "{error}");
-    assert!(error.contains("format 7"), "{error}");
-    // A format 6 set's documents were plain strings: no format 7 reader
-    // takes them for documents.
-    value["format"] = 7.into();
+    assert!(error.contains(&format!("format {FORMAT}")), "{error}");
+    // A format 6 set's documents were plain strings: no reader of a later
+    // format takes them for documents.
+    value["format"] = FORMAT.into();
     value["sets"][0]["theme_documents"] = serde_json::json!([OWN]);
     let error = Description::from_json(&value.to_string()).unwrap_err();
     assert!(

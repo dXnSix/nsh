@@ -18,7 +18,7 @@ places its first `limit` avatars.
   (`Toast`, `ToastStack` and the class `ToastManager`: "Toasts" below) and the
   module `AlertDialog`, beside the navigation `nsh-js` makes for it (`NavStack`, `NavPage`, `Dialog`, `createNavStack`); controls
   (toggles, sliders, selects, popovers, sheets, ...) join as their behavior is written. It is a UI set
-  (`Registry::ui_set("nsh/base")`), with the charts' parts `Plot`, `Line`, `Area`, `Bar`, `Grid`, `Pie`, `Arc`, `RadialLine`, `RadialGrid`, `Sankey`, `Treemap`, `PlotAxis`, `PlotLabel` and `PlotAppearScope` in its submodule `nsh/base/plot` (`Registry::submodule`, `js-modules.md`), every host serves by default (`set_ui_sets`' default; embedders with a list of their
+  (`Registry::ui_set("nsh/base")`), with the charts' parts `Plot`, `Line`, `Area`, `Bar`, `Grid`, `Pie`, `Arc`, `RadialLine`, `RadialGrid`, `Sankey`, `Treemap`, `PlotAxis`, `PlotLabel` and `PlotAppearScope` in its submodule `nsh/base/plot` (`Registry::submodule`, `js-modules.md`; a set under a specifier of its own, a library's, is served with `Registry::serve` instead, `rust-modules.md` "A library's set"), every host serves by default (`set_ui_sets`' default; embedders with a list of their
   own add `nsh_base::registry()` to it). `nsh_base::registry_of` makes it of some of its parts only
   (`nsh_base::parts`: `core`, the controls, popups, toasts and alerts every app has, and one part per larger
   component, `text_view`, `editor`, `diff`, `rich_editor`, `data_table`, `table`, `dock`, `resizable`, `plot`): a
@@ -39,7 +39,9 @@ places its first `limit` avatars.
   imported by the app's TSX by that specifier. This is the styled layer: an app's own component library (buttons,
   cards, list rows with its look), or a community library a third party publishes as a crate, built on `nsh-base`'s
   behavior and the primitives. `examples/gallery-rs` is one (`gallery/native`), and so is the crate
-  `nsh init --template rust` / `mixed` writes (`app/native`).
+  `nsh init --template rust` / `mixed` writes (`app/native`). A library several apps use has a set of its own
+  (`acme/ui`), which its crate makes in a plain function and each app's crate serves from its entry
+  (`registry.serve(acme_ui::set())`, `Registry::serve`; `docs/dev/rust-modules.md`, "A library's set").
   What such a crate keeps per engine (the languages and highlighters its editors know,
   `nsh_base::editor::register_language`; a value of `nsh_core::element::global`) it sets up in `Registry::setup`, a
   function each engine serving the set runs once in its runtime before the app's first op (`Core::set_components`).
@@ -699,6 +701,18 @@ ships the directory: `registry.assets(assets!())` lists every file (`AssetFile`:
 built, kind), which `nsh` (`rust_app.rs`, from the description of the set: each file's path and source) serves in development and
 copies into packages next to the imported assets, and whose fonts the engine registers before the first view
 (`EngineConfig::ui_sets`, read through `EngineConfig::assets`).
+
+TS imports a file a set the hosts serve ships by its URL, `import logo from "asset:/@acme-ui/images/logo.png"`
+(`crates/nsh-bundler/src/plugin/set_assets.rs`), from the app or from a library's own module outside it: the bundler
+checks it against the files the sets ship (their descriptions' `assets`, `BundleOptions::ui_sets`) and fails the
+build for one none ships, naming the closest; the module is what the app's own import of that kind of file gives: an
+image's `ImageAsset` (its size and `scales` from the set's files, `@2x` names and variants beside it among them), a
+font's family name (the engine registers the sets' fonts), any other file's URL, and with `?url` the URL of any.
+Nothing is copied: the set ships it. `.nsh/types/nsh/set-assets.d.ts` declares each file the sets ship by its URL
+(`nsh_bundler::set_assets_declaration`). While an engine runs, `served_asset_files()` lists the files its UI sets
+and their submodules ship (`element/served_assets.rs`: `ServedAssets`, put in the engine's context when it starts
+and when it serves more sets, sorted by URI), so a library lists another's files (an asset catalog, a set's icons) by
+their URIs' start without the app naming the package.
 
 ## Styles
 

@@ -391,6 +391,18 @@ const list = await (await fetch(cities)).json();
 
 用 `?url` 导入的 `.json` 保持为文件，应用需要时再读取，而不是脚本里的一个值。
 
+### 库随附的文件
+
+库的 Rust crate 通过 `registry.assets(assets!())` 随附它的 `assets/` 目录，地址是 `asset:/@<package>/<path>`。TSX 可以用这个 URL 导入这些文件，无论是在应用中还是在库自己的 TSX 文件中，得到的值与导入应用中同类文件时相同：
+
+```tsx
+import logo from "asset:/@acme-ui/images/logo.png"; // { url, size, scales? }，带上它的 @2x、@3x 文件
+import inter from "asset:/@acme-ui/fonts/Inter.ttf"; // 字体的字体族名
+import intro from "asset:/@acme-ui/media/intro.mp4"; // 它的 URL，与任何文件加 "?url" 相同
+```
+
+构建会对照应用的 UI 集合随附的文件检查这个 URL，遇到它们没有随附的文件就停止，并给出最接近的文件；`.nsh/types` 声明了它们随附的每个文件，所以 TypeScript 能为这些导入提供类型。这些文件不会和应用自己的文件一起复制：由库随附，库的字体在第一帧之前注册。需要在运行时列出某个库的文件的 Rust 代码（例如图标目录）读取 `served_asset_files()`：应用提供的每个 UI 集合随附的文件，按 URL 列出。
+
 ### 运行时读取文件
 
 `fetch` 通过 `asset:/` URL 读取应用随附的文件，TSX 和 Rust 中都一样，在每个平台上都是如此。导入的图片带有它的 URL（`url`），Rust crate 的文件则由 `asset!`（`FileAsset::uri`）和 `assets!()` 给出：

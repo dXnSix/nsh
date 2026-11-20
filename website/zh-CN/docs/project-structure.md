@@ -205,6 +205,7 @@ NSH 不需要 `node_modules`。取而代之的是，每个构建应用的命令�
 | `jsx-runtime.d.ts` | TypeScript 通过 `jsxImportSource` 解析的 JSX 运行时（`JSX` 命名空间） |
 | `globals.d.ts` | `If` 和 `Each`；`console`、定时器、`requestAnimationFrame`、`fetch` 及其他[全局 API](../modules/globals.md) |
 | `assets.d.ts` | 导入图片或字体得到的值 |
+| `set-assets.d.ts` | 应用的 UI 集合随附的每个文件，按 URL（`asset:/@<package>/<path>`）声明为导入它得到的值 |
 | `tokens.d.ts` | `Tokens`：应用当前主题文档（它的 `"theme"`，否则为 UI 集合的）中的 token，各带类型和说明，为 [`token()`](../modules/nsh.md#token) 提供类型 |
 | `modifiers.d.ts` | `ThemeModifiers`：当前主题文档的 modifier 及其各自的 context |
 | `roles.d.ts` | `Roles`：UI 集合绘制时使用的主题角色，各带类型并注明主题是否必须映射它，为 [`role()`](../modules/nsh.md#role) 提供类型 |
@@ -264,7 +265,7 @@ const icons = import.meta.glob("./icons/*.ts", { eager: true, import: "default" 
 - 以 `./` 或 `../` 开头的模式相对于当前模块，以 `/` 开头的相对于应用目录。模式可以使用 `*`（名称的任意部分）、`**`（任意层目录）、`?`（一个字符）和 `{a,b}`（二选一）；模式数组可以用 `!` 排除文件（`["./pages/*.tsx", "!./pages/Draft.tsx"]`）。
 - `{ eager: true }` 会提前导入这些模块，值就是模块本身；`import: "name"` 取该导出而不是整个模块。
 - 只有模式明确写出时才会搜索 `node_modules`、`target` 和以 `.` 开头的目录。键按顺序排列。
-- 模式和选项必须是字面量，因为由打包器读取。开发运行期间添加或删除文件时，对象会像编辑代码一样原地更新。
+- 模式和选项必须是字面量，因为由打包器读取。开发运行期间添加或删除文件时，对象会像编辑代码一样原地更新；模式延伸到应用目录之外的目录（`"/../lib/**/*.preview.tsx"`）以及其中新建的目录也是如此。
 
 ### NSH 的模块
 

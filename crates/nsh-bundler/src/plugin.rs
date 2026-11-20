@@ -20,6 +20,9 @@ use rolldown::{
 
 use crate::compile::{NativeModules, compile_native};
 
+mod names;
+pub(crate) mod set_assets;
+
 /// Compiles the app's modules with nsh's JSX compiler against the native
 /// modules (kept as imports) and loads its assets.
 #[derive(Debug)]
@@ -50,6 +53,13 @@ pub(crate) struct NshPlugin {
     /// A split bundle: dynamic imports of chunks call the runtime's chunk
     /// loader (`split.rs`).
     pub(crate) split: bool,
+    /// The names of the modules ([`NshPlugin::module_name`]).
+    pub(crate) names: names::ModuleNames,
+    /// The directories outside the app the `import.meta.glob` patterns
+    /// search ([`crate::GlobDir`]).
+    pub(crate) globs: Arc<Mutex<Vec<crate::GlobDir>>>,
+    /// The files the UI sets ship, which `asset:/@<package>/<path>` imports.
+    pub(crate) set_assets: Arc<set_assets::SetAssets>,
 }
 
 /// The `"tailwind"`, `"theme"`, `"themeOverrides"`, `"appearance"` and
@@ -419,6 +429,15 @@ impl NshPlugin {
             .replace('\\', "/")
     }
 
+    /// The name of the module at `path` in a development bundle, its hot
+    /// key (source stamps, component instances, overrides): as
+    /// [`NshPlugin::rel`] names it in the entry's directory, else by its
+    /// package (`@acme-ui/src/Card.tsx`), the same on every machine
+    /// ([`names`]).
+    fn module_name(&self, path: &Path) -> String {
+        self.names.name(path, &self.root)
+    }
+
     /// Ships the asset `path` with the app and names it (its `asset:/` URL
     /// without the scheme): its path in the app's directory, `/`-separated
     /// on every system. A file outside it fails the build: the files an app
@@ -572,6 +591,10 @@ impl Plugin for NshPlugin {
                 "{from}`{spec}` is not part of nsh apps: import signal, computed, effect, batch, untracked, cleanup, context and mount from \"nsh\""
             )));
         }
+        // A file a UI set ships (`asset:/@<package>/<path>`).
+        if spec.starts_with(set_assets::PREFIX) {
+            return self.resolve_set_asset(spec, &from).map(Some);
+        }
         if spec.starts_with("nsh/") {
             // Named as nsh's modules are, and none of them: name the ones
             // there are.
@@ -617,6 +640,9 @@ impl Plugin for NshPlugin {
     }
 
     async fn load(&self, _cx: SharedLoadPluginContext, args: &HookLoadArgs<'_>) -> HookLoadReturn {
+        if let Some(module) = self.load_set_asset(args.id) {
+            return module.map(Some);
+        }
         if args.id == I18N_ID
             && let Some(json) = &self.tailwind.i18n
         {
@@ -747,7 +773,7 @@ impl Plugin for NshPlugin {
         if !(jsx_module || entry || self.hot && script || meta) {
             return Ok(None);
         }
-        let hot_key = self.hot.then(|| self.rel(path));
+        let hot_key = self.hot.then(|| self.module_name(path));
         // By module type, not file name: asset modules (`logo.png`) are JS.
         let source_type = match args.module_type {
             ModuleType::Tsx => SourceType::tsx(),
@@ -763,8 +789,16 @@ impl Plugin for NshPlugin {
         }
         let prologue = if entry { self.prologue() } else { None };
         // `import.meta.glob` calls become literal imports first.
-        let globbed = crate::glob::expand(args.code, source_type, path, &self.asset_root)
-            .map_err(|detail| self.fail(path, &detail))?;
+        let mut searched = Vec::new();
+        let globbed = crate::glob::expand(
+            args.code,
+            source_type,
+            path,
+            &self.asset_root,
+            &mut searched,
+        )
+        .map_err(|detail| self.fail(path, &detail))?;
+        self.globs.lock().expect("globs lock").extend(searched);
         let compiled = compile_native(
             path,
             source_type,

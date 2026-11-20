@@ -235,6 +235,15 @@ compiler gives every top-level statement with JSX an anchor in the module's head
 again with every run of the module; `element(tag, …)` and `component(Comp, props, …)` get three more arguments, the
 anchor, the element's line relative to it and its column. Other bundles are compiled exactly as before.
 
+A module's hot key (its stamps, its components' instance keys, `__nsh_hot.kept()`'s and the design overrides' keys) is
+the same on every machine and system (`crates/nsh-bundler/src/plugin/names.rs`): its path from the directory modules
+are named from (the entry's, or the app's for an entry kept outside it), `/`-separated (`src/Card.tsx`); a module
+outside it, a library's, `@<package>/<path in its package>` (`@acme-ui/src/Card.tsx`), as a package's files are
+published (`asset:/@<package>/<path>`), with no version, so an upgrade keeps the names of the files it leaves alone.
+Its package is the nearest directory above it with a `Cargo.toml` that has a `[package]` (its `name`), else a
+`package.json` with a `name` (a scoped one keeps its `@`: `@scope/ui/src/A.tsx`), each directory read once a build;
+a module in no package keeps its absolute path. `import.meta.url` and messages still name the file where it is.
+
 The renderer keeps the stamp beside the node (`crates/nsh-js/src/dev_source.rs`) and computes the line when asked
 (`Host::node_source`), from the anchor's line now: a hot update that moves a statement leaves the nodes of the
 components it did not render again with their right lines. A component use is pending while its component starts: a
