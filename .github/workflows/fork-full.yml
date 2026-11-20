@@ -319,6 +319,9 @@ jobs:
         run: |
           bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::activation_ -- --nocapture
           bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib access::tests::atspi_activation_ -- --ignored --nocapture
+          # A press on a text view under a view with `can-focus` off focuses
+          # it (the storage test's note is typed into this way).
+          bash .github/fork/retry.sh dbus-run-session -- xvfb-run -a cargo test -p nsh-platform-linux --no-default-features --features dev --lib input::tests::a_press_focuses -- --nocapture
       # The examples' tests in GTK windows on a virtual display, with the
       # platform's input (`nsh test --target linux`).
       - name: Run the examples' tests in GTK windows
@@ -380,13 +383,19 @@ jobs:
         run: |
           cargo build -p nsh-cli
           cargo build --manifest-path crates/gpui/Cargo.toml --target-dir target -p nsh-gpui-host
+      # Upstream's list: `navigation`, and storage's clearing, read a
+      # dialog the GPUI host does not host in an app window yet.
       - name: Run the gallery's tests in GPUI windows
         run: |
           run() { env -u WAYLAND_DISPLAY dbus-run-session -- xvfb-run -a -s '-screen 0 1280x1024x24' ./target/debug/nsh test "$@" --target gpui; }
-          for file in context-menu device dock form gestures hover links navigation network photos resizable shortcuts storage timers; do
+          for file in context-menu device dock form gestures hover links network photos resizable shortcuts timers; do
             run "examples/gallery/tests/$file.test.tsx"
           done
+          run examples/gallery/tests/storage.test.tsx --filter "counts the demo's openings"
           run examples/gallery/tests/environment.test.tsx --filter appearance
+          run crates/nsh-testing/tests/testing/input-target/App.test.tsx --filter 'shared prefix'
+          run crates/nsh-testing/tests/testing/input-target/gpui/Editor.test.tsx
+          run crates/nsh-testing/tests/testing/input-target/gpui/Input.test.tsx
 
   # Upstream's `windows.yml` in full (x64).
   windows:
@@ -421,6 +430,14 @@ jobs:
       - name: Test
         shell: bash
         run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
+      # Cargo retries oversized compiler commands with an argument file when
+      # it receives the Windows launch error directly from starting rustc.
+      - name: Use the toolchain compiler directly for examples
+        shell: pwsh
+        run: |
+          $rustc = rustup which rustc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RUSTC=$rustc" >> $env:GITHUB_ENV
       # The examples' tests in Win32 windows, with the platform's input
       # (`nsh test --target windows`).
       - name: Run the examples' tests in Win32 windows
