@@ -27,8 +27,12 @@ others and registered them all under its specifier.
   crate's `[lib] path` or `src/lib.rs`) fail with the two paths and what to change. That reading is early and
   friendly; the authority is the description the crates' describe program prints, in which `nsh` refuses two sets
   with one specifier, or one with a specifier of nsh's own (`rust_app::check_specifiers`), however the entry was
-  written. `Registry::merged` already refuses two sets registering
-  components or modules of the same name when an engine starts.
+  written, and two sets registering one component, `nsh/base` included (`description::component_clash`, from each
+  set's `component_types`), naming both sets: "component `shared::Chip` is registered by both `app/charts` and
+  `app/storage`: register it in one set". `Registry::merged` panics with the same message when an engine starts with
+  such sets (a host built some other way), and the engine reports a panic as it starts as the app's `Load` error,
+  `the app did not start: …` (`nsh-engine` `run`): a development host shows it, and `nsh test` fails the test file
+  with it rather than waiting for its results.
 - Each specifier gets its declarations (`.nsh/types/<specifier>.d.ts`) and its assets (`asset:/@<package>/...`,
   already per package), as both come from the description of its set.
 - `nsh dev` / `nsh run` watch every listed crate and the local crates they depend on by path, transitively

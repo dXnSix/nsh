@@ -3589,7 +3589,9 @@ fn stamp(program: &Path) -> anyhow::Result<String> {
 
 /// The sets of `crates` (`what` the steps call them) in `text`, the output
 /// of their describe program: a description of this nsh's format and
-/// version, one set per crate, each imported by a specifier of its own.
+/// version, one set per crate, each imported by a specifier of its own. No
+/// two sets, nsh's included, may register one component
+/// ([`nsh_core::element::description::component_clash`]).
 fn read_description(
     text: &str,
     crates: &[AppCrate],
@@ -3611,6 +3613,14 @@ fn read_description(
         );
     }
     check_specifiers(crates, &description.sets)?;
+    // A component two sets register would stop every engine serving them
+    // as it starts (`Registry::merged`): refused before anything is built.
+    let all = crate::own_set_descriptions()
+        .iter()
+        .chain(&description.sets);
+    if let Some(clash) = nsh_core::element::description::component_clash(all) {
+        bail!("{clash}");
+    }
     Ok(description.sets)
 }
 
@@ -5647,6 +5657,78 @@ panic = \"abort\"
             error.contains("the crates charts and storage are both imported as \"app/charts\""),
             "{error}"
         );
+    }
+
+    /// Two sets registering one component: refused as the description is
+    /// read, naming both, before anything is built with them.
+    mod duplicate_components {
+        use std::path::PathBuf;
+
+        use nsh_core::{
+            element::{Registry, description::Description},
+            prelude::*,
+        };
+
+        use super::AppCrate;
+
+        /// Registered by two sets.
+        #[component]
+        fn Chip() -> impl IntoElement {
+            view()
+        }
+
+        const CHIP: &str = "nsh::rust_app::tests::duplicate_components::Chip";
+
+        fn with_chip(specifier: &'static str) -> Registry {
+            let mut set = Registry::ui_set(specifier);
+            set.register::<Chip>();
+            set
+        }
+
+        /// Reads the description of `sets` (the crates' entries' registries)
+        /// for crates named `packages`, as `nsh` reads the describe
+        /// program's.
+        fn read(sets: &[Registry], packages: &[&str]) -> Result<(), String> {
+            let crates: Vec<AppCrate> = packages
+                .iter()
+                .map(|p| AppCrate {
+                    package: (*p).into(),
+                    dir: PathBuf::from("/app").join(p),
+                })
+                .collect();
+            let text = Description::of(sets).to_json();
+            super::super::read_description(&text, &crates, "the Rust crates")
+                .map(drop)
+                .map_err(|e| e.to_string())
+        }
+
+        #[test]
+        fn a_component_of_two_crates_sets_is_refused() {
+            let error = read(
+                &[with_chip("app/charts"), with_chip("app/storage")],
+                &["charts", "storage"],
+            )
+            .unwrap_err();
+            assert_eq!(
+                error,
+                format!(
+                    "component `{CHIP}` is registered by both `app/charts` and `app/storage`: register it in one set"
+                )
+            );
+            // Registered once, it is the crate's.
+            assert!(read(&[with_chip("app/charts")], &["charts"]).is_ok());
+        }
+
+        #[test]
+        fn a_component_of_nsh_base_is_refused_in_an_app_set() {
+            let mut app = Registry::ui_set("app/native");
+            app.register::<nsh_base::Button>();
+            let error = read(&[app], &["native"]).unwrap_err();
+            assert!(
+                error.contains("is registered by both `nsh/base` and `app/native`"),
+                "{error}"
+            );
+        }
     }
 
     /// The directory `path` of the app's crates, as the generated code

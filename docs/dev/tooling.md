@@ -909,16 +909,20 @@ program that describes them, builds the hosts and runners with them, and does ev
 - `rust_app::crates` reads `"rust"` (a string or a non-empty list of strings) and checks the list when the
   workspace is written: a crate listed twice (by any path), two packages of one name (Cargo takes `-` and `_` as
   one) or two crates whose `#[native_module("…")]` has the same specifier (read from the crate's `[lib] path` or
-  `src/lib.rs`) fail with the two paths and what to change. `Registry::merged` refuses two sets registering
-  components or modules of the same name when an engine starts. Crates may depend on each other, or on crates not
-  listed (a shared crate of components), through plain Cargo path dependencies; only listed ones export to TS.
+  `src/lib.rs`) fail with the two paths and what to change. Two sets registering one component (two crates
+  registering a shared crate's, or a crate one of `nsh/base`'s) are refused as the description is read, naming both
+  sets (`description::component_clash`, from each set's `component_types`), before anything is built with them:
+  `Registry::merged` would panic with the same message when an engine starts. Crates may depend on each other, or on
+  crates not listed (a shared crate of components), through plain Cargo path dependencies; only listed ones export
+  to TS.
 - A Cargo workspace in `<app>/.nsh/rust`, written on every command (files only when they change; the `cli` crate and
   `app.json` earlier versions wrote are removed), each member depending on every listed crate:
   - `describe` (nsh-core and the app's crates, nothing else): calls each crate's entry and prints one JSON document,
     `nsh_core::element::description::Description` (format `FORMAT`, the nsh-core version that wrote it, then per crate in
     `"rust"`'s order its specifier, exports with their kinds, TypeScript declarations, re-exported runtime values and
-    types, the values nsh-js makes for it, the files it ships and the exports TS sees without a doc comment, which
-    `nsh` warns of as it writes `.nsh/types`);
+    types, the values nsh-js makes for it, the files it ships, the Rust type of each component it registers,
+    `component_types`, and the exports TS sees without a doc comment, which `nsh` warns of as it writes
+    `.nsh/types`);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);
   - the hosts and runners, passing the sets after `nsh/base`'s (`vec![nsh_base::registry(), set_app_charts(),

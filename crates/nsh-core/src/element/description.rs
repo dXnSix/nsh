@@ -14,13 +14,14 @@
 //! ([`FORMAT`]) and the version of nsh-core that wrote it ([`VERSION`]):
 //! `nsh` takes only its own.
 
+use rustc_hash::FxHashMap;
 use serde_json::{Map, Value, json};
 
 use super::Registry;
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -110,6 +111,54 @@ pub struct SetDescription {
     /// The exports TS sees without a doc comment ([`Registry::undocumented`]),
     /// which the toolchain warns of.
     pub undocumented: Vec<String>,
+    /// The Rust type of each component it registers, by its export: what
+    /// tells the toolchain two sets register one component
+    /// ([`component_clash`]).
+    pub component_types: Vec<ComponentTypeDescription>,
+}
+
+/// A component a set registers, by its export and its Rust type.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComponentTypeDescription {
+    /// The name JS imports it by.
+    pub name: String,
+    /// Its Rust type, the name the core makes it by
+    /// ([`super::ComponentSpec::name`]: `app::chart::Chart`).
+    pub rust_type: String,
+}
+
+impl ComponentTypeDescription {
+    /// Component `name` (its export) of Rust type `rust_type`.
+    pub fn new(name: impl Into<String>, rust_type: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            rust_type: rust_type.into(),
+        }
+    }
+}
+
+/// The first component two of `sets` register, by its Rust type
+/// ([`SetDescription::component_types`]): the message an engine serving
+/// them would panic with as it starts ([`Registry::merged`]), which the
+/// toolchain reports before it builds anything. `None`: each component is
+/// registered once.
+pub fn component_clash<'a>(sets: impl IntoIterator<Item = &'a SetDescription>) -> Option<String> {
+    let mut seen: FxHashMap<&str, &str> = FxHashMap::default();
+    for set in sets {
+        for component in &set.component_types {
+            let rust_type = component.rust_type.as_str();
+            if let Some(first) = seen.insert(rust_type, &set.specifier) {
+                return Some(super::component::in_two_sets(
+                    rust_type,
+                    true,
+                    Some(first),
+                    Some(&set.specifier),
+                ));
+            }
+        }
+    }
+    None
 }
 
 impl SetDescription {
@@ -168,6 +217,10 @@ impl SetDescription {
                 })
                 .collect(),
             undocumented: registry.undocumented(),
+            component_types: specs
+                .iter()
+                .map(|c| ComponentTypeDescription::new(c.export.clone(), c.name))
+                .collect(),
         })
     }
 
@@ -197,6 +250,10 @@ impl SetDescription {
                 "source": a.source,
             })).collect::<Vec<_>>(),
             "undocumented": self.undocumented,
+            "component_types": self.component_types.iter().map(|c| json!({
+                "name": c.name,
+                "type": c.rust_type,
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -247,6 +304,18 @@ impl SetDescription {
             native_values: strings(set, "native_values", &at)?,
             assets,
             undocumented: strings(set, "undocumented", &at)?,
+            component_types: array(set, "component_types", &at)?
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let at = format!("{at}.component_types[{i}]");
+                    let c = object(c, &at)?;
+                    Ok(ComponentTypeDescription::new(
+                        string(c, "name", &at)?,
+                        string(c, "type", &at)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, String>>()?,
         })
     }
 }
@@ -466,5 +535,67 @@ mod tests {
                 .unwrap_err()
                 .contains("no format")
         );
+    }
+}
+
+/// Two sets registering one component, which the toolchain refuses from
+/// the description before an engine starts.
+#[cfg(test)]
+mod duplicate_components {
+    use super::*;
+    use crate::prelude::*;
+
+    /// Registered by two sets.
+    #[component]
+    fn Chip() -> impl IntoElement {
+        view()
+    }
+
+    const CHIP: &str = "nsh_core::element::description::duplicate_components::Chip";
+
+    fn set(specifier: &'static str) -> SetDescription {
+        let mut set = Registry::ui_set(specifier);
+        set.register::<Chip>();
+        SetDescription::from(&set)
+    }
+
+    #[test]
+    fn a_component_two_sets_register_is_named_with_both() {
+        assert_eq!(
+            component_clash(&[set("app/charts"), set("app/storage")]).unwrap(),
+            format!(
+                "component `{CHIP}` is registered by both `app/charts` and `app/storage`: register it in one set"
+            )
+        );
+        assert_eq!(component_clash(&[set("app/charts")]), None);
+        assert_eq!(
+            component_clash(&[set("app/charts"), Registry::ui_set("app/storage").into()]),
+            None
+        );
+    }
+
+    #[test]
+    fn each_component_is_described_with_its_rust_type() {
+        let description = Description::of(&[{
+            let mut set = Registry::ui_set("app/charts");
+            set.register::<Chip>();
+            set
+        }]);
+        assert_eq!(
+            description.sets[0].component_types,
+            [ComponentTypeDescription::new("Chip", CHIP)]
+        );
+        let json = description.to_json();
+        assert!(json.contains("\"component_types\":[{"), "{json}");
+        assert_eq!(Description::from_json(&json).unwrap(), description);
+        // A set without them is refused.
+        let mut value: Value = serde_json::from_str(&json).unwrap();
+        value["sets"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("component_types")
+            .unwrap();
+        let error = Description::from_json(&value.to_string()).unwrap_err();
+        assert_eq!(error, "sets[0] (app/charts): no list component_types");
     }
 }

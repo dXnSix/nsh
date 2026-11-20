@@ -332,6 +332,7 @@ TS gets only `Puts ... copied.` and `copy(text: string): Promise<number>`.
 - Every host and runner links them all, and `.nsh/types` declares each specifier.
 - Share code with Cargo path dependencies. Only listed crates export to TSX.
 - A crate listed twice, two crates with one package name (`-` and `_` count as one), or two with one specifier all fail with both paths named.
+- A component registered by two sets (two crates registering a shared crate's, or a crate one of `nsh/base`'s) fails before anything builds, naming both sets: register it in one.
 - With a `"root"`, it is a component of the first crate listed.
 
 ## The dev loop

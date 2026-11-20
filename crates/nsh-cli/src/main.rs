@@ -54,6 +54,18 @@ pub(crate) fn own_sets() -> &'static [Registry] {
     OWN.get_or_init(|| vec![nsh_base::registry()])
 }
 
+/// [`own_sets`] and their submodules, as data.
+pub(crate) fn own_set_descriptions() -> &'static [SetDescription] {
+    static OWN: OnceLock<Vec<SetDescription>> = OnceLock::new();
+    OWN.get_or_init(|| {
+        own_sets()
+            .iter()
+            .flat_map(Registry::sets)
+            .map(SetDescription::from)
+            .collect()
+    })
+}
+
 /// The UI sets of the command's app, as data ([`set_app_sets`]).
 static UI_SETS: RwLock<Option<Arc<[SetDescription]>>> = RwLock::new(None);
 
@@ -64,11 +76,7 @@ pub(crate) fn ui_sets() -> Arc<[SetDescription]> {
     if let Some(sets) = &*UI_SETS.read().unwrap_or_else(|e| e.into_inner()) {
         return sets.clone();
     }
-    let sets: Arc<[SetDescription]> = own_sets()
-        .iter()
-        .flat_map(nsh_core::element::Registry::sets)
-        .map(SetDescription::from)
-        .collect();
+    let sets: Arc<[SetDescription]> = own_set_descriptions().into();
     *UI_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(sets.clone());
     sets
 }
@@ -76,12 +84,7 @@ pub(crate) fn ui_sets() -> Arc<[SetDescription]> {
 /// Makes [`ui_sets`] `nsh/base` and `app`, the sets of the app's crates
 /// (described again after a change to its Rust code).
 pub(crate) fn set_app_sets(app: Vec<SetDescription>) {
-    let sets: Arc<[SetDescription]> = own_sets()
-        .iter()
-        .flat_map(nsh_core::element::Registry::sets)
-        .map(SetDescription::from)
-        .chain(app)
-        .collect();
+    let sets: Arc<[SetDescription]> = own_set_descriptions().iter().cloned().chain(app).collect();
     *UI_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(sets);
 }
 

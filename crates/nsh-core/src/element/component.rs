@@ -1136,10 +1136,13 @@ impl Registry {
     /// # Panics
     ///
     /// When two sets register the same component or two types of the same
-    /// name.
+    /// name, naming both sets.
     #[track_caller]
     pub fn merged(sets: &[Registry]) -> Self {
         let mut out = Self::default();
+        // The set that registered each component, for the message of a
+        // second one.
+        let mut owners: FxHashMap<&'static str, Option<&'static str>> = FxHashMap::default();
         for set in sets.iter().flat_map(Registry::sets) {
             out.tokens = out.tokens.or(set.tokens);
             out.scrollbars = out.scrollbars.or(set.scrollbars);
@@ -1147,8 +1150,13 @@ impl Registry {
             let types = Arc::make_mut(&mut out.types);
             for (name, ty) in set.types.iter() {
                 if let Some(old) = types.insert(name, ty.clone()) {
-                    panic!("{}, by two UI sets", same_name(name, old.id, ty.id, None));
+                    let first = owners.get(name).copied().flatten();
+                    panic!(
+                        "{}",
+                        in_two_sets(name, old.id == ty.id, first, set.specifier())
+                    );
                 }
+                owners.insert(name, set.specifier());
             }
         }
         out
@@ -1444,6 +1452,34 @@ fn same_name(name: &str, old: TypeId, new: TypeId, set: Option<&str>) -> String 
             of_set(set)
         )
     }
+}
+
+/// The message of component `name` registered by two UI sets, `first` and
+/// `second` (`same`: one type; else two types of that name): what
+/// [`Registry::merged`] panics with, and what the toolchain reports before
+/// an engine starts ([`super::description::component_clash`]).
+pub(crate) fn in_two_sets(
+    name: &str,
+    same: bool,
+    first: Option<&str>,
+    second: Option<&str>,
+) -> String {
+    let (first, second) = (set_name(first), set_name(second));
+    if same {
+        format!(
+            "component `{name}` is registered by both {first} and {second}: register it in one set"
+        )
+    } else {
+        format!(
+            "two different types named `{name}` are registered, by {first} and {second} (two versions of one crate?)"
+        )
+    }
+}
+
+/// A set in a message: its specifier, or the app's set for a registry
+/// without one (a Rust app's components).
+fn set_name(set: Option<&str>) -> String {
+    set.map_or_else(|| "the app's set".to_owned(), |s| format!("`{s}`"))
 }
 
 /// The message of two modules named `name`.
@@ -2229,14 +2265,51 @@ mod tests {
         b.register::<other::Stepper>();
         let merged = Registry::merged(&[a.clone(), b]);
         assert_eq!(merged.specs().len(), 2);
-        let twice = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            Registry::merged(&[a.clone(), a])
-        }));
-        let message = *twice.unwrap_err().downcast::<String>().unwrap();
-        assert_eq!(
-            message,
-            "component `nsh_core::element::component::tests::Stepper` is registered twice, by two UI sets"
-        );
+    }
+
+    /// Two sets registering one component: refused naming both, by the core
+    /// as an engine starts.
+    mod duplicate_components {
+        use super::*;
+
+        /// What `f` panicked with.
+        fn panic_of(f: impl FnOnce()) -> String {
+            let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_err();
+            *failed.downcast::<String>().unwrap()
+        }
+
+        #[test]
+        fn two_sets_registering_one_component_are_named() {
+            let mut a = Registry::ui_set("test/a");
+            a.register::<Stepper>();
+            let mut c = Registry::ui_set("test/c");
+            c.register::<Stepper>();
+            let message = panic_of(|| {
+                Registry::merged(&[a.clone(), c]);
+            });
+            assert_eq!(
+                message,
+                "component `nsh_core::element::component::tests::Stepper` is registered by both `test/a` and `test/c`: register it in one set"
+            );
+            // A Rust app's components are the app's set.
+            let mut root = Registry::new();
+            root.register::<Stepper>();
+            let message = panic_of(|| {
+                Registry::merged(&[root, a.clone()]);
+            });
+            assert!(
+                message.contains("registered by both the app's set and `test/a`"),
+                "{message}"
+            );
+            // A set listed twice registers its components twice.
+            let message = panic_of(|| {
+                Registry::merged(&[a.clone(), a]);
+            });
+            assert!(
+                message.contains("registered by both `test/a` and `test/a`"),
+                "{message}"
+            );
+        }
     }
 }
 

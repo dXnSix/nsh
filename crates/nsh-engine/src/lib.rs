@@ -2023,7 +2023,28 @@ fn run<M: TextEngine + 'static, S: MountSink>(
     // The thread's time is the engine's from its first line of JS on.
     let _clock = config.clock.enter();
     let _context = config.context.enter();
-    let Some(mut driver) = Driver::start(config, text_engine, Rc::new(sink), tx, &rx, stop) else {
+    let sink: Rc<dyn MountSink> = Rc::new(sink);
+    // A panic as the engine starts (two UI sets registering one component:
+    // `Registry::merged`) is a mistake in the code the host was built with.
+    // It is the app's error that it did not start, which the host reports
+    // (a development host on screen, `nsh test` as the test file's
+    // failure), rather than an engine thread ending in silence while the
+    // host waits for its first frame.
+    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Driver::start(config, text_engine, sink.clone(), tx, &rx, stop)
+    }))
+    .unwrap_or_else(|panic| {
+        let reason = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("a panic");
+        let message = format!("the app did not start: {reason}");
+        log::error!("{message}");
+        sink.report(&AppError::new(AppErrorKind::Load, &message));
+        None
+    });
+    let Some(mut driver) = started else {
         return;
     };
     driver.state.core.set_download_cleanup(downloads);

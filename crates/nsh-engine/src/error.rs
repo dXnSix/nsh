@@ -7,8 +7,10 @@ use std::{fmt, sync::Arc};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AppErrorKind {
-    /// The app did not start: its VM could not be made, or evaluating the
-    /// bundle threw (a missing module, an exception at the top level).
+    /// The app did not start: its VM could not be made, evaluating the
+    /// bundle threw (a missing module, an exception at the top level), or
+    /// the engine panicked as it started (two of its UI sets register one
+    /// component).
     Load,
     /// An exception escaped a callback (an event handler, a timer, a
     /// promise). The app keeps running.

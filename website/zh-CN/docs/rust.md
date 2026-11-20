@@ -619,8 +619,9 @@ import { Store } from "app/storage";       // native/storage：#[native_module("
 
 每个运行器和宿主都链接全部这些 crate，`.nsh/types` 为每个名称生成声明。crate 之间通过 Cargo 路径依赖共享代码
 （`shared = { path = "../shared" }`）：一个公司组件 crate 可以被多个 crate 使用、被多个应用列出，只有 `"rust"` 中列出的
-crate 会导出给 TSX。列出的每个 crate 都有自己的包名和导入名称；重复时 `nsh` 会报告共用它的两个路径。Rust 应用的
-`"root"` 是列出的第一个 crate 中的组件。`nsh run` 和 `nsh dev` 期间，修改其中任何一个 crate，或它们通过路径依赖的
+crate 会导出给 TSX。列出的每个 crate 都有自己的包名和导入名称；重复时 `nsh` 会报告共用它的两个路径。一个组件只由
+一个 crate 的组件集注册：两个组件集注册同一个组件（共享 crate 的组件，或 `nsh/base` 的组件）时，`nsh` 会在构建任何内容
+之前报告，并指出这两个组件集。Rust 应用的 `"root"` 是列出的第一个 crate 中的组件。`nsh run` 和 `nsh dev` 期间，修改其中任何一个 crate，或它们通过路径依赖的
 crate，都会重新构建并重启应用。
 
 ## 在 Web 上使用浏览器 API

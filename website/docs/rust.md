@@ -689,8 +689,10 @@ import { Store } from "app/storage";       // native/storage: #[native_module("a
 Every runner and host links all of them, and `.nsh/types` declares each specifier. Crates share code through Cargo
 path dependencies (`shared = { path = "../shared" }`): a crate of company components can be used by several crates
 and listed by several apps, and only the crates listed in `"rust"` export to TSX. Each listed crate has a package
-name and a specifier of its own; `nsh` reports a repeated one with the two paths that share it. A Rust app's
-`"root"` is a component of the first crate listed. During `nsh run` and `nsh dev`, a change to any of them, or to a
+name and a specifier of its own; `nsh` reports a repeated one with the two paths that share it. A component is
+registered by one crate's set: `nsh` reports a component two sets register (a shared crate's, or one of
+`nsh/base`'s), naming both, before it builds anything. A Rust app's `"root"` is a component of the first crate
+listed. During `nsh run` and `nsh dev`, a change to any of them, or to a
 crate they depend on by path, rebuilds the app and restarts it.
 
 ## Browser APIs on the web
