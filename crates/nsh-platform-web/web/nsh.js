@@ -128,6 +128,13 @@ const BAR_THICK = 4;
 const BAR_MARGIN = 2;
 const BAR_GRAB = 12;
 const BAR_HOLD = 700;
+/** How long (ms) an animated scroll command of the core's takes here, the
+ * length its own animation runs for on the other platforms (`nsh-core`'s
+ * `scroll::ANIMATION`, eased out cubically): the browser's
+ * `behavior: "smooth"` takes about a second over a long distance, and
+ * starts over every time a command retargets it, which a list does as it
+ * measures the rows the scroll passes. */
+const SCROLL_MS = 300;
 
 /* Keyframe animations (animate-spin, -ping, -pulse, -bounce) run with
    animation-composition: add: their transforms follow the view's own (as the
@@ -821,6 +828,23 @@ function runPoint(run, offset) {
 }
 
 /** The offset in a run of a boundary (`container`, `offset`) inside it. */
+/**
+ * `part` of a run, starting at UTF-16 offset `start` of its text (null: a
+ * truncated line's `…` first), as a copy gives it: an attachment (U+FFFC)
+ * as its copy text in `copies` (offset to text, `copyText`), else left out
+ * in a selectable view (`area`).
+ */
+function copiedRun(part, start, copies, area) {
+  if (!copies || start == null) return area ? part.replaceAll("\uFFFC", "") : part;
+  let out = "";
+  for (let i = 0; i < part.length; i++) {
+    const c = part[i];
+    if (c !== "\uFFFC") out += c;
+    else out += copies.get(start + i) ?? (area ? "" : c);
+  }
+  return out;
+}
+
 function runOffset(run, container, offset) {
   const range = document.createRange();
   range.setStart(run, 0);
@@ -1317,9 +1341,9 @@ class Player {
           if (url.length <= cap) this.bytes(p, cap).set(url);
           return url.length;
         },
-        fetch_start: (id, mp, ml, up, ul, hp, hl, bp, bl, kind, follow) =>
+        fetch_start: (id, mp, ml, up, ul, hp, hl, bp, bl, kind, follow, cp, cl) =>
           this.fetchStart(id, this.str(mp, ml), this.str(up, ul), JSON.parse(this.str(hp, hl)),
-            kind === 1 ? this.bytes(bp, bl).slice() : null, kind === 2, follow !== 0),
+            kind === 1 ? this.bytes(bp, bl).slice() : null, kind === 2, follow !== 0, this.str(cp, cl)),
         fetch_send: (id, p, l) => this.fetchSend(id, this.bytes(p, l).slice()),
         fetch_finish: (id) => this.requests.get(id)?.finish?.(),
         fetch_pause: (id, paused) => this.fetchPause(id, paused !== 0),
@@ -2562,8 +2586,8 @@ class Player {
       el._applied = 0;
       el.addEventListener("scroll", () => this.scrolled(el), { passive: true });
       el.addEventListener("scrollend", () => this.scrollEnded(el));
-      // The user takes over a smooth scroll of the core's (`op_sb`).
-      const takeOver = () => { el._smooth = null; };
+      // The user takes over a scroll animation of the core's.
+      const takeOver = () => this.endScrollAnimation(el, false);
       for (const type of ["wheel", "pointerdown", "touchstart", "keydown"]) el.addEventListener(type, takeOver, { passive: true });
     }
     if (kind === "screen") el.classList.add("nsh-screen");
@@ -2929,9 +2953,11 @@ class Player {
     el.style.setProperty(prop, value);
   }
 
-  op_t([, id, cx, cy, , , runs, styles, selectable, selection, color, backgrounds, links]) {
+  op_t([, id, cx, cy, , , runs, styles, selectable, selection, color, backgrounds, links, copies]) {
     const el = this.view(id);
     if (!el) return;
+    // What its attachments copy as (`copyText`), by offset.
+    el._copyTexts = copies?.length ? new Map(copies) : null;
     setTextColor(el, color ?? null);
     if (!this.updateRuns(el, cx, cy, runs, styles, backgrounds, links)) this.replaceRuns(el, cx, cy, runs, styles, backgrounds, links);
     el.classList.toggle("nsh-selectable", !!selectable);
@@ -3377,7 +3403,7 @@ class Player {
    * focus as Tab gives it, with the ring (`focusVisible`, where browsers
    * take it) and `focus:` whatever the browser's heuristics decide after a
    * click; one a click focused becomes keyboard focused. */
-  focusPressable(el, preventScroll = false) {
+  focusPressable(el) {
     if (el.tabIndex !== 0) return;
     if (document.activeElement === el) {
       if (!el._keyFocus) this.keyFocus(el);
@@ -3385,7 +3411,7 @@ class Player {
     }
     el._focusCall = true;
     try {
-      el.focus({ focusVisible: true, preventScroll });
+      el.focus({ focusVisible: true, preventScroll: true });
     } finally {
       el._focusCall = false;
     }
@@ -4685,12 +4711,15 @@ class Player {
     const el = this.view(id);
     if (!el) return;
     el._applied++;
-    // A smooth scroll of the core's in flight moves with it, as on the
-    // native backends: setting the offset would stop it.
-    if (el._smooth) {
-      el._smooth = [el._smooth[0] + dx, el._smooth[1] + dy];
-      el.scrollTo({ left: el._smooth[0], top: el._smooth[1], behavior: "smooth" });
-      return;
+    // A scroll animation of the core's in flight moves with the content,
+    // as on the native backends (`nsh-core`'s `shifted`): it goes on from
+    // the content it was on.
+    const s = el._smooth;
+    if (s) {
+      s.fromX += dx;
+      s.fromY += dy;
+      s.x += dx;
+      s.y += dy;
     }
     // So does a glide of the wheel's or the keys' (`scrollSmoothly`):
     // its next frame would put the offset back.
@@ -5048,21 +5077,17 @@ class Player {
    * none a quiet `SCROLL_QUIET` ms): the end, unless the scroll is driven
    * here (`drive`) or a finger still holds it. */
   scrollEnded(el) {
-    // A list anchors its content with an instant `ScrollBy` in the commit
-    // its animated `ScrollTo` is in, and that one's `scrollend` arrives
-    // once the smooth scroll is under way: taking it for the command's
-    // would forget the smooth scroll, and the next `ScrollBy` would then
-    // set the offset and stop it. A smooth scroll stopped elsewhere ends
-    // on the fallback below, which its own frames keep waiting.
-    if (el._smooth && !this.scrolledTo(el, el._smooth[0], el._smooth[1])) {
-      this.waitCommandEnd(el);
-      return;
-    }
+    // A browser wheel's scroll goes on while its events keep coming
+    // (`wheelNatively`): a `scrollend` between two notches is not its end,
+    // which waits for the fallback, as one scroll of nsh's ends once.
+    if (el._wheelAt && performance.now() - el._wheelAt < 200) return;
     clearTimeout(el._commandEnd);
     el._commandEnd = 0;
     clearTimeout(el._quietEnd);
     el._quietEnd = 0;
-    el._smooth = null;
+    // A scroll animation of the core's (`animateScroll`) is driven here:
+    // every frame of it sets the offset, and the `scrollend` the frame
+    // before it drew is not its end. It ends on its own last frame.
     if (el._driven || el._touchDrag) return;
     // The browser's end of a scroll that ended here (`ownEnd`).
     const own = el._ownEnd;
@@ -6279,9 +6304,12 @@ class Player {
     // keeps them, with their depths) are foreign, below this one's.
     this.historySession = newHistorySession();
     // The current entry's place, and the depth of each entry up to the
-    // newest (what a back of the app's own goes back over).
+    // newest (what a back of the app's own goes back over), and the address
+    // each had when the player last wrote it or was on it (what
+    // `takeOverEntry` checks the entry under against).
     this.historyIndex = 0;
     this.historyDepths = [0];
+    this.historyUrls = [location.href];
     history.replaceState(this.historyState(0), "");
     // The app's first entry's place in the tab's history, where the
     // browser says (`navigationIndex`): a state-less entry before it is the
@@ -6316,6 +6344,7 @@ class Player {
     const index = this.historyIndex;
     this.historyIndex = 0;
     this.historyDepths = [0];
+    this.historyUrls.length = 1;
     this.historyDepth = 0;
     if (!index) return;
     this.ignoredPops++;
@@ -6329,6 +6358,8 @@ class Player {
     history.pushState(this.historyState(depth, index), "", url);
     this.historyDepths.length = index;
     this.historyDepths.push(depth);
+    this.historyUrls.length = index;
+    this.historyUrls.push(location.href);
     this.historyIndex = index;
   }
 
@@ -6377,9 +6408,43 @@ class Player {
       return;
     }
     this.pageUrl = resolved.href;
+    if (push && this.earlyPushed) {
+      // An entry of its own was written for this task's push already
+      // (`pushEarly`): the turn's last address is that entry's.
+      push = false;
+    }
     if (push) this.pageUrlPush = true;
     this.pageUrlSets = (this.pageUrlSets ?? 0) + 1;
-    this.syncHistorySoon();
+    this.syncHistorySoon(push);
+  }
+
+  /** Whether an address pushed now can have its entry at once, in the task
+   * the app pushed it in: no page has an entry (no modal, no stack screen
+   * above its first), none is going, and no traversal is waited for. Then
+   * nothing later in the turn can take an entry away under it. */
+  canPushEarly() {
+    if (this.historyDepth || this.ignoredPops || this.dismissing > 0 || this.popAnswer) return false;
+    if ([...(this.root?.children ?? [])].some((el) => el._kind === "modal")) return false;
+    return this.backDepth() === 0;
+  }
+
+  /**
+   * A push with no page open (a list's row that opens a screen of its own
+   * address): the entry is written now, before the browser draws the new
+   * screen, not a task later (`syncHistorySoon`). Chrome on Android pictures
+   * an entry as the page leaves it and shows that picture under a back
+   * swipe; written after the new screen was drawn, the entry under it was
+   * pictured with that screen. Later addresses of the same task replace
+   * this entry's (in a turn the last one wins). With a page open it waits as
+   * before: a sheet's dismissal can reach the player a task after the push,
+   * and an entry written early would be gone back over with the sheet's.
+   */
+  pushEarly() {
+    this.earlyPushed = true;
+    setTimeout(() => {
+      this.earlyPushed = false;
+    }, 0);
+    this.syncHistory();
   }
 
   // The document's title: a mounted `Head`'s (`nsh/web`), else the main
@@ -6428,8 +6493,13 @@ class Player {
     return depth;
   }
 
-  syncHistorySoon() {
-    if (!this.history || this.historySync) return;
+  /** Writes the turn's entries a task later, once all of it reached the
+   * player; with `push` (an address pushed) at once when it can
+   * (`pushEarly`). */
+  syncHistorySoon(push = false) {
+    if (!this.history) return;
+    if (push && this.canPushEarly()) return this.pushEarly();
+    if (this.historySync) return;
     this.historySync = setTimeout(() => {
       this.historySync = 0;
       this.syncHistory();
@@ -6440,7 +6510,9 @@ class Player {
     const depth = this.backDepth();
     const have = this.historyDepth;
     for (let i = have + 1; i <= depth; i++) this.pushEntry(i);
-    if (depth < have) {
+    if (depth < have && this.takeOverEntry(depth)) {
+      // The address is on the entry the page that went had (`takeOverEntry`).
+    } else if (depth < have) {
       // Back over the entries above `depth`, the addresses the user typed
       // at those depths included; a level that has no entry left gets one
       // once the traversal lands.
@@ -6467,6 +6539,7 @@ class Player {
         // Absolute: `setPageUrl` resolved it.
         if (push) this.pushEntry(depth, url);
         else history.replaceState(history.state, "", url);
+        this.historyUrls[this.historyIndex] = url;
         this.shownUrl = url;
         if (!this.historyIndex) this.firstUrl = url;
       } catch (error) {
@@ -6474,6 +6547,45 @@ class Player {
       }
     }
     if (!this.ignoredPops) this.syncTitle();
+  }
+
+  /**
+   * A turn that takes away the one page whose entry is the current one (a
+   * modal, a stack's screen) and pushes an address (a sheet's item that
+   * opens a page of the app's): the address takes that entry over, at the
+   * depth of the pages left, instead of going back over it and pushing an
+   * entry of its own once the traversal lands. Nothing waits for a
+   * traversal, and the entry under it is not left again. A browser pictures
+   * an entry as the page leaves it, and Chrome on Android shows that
+   * picture under a back swipe: left again here, after the app's new page
+   * was drawn (the traversal lands a task or more later), the entry under
+   * it was pictured with that page. Its picture stays the one taken as the
+   * page that went came. Not with entries after the current one (the user
+   * went back onto it), which a push drops and this would keep. Nor with
+   * the address of the entry under it (a sheet with an address of its own
+   * closing onto its opener's), which the back lands on and the push then
+   * makes nothing of: here two entries of one address would have a back
+   * between them that moves nothing. Returns whether it did.
+   */
+  takeOverEntry(depth) {
+    const url = this.pageUrl;
+    if (url == null || !this.pageUrlPush || url === location.href) return false;
+    if (this.entryAtDepth(depth) !== this.historyIndex - 1 || this.historyDepths.length !== this.historyIndex + 1) return false;
+    const under = this.historyUrls[this.historyIndex - 1];
+    if (under == null || url === under) return false;
+    this.pageUrl = null;
+    this.pageUrlPush = false;
+    try {
+      // Absolute: `setPageUrl` resolved it.
+      history.replaceState(this.historyState(depth), "", url);
+    } catch (error) {
+      this.showError(`UrlScheme.setUrl(${JSON.stringify(url)}): ${error?.message ?? error}`);
+    }
+    this.historyDepths[this.historyIndex] = depth;
+    this.historyUrls[this.historyIndex] = url;
+    this.historyDepth = depth;
+    this.shownUrl = url;
+    return true;
   }
 
   popState(e) {
@@ -6501,6 +6613,8 @@ class Player {
         const index = this.historyIndex + 1;
         this.historyDepths.length = index;
         this.historyDepths.push(have);
+        this.historyUrls.length = index;
+        this.historyUrls.push(location.href);
         this.historyIndex = index;
         history.replaceState(this.historyState(have, index), "");
         this.tellAddress("address");
@@ -6519,6 +6633,7 @@ class Player {
       // it are an earlier load's too.
       this.historySession = newHistorySession();
       this.historyDepths = [0];
+      this.historyUrls = [location.href];
       history.replaceState(this.historyState(0), "");
       this.historyBase = navigationIndex();
       this.firstUrl = location.href;
@@ -6531,6 +6646,7 @@ class Player {
     const reason = index < this.historyIndex ? "back" : "forward";
     this.historyIndex = index;
     this.historyDepths[index] = at;
+    this.historyUrls[index] = location.href;
     if (at > have) {
       // Forward to a screen the stack no longer has: an address the app is
       // handed from outside, as a link (`open`), and its pages' entries go
@@ -7287,6 +7403,15 @@ class Player {
         if (el?._field) el._field.blur();
         else document.activeElement?.blur?.();
         break;
+      case "clearSelection": {
+        // The selection of the selectable view `el` is, is in or holds:
+        // `selectionchange` then reports `""`.
+        const sel = getSelection();
+        const anchor = sel?.rangeCount ? sel.anchorNode : null;
+        const area = anchor && this.areaOf(anchor.nodeType === 1 ? anchor : anchor.parentElement);
+        if (el && area && (el.contains(area) || area.contains(el))) sel.removeAllRanges();
+        break;
+      }
       case "setSelection": el?._field?.setSelectionRange(args[0], args[1]); break;
       case "insertText": {
         // As the user's typing: the browser's undo history keeps it and
@@ -7312,17 +7437,12 @@ class Player {
           el._field.scrollTo({ top: args[1], behavior: args[2] ? "smooth" : "instant" });
           break;
         }
-        el._applied++;
-        this.stopGlide(el, args[0], args[1]);
-        el._smooth = args[2] ? [args[0], args[1]] : null;
-        el.scrollTo({ left: args[0], top: args[1], behavior: args[2] ? "smooth" : "instant" });
+        this.scrollCommand(el, args[0], args[1], args[2]);
         break;
       case "scrollToEnd": {
         if (!el) break;
-        el._applied++;
         const [x, y] = el._horizontal ? [el.scrollWidth, 0] : [0, el.scrollHeight];
-        this.stopGlide(el, x, y);
-        el.scrollTo({ left: x, top: y, behavior: args[0] ? "smooth" : "instant" });
+        this.scrollCommand(el, x, y, args[0]);
         break;
       }
       case "zoomTo": if (el) this.zoomCommand(el, ...args); break;
@@ -7435,7 +7555,7 @@ class Player {
           el.tabIndex = -1;
           el._a11yFocus = true;
         }
-        el.focus();
+        el.focus({ preventScroll: true });
         break;
       default: break;
     }
@@ -8530,7 +8650,7 @@ class Player {
    * browser's `fetch`, its head and body chunks reported back as they come.
    * A streamed body (`streamed`) is collected until `fetch_finish`.
    */
-  fetchStart(id, method, url, headers, body, streamed, follow) {
+  fetchStart(id, method, url, headers, body, streamed, follow, cache) {
     const request = { controller: new AbortController(), paused: false, resume: null, reader: null, done: false };
     this.requests.set(id, request);
     const report = (f) => {
@@ -8541,7 +8661,7 @@ class Player {
       this.requests.delete(id);
     };
     const send = async (body) => {
-      const init = { method, headers: new Headers(), body, redirect: follow ? "follow" : "manual", signal: request.controller.signal };
+      const init = { method, headers: new Headers(), body, redirect: follow ? "follow" : "manual", cache: cache || "default", signal: request.controller.signal };
       for (const [name, value] of headers) {
         try {
           init.headers.append(name, value);
@@ -9285,8 +9405,8 @@ class Player {
    * selectable view, texts on one row (their boxes overlap vertically: a
    * table's cells) are joined by a tab instead, a text that continues the
    * one before it (`continuesText`: a wrapped line's later part) by
-   * nothing, and attachments (U+FFFC) and hidden runs are left out, as
-   * the native platforms copy. */
+   * nothing, attachments (U+FFFC) are their copy texts (`copyText`) or
+   * left out, and hidden runs are left out, as the native platforms copy. */
   copyText(e) {
     if (e.target.closest?.(".nsh-field")) return;
     const out = this.selectedText();
@@ -9340,8 +9460,7 @@ class Player {
         if (to === text.length && run._after) out += run._after;
         continue;
       }
-      const part = text.slice(from, to);
-      out += area ? part.replaceAll("\uFFFC", "") : part;
+      out += copiedRun(text.slice(from, to), run._start == null ? null : run._start + from, run.parentNode._copyTexts, !!area);
       if (to === text.length && run._after) out += run._after;
     }
     if (!found) return null;
@@ -9490,7 +9609,7 @@ class Player {
    * brings it into sight (`revealFocus`). */
   focusStop(el) {
     if (el._field) el._field.focus({ preventScroll: true });
-    else this.focusPressable(el, true);
+    else this.focusPressable(el);
     this.revealFocus(el);
   }
 
@@ -9711,8 +9830,10 @@ class Player {
    * A wheel or touchpad scroll goes to the innermost scroll view along its
    * axis that can move that way (a vertical wheel scrolls a horizontal view
    * when no vertical one can), and stays on it until the scroll ends
-   * (events 200 ms apart). Notches glide; Ctrl + wheel (a touchpad's pinch)
-   * pinches the view under the pointer and never zooms the page.
+   * (events 200 ms apart). Where the browser would scroll the same view, it
+   * does (`wheelNatively`): its notches glide as every page's. Otherwise
+   * notches glide here; Ctrl + wheel (a touchpad's pinch) pinches the view
+   * under the pointer and never zooms the page.
    */
   wheel(e) {
     // A view listening to `onWheel` nearer than the scroll views under the
@@ -9744,16 +9865,28 @@ class Player {
       };
       const el = chain.find((v) => !!v._horizontal === horizontal && can(v, horizontal ? dx : dy))
         ?? (horizontal ? null : chain.find((v) => v._horizontal && can(v, dy)));
+      // The browser scrolls it itself, with its own smooth wheel and the
+      // touchpad's momentum, when it would pick the same view: the
+      // innermost along the scroll's axis (`overscroll-behavior: contain`
+      // keeps the scroll on it at its edge, as `wheelLock` does), not
+      // snapping (one snap point per scroll) and without a content layer
+      // (zoom, pull to refresh), whose offsets are nsh's.
+      const native = !!el && !el._snapPoints && !el._layer
+        && el === chain.find((v) => !!v._horizontal === horizontal);
       // Nothing to scroll: the page around may, unless a dialog or an
       // alert covers it.
-      this.wheelLock = lock = el ? { el, total: 0, snapped: false } : null;
+      this.wheelLock = lock = el ? { el, total: 0, snapped: false, native } : null;
       if (!lock) {
         if (this.viewportDialogs && e.target.closest?.(".nsh-viewport")) e.preventDefault();
         return;
       }
     }
-    e.preventDefault();
     lock.t = now;
+    if (lock.native) {
+      this.wheelNatively(lock.el);
+      return;
+    }
+    e.preventDefault();
     const el = lock.el;
     const d = el._horizontal ? dx || dy : dy;
     if (el._snapPoints) {
@@ -9770,6 +9903,30 @@ class Player {
     // deltas. Its magnitude cannot distinguish a notch from a finger.
     const smooth = e.deltaMode !== 0;
     this.scrollSmoothly(el, el._horizontal ? d : 0, el._horizontal ? 0 : d, smooth);
+  }
+
+  /**
+   * A wheel the browser scrolls `el` with (`wheel`): Chrome and Safari
+   * send a mouse's notches in pixels, as a touchpad's deltas, so nsh could
+   * not tell them apart and moved each notch at once, where every page
+   * glides. The offsets reach the core as any scroll's do (`scrolled`).
+   * A glide of the keys' stops where it is, without an end: the wheel's
+   * scroll goes on from there. The end is the browser's `scrollend` once
+   * no event came for 200 ms (`scrollEnded`: one scroll, as nsh's own
+   * wheels end once), or 200 ms after the last scroll event where it sends
+   * none (`waitCommandEnd`, which `scrolled` keeps waiting while it moves).
+   */
+  wheelNatively(el) {
+    el._wheelAt = performance.now();
+    const a = el._glide;
+    if (a) {
+      cancelAnimationFrame(a.frame);
+      clearTimeout(a.timer);
+      clearTimeout(a.watch);
+      el._glide = null;
+      this.drive(el, -1);
+    }
+    this.waitCommandEnd(el);
   }
 
   /**
@@ -9919,13 +10076,7 @@ class Player {
    * the view where it is moves nothing, and no `scrollend` follows, so its
    * `onScrollEnd` is sent here. */
   stopGlide(el, x, y) {
-    const a = el._glide;
-    if (!a) return;
-    cancelAnimationFrame(a.frame);
-    clearTimeout(a.timer);
-    clearTimeout(a.watch);
-    el._glide = null;
-    this.drive(el, -1);
+    if (!this.cancelGlide(el)) return;
     if (this.scrolledTo(el, x, y)) {
       this.ownEnd(el);
     } else {
@@ -9934,6 +10085,90 @@ class Player {
       // keep this fallback waiting through their scroll events.
       this.waitCommandEnd(el);
     }
+  }
+
+  /** Stops `el`'s glide where it is, for something that takes it over;
+   * whether there was one. */
+  cancelGlide(el) {
+    const a = el._glide;
+    if (!a) return false;
+    cancelAnimationFrame(a.frame);
+    clearTimeout(a.timer);
+    clearTimeout(a.watch);
+    el._glide = null;
+    this.drive(el, -1);
+    return true;
+  }
+
+  /** `ScrollTo` and `ScrollToEnd` of the core: puts `el` at (`x`, `y`),
+   * animating it over `SCROLL_MS` when `animated`. */
+  scrollCommand(el, x, y, animated) {
+    el._applied++;
+    if (!animated) {
+      this.endScrollAnimation(el, false);
+      this.stopGlide(el, x, y);
+      el.scrollTo({ left: x, top: y, behavior: "instant" });
+      return;
+    }
+    // The animation below ends the scroll it takes over, so the glide
+    // only stops.
+    this.cancelGlide(el);
+    this.animateScroll(el, x, y);
+  }
+
+  /** Moves `el` to (`x`, `y`) over `SCROLL_MS`, eased out cubically, as
+   * the core animates a scroll of its own on the other platforms. A
+   * command that retargets one in flight carries on from where it is, as
+   * the core's `animate_to` does. */
+  animateScroll(el, x, y) {
+    let a = el._smooth;
+    if (!a) {
+      a = el._smooth = { fromX: 0, fromY: 0, x: 0, y: 0, start: 0, frame: 0, step: null, watch: 0 };
+      a.step = (now) => this.stepScroll(el, a, now);
+      this.drive(el, 1);
+    }
+    a.fromX = el.scrollLeft;
+    a.fromY = el.scrollTop;
+    a.x = x;
+    a.y = y;
+    a.start = performance.now();
+    // Its frames stopped (a hidden tab): it is where it was going, and
+    // ends there, as a glide's do (`scrollSmoothly`). One timer an
+    // animation, not one a frame.
+    clearTimeout(a.watch);
+    a.watch = setTimeout(() => {
+      el.scrollLeft = a.x;
+      el.scrollTop = a.y;
+      this.endScrollAnimation(el, true);
+    }, SCROLL_MS + 200);
+    if (!a.frame) a.frame = requestAnimationFrame(a.step);
+  }
+
+  /** One frame of `el`'s scroll animation (`animateScroll`). */
+  stepScroll(el, a, now) {
+    const t = Math.min((now - a.start) / SCROLL_MS, 1);
+    const k = 1 - (1 - t) ** 3;
+    el.scrollLeft = a.fromX + (a.x - a.fromX) * k;
+    el.scrollTop = a.fromY + (a.y - a.fromY) * k;
+    if (t < 1) {
+      a.frame = requestAnimationFrame(a.step);
+      return;
+    }
+    a.frame = 0;
+    this.endScrollAnimation(el, true);
+  }
+
+  /** `el`'s scroll animation is over: `reached` when it ran to its target,
+   * which ends the scroll, rather than being taken over by input or a
+   * command that does not animate. */
+  endScrollAnimation(el, reached) {
+    const a = el._smooth;
+    if (!a) return;
+    cancelAnimationFrame(a.frame);
+    clearTimeout(a.watch);
+    el._smooth = null;
+    this.drive(el, -1);
+    if (reached) this.ownEnd(el);
   }
 
   /** Whether `el` is where a scroll to (`x`, `y`) leaves it: browsers
@@ -9949,8 +10184,6 @@ class Player {
   waitCommandEnd(el) {
     clearTimeout(el._commandEnd);
     el._commandEnd = setTimeout(() => {
-      // A smooth scroll still waited for here stopped short: give it up.
-      el._smooth = null;
       this.scrollEnded(el);
       el._ownEnd = [el.scrollLeft, el.scrollTop];
     }, 200);
