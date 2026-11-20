@@ -153,7 +153,9 @@ fn open(endpoint: &str) -> std::io::Result<(Box<dyn BufRead + Send>, Box<dyn Lin
     }
 }
 
-/// Whether this process is a design host ([`connect`]).
+/// Whether this process is a design host ([`connect`]): what the app's
+/// script reads as `design.active()` and a Rust view as
+/// [`crate::element::design_mode`].
 pub fn attached() -> bool {
     ATTACHED.get().is_some()
 }
@@ -239,7 +241,7 @@ pub(crate) struct Design;
 impl Design {
     /// Whether a design tool shows this app: the app was started as its
     /// design host (`NSH_DESIGN_SOCKET`). Without one, `next()` never
-    /// resolves and `send()` does nothing.
+    /// resolves and `send()` does nothing. Rust: `design_mode()`.
     pub(crate) fn active() -> bool {
         attached()
     }
