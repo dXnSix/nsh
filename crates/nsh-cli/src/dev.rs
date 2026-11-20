@@ -69,10 +69,9 @@ impl DevSession {
     ) -> anyhow::Result<DevSession> {
         let entry = dunce::canonicalize(entry)
             .with_context(|| format!("entry not found: {}", entry.display()))?;
-        let src_dir = entry
-            .parent()
-            .context("entry has no directory")?
-            .to_path_buf();
+        // The app's directory: the entry's, or `--app`'s for an entry kept
+        // outside the app, whose own directory `watch_imports` watches.
+        let src_dir = dunce::canonicalize(crate::entry::app_dir(&entry))?;
         let devices = Arc::<Devices>::default();
         let server = start_server(listen, &src_dir, devices.clone())?;
         server.serve_files(crate::build::crate_assets().map(|a| (a.path, a.source)));

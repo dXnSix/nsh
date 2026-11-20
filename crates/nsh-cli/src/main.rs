@@ -251,6 +251,11 @@ enum Command {
         /// whose `App.tsx` is the entry.
         #[arg(default_value = ".")]
         entry: PathBuf,
+        /// The app's directory, when the entry is a module kept outside it
+        /// (a tool's): its `nsh.json`, crates, assets and `.nsh/` are this
+        /// directory's, and the session watches it (default: the entry's).
+        #[arg(long, value_name = "DIR")]
+        app: Option<PathBuf>,
         /// Dev server port (replaces the previous NSH development session on
         /// it). Default: the port this app had last, else the first free one
         /// from 8790; with --server-only, 8790.
@@ -294,6 +299,11 @@ enum Command {
         /// whose `App.tsx` is the entry.
         #[arg(default_value = ".")]
         entry: PathBuf,
+        /// The app's directory, when the entry is a module kept outside it
+        /// (a tool's): its `nsh.json`, crates, assets and `.nsh/` are this
+        /// directory's, and the session watches it (default: the entry's).
+        #[arg(long, value_name = "DIR")]
+        app: Option<PathBuf>,
         /// Dev server port (replaces the previous NSH development session on
         /// it). Default: the port this app had last, else the first free one
         /// from 8790; with --server-only, 8790.
@@ -822,6 +832,23 @@ fn run(mut command: Command) -> anyhow::Result<()> {
     {
         args.entry = probe_entry(&args.entry);
     }
+    // An entry kept outside its app (`--app`); with none named, the app's own.
+    if let Command::Run {
+        app: Some(dir),
+        entry,
+        ..
+    }
+    | Command::Dev {
+        app: Some(dir),
+        entry,
+        ..
+    } = &mut command
+    {
+        entry::set_app_dir(dir)?;
+        if entry.as_path() == std::path::Path::new(".") {
+            *entry = dir.clone();
+        }
+    }
     if let Some(entry) = command.entry_mut() {
         *entry = entry::resolve(entry)?;
         // A Rust app has no TypeScript to declare things for, unless it
@@ -1040,6 +1067,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         ),
         Command::Dev {
             entry,
+            app: _,
             port,
             release,
             limits,
@@ -1136,6 +1164,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
         }
         Command::Run {
             entry,
+            app: _,
             port,
             release,
             limits,

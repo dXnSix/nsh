@@ -42,6 +42,26 @@ pub struct BundleOptions {
     /// imports are named from its app. The theme, capabilities and
     /// resolution stay the entry's. `None`: the entry's.
     pub asset_root_from: Option<PathBuf>,
+    /// The app's directory when the entry is a module kept outside it
+    /// (`nsh run --app <dir>`, a tool's entry): its `nsh.json` (theme,
+    /// capabilities, resolution, main window, translations) and the root
+    /// its assets are named from ([`Bundle::asset_root`]). `None`: found
+    /// from the entry's directory, as an app's own entry is.
+    pub app_dir: Option<PathBuf>,
+}
+
+/// The app's directory: `given` canonical (`BundleOptions::app_dir`), else
+/// the one the entry's directory `cwd` belongs to ([`app_dir`]).
+fn app_dir_of(
+    given: Option<&std::path::Path>,
+    cwd: &std::path::Path,
+) -> Result<PathBuf, BundleError> {
+    match given {
+        Some(dir) => dunce::canonicalize(dir).map_err(|e| {
+            BundleError::other(format!("app directory not found: {}: {e}", dir.display()))
+        }),
+        None => Ok(app_dir(cwd)),
+    }
 }
 
 /// The app's identity a build gives it in place of `nsh.json`'s (what a
@@ -759,15 +779,23 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
     let cwd_for_errors = cwd.clone();
     let cwd_root = cwd.clone();
     // Canonical: `cwd` is, and so is each directory above it.
-    let app = app_dir(&cwd);
+    let app = app_dir_of(options.app_dir.as_deref(), &cwd)?;
+    // The `nsh.json` whose theme and translations a change rebuilds with.
+    let cwd_root = if options.app_dir.is_some() {
+        app.clone()
+    } else {
+        cwd_root
+    };
     let tailwind = tailwind_setup(&app, options.development, &options.app, &options.ui_sets)?;
     let capabilities = capabilities(&app)?;
     let url_schemes = url_schemes(&app)?;
     // Beside the entry, as `app.json`, `nsh run` and `nsh test`'s
     // real-window hosts read it (the CLI's `read_config`): an app a test
     // opens below its app's root starts alike headless and in a window.
-    let main_window = main_window(&cwd)?;
-    let application = application(&cwd)?;
+    // An entry kept outside its app reads them from the app's directory.
+    let config_dir = if options.app_dir.is_some() { &app } else { &cwd };
+    let main_window = main_window(config_dir)?;
+    let application = application(config_dir)?;
     let resolve = ResolveSetup::read(&app)?;
     let asset_root = match &options.asset_root_from {
         Some(file) => {
@@ -1167,15 +1195,35 @@ pub fn bundle_hot(
     entry: &std::path::Path,
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<HotBundle, BundleError> {
+    bundle_hot_in(entry, None, ui_sets)
+}
+
+/// [`bundle_hot`] of an entry kept outside its app, whose directory is
+/// `app_dir` (as [`BundleOptions::app_dir`]); `None`: as [`bundle_hot`].
+pub fn bundle_hot_in(
+    entry: &std::path::Path,
+    app_dir: Option<&std::path::Path>,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<HotBundle, BundleError> {
     tokio::runtime::Builder::new_current_thread()
         .build()
         .map_err(BundleError::other)?
-        .block_on(bundle_hot_async(entry, ui_sets))
+        .block_on(bundle_hot_in_async(entry, app_dir, ui_sets))
 }
 
 /// Bundles an app for development with hot module replacement.
 pub async fn bundle_hot_async(
     entry: &std::path::Path,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<HotBundle, BundleError> {
+    bundle_hot_in_async(entry, None, ui_sets).await
+}
+
+/// [`bundle_hot_async`] of an entry kept outside its app, whose directory
+/// is `app_dir` (as [`BundleOptions::app_dir`]).
+pub async fn bundle_hot_in_async(
+    entry: &std::path::Path,
+    app_dir: Option<&std::path::Path>,
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<HotBundle, BundleError> {
     let start = Instant::now();
@@ -1189,7 +1237,11 @@ pub async fn bundle_hot_async(
     let preloads = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
-    let app = app_dir(&cwd);
+    let app = app_dir_of(app_dir, &cwd)?;
+    // Modules are named from the app's directory when the entry is kept
+    // outside it, so that the app's own keep the names they have when its
+    // entry is its own (hot updates find them by name).
+    let cwd = if app_dir.is_some() { app.clone() } else { cwd };
     let tailwind = tailwind_setup(&app, true, &AppInfo::default(), ui_sets)?;
     let capabilities = capabilities(&app)?;
     let url_schemes = url_schemes(&app)?;
@@ -1206,6 +1258,10 @@ pub async fn bundle_hot_async(
         // again in place is seen by its importers.
         format: Some(OutputFormat::Cjs),
         preserve_modules: Some(true),
+        // An entry kept outside its app: the app's modules are named from
+        // its directory, as its own entry names them, not from the folder
+        // both share.
+        preserve_modules_root: app_dir.map(|_| app.to_string_lossy().into_owned()),
         // Every statement stays. Rolldown still leaves out the exports
         // no module imports: an edit that starts using one changes the
         // exporting module too, which then runs again.
@@ -1877,6 +1933,88 @@ mod tests {
         assert!(code.contains("\"asset:/assets/dot.png\""), "{code}");
         assert_eq!(hot.assets, [PathBuf::from("assets/dot.png")]);
         assert_eq!(hot.asset_root, dir);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// An entry kept outside its app (a tool's, `nsh run --app <dir>`) is
+    /// built as the app: the app's `nsh.json` and the names its files have
+    /// from the app's directory, in both kinds of bundle. In a hot bundle the
+    /// app's modules keep the names its own entry gives them, so an update
+    /// finds them; the entry's own are named from there too.
+    #[test]
+    fn an_entry_outside_its_app_is_built_as_the_app() {
+        let shown = "import { Image, View } from \"nsh\";\nimport dot from \"../assets/dot.png\";\n\
+                     export function Shown() { return <View><Image src={dot} /></View>; }\n";
+        let dir = asset_app("outside-entry", true, &[("src/Shown.tsx", shown)]);
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "capabilities": { "host": ["tool"] } }"#,
+        )
+        .unwrap();
+        let tool = dir.with_file_name(format!(
+            "{}-tool",
+            dir.file_name().unwrap().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&tool);
+        std::fs::create_dir_all(&tool).unwrap();
+        let shown = dir
+            .join("src/Shown.tsx")
+            .to_string_lossy()
+            .replace('\\', "/");
+        std::fs::write(tool.join("Helper.ts"), "export const label = \"tool\";\n").unwrap();
+        std::fs::write(
+            tool.join("Stage.tsx"),
+            format!(
+                "import {{ mount }} from \"nsh\";\nimport {{ Shown }} from {shown:?};\n\
+                 import {{ label }} from \"./Helper\";\nmount(() => <Shown key={{label}} />);\n"
+            ),
+        )
+        .unwrap();
+        let entry = tool.join("Stage.tsx");
+        let built = bundle(&BundleOptions {
+            entry: entry.clone(),
+            app_dir: Some(dir.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            built.code.contains("\"asset:/assets/dot.png\""),
+            "{}",
+            built.code
+        );
+        assert_eq!(built.assets, [PathBuf::from("assets/dot.png")]);
+        assert_eq!(built.asset_root, dir);
+        assert!(built.capabilities.is_some(), "the app's nsh.json");
+        let hot = bundle_hot_in(&entry, Some(&dir), &[]).unwrap();
+        assert!(hot_code(&hot).contains("\"asset:/assets/dot.png\""));
+        assert_eq!(hot.asset_root, dir);
+        assert!(hot.capabilities.is_some(), "the app's nsh.json");
+        let ids: Vec<&str> = hot.modules.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"src/Shown.js"), "{ids:?}");
+        // The entry finds them from where its own name puts it.
+        let stage = hot
+            .modules
+            .iter()
+            .find(|m| m.id.ends_with("-tool/Stage.js"))
+            .unwrap();
+        assert!(
+            stage.code.contains("require(\"../src/Shown.js\")"),
+            "{}",
+            stage.code
+        );
+        // The app's own entry names the module alike: an update finds it.
+        std::fs::write(
+            dir.join("App.tsx"),
+            "import { mount } from \"nsh\";\nimport { Shown } from \"./src/Shown\";\nmount(Shown);\n",
+        )
+        .unwrap();
+        let own = bundle_hot(&dir.join("App.tsx"), &[]).unwrap();
+        assert!(own.modules.iter().any(|m| m.id == "src/Shown.js"));
+        // Without the app's directory, the entry's is the app's: the file
+        // is outside it.
+        let error = release(&entry).unwrap_err().plain;
+        assert!(error.contains("is outside the app's directory"), "{error}");
+        let _ = std::fs::remove_dir_all(tool);
         let _ = std::fs::remove_dir_all(dir);
     }
 

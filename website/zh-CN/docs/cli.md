@@ -78,7 +78,7 @@ nsh init [DIR] [--name <NAME>] [--template <ts|rust|mixed>] [--nsh-source <DIR>]
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop]
+nsh run [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop]
 ```
 
 ```sh
@@ -95,6 +95,7 @@ nsh run my-app/App.tsx --target web
 |---|---|---|
 | `--target <TARGET>` | macOS 上为 `macos`，Linux 上为 `linux`，Windows 上为 `windows` | `catalyst`：Mac Catalyst 宿主，一个 iPhone 大小的窗口（390×844）。`ios`：iOS 模拟器中的宿主。`android`：Android 设备或模拟器上的宿主。`macos`：AppKit 宿主，一个 1200×800 的窗口（[macOS](./macos.md)）。`linux`：GTK 宿主，一个 390×844 的窗口（[Linux](./linux.md)）。`windows`：Win32 宿主，一个 1200×800 的窗口（[Windows](./windows.md)）。`gpui`：GPUI 宿主，一个 1200×800 的窗口，可在 macOS、Windows 或 Linux 上运行，以嵌入它的 GPUI 应用的方式显示 TSX 应用（[GPUI](./gpui.md)）。`tui`：当前终端中的宿主（[TUI](./tui.md)）。`web`：开发服务器的页面，地址会打印出来（[Web](./web.md#在浏览器里开发)）。`tizen-web`：同一个页面作为三星电视的页面，以电视 idiom 运行，在本机浏览器中打开；配置了 `nsh.json` 的 `tizen.signing` 时也在电视上运行（[Web](./web.md#三星电视)）。`tizen`：三星电视或 Tizen 模拟器上的 NSH 开发包，原生运行，通过 `sdb` 安装和连接（需要 `nsh.json` 的 `tizen.signing`；[Tizen](./tizen.md)）。其他名字运行在 NSH 之外构建的同名平台（[外部 target](#外部-target)）。 |
 | `--device <DEVICE>` | | 要使用的 iOS 模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定。默认：已启动的模拟器，否则启动最新的 iPhone。使用 `tizen-web` 和 `tizen` 时：电视的 `sdb` 序列号（`192.168.1.5:26101`；`tizen` 默认用 `sdb devices` 列出的唯一一台）。 |
+| `--app <DIR>` | 入口所在目录 | 入口放在应用之外时（例如设计工具的入口）应用的目录：`nsh run ~/tool/Stage.tsx --app my-app`。应用的 `nsh.json`、crate、资源、翻译和 `.nsh/` 都取自这个目录，它的模块保留应用自己的入口给出的名称，会话同时监视它和入口。不给 `ENTRY` 时使用这个目录自己的入口。仅限 TSX 入口。 |
 | `--port <PORT>` | 此应用上次的端口，否则从 `8790` 起第一个空闲端口 | 开发服务器端口。等待此端口上的旧 NSH 开发会话清理完成后接管。 |
 | `--release` | | 压缩代码并去掉调试信息。release 包没有热模块替换：每次保存都会重新加载应用。 |
 | `--limits [<LIMITS>]` | | 按嵌入在其他应用中的方式运行应用，使用宿主应用设置的限制：`memory` 和 `stack`（单位为 `KB`、`MB` 或 `GB`）、`load` 和 `call`（单位为 `ms` 或 `s`）以及 `nodes`，例如 `--limits memory=128MB,call=500ms`。没写的项保持嵌入时的默认值，只写 `--limits` 就全部使用默认值（[沙箱与能力](./sandbox-and-capabilities.md#限制)）。不带它时，应用像打包后的应用一样独立运行。仅 TSX 入口。 |
@@ -116,10 +117,10 @@ nsh run my-app/App.tsx --target web
 ## nsh dev
 
 ```sh
-nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
+nsh dev [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
 ```
 
-启动开发服务器并打开当前系统的原生宿主：macOS 使用 AppKit，Linux 使用 GTK，Windows 使用 Win32。开发 iOS 或 Android 应用时显式指定 `--target ios` 或 `--target android`。用 `--server-only` 为自己启动的宿主提供服务。服务器构建应用、监视入口所在目录，并把每次重新构建推送给连接到它的宿主。使用 `--server-only` 时，它会打印本机宿主使用的 URL、每个局域网地址对应的设备 URL，以及在 Web 运行时存在时，浏览器运行应用要打开的页面（[Web](./web.md#在浏览器里开发)）：
+启动开发服务器并打开当前系统的原生宿主：macOS 使用 AppKit，Linux 使用 GTK，Windows 使用 Win32。开发 iOS 或 Android 应用时显式指定 `--target ios` 或 `--target android`。用 `--server-only` 为自己启动的宿主提供服务。服务器构建应用、监视入口所在目录（以及 `--app` 的目录），并把每次重新构建推送给连接到它的宿主。使用 `--server-only` 时，它会打印本机宿主使用的 URL、每个局域网地址对应的设备 URL，以及在 Web 运行时存在时，浏览器运行应用要打开的页面（[Web](./web.md#在浏览器里开发)）：
 
 ```text
 ✓ built App.tsx (3.2 KB js, 9.8 KB bytecode, 21ms)
@@ -129,7 +130,7 @@ nsh dev [ENTRY] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|
   browsers on this network: http://192.168.1.20:8790/
 ```
 
-用 `nsh dev --server-only` 连接嵌入了开发版 SDK（`NativeShellDev.xcframework`、`nsh-dev.aar`）的应用。`--target`、`--device`、`--port`、`--release`、`--limits` 和 `--idiom` 的含义与 `nsh run` 相同。配合 `--server-only` 时，`--idiom`（或 `nsh.json` 的 `dev.idiom`）设置它提供给浏览器的页面的界面风格（自己启动的 GPUI 宿主在它自己的命令行上接受 `--idiom tv`）。
+用 `nsh dev --server-only` 连接嵌入了开发版 SDK（`NativeShellDev.xcframework`、`nsh-dev.aar`）的应用。`--app`、`--target`、`--device`、`--port`、`--release`、`--limits` 和 `--idiom` 的含义与 `nsh run` 相同。配合 `--server-only` 时，`--idiom`（或 `nsh.json` 的 `dev.idiom`）设置它提供给浏览器的页面的界面风格（自己启动的 GPUI 宿主在它自己的命令行上接受 `--idiom tv`）。
 
 ## nsh test
 

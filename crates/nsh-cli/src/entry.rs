@@ -5,8 +5,17 @@
 //! a Rust root component (`"root"`) is a Rust app: its entry is that
 //! `nsh.json` (`rust_app::is_root`), and its `App.tsx`, if any, is used
 //! only when named.
+//!
+//! The app's directory is the entry's, unless the command names another
+//! (`nsh run --app <dir>`, `nsh dev --app <dir>`): then the entry is a
+//! module kept outside the app, such as a tool's, and everything else is
+//! the app's: its `nsh.json`, crates, assets, `.nsh/` and the files the
+//! session watches ([`app_dir`]).
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
 use anyhow::bail;
 
@@ -47,6 +56,44 @@ pub(crate) fn resolve(path: &Path) -> anyhow::Result<PathBuf> {
     }
 }
 
+/// The app's directory `--app` named, canonical: one per command.
+static APP_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Makes `dir` (`--app`) the directory of the command's app, whatever
+/// directory its entry is in.
+pub(crate) fn set_app_dir(dir: &Path) -> anyhow::Result<()> {
+    let canonical = dunce::canonicalize(dir)
+        .ok()
+        .filter(|d| d.is_dir())
+        .ok_or_else(|| anyhow::anyhow!("--app {}: no such directory", dir.display()))?;
+    if APP_DIR.set(canonical).is_err() {
+        bail!("--app was given twice");
+    }
+    Ok(())
+}
+
+/// The directory of the app whose entry is `entry`: the one `--app` named
+/// ([`set_app_dir`]), else the entry's (`.` for a bare file name).
+pub(crate) fn app_dir(entry: &Path) -> PathBuf {
+    app_dir_from(entry, APP_DIR.get().map(PathBuf::as_path))
+}
+
+/// [`app_dir`] with `given` as `--app`.
+fn app_dir_from(entry: &Path, given: Option<&Path>) -> PathBuf {
+    if let Some(dir) = given {
+        return dir.to_path_buf();
+    }
+    match entry.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
+/// The app's directory `--app` named, if it did.
+pub(crate) fn app_dir_override() -> Option<&'static Path> {
+    APP_DIR.get().map(PathBuf::as_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +122,19 @@ mod tests {
         assert_eq!(resolve(&dir).unwrap(), dir.join("nsh.json"));
         assert_eq!(resolve(&dir.join("app.tsx")).unwrap(), dir.join("app.tsx"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_app_directory_is_the_entry_s_unless_named() {
+        assert_eq!(
+            app_dir_from(Path::new("/a/app/App.tsx"), None),
+            Path::new("/a/app")
+        );
+        assert_eq!(app_dir_from(Path::new("App.tsx"), None), Path::new("."));
+        // An entry kept outside its app (`--app`): the named directory.
+        assert_eq!(
+            app_dir_from(Path::new("/tool/Stage.tsx"), Some(Path::new("/a/app"))),
+            Path::new("/a/app")
+        );
     }
 }
