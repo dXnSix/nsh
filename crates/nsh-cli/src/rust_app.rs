@@ -5254,6 +5254,7 @@ mod tests {
             status_bar: None,
             url_schemes: Vec::new(),
             window: None,
+            application: None,
             capabilities: None,
             translations: None,
         });
@@ -6316,6 +6317,7 @@ panic = \"abort\"
                 status_bar: None,
                 url_schemes: Vec::new(),
                 window: None,
+                application: None,
                 capabilities: None,
                 translations: None,
             }
