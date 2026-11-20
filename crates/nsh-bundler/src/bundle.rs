@@ -669,6 +669,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
             natives: natives.clone(),
             preloads: None,
             modules: Arc::new(compile::NativeModules::new(&options.ui_sets)),
+            set_assets: Arc::new(plugin::set_assets::SetAssets::new(&options.ui_sets)),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;
@@ -1064,6 +1065,7 @@ pub async fn bundle_hot_async(
             preloads: Some(preloads.clone()),
             modules: Arc::new(compile::NativeModules::new(ui_sets)),
             split: false,
+            set_assets: Arc::new(plugin::set_assets::SetAssets::new(ui_sets)),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;

@@ -873,6 +873,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compat-rust-native"
+version = "0.6.0"
+dependencies = [
+ "nsh-core",
+]
+
+[[package]]
 name = "concurrent_lru"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

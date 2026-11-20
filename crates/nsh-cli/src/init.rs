@@ -355,6 +355,11 @@ pub(crate) fn write_types(dir: &Path) {
     ));
     let mut definitions = nsh_js::type_definitions(&sets);
     definitions.extend(nsh_bundler::type_definitions());
+    // The files the sets ship, by URL (`import logo from "asset:/@…"`).
+    definitions.push((
+        "nsh/set-assets.d.ts".to_owned(),
+        nsh_bundler::set_assets_declaration(&sets),
+    ));
     // The theme's errors are the build's to report: its names are the
     // default's meanwhile.
     let tokens =
@@ -525,6 +530,8 @@ mod tests {
             "`using` type-checks"
         );
         assert!(base.contains("./types/nsh/globals.d.ts"));
+        // Every file it lists is written.
+        assert!(dir.join(".nsh/types/nsh/set-assets.d.ts").is_file());
         fs::remove_dir_all(dir).unwrap();
     }
 

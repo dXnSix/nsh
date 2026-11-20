@@ -204,6 +204,7 @@ NSH does not need `node_modules`. Instead, every command that builds the app (`i
 | `jsx-runtime.d.ts` | The JSX runtime TypeScript resolves through `jsxImportSource` (the `JSX` namespace) |
 | `globals.d.ts` | `If` and `Each`; `console`, timers, `requestAnimationFrame`, `fetch` and the other [global APIs](../modules/globals.md) |
 | `assets.d.ts` | What importing an image or font gives |
+| `set-assets.d.ts` | Each file the app's UI sets ship, by its URL (`asset:/@<package>/<path>`), as importing it gives it |
 | `tokens.d.ts` | `Tokens`: the app's design tokens, from its `"theme"`, which type [`token()`](../modules/nsh.md#token) |
 | `mobile.d.ts`, `desktop.d.ts` | One file per module (`nsh/mobile`, `nsh/desktop`) |
 | `base.d.ts` | `nsh/base` |

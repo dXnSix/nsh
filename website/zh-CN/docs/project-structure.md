@@ -201,6 +201,7 @@ NSH 不需要 `node_modules`。取而代之的是，每个构建应用的命令�
 | `jsx-runtime.d.ts` | TypeScript 通过 `jsxImportSource` 解析的 JSX 运行时（`JSX` 命名空间） |
 | `globals.d.ts` | `If` 和 `Each`；`console`、定时器、`requestAnimationFrame`、`fetch` 及其他[全局 API](../modules/globals.md) |
 | `assets.d.ts` | 导入图片或字体得到的值 |
+| `set-assets.d.ts` | 应用的 UI 集合随附的每个文件，按 URL（`asset:/@<package>/<path>`）声明为导入它得到的值 |
 | `tokens.d.ts` | `Tokens`：应用的设计令牌，来自它的 `"theme"`，为 [`token()`](../modules/nsh.md#token) 提供类型 |
 | `mobile.d.ts`、`desktop.d.ts` | 每个模块一个文件（`nsh/mobile`、`nsh/desktop`） |
 | `base.d.ts` | `nsh/base` |

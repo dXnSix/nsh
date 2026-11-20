@@ -700,6 +700,18 @@ built, kind), which `nsh` (`rust_app.rs`, from the description of the set: each 
 copies into packages next to the imported assets, and whose fonts the engine registers before the first view
 (`EngineConfig::ui_sets`, read through `EngineConfig::assets`).
 
+TS imports a file a set the hosts serve ships by its URL, `import logo from "asset:/@acme-ui/images/logo.png"`
+(`crates/nsh-bundler/src/plugin/set_assets.rs`), from the app or from a library's own module outside it: the bundler
+checks it against the files the sets ship (their descriptions' `assets`, `BundleOptions::ui_sets`) and fails the
+build for one none ships, naming the closest; the module is what the app's own import of that kind of file gives: an
+image's `ImageAsset` (its size and `scales` from the set's files, `@2x` names and variants beside it among them), a
+font's family name (the engine registers the sets' fonts), any other file's URL, and with `?url` the URL of any.
+Nothing is copied: the set ships it. `.nsh/types/nsh/set-assets.d.ts` declares each file the sets ship by its URL
+(`nsh_bundler::set_assets_declaration`). While an engine runs, `served_asset_files()` lists the files its UI sets
+and their submodules ship (`element/served_assets.rs`: `ServedAssets`, put in the engine's context when it starts
+and when it serves more sets, sorted by URI), so a library lists another's files (an asset catalog, a set's icons) by
+their URIs' start without the app naming the package.
+
 ## Styles
 
 `Styled` methods are named as in GPUI and Tailwind (`.flex_row()`, `.items_center()`, `.p_4()` = 16pt, `.gap(px(6.0))`,

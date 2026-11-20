@@ -1,0 +1,5 @@
+{
+  "name": "API Rust",
+  "id": "com.example.api-rust",
+  "rust": "native"
+}

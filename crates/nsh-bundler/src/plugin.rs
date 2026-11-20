@@ -20,6 +20,8 @@ use rolldown::{
 
 use crate::compile::{NativeModules, compile_native};
 
+pub(crate) mod set_assets;
+
 /// Compiles the app's modules with nsh's JSX compiler against the native
 /// modules (kept as imports) and loads its assets.
 #[derive(Debug)]
@@ -50,6 +52,8 @@ pub(crate) struct NshPlugin {
     /// A split bundle: dynamic imports of chunks call the runtime's chunk
     /// loader (`split.rs`).
     pub(crate) split: bool,
+    /// The files the UI sets ship, which `asset:/@<package>/<path>` imports.
+    pub(crate) set_assets: Arc<set_assets::SetAssets>,
 }
 
 /// The `"tailwind"`, `"theme"`, `"appearance"` and `"statusBar"` of the
@@ -544,6 +548,10 @@ impl Plugin for NshPlugin {
                 "{from}`{spec}` is not part of nsh apps: import signal, computed, effect, batch, untracked, cleanup, context and mount from \"nsh\""
             )));
         }
+        // A file a UI set ships (`asset:/@<package>/<path>`).
+        if spec.starts_with(set_assets::PREFIX) {
+            return self.resolve_set_asset(spec, &from).map(Some);
+        }
         if spec.starts_with("nsh/") {
             // Named as nsh's modules are, and none of them: name the ones
             // there are.
@@ -589,6 +597,9 @@ impl Plugin for NshPlugin {
     }
 
     async fn load(&self, _cx: SharedLoadPluginContext, args: &HookLoadArgs<'_>) -> HookLoadReturn {
+        if let Some(module) = self.load_set_asset(args.id) {
+            return module.map(Some);
+        }
         if args.id == I18N_ID
             && let Some(json) = &self.tailwind.i18n
         {

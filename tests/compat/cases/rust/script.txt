@@ -1,0 +1,12 @@
+# What a user does and sees (compat/apps.rs): each case after its tap.
+# set-asset-imports
+tap id:case-set-asset-imports
+# an image the set ships is its URL, its size in points and the densities
+# it ships in (its @2x file beside it)
+expect Image: asset:/@compat-rust-native/images/logo.png 40x30 at 1,2
+expect SVG: asset:/@compat-rust-native/icons/mark.svg 12x8
+# a font is its family name, any other file its URL, and `?url` the URL of
+# any file
+expect Font: Pacifico
+expect File: asset:/@compat-rust-native/data/cities.json
+expect URL: asset:/@compat-rust-native/images/logo.png
