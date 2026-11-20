@@ -100,6 +100,9 @@ pub enum DevEvent {
         /// The main window's launch-time options (`nsh.json` `"window"`,
         /// JSON): give them to the bundle (`Bundle::with_main_window`).
         window: Option<String>,
+        /// The app's lifecycle (`nsh.json` `"application"`, JSON): give it
+        /// to the bundle (`Bundle::with_application`).
+        application: Option<String>,
         /// The VM limits to run it with (`nsh run --limits`, see
         /// [`ServerMessage::Bundle`]): `nsh_core::js::Limits::development`
         /// reads them; `None` is none.
@@ -337,6 +340,7 @@ fn session(
         capabilities: Option<String>,
         app_id: Option<String>,
         window: Option<String>,
+        application: Option<String>,
         limits: Option<String>,
         bytes: Option<Vec<u8>>,
     }
@@ -399,6 +403,7 @@ fn session(
                     capabilities,
                     app_id,
                     window,
+                    application,
                     limits,
                 }) => {
                     pending = Some(Pending {
@@ -409,6 +414,7 @@ fn session(
                         capabilities,
                         app_id,
                         window,
+                        application,
                         limits,
                         bytes: None,
                     })
@@ -426,6 +432,7 @@ fn session(
                         capabilities: None,
                         app_id: None,
                         window: None,
+                        application: None,
                         limits: None,
                         bytes: None,
                     })
@@ -483,6 +490,7 @@ fn session(
                             capabilities: p.capabilities,
                             app_id: p.app_id,
                             window: p.window,
+                            application: p.application,
                             limits: p.limits,
                         })
                     }

@@ -178,6 +178,7 @@ pub use crate::element::{
     ScreenAnimation,
     Scroll,
     ScrollAlignment,
+    ScrollEdge,
     ScrollEvent,
     Scrollable,
     Selection,
@@ -276,7 +277,7 @@ pub use crate::element::{
     load_sound,
 };
 pub use crate::element::{
-    Delay, Each, If, IntoElements, IntoReactive, KeyOptions, Memo, Owner, Prop, Reactive,
+    Delay, Each, If, IntoElements, IntoReactive, KeyOptions, KeyScope, Memo, Owner, Prop, Reactive,
     ReadSignal, Resource, ResourceInfo, ResourceState, Scope, Signal, SignalEquals, Spawned,
     Stored, after_answer, animate_layout, animated_value, announce_for_accessibility, app_url,
     apple_keys, batch, can_pick_screen_color, catch_error, cleanup, clipboard_files,

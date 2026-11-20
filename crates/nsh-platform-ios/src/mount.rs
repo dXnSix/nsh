@@ -594,6 +594,11 @@ struct Slot {
     /// A style was applied before: a view's first style does not transition
     /// from the defaults, as in `nsh_core`'s `transition::restyle`.
     styled: bool,
+    /// Its `UIScrollEdgeElementContainerInteraction`, while it names the
+    /// scroll view it floats over (`crate::scroll_edge`).
+    edge_element: Option<Retained<objc2::runtime::AnyObject>>,
+    /// The scroll view and edge it names, counted in `Mounter::soft_edges`.
+    edge_named: Option<(NodeId, nsh_core::ScrollEdge)>,
 }
 
 impl Slot {
@@ -647,6 +652,8 @@ impl Slot {
             tracked: 0,
             states: 0,
             styled: false,
+            edge_element: None,
+            edge_named: None,
         }
     }
 }
@@ -705,6 +712,9 @@ pub(crate) struct Mounter {
     created: Vec<NodeId>,
     /// Views fading out before their removal.
     disappearing: rustc_hash::FxHashSet<NodeId>,
+    /// The scroll view edges views name (`ios={{ scrollEdgeElement }}`),
+    /// with how many name each: soft while any does (`crate::scroll_edge`).
+    soft_edges: Vec<(NodeId, nsh_core::ScrollEdge, u32)>,
     /// One-shot display link for `requestAnimationFrame`.
     frame_link: Retained<objc2_quartz_core::CADisplayLink>,
     /// Parents of screens, header items and modals (which are not
@@ -742,17 +752,17 @@ pub(crate) struct Mounter {
     /// the pans of the scroll views and the swipe back of the stacks around
     /// it.
     blocked_gestures: Vec<Retained<UIGestureRecognizer>>,
-    /// Vertical scroll views whose content size arrived in this batch, with
-    /// the height that came with it. A batch applies a scroll view's content
+    /// Vertical scroll views whose content size arrived in this batch. Judge
+    /// the final size once per view. A batch applies a scroll view's content
     /// size before the frames of the children it measures (`ScrollContent` is
     /// queued when the scroll view is, its children after it), so a size that
     /// looks too wide is only judged after the whole batch is in place.
-    content_sizes: Vec<(NodeId, CGFloat)>,
-    /// The core's width and height for every vertical scroll view the platform
+    content_sizes: rustc_hash::FxHashSet<NodeId>,
+    /// The core's width for every vertical scroll view the platform
     /// narrowed, by id. The core does not resend a content size it did not
     /// change, so a later batch that widens what such a scroll view holds has
     /// to give that width back from here.
-    narrowed: Vec<(NodeId, CGFloat, CGFloat)>,
+    narrowed: Vec<(NodeId, CGFloat)>,
     /// Whether this batch moved any frame: nothing under a narrowed scroll
     /// view can have grown otherwise, so the judgement is skipped.
     frames_applied: bool,
@@ -856,6 +866,7 @@ impl Mounter {
             layout_animation: None,
             created: Vec::new(),
             disappearing: Default::default(),
+            soft_edges: Vec::new(),
             frame_link: crate::animation::frame_link(&target_for_link),
             shaders,
             text_colors: crate::interaction::TextColors::new(&target_for_link),
@@ -879,7 +890,7 @@ impl Mounter {
             touch_trackers: Vec::new(),
             touch_listeners: 0,
             blocked_gestures: Vec::new(),
-            content_sizes: Vec::new(),
+            content_sizes: Default::default(),
             narrowed: Vec::new(),
             frames_applied: false,
             rtl: false,
@@ -964,15 +975,15 @@ impl Mounter {
     /// that really is wider than the viewport.
     fn settle_content_sizes(&mut self) {
         let frames_applied = std::mem::take(&mut self.frames_applied);
-        for (id, height) in std::mem::take(&mut self.content_sizes) {
+        for id in std::mem::take(&mut self.content_sizes) {
             let mut narrowed = None;
-            if let Some(Slot {
-                native: Native::Scroll(scroll),
-                ..
-            }) = self.slot(id)
+            if let Some(slot) = self.slot(id)
+                && let Native::Scroll(scroll) = &slot.native
+                && still_judged(slot.horizontal, slot.zoom_view().is_some())
             {
                 let viewport = scroll.bounds().size.width;
-                let content = scroll.contentSize().width;
+                let size = scroll.contentSize();
+                let content = size.width;
                 // Content that fits cannot be narrowed; walking the subtree
                 // to learn that would cost the page on every batch.
                 if viewport > 0.0 && content > viewport {
@@ -982,14 +993,14 @@ impl Mounter {
                         reaches_beyond(scroll, viewport + 0.5),
                     );
                     if width != content {
-                        scroll.setContentSize(CGSize::new(width, height));
-                        narrowed = Some((content, height));
+                        scroll.setContentSize(CGSize::new(width, size.height));
+                        narrowed = Some(content);
                     }
                 }
             }
             self.narrowed.retain(|&(n, ..)| n != id);
-            if let Some((width, height)) = narrowed {
-                self.narrowed.push((id, width, height));
+            if let Some(width) = narrowed {
+                self.narrowed.push((id, width));
             }
         }
         if frames_applied {
@@ -1004,7 +1015,7 @@ impl Mounter {
     fn rejudge_narrowed(&mut self) {
         let mut i = 0;
         while i < self.narrowed.len() {
-            let (id, core, height) = self.narrowed[i];
+            let (id, core) = self.narrowed[i];
             let mut done = true;
             if let Some(slot) = self.slot(id)
                 && let Native::Scroll(scroll) = &slot.native
@@ -1013,8 +1024,9 @@ impl Mounter {
                 let viewport = scroll.bounds().size.width;
                 let reaches = reaches_beyond(scroll, viewport + 0.5);
                 let width = narrowed_width(viewport, core, reaches);
-                if width != scroll.contentSize().width {
-                    scroll.setContentSize(CGSize::new(width, height));
+                let size = scroll.contentSize();
+                if width != size.width {
+                    scroll.setContentSize(CGSize::new(width, size.height));
                 }
                 done = width == core;
             }
@@ -1311,6 +1323,9 @@ impl Mounter {
                     self.areas.remove(i).1.delete();
                 }
                 if let Some(mut s) = self.views.get_mut(id as usize).and_then(Option::take) {
+                    // The scroll view edge it named, or its own named edges,
+                    // go back to their automatic style.
+                    self.edges_deleted(id, s.edge_named);
                     // A modal deleted while presented (the app closed it and
                     // released it, or released its subtree without a
                     // remove) goes away too, as on Android: through its
@@ -1563,7 +1578,7 @@ impl Mounter {
                         None => scroll.setContentSize(size),
                     }
                     if vertical {
-                        self.content_sizes.push((id, size.height));
+                        self.content_sizes.insert(id);
                     }
                     self.scrolls.resized(id);
                 }
@@ -2139,10 +2154,7 @@ impl Mounter {
             (Command::SetSelection { start, end }, Native::Input(input)) => {
                 input.select(start, end)
             }
-            // Not carried out on iOS yet: the app's paste is lost, so say so.
-            (Command::InsertText(_), _) => {
-                log::warn!("insertText is not supported on iOS yet; nothing inserted")
-            }
+            (Command::InsertText(text), Native::Input(input)) => input.insert_text(&text),
             (Command::OpenEditMenu { bounds, actions }, Native::Input(input)) => {
                 let view = input.editor_view();
                 let rect = CGRect::new(
@@ -4906,6 +4918,7 @@ impl Mounter {
     fn set_view_props(&mut self, id: NodeId, props: ViewProps) {
         let (control, mtm, target) = (self.control.clone(), self.mtm, self.target.clone());
         let native_id = props.native_id.clone();
+        let edge_element = props.scroll_edge_element;
         let Some(s) = self.slot_mut(id) else { return };
         s.key_capture = props.key_capture.clone();
         s.disabled = props.accessibility.state.disabled;
@@ -5013,6 +5026,102 @@ impl Mounter {
             self.scrolls
                 .props(&self.scroll_watchers, id, &scroll, &self.target, native_id);
         }
+        self.set_scroll_edge_element(id, edge_element);
+    }
+
+    /// `ios={{ scrollEdgeElement }}`: the view shapes the edge effect of
+    /// the scroll view it names (`crate::scroll_edge`).
+    fn set_scroll_edge_element(
+        &mut self,
+        id: NodeId,
+        element: Option<nsh_core::ScrollEdgeElement>,
+    ) {
+        let scroll = element.and_then(|e| match self.slot(e.scroll_view) {
+            Some(Slot {
+                native: Native::Scroll(scroll),
+                ..
+            }) => Some((e.scroll_view, scroll.clone(), e.edge)),
+            _ => None,
+        });
+        let named = scroll.as_ref().map(|&(node, _, edge)| (node, edge));
+        let Some(s) = self.slot_mut(id) else { return };
+        if named == s.edge_named {
+            return;
+        }
+        let old = std::mem::replace(&mut s.edge_named, named);
+        let view = s.native.view().retain();
+        crate::scroll_edge::set(
+            &view,
+            &mut s.edge_element,
+            scroll.as_ref().map(|(_, scroll, edge)| (&**scroll, *edge)),
+        );
+        if let Some((node, edge)) = old {
+            self.unname_edge(node, edge);
+        }
+        if let Some((node, edge)) = named {
+            self.name_edge(node, edge);
+        }
+    }
+
+    /// One more view names `edge` of scroll view `node`: the first makes it
+    /// soft.
+    fn name_edge(&mut self, node: NodeId, edge: nsh_core::ScrollEdge) {
+        if let Some(named) = self
+            .soft_edges
+            .iter_mut()
+            .find(|(n, e, _)| (*n, *e) == (node, edge))
+        {
+            named.2 += 1;
+            return;
+        }
+        self.soft_edges.push((node, edge, 1));
+        if let Some(Slot {
+            native: Native::Scroll(scroll),
+            ..
+        }) = self.slot(node)
+        {
+            crate::scroll_edge::set_style(scroll, edge, true);
+        }
+    }
+
+    /// A view stops naming `edge` of scroll view `node`: once none does,
+    /// the edge gets its automatic style back.
+    fn unname_edge(&mut self, node: NodeId, edge: nsh_core::ScrollEdge) {
+        let Some(i) = self
+            .soft_edges
+            .iter()
+            .position(|(n, e, _)| (*n, *e) == (node, edge))
+        else {
+            return;
+        };
+        self.soft_edges[i].2 -= 1;
+        if self.soft_edges[i].2 > 0 {
+            return;
+        }
+        self.soft_edges.swap_remove(i);
+        if let Some(Slot {
+            native: Native::Scroll(scroll),
+            ..
+        }) = self.slot(node)
+        {
+            crate::scroll_edge::set_style(scroll, edge, false);
+        }
+    }
+
+    /// Deleted node `id` no longer names an edge, and nothing names the
+    /// edges of it any more (a new view may take its id).
+    fn edges_deleted(&mut self, id: NodeId, named: Option<(NodeId, nsh_core::ScrollEdge)>) {
+        if let Some((node, edge)) = named {
+            self.unname_edge(node, edge);
+        }
+        if self.soft_edges.iter().any(|(n, ..)| *n == id) {
+            self.soft_edges.retain(|(n, ..)| *n != id);
+            for s in self.views.iter_mut().flatten() {
+                if s.edge_named.is_some_and(|(n, _)| n == id) {
+                    s.edge_named = None;
+                }
+            }
+        }
     }
 
     /// Only the label of the view's props changed.
@@ -5029,9 +5138,8 @@ impl Mounter {
         }
     }
 
-    /// A tap on a `focusable` view that takes no presses: it takes the
-    /// keyboard focus without claiming the touch. The pressable path
-    /// ([`Mounter::press_changed`]) focuses those with press handlers.
+    /// Give a tapped focus stop keyboard focus. An input using the software
+    /// keyboard keeps focus so the layout stays in place under the finger.
     pub(crate) fn focus_node(&mut self, id: NodeId) {
         if !self.typing()
             && let Some(view) = self.slot(id).and_then(|s| s.native.focus_view())
@@ -5044,18 +5152,6 @@ impl Mounter {
 
     /// A finger went down on (or left) a pressable view.
     pub(crate) fn press_changed(&mut self, id: NodeId, pressed: bool, at: PressAt) {
-        // A press on a focusable view gives it the keyboard focus, as a
-        // click does on the desktops (and a tap on an iPad with a hardware
-        // keyboard should). Not while the software keyboard types into an
-        // input: as with UIKit's controls, the input keeps it.
-        if pressed
-            && !self.typing()
-            && let Some(view) = self.slot(id).and_then(|s| s.native.focus_view())
-            && view.is_focus_stop()
-            && view.becomeFirstResponder()
-        {
-            crate::keyboard::request_focus(view);
-        }
         self.report_state(id, nsh_core::tailwind::state::PRESSED, pressed);
         let Some(s) = self.slot(id) else { return };
         let event = if pressed {
@@ -5066,6 +5162,10 @@ impl Mounter {
         if s.events.contains(event) {
             let payload = self.press_payload(id, at);
             self.control.dispatch_event(id, event, payload);
+        }
+        // Queue press-down before UIKit sends the resulting focus notifications.
+        if pressed {
+            self.focus_node(id);
         }
     }
 

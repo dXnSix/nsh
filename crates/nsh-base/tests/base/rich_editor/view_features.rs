@@ -210,9 +210,11 @@ fn start_features(doc: Value, editable: bool) -> Headless {
         ui_sets: vec![nsh_base::registry()],
         // The session is made in the engine, so its keymaps are the
         // platform's the engine says (Linux's), not the machine's.
-        ..EngineConfig::new(Root::new::<Features>(move || FeaturesProps {
-            session: Some(features_session(&doc)),
-            editable,
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<Features>(move || {
+            FeaturesProps {
+                session: Some(features_session(&doc)),
+                editable,
+            }
         }))
     };
     config.environment.os = Os::Linux;
@@ -379,8 +381,10 @@ fn a_padded_root_keeps_the_sink_in_the_viewport_and_fills_its_height() {
     let mounted = session.clone();
     let mut config = EngineConfig {
         viewport: Size::new(px(800.0), px(900.0)),
-        ..EngineConfig::new(Root::new::<Padded>(move || PaddedProps {
-            session: Some(mounted.clone()),
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<Padded>(move || {
+            PaddedProps {
+                session: Some(mounted.clone()),
+            }
         }))
     };
     config.environment.os = Os::Linux;
@@ -562,8 +566,10 @@ fn inline_image_app(doc: serde_json::Value) -> Headless {
     let session = EditorSession::new(state, NodeViews::new());
     let mut config = EngineConfig {
         viewport: Size::new(px(800.0), px(900.0)),
-        ..EngineConfig::new(Root::new::<InlineImage>(move || InlineImageProps {
-            session: Some(session.clone()),
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<InlineImage>(move || {
+            InlineImageProps {
+                session: Some(session.clone()),
+            }
         }))
     };
     config.environment.os = Os::Linux;
@@ -708,11 +714,13 @@ fn selected_block_app(paragraphs: usize, height: f32) -> Headless {
     let session = EditorSession::new(state, NodeViews::new());
     let mut config = EngineConfig {
         viewport: Size::new(px(800.0), px(900.0)),
-        ..EngineConfig::new(Root::new::<SelectedBlock>(move || SelectedBlockProps {
-            session: Some(session.clone()),
-            height,
-            at: paragraphs * 3,
-        }))
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<SelectedBlock>(
+            move || SelectedBlockProps {
+                session: Some(session.clone()),
+                height,
+                at: paragraphs * 3,
+            },
+        ))
     };
     config.environment.os = Os::Linux;
     config.environment.idiom = Idiom::Desktop;

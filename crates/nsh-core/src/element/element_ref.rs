@@ -132,7 +132,8 @@ impl FocusTarget {
 /// An element another one names for assistive technologies
 /// ([`crate::AccessibilityProp::ActiveDescendant`],
 /// [`crate::AccessibilityProp::Controls`],
-/// [`crate::AccessibilityProp::DescribedBy`]): a node JS passes (a `ref`),
+/// [`crate::AccessibilityProp::DescribedBy`]) or as the scroll view it
+/// floats over ([`ScrollEdgeTarget`]): a node JS passes (a `ref`),
 /// or whatever element carries a Rust [`ElementRef`], looked up as the
 /// core commits, so the element may be rendered after the one naming it
 /// (a list's row made as the list lays out).
@@ -212,6 +213,26 @@ pub struct FocusGroupTargets {
     pub trap: bool,
     /// The views the focus enters the group at, in order.
     pub destinations: Vec<FocusTarget>,
+}
+
+/// The scroll view a view floats over and the edge of it the view sits
+/// at ([`crate::Prop::ScrollEdgeElement`], `ios={{ scrollEdgeElement }}`).
+/// The scroll view is looked up as the core commits, as an
+/// [`ElementTarget`] is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollEdgeTarget {
+    pub(crate) scroll_view: ElementTarget,
+    pub(crate) edge: crate::ScrollEdge,
+}
+
+impl ScrollEdgeTarget {
+    /// Scroll view `scroll_view` (JS's ref), at `edge`.
+    pub(crate) fn of_node(scroll_view: NodeId, edge: crate::ScrollEdge) -> Self {
+        Self {
+            scroll_view: ElementTarget::of_node(scroll_view),
+            edge,
+        }
+    }
 }
 
 impl ElementRef {

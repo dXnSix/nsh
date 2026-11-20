@@ -1,4 +1,5 @@
 import { colorScheme, effect, modifiers, mount, Scroll, setModifier, signal, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
 import {
   Button,
   Input,
@@ -335,4 +336,4 @@ function App() {
   );
 }
 
-mount(App);
+mount(() => <Window id="main">{App}</Window>);
