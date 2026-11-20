@@ -188,10 +188,8 @@ pub struct DesignWindow {
     /// What the tool draws it with: `("context", <CAContext id>)` on macOS,
     /// `("hwnd", <HWND>)` on Windows, `("xid", <X11 window>)` on Linux.
     pub handle: (&'static str, u64),
-    /// Its content's width, in points.
-    pub width: f64,
-    /// Its content's height, in points.
-    pub height: f64,
+    /// Its content's size.
+    pub size: crate::geometry::Size<crate::geometry::Points>,
 }
 
 static TOLD: Mutex<Option<HashMap<String, DesignWindow>>> = Mutex::new(None);
@@ -208,7 +206,9 @@ pub fn report(windows: &[DesignWindow]) {
             if told.get(&window.id) != Some(window) {
                 told.insert(window.id.clone(), window.clone());
                 let mut surface = serde_json::json!({
-                    "id": window.id, "width": window.width, "height": window.height,
+                    "id": window.id,
+                    "width": f64::from(window.size.width.0),
+                    "height": f64::from(window.size.height.0),
                 });
                 surface[window.handle.0] = window.handle.1.into();
                 lines.push(serde_json::json!({ "surface": surface }));
@@ -804,8 +804,10 @@ mod tests {
         let a = DesignWindow {
             id: "a".into(),
             handle: ("context", 7),
-            width: 300.0,
-            height: 200.0,
+            size: crate::geometry::size(
+                crate::geometry::Points(300.0),
+                crate::geometry::Points(200.0),
+            ),
         };
         report(std::slice::from_ref(&a));
         assert_eq!(
@@ -814,8 +816,10 @@ mod tests {
         );
         report(std::slice::from_ref(&a));
         let b = DesignWindow {
-            id: "a".into(),
-            width: 320.0,
+            size: crate::geometry::size(
+                crate::geometry::Points(320.0),
+                crate::geometry::Points(200.0),
+            ),
             ..a
         };
         report(&[b]);

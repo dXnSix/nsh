@@ -162,8 +162,10 @@ fn tick() {
             shown.push(DesignWindow {
                 id: id.clone(),
                 handle: ("hwnd", key as u64),
-                width: f64::from(rect.right - rect.left) / s,
-                height: f64::from(rect.bottom - rect.top) / s,
+                size: nsh_core::geometry::size(
+                    nsh_core::geometry::Points((f64::from(rect.right - rect.left) / s) as f32),
+                    nsh_core::geometry::Points((f64::from(rect.bottom - rect.top) / s) as f32),
+                ),
             });
         }
     }

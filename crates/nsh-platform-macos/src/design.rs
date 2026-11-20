@@ -290,8 +290,10 @@ fn tick() {
         shown.push(DesignWindow {
             id,
             handle: ("context", u64::from(context)),
-            width: size.width,
-            height: size.height,
+            size: nsh_core::geometry::size(
+                nsh_core::geometry::Points(size.width as f32),
+                nsh_core::geometry::Points(size.height as f32),
+            ),
         });
     }
     core::report(&shown);
