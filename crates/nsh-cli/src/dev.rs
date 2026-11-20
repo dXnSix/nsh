@@ -587,9 +587,49 @@ fn glob_watcher(
                 .any(|p| globs.iter().any(|g| g.matches(p)))
             {
                 let _ = tx.send(event);
+                return;
+            }
+            // A directory made under a glob's: inotify watches it only
+            // once it reports it, so the files already written in it come
+            // without events of their own. They are looked for here.
+            if matches!(event.kind, notify::EventKind::Create(_)) {
+                let mut found = Vec::new();
+                for path in &event.paths {
+                    if path.is_dir() && globs.iter().any(|g| path.starts_with(&g.dir)) {
+                        globbed_files(path, &globs, &mut found);
+                    }
+                }
+                if !found.is_empty() {
+                    let mut files = notify::Event::new(notify::EventKind::Create(
+                        notify::event::CreateKind::File,
+                    ));
+                    files.paths = found;
+                    let _ = tx.send(files);
+                }
             }
         }
     })
+}
+
+/// The files below `dir` that `globs` match, into `found`. The directories
+/// the globs' search skips (`node_modules`, `target`, a dot directory) are
+/// not entered unless a pattern names them.
+fn globbed_files(dir: &Path, globs: &[nsh_bundler::GlobDir], found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let skipped = name.starts_with('.') || name == "node_modules" || name == "target";
+            if !skipped || globs.iter().any(|g| g.pattern.contains(name.as_str())) {
+                globbed_files(&path, globs, found);
+            }
+        } else if globs.iter().any(|g| g.matches(&path)) {
+            found.push(path);
+        }
+    }
 }
 
 /// Watches, recursively, the directories of `globs` not `watched` yet. One

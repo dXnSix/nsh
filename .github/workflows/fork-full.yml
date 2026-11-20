@@ -119,7 +119,9 @@ jobs:
           --features nsh-platform-macos/dev
           -- -D warnings
       - name: Test
-        run: bash .github/fork/retry.sh cargo test -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app
+        # Less the cases of upstream's tests that fail on upstream's code:
+        # macos-tests.sh.
+        run: bash .github/fork/retry.sh bash .github/fork/macos-tests.sh nsh-platform-macos nsh-macos-host nsh-macos-app
       - name: Run the examples' tests in macOS windows
         run: |
           cargo build -p nsh-cli

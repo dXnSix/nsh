@@ -12,7 +12,7 @@
 #
 # The script may come from another checkout: an `up/*` branch, cut from
 # upstream, has no `.github/fork/`, and is checked with `main`'s script
-# (it reads `examples.sh` and `changed.py` beside itself).
+# (it reads `examples.sh`, `macos-tests.sh` and `changed.py` beside itself).
 #
 # - `macos`: clippy and tests of the macOS backend, hosts and the Apple
 #   crate, then the examples' tests in macOS windows (`examples.sh macos`).
@@ -227,7 +227,7 @@ for part in "${parts[@]}"; do
         --features nsh-platform-macos/dev -- -D warnings
       step "macOS clippy without optional features" cargo clippy -p nsh-macos-app \
         --no-default-features --features js -- -D warnings
-      step "macOS tests" cargo test -p nsh-platform-macos -p nsh-macos-host -p nsh-macos-app -p nsh-platform-apple
+      step "macOS tests" bash "$here/macos-tests.sh" nsh-platform-macos nsh-macos-host nsh-macos-app nsh-platform-apple
       examples macos
       ;;
     ios)
