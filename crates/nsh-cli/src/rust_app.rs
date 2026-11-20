@@ -5482,6 +5482,7 @@ mod tests {
             application: None,
             capabilities: None,
             translations: None,
+            app_info: "{}".into(),
         });
         app.tizen_workspace().unwrap();
         let lib = read("tizen/tizen-lib/lib.rs");
@@ -6724,6 +6725,7 @@ panic = \"abort\"
                 application: None,
                 capabilities: None,
                 translations: None,
+                app_info: "{}".into(),
             }
         }
 

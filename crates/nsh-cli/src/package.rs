@@ -3010,6 +3010,8 @@ mod tests {
             device: Some("emulator-5554"),
             asset_url: None,
             development: false,
+            tizen_archs: &[],
+            probe: false,
         };
         for target in [
             PackageTarget::Macos,
@@ -3017,6 +3019,8 @@ mod tests {
             PackageTarget::Windows,
             PackageTarget::Ios,
             PackageTarget::Web,
+            PackageTarget::TizenWeb,
+            PackageTarget::Tizen,
         ] {
             assert_eq!(
                 package(options(target, true)).unwrap_err().to_string(),
