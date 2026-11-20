@@ -20,6 +20,15 @@
 //! the holder, the slot's presses would never come: the component's root
 //! takes them, as the innermost press target.
 //!
+//! A component that only places its children is no target: its view's
+//! root is a view with nothing of its own, holding the place of the
+//! children and nothing else ([`Core::places_children_only`]), so it
+//! draws and hears nothing. Holding exactly one element of the app's, it
+//! is looked through and that element is the target, as deep as such
+//! components nest ([`Core::placed_through`]); the target follows its
+//! content as it follows the holder's ([`Core::retarget_through`]). With
+//! no child or several, it is the target, as any host.
+//!
 //! On the app's element the two sides combine ([`merged`]): what the
 //! component sets wins and the app's props fill in the rest, field by
 //! field (`accessibilityState`'s one by one); `disabled`, the state flags
@@ -251,7 +260,10 @@ impl<M: TextEngine> Core<M> {
     /// The node slot holder `holder`'s props go to: its one element (a
     /// component's host by the id its view makes the node under), else
     /// itself (no child, several, raw text, a slot or a render's holder; a
-    /// list's cells are its rows, never a target).
+    /// list's cells are its rows, never a target). A component that only
+    /// places its children is looked through: holding exactly one
+    /// element, that one is the target, as deep as such components nest
+    /// ([`Self::placed_through`]).
     pub(super) fn slot_target_of(&self, holder: NodeId) -> NodeId {
         let Ok(k) = self.key(holder) else {
             return holder;
@@ -262,16 +274,56 @@ impl<M: TextEngine> Core<M> {
         let [child] = self.nodes[k as usize].children[..] else {
             return holder;
         };
-        let node = &self.nodes[child as usize];
-        let id = node.id;
-        if node.kind == Kind::RawText
-            || self.components.slot_hosts.contains_key(&id)
-            || self.components.fill_holders.contains(&id)
-            || self.is_render_holder(id)
-        {
+        let mut id = self.nodes[child as usize].id;
+        if !self.takes_slot_props(id) {
             return holder;
         }
+        while let Some(inner) = self
+            .placed_through(id)
+            .filter(|&inner| self.takes_slot_props(inner))
+        {
+            id = inner;
+        }
         self.base_of(id)
+    }
+
+    /// Whether node `id` can be a slot's target: an element, not raw
+    /// text, a slot's holder or a render's.
+    fn takes_slot_props(&self, id: NodeId) -> bool {
+        self.key(id)
+            .is_ok_and(|k| self.nodes[k as usize].kind != Kind::RawText)
+            && !self.components.slot_hosts.contains_key(&id)
+            && !self.components.fill_holders.contains(&id)
+            && !self.is_render_holder(id)
+    }
+
+    /// The children of component host `host` changed, or its view was
+    /// made: when its component only places its children and a slot's
+    /// holder holds it as its one element (through other such components),
+    /// the slot's target follows ([`Self::retarget_slot`]). Nothing for
+    /// any other host.
+    pub(super) fn retarget_through(&mut self, host: NodeId) {
+        if self.components.slot_targets.is_empty() || !self.places_children_only(host) {
+            return;
+        }
+        let mut at = host;
+        loop {
+            let Ok(key) = self.key(at) else {
+                return;
+            };
+            let parent = self.nodes[key as usize].parent;
+            if parent == super::NO_KEY {
+                return;
+            }
+            let parent = self.nodes[parent as usize].id;
+            if self.components.slot_targets.contains_key(&parent) {
+                return self.retarget_slot(parent, None);
+            }
+            if !self.places_children_only(parent) {
+                return;
+            }
+            at = parent;
+        }
     }
 
     /// The component whose slot's props app element `id` has (a host's
@@ -339,7 +391,18 @@ impl<M: TextEngine> Core<M> {
         if self.components.adopted.is_empty() {
             return id;
         }
-        self.components.adopted.get(&id).copied().unwrap_or(id)
+        let Some(&holder) = self.components.adopted.get(&id) else {
+            return id;
+        };
+        // Through components that only place their children: the one
+        // around the element, whose box holds it alone.
+        self.key(id)
+            .ok()
+            .map(|key| self.nodes[key as usize].parent)
+            .filter(|&parent| parent != super::NO_KEY)
+            .map(|parent| self.nodes[parent as usize].id)
+            .filter(|&parent| parent != holder && self.places_children_only(parent))
+            .unwrap_or(holder)
     }
 
     /// The events the component listens to on node `id` when it takes a
