@@ -120,9 +120,7 @@ pub(crate) fn test(
     if device.is_some()
         && !matches!(
             target,
-            Some(
-                crate::run::Target::Ios | crate::run::Target::Android | crate::run::Target::Tizen
-            )
+            Some(crate::run::Target::Ios | crate::run::Target::Android | crate::run::Target::Tizen)
         )
     {
         bail!("--device goes with --target ios, android or tizen");
