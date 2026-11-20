@@ -50,6 +50,7 @@ mod list_bench;
 mod login_item;
 mod logs;
 mod native;
+mod nested_slot_place;
 mod net;
 mod notifications;
 mod open_url;

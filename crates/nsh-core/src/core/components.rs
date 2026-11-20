@@ -1866,9 +1866,11 @@ impl<M: TextEngine> Core<M> {
                 self.remove_render_holder(id, true);
                 Ok(Some(Op::Release { id }))
             }
-            // A slot's node joins its host: the view places it.
+            // A slot's node joins its host: the view places it. (The slot
+            // of another component, which that one's view places among
+            // this one's children, is a child: below.)
             Op::Insert { parent, child, .. }
-                if self.is_host(parent) && self.components.slot_names.contains_key(&child) =>
+                if self.is_host(parent) && self.names_slot_of(parent, child) =>
             {
                 let name = self.components.slot_names[&child].clone();
                 let inst = self.components.instances.get_mut(&parent).expect("host");
@@ -1884,7 +1886,7 @@ impl<M: TextEngine> Core<M> {
                 Ok(None)
             }
             Op::Remove { parent, child }
-                if self.is_host(parent) && self.components.slot_names.contains_key(&child) =>
+                if self.is_host(parent) && self.names_slot_of(parent, child) =>
             {
                 self.unslot(child);
                 self.detach_id(child);
@@ -2409,6 +2411,21 @@ impl<M: TextEngine> Core<M> {
             inst.user = user;
             self.components.mark(host);
         }
+    }
+
+    /// Whether node `id` names a slot of the component hosted by `host`
+    /// (`componentSlot`): JS's holder of the slot's JSX, or the rows a view
+    /// passes a nested component. The slot of another component, which
+    /// that one's view places among `host`'s children
+    /// (`inset().child(props.header.place(|h| h))`), is a child of `host`
+    /// like any other, whatever its name.
+    fn names_slot_of(&self, host: NodeId, id: NodeId) -> bool {
+        self.components.slot_names.contains_key(&id)
+            && self
+                .components
+                .slot_hosts
+                .get(&id)
+                .is_none_or(|&of| of == host || !self.is_host(of))
     }
 
     /// Slot node `id` leaves its host.
@@ -4233,7 +4250,11 @@ impl<M: TextEngine> Core<M> {
     /// component's children with no native removal (deleting a view
     /// detaches it, as a plain element's does).
     fn forget_nested(&mut self, nested: NodeId, child: NodeId) {
-        if self.components.slot_names.remove(&child).is_some() {
+        // Its slot (the rows a view passes it): no longer one. The slot of
+        // the view itself, placed among its children, is JS's holder: it
+        // keeps its name and leaves the children.
+        if self.components.slot_hosts.get(&child) == Some(&nested) {
+            self.components.slot_names.remove(&child);
             self.unslot(child);
             return;
         }
@@ -4286,7 +4307,7 @@ impl<M: TextEngine> Core<M> {
                 Part::Fill(_) => Vec::new(),
                 _ => self.placed(e),
             })
-            .partition(|id| self.components.slot_names.contains_key(id));
+            .partition(|&id| self.names_slot_of(nested, id));
         for slot in slots {
             if self.components.slot_hosts.get(&slot) != Some(&nested) {
                 insert(self, slot, None);

@@ -52715,6 +52715,9 @@ mod download_decisions {
 #[path = "reconciliation_tests.rs"]
 mod reconciliation_cleanup;
 
+#[path = "slot_place_tests.rs"]
+mod slot_place_in_nested_content;
+
 // Structural variants share positions without changing immediate restyling.
 mod positional_regressions {
     use super::*;
