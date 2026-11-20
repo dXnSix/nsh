@@ -53074,9 +53074,11 @@ fn node_record_sizes() {
     // #1345: the per-node records the core keeps for every node.
     let node = std::mem::size_of::<super::Node>();
     eprintln!("Node {node} B");
-    // nshx: 8 bytes over upstream's 600 for the fork's theme scopes
-    // (`appearance`, `scoped_dark`, `token_scope`).
-    assert!(node <= 608, "Node grew to {node} bytes");
+    // nshx: upstream's 600, 8 bytes more for the fork's theme scopes
+    // (`appearance`, `scoped_dark`, `token_scope`) and 8 for a dev tool's
+    // layer (`dev`) where `inspect` is on.
+    let fork = 8 + if cfg!(feature = "inspect") { 8 } else { 0 };
+    assert!(node <= 600 + fork, "Node grew to {node} bytes");
 }
 
 #[test]
