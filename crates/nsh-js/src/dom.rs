@@ -912,16 +912,36 @@ fn set_stamp(cx: *mut JsContext, node: JsValue, stamp: Option<crate::dev_source:
     }
 }
 
+/// The data of node `id` for dev tools, which ask about the core's nodes
+/// too: those have odd ids, and the table (by `id >> 1`) would answer with
+/// the script's node before them.
+fn dev_node_data(cx: *mut JsContext, id: NodeId) -> *mut NodeData {
+    let p = dom(cx).by_id(id);
+    // SAFETY: live node data.
+    if p.is_null() || unsafe { (*p).id } != id {
+        ptr::null_mut()
+    } else {
+        p
+    }
+}
+
+/// Whether node `node` (borrowed) was stamped: only hot bundles stamp.
+pub(crate) fn is_stamped(cx: *mut JsContext, node: JsValue) -> bool {
+    let p = node_ptr(cx, node);
+    // SAFETY: live node data.
+    !p.is_null() && unsafe { (*p).stamp }.is_some()
+}
+
 /// Where node `id` was written, if it was stamped.
 pub(crate) fn node_stamp(cx: *mut JsContext, id: NodeId) -> Option<crate::dev_source::Stamp> {
-    let p = dom(cx).by_id(id);
+    let p = dev_node_data(cx, id);
     // SAFETY: live node data.
     (!p.is_null()).then(|| unsafe { (*p).stamp }).flatten()
 }
 
 /// The hot component instance node `id` was made under (0: none).
 pub(crate) fn node_instance(cx: *mut JsContext, id: NodeId) -> u32 {
-    let p = dom(cx).by_id(id);
+    let p = dev_node_data(cx, id);
     // SAFETY: live node data.
     if p.is_null() {
         0

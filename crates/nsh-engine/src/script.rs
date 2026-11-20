@@ -95,25 +95,35 @@ mod imp {
         }
 
         fn props(&self, instance: u32) -> Vec<(String, nsh_core::inspect::DevProp)> {
-            use nsh_core::inspect::DevProp;
-            self.host
-                .instance_props(instance)
-                .into_iter()
-                .map(|(name, value)| {
-                    let value = match value {
-                        nsh_js::PropValue::Getter => DevProp::Getter,
-                        nsh_js::PropValue::Function => DevProp::Function,
-                        nsh_js::PropValue::Undefined => DevProp::Undefined,
-                        nsh_js::PropValue::Null => DevProp::Null,
-                        nsh_js::PropValue::Bool(b) => DevProp::Bool(b),
-                        nsh_js::PropValue::Number(n) => DevProp::Number(n),
-                        nsh_js::PropValue::Text(t) => DevProp::Text(t),
-                        nsh_js::PropValue::Object => DevProp::Object,
-                    };
-                    (name, value)
-                })
-                .collect()
+            dev_props(self.host.instance_props(instance))
         }
+
+        fn host_props(&self, id: NodeId) -> Vec<(String, nsh_core::inspect::DevProp)> {
+            dev_props(self.host.host_props(id))
+        }
+    }
+
+    #[cfg(feature = "inspect")]
+    fn dev_props(
+        props: Vec<(String, nsh_js::PropValue)>,
+    ) -> Vec<(String, nsh_core::inspect::DevProp)> {
+        use nsh_core::inspect::DevProp;
+        props
+            .into_iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    nsh_js::PropValue::Getter => DevProp::Getter,
+                    nsh_js::PropValue::Function => DevProp::Function,
+                    nsh_js::PropValue::Undefined => DevProp::Undefined,
+                    nsh_js::PropValue::Null => DevProp::Null,
+                    nsh_js::PropValue::Bool(b) => DevProp::Bool(b),
+                    nsh_js::PropValue::Number(n) => DevProp::Number(n),
+                    nsh_js::PropValue::Text(t) => DevProp::Text(t),
+                    nsh_js::PropValue::Object => DevProp::Object,
+                };
+                (name, value)
+            })
+            .collect()
     }
 
     #[cfg(feature = "inspect")]

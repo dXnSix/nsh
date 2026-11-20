@@ -315,21 +315,32 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 ### What dev tools ask the core (feature `inspect`)
 
 Every platform's `dev` feature turns on `nsh-core`'s `inspect` (release runners never do): dev tools ask the core
-about its nodes with `nsh_core::element::dev_tree()` (every node from the root: kind, parent and children, a Rust
-component's name, `class` as written, `testID`, the text of a raw text run or of the only run a text block holds
+about its nodes with `nsh_core::element::dev_tree()` (every node from the root: kind, parent and children, the
+component it hosts, `class` as written, `testID`, the text of a raw text run or of the only run a text block holds
 without a node, frame, page position, flags), `dev_node(id)` (inline style declarations, the resolved view and
 text style, the unrounded box with padding, border and margin, states, events, accessibility props, a scroll
-view's offset and content size, a list's or cell's state) and
+view's offset and content size, a list's or cell's state, and what the Rust component it hosts takes: its spec's
+props with their kinds, and events) and
 `dev_pick(point, skip)` (the nodes under a page point, innermost and topmost first, whatever their `pointerEvents`,
 listeners or disabled state: modals above the surface, shown overlays above their root view in the order they were
 shown, clipping counts, hidden views and `skip`'s subtree, its overlays included, are left out). Each returns an
 `Answer` the core resolves in its next commit, after layout, through the same action path as `app_url()`; positions
 ignore transforms and stop at modal roots. What the script knows of its nodes comes the same way:
-`dev_source(id)`, `dev_instances(id)` and `dev_instance_props(instance)` (hot bundles' stamps and instances, kept by
-`nsh-js`) are queued by the core and answered in the same round by the engine (feature `inspect`, which the platforms'
+`dev_source(id)`, `dev_instances(id)`, `dev_instance_props(instance)` and `dev_host_props(id)` (hot bundles' stamps
+and instances, and the props a stamped use passes a Rust component, kept by `nsh-js`) are queued by the core and
+answered in the same round by the engine (feature `inspect`, which the platforms'
 `dev` turns on) from its VM (`Core::answer_script_inspections` with the script as `ScriptSources`); a Rust app answers
-nothing. The code is `crates/nsh-core/src/inspect.rs` (the types) and `crates/nsh-core/src/core/inspect.rs` (the
-answers). Until something asks, no node has dev state and a commit does no dev work.
+nothing, and so does a node the core made (an odd id). The code is `crates/nsh-core/src/inspect.rs` (the types) and
+`crates/nsh-core/src/core/inspect.rs` (the answers). Until something asks, no node has dev state and a commit does no
+dev work.
+
+A view that hosts a Rust component says so in the tree: `flags.host`, and `component` is the component's JS export
+(a registered native view keeps its registered name there, with kind `native`). What is under a host is its
+component's view, the core's nodes, but for what the script gave the component: such a node has `given: { host,
+slot }`, the nearest host above it that the script made (a component a view nests is part of that view) and, for the
+glue's holder of a named slot, of the rows or of what a render function rendered, the prop's JS name. A row a
+component's list wraps is a host without a name. `docs/dev/design-mode.md` has the layer tree a design tool reads
+from this; `crates/nsh-engine/tests/engine/design_layers.rs` covers both.
 
 `dev_override(id, layer)` puts a `DevOverride` over a node: classes over its own (or instead of them, `replace_class`),
 inline declarations applied after its classes and `style`, and forced interaction states (`tailwind::state`). Nothing

@@ -3,13 +3,15 @@
 //! from the nodes and the last layout. Nothing here runs until a tool
 //! asks.
 
+use std::sync::Arc;
+
 use super::{Core, Key, Kind, NO_KEY, Node, measure::valid};
 use crate::{
     NodeId,
     geometry::{Point, Points, point, size_pt},
     inspect::{
-        DevBox, DevDetail, DevEdges, DevFlags, DevList, DevNode, DevOverride, DevScroll, DevState,
-        DevTree, NodeDev, Request,
+        DevBox, DevComponent, DevDetail, DevEdges, DevEventSpec, DevFlags, DevGiven, DevList,
+        DevNode, DevOverride, DevPropSpec, DevScroll, DevState, DevTree, NodeDev, Request,
     },
     text::TextEngine,
 };
@@ -35,6 +37,15 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Native => "native",
         Kind::Overlay => "overlay",
         Kind::Shader => "shader",
+    }
+}
+
+/// An event's handler as TSX names it: `press` is `onPress`.
+fn handler_name(event: &str) -> String {
+    let mut chars = event.chars();
+    match chars.next() {
+        Some(first) => format!("on{}{}", first.to_ascii_uppercase(), chars.as_str()),
+        None => "on".to_owned(),
     }
 }
 
@@ -100,6 +111,9 @@ impl<M: TextEngine> Core<M> {
                 Request::Props(instance, answer) => answer
                     .borrow_mut()
                     .deliver(sources.map_or_else(Vec::new, |s| s.props(instance))),
+                Request::HostProps(id, answer) => answer
+                    .borrow_mut()
+                    .deliver(sources.map_or_else(Vec::new, |s| s.host_props(id))),
                 other => self.queue_inspect(other),
             }
         }
@@ -200,14 +214,35 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// The tree as the last layout left it: every node from the root, in
-    /// tree order.
+    /// tree order. A node the script made in a Rust component's view says
+    /// whose content it is ([`DevNode::given`]).
     pub fn dev_tree(&self) -> DevTree {
         let mut nodes = Vec::new();
-        let mut stack = vec![self.root];
-        while let Some(key) = stack.pop() {
+        // With each node, the host whose view it is in.
+        let mut stack = vec![(self.root, None::<NodeId>)];
+        while let Some((key, within)) = stack.pop() {
             let node = &self.nodes[key as usize];
-            nodes.push(self.dev_node_light(key));
-            stack.extend(node.children.iter().rev().copied());
+            let mut dev = self.dev_node_light(key);
+            // The core's nodes have odd ids: an even one in a view is the
+            // script's, given to the component.
+            let scripted = node.id.is_multiple_of(2);
+            if let Some(host) = within.filter(|_| scripted) {
+                dev.given = Some(DevGiven {
+                    host,
+                    slot: self.dev_given_as(node.id),
+                });
+            }
+            // A view starts at a host the script made (or one in no view):
+            // the components its view nests are part of it.
+            let below = if dev.flags.host && (scripted || within.is_none()) {
+                Some(node.id)
+            } else if scripted {
+                None
+            } else {
+                within
+            };
+            nodes.push(dev);
+            stack.extend(node.children.iter().rev().map(|&child| (child, below)));
         }
         DevTree {
             root: self.nodes[self.root as usize].id,
@@ -227,7 +262,11 @@ impl<M: TextEngine> Core<M> {
                 .iter()
                 .map(|&c| self.nodes[c as usize].id)
                 .collect(),
-            component: node.component.as_deref().and_then(|c| c.name.clone()),
+            component: self
+                .dev_hosted(node.id)
+                .map(|spec| Arc::from(spec.export.as_str()))
+                .or_else(|| node.component.as_deref().and_then(|c| c.name.clone())),
+            given: None,
             class: node
                 .class_names
                 .as_deref()
@@ -251,6 +290,7 @@ impl<M: TextEngine> Core<M> {
                 hidden: node.view_style.hidden || node.hidden_in_text,
                 overlay: node.is_overlay(),
                 overridden: node.dev.is_some(),
+                host: self.is_host(node.id),
             },
         }
     }
@@ -291,6 +331,27 @@ impl<M: TextEngine> Core<M> {
             }),
             cell: node.slot,
             dev_override: node.dev.as_deref().map(|dev| dev.layer.clone()),
+            component: self.dev_hosted(id).map(|spec| DevComponent {
+                name: spec.export.clone(),
+                props: spec
+                    .props
+                    .iter()
+                    .map(|p| DevPropSpec {
+                        name: p.name,
+                        kind: p.kind,
+                        ts: p.ts.clone(),
+                        optional: p.optional,
+                    })
+                    .collect(),
+                events: spec
+                    .events
+                    .iter()
+                    .map(|e| DevEventSpec {
+                        handler: handler_name(e.name),
+                        data: e.data.clone(),
+                    })
+                    .collect(),
+            }),
         })
     }
 

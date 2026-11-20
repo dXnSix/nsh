@@ -878,6 +878,13 @@ fn render_component(
     // SAFETY: ours.
     unsafe { qjs::JS_FreeValue(cx, name) };
     r?;
+    // Dev tools read what a stamped use passes its component (hot bundles
+    // only: no other use is stamped).
+    if dom::is_stamped(cx, node)
+        && let Some(id) = dom::node_id(cx, node)
+    {
+        crate::dev_source::keep_host_props(cx, id, props);
+    }
     // One holder per slot the app fills (props are fixed per JSX site).
     let mut anchor: Option<Owned> = None;
     for slot in spec.slots() {

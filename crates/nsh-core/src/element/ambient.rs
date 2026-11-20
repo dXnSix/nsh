@@ -1487,6 +1487,20 @@ pub fn dev_instance_props(instance: u32) -> Answer<Vec<(String, crate::inspect::
     answer
 }
 
+/// The props the script passes the Rust component hosted by node `id`,
+/// read from their descriptors as [`dev_instance_props`] reads an
+/// instance's: a getter is reported, never called (dev tools, feature
+/// `inspect`). Hot bundles keep them; none for another node, bundles
+/// without stamps and Rust apps. To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_host_props(id: crate::NodeId) -> Answer<Vec<(String, crate::inspect::DevProp)>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::HostProps(
+        id, slot,
+    )));
+    answer
+}
+
 /// The nodes under page point `page` as the next commit lays them out,
 /// innermost and topmost first, leaving out the subtree of `skip` (dev
 /// tools, feature `inspect`: [`crate::Core::dev_pick`]). To await in a

@@ -22,6 +22,9 @@
 //! [`node_instances`] answers with the chain that rendered a node. Before a
 //! hot component has rendered, nodes look nothing up.
 //!
+//! A native component's stamped host also keeps the props its use passes,
+//! until the owner that rendered it goes ([`host_props`]).
+//!
 //! Nothing here sends an op or touches the core.
 
 use std::cell::{Cell, RefCell};
@@ -117,6 +120,9 @@ pub(crate) struct DevSource {
     /// The call site of the component use running now.
     pending: Cell<Option<Stamp>>,
     instances: RefCell<FxHashMap<u32, Instance>>,
+    /// The props native components' stamped hosts were rendered with
+    /// (owned), by host node.
+    hosts: RefCell<FxHashMap<NodeId, JsValue>>,
     /// The last instance id given (0: none yet, and nodes look nothing up).
     last_instance: Cell<u32>,
     /// The context key instances are provided under (owned).
@@ -129,6 +135,7 @@ impl DevSource {
             anchors: RefCell::default(),
             pending: Cell::new(None),
             instances: RefCell::default(),
+            hosts: RefCell::default(),
             last_instance: Cell::new(0),
             key: Cell::new(UNDEFINED),
         }
@@ -139,6 +146,10 @@ impl DevSource {
         for (_, instance) in self.instances.take() {
             // SAFETY: values it owned.
             unsafe { qjs::JS_FreeValue(cx, instance.props) };
+        }
+        for (_, props) in self.hosts.take() {
+            // SAFETY: values it owned.
+            unsafe { qjs::JS_FreeValue(cx, props) };
         }
         unsafe { qjs::JS_FreeValue(cx, self.key.replace(UNDEFINED)) };
     }
@@ -360,6 +371,56 @@ pub(crate) fn node_instances(cx: *mut JsContext, id: NodeId) -> Vec<InstanceRef>
     out
 }
 
+/// Keeps the props (borrowed) the native component hosted by node `id` was
+/// rendered with, for [`host_props`], until the current owner goes (the
+/// one that rendered the host; with no owner, until the context goes).
+pub(crate) fn keep_host_props(cx: *mut JsContext, id: NodeId, props: JsValue) {
+    // SAFETY: kept until the cleanup below runs, or the context goes.
+    let kept = unsafe { qjs::JS_DupValue(cx, props) };
+    let old = dev(cx).hosts.borrow_mut().insert(id, kept);
+    if let Some(old) = old {
+        // SAFETY: a value it owned.
+        unsafe { qjs::JS_FreeValue(cx, old) };
+    }
+    let mut data = [qjs::JS_NewFloat64(f64::from(id))];
+    // SAFETY: the function keeps a dup of `data`; the owner takes it.
+    let cleanup = unsafe {
+        qjs::JS_NewCFunctionData(cx, Some(forget_host_props), 0, 0, 1, data.as_mut_ptr())
+    };
+    crate::reactive::add_cleanup(cx, cleanup);
+}
+
+/// The cleanup of [`keep_host_props`]: the host's props go.
+unsafe extern "C" fn forget_host_props(
+    cx: *mut JsContext,
+    _this: JsValue,
+    _argc: std::ffi::c_int,
+    _argv: *mut JsValue,
+    _magic: std::ffi::c_int,
+    data: *mut JsValue,
+) -> JsValue {
+    // SAFETY: one data value, the host's id as a number.
+    let id = number(cx, unsafe { *data }).unwrap_or(0.0) as NodeId;
+    let removed = dev(cx).hosts.borrow_mut().remove(&id);
+    if let Some(props) = removed {
+        // SAFETY: a value it owned.
+        unsafe { qjs::JS_FreeValue(cx, props) };
+    }
+    UNDEFINED
+}
+
+/// The props the native component hosted by node `id` was rendered with,
+/// read as [`instance_props`] reads an instance's; none for another node
+/// and for a host whose use was not stamped.
+pub(crate) fn host_props(cx: *mut JsContext, id: NodeId) -> Vec<(String, PropValue)> {
+    let props = match dev(cx).hosts.borrow().get(&id) {
+        // SAFETY: kept alive while read.
+        Some(props) => unsafe { qjs::JS_DupValue(cx, *props) },
+        None => return Vec::new(),
+    };
+    read_props(cx, props)
+}
+
 /// The props instance `id` was rendered with, by name, read from their
 /// descriptors: a getter is reported, never called.
 pub(crate) fn instance_props(cx: *mut JsContext, id: u32) -> Vec<(String, PropValue)> {
@@ -368,6 +429,12 @@ pub(crate) fn instance_props(cx: *mut JsContext, id: u32) -> Vec<(String, PropVa
         Some(i) => unsafe { qjs::JS_DupValue(cx, i.props) },
         None => return Vec::new(),
     };
+    read_props(cx, props)
+}
+
+/// The own properties of props object `props` (owned), by name, read from
+/// their descriptors: a getter is reported, never called.
+fn read_props(cx: *mut JsContext, props: JsValue) -> Vec<(String, PropValue)> {
     let mut out = Vec::new();
     // SAFETY: an enumeration of a live object; every value read is freed.
     unsafe {
