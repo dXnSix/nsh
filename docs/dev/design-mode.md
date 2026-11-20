@@ -20,7 +20,7 @@ modules (`import.meta.glob`) and opens their windows (`Window.open`).
 | From | Message | What |
 |---|---|---|
 | host | `{"hello":{}}` | Once connected. |
-| host | `{"surface":{"id","width","height", <handle>}}` | A window of the app's own (named by `Window.open`'s `id`), whenever it is new or its handle or size changed. The handle is what the tool draws it with: `"context"`, its layer's `CAContext` id, on macOS (`CALayerHost`). |
+| host | `{"surface":{"id","width","height", <handle>}}` | A window of the app's own (named by `Window.open`'s `id`), whenever it is new or its handle or size changed. The handle is what the tool draws it with: `"context"`, its layer's `CAContext` id, on macOS (`CALayerHost`); `"hwnd"` on Windows (a DWM thumbnail); `"xid"` under X11 (Composite). |
 | host | `{"surface":{"id","gone":true}}` | The window closed. |
 | tool | `{"pointer":{"id","kind":"down\|drag\|up\|move","x","y"}}` | Input, delivered by the platform to window `id`, in points from its content's top left. |
 | tool | `{"wheel":{"id","x","y","dx","dy"}}`, `{"key":{"id","down","key",…}}`, `{"resize":{"id","width","height"}}` | The same; a key as the DOM names it. |
@@ -42,6 +42,19 @@ app's own windows for `report`, which tells the tool what changed:
   no App Nap. Input is given to the view under the point straight (AppKit drops events routed to a
   window that ignores the mouse), through a run-loop source in the common modes so that a control's
   own mouse loop still gets the drags and the release. `NSH_DESIGN_ALPHA` shows the windows.
+- **Windows**: the handle is the window's `HWND` (`"hwnd"`), which a tool draws with a DWM thumbnail
+  (`DwmRegisterThumbnail`). The main window stays hidden; the app's own windows are moved off every
+  display and out of the taskbar and switcher (tool windows that never activate), where DWM still
+  composes them. Input goes through `crate::input` in the window's root (`app_window::enter`), as the
+  test agent's does; the connection's thread hands it over with `UiThread::invoke`. When the tool
+  closes the connection the host exits.
+- **Linux**: under X11 the handle is the window's X11 id (`"xid"`), which a tool draws with the
+  Composite extension; Wayland lets no other process draw a window, so nothing is reported there
+  (logged once). The main window stays hidden; the app's own windows are moved off every display
+  (`XMoveWindow`) and out of the taskbar and pager, still mapped so the compositor keeps their
+  pictures. GDK's X11 functions and libX11's are looked up at run time, as `xtest.rs` does. Pointer
+  and wheel input go through `crate::input::simulate` in the window's root; keys type text, Enter
+  and Backspace into the focused widget (`crate::synth`).
 
 ## `nsh/design`
 

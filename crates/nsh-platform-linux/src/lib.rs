@@ -24,6 +24,8 @@ mod audio;
 mod canvas;
 mod chrome;
 mod decor;
+#[cfg(feature = "dev")]
+mod design;
 mod desktop_file;
 #[cfg(feature = "dev")]
 pub mod dev;

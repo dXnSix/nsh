@@ -606,6 +606,9 @@ pub fn run_app(source: AppSource, mut options: AppOptions) -> glib::ExitCode {
         .register_session(true)
         .build();
     STANDALONE.with(|s| *s.borrow_mut() = Some(app.downgrade()));
+    // Shown in a design tool (`NSH_DESIGN_SOCKET`): before any window opens.
+    #[cfg(feature = "dev")]
+    crate::design::start();
     // Signing out or shutting down closes no window: the app leaves when
     // the session manager asks, and stops when it ends the run; systemd
     // sends SIGTERM to what remains of the session, which quits the app

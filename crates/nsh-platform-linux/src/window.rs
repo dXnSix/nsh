@@ -414,6 +414,13 @@ fn main_window(surface: &Surface) -> Option<gtk::Window> {
     surface.root.root().and_downcast::<gtk::Window>()
 }
 
+/// The `gtk::Window` of window `id` (its root node; `ROOT_ID`: the main
+/// one), for the design host.
+#[cfg(feature = "dev")]
+pub(crate) fn window_of(surface: &Surface, id: NodeId) -> Option<gtk::Window> {
+    gtk_window(surface, id)
+}
+
 /// The `gtk::Window` of window `id` (its root node).
 fn gtk_window(surface: &Surface, id: NodeId) -> Option<gtk::Window> {
     if id == ROOT_ID {
@@ -507,6 +514,11 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
     let options = &open.options;
     let window = gtk::Window::new();
     window.add_css_class("nsh-window");
+    // A design tool names the app's windows by their ids.
+    #[cfg(feature = "dev")]
+    if crate::design::active() {
+        crate::design::name_window(&open.options.id, id);
+    }
     let main = main_window(surface);
     if let Some(app) = main.as_ref().and_then(|w| w.application()) {
         window.set_application(Some(&app));

@@ -327,6 +327,11 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
     } else {
         None
     };
+    // A design tool names the app's windows by their ids.
+    #[cfg(feature = "dev")]
+    if crate::design::active() {
+        crate::design::name_window(&options.id, id);
+    }
     let window = Rc::new(AppWindow {
         id,
         hwnd,
