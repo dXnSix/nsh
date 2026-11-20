@@ -623,6 +623,33 @@ crate 会导出给 TSX。列出的每个 crate 都有自己的包名和导入名
 `"root"` 是列出的第一个 crate 中的组件。`nsh run` 和 `nsh dev` 期间，修改其中任何一个 crate，或它们通过路径依赖的
 crate，都会重新构建并重启应用。
 
+### 组件库
+
+被多个应用使用的组件库可以拥有自己的模块，这样每个应用（以及组件库自己的示例）都用同一个名称导入它的组件。组件库的
+crate 在一个普通函数中创建它的组件集，每个应用的 crate 在自己的 `#[native_module]` 函数中提供它；应用的 `"rust"`
+只列出自己的 crate：
+
+```rust
+// 组件库的 crate（acme-ui）。
+pub fn set() -> Registry {
+    let mut registry = Registry::ui_set("acme/ui");
+    registry.register::<Chip>();
+    registry
+}
+
+// 应用的 crate。
+#[native_module("app/native")]
+fn native(registry: &mut Registry) {
+    registry.serve(acme_ui::set());
+}
+```
+
+```tsx
+import { Chip } from "acme/ui";
+```
+
+同一应用的两个 crate 可以提供同一个组件库：它只会被提供一次。
+
 ## 在 Web 上使用浏览器 API
 
 在 Web 上，crate 可以通过 wasm-bindgen 和 `web-sys` 调用浏览器的 API（WebSocket、`IndexedDB` 等）；`nsh`

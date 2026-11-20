@@ -128,9 +128,8 @@ fn build(
     ui_sets: &[Registry],
     asset_root_from: Option<std::path::PathBuf>,
 ) -> Result<(Bundle, Option<String>, std::path::PathBuf), String> {
-    let sets: Vec<SetDescription> = ui_sets
-        .iter()
-        .flat_map(Registry::sets)
+    let sets: Vec<SetDescription> = Registry::served_sets(ui_sets)
+        .into_iter()
         .map(SetDescription::from)
         .collect();
     let bundle = nsh_bundler::bundle(&nsh_bundler::BundleOptions {

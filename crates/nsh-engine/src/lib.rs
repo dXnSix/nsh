@@ -2486,10 +2486,10 @@ impl<M: TextEngine + 'static> Driver<M> {
                 }
             }
         }
-        // The fonts the UI sets' crates ship, before anything is measured.
-        let fonts = config
-            .ui_sets
-            .iter()
+        // The fonts the UI sets' crates ship (their submodules' and the
+        // sets they serve too), before anything is measured.
+        let fonts = nsh_core::element::Registry::served_sets(&config.ui_sets)
+            .into_iter()
             .flat_map(nsh_core::element::Registry::asset_files)
             .filter(|file| file.kind == nsh_core::element::AssetKind::Font);
         for font in fonts {

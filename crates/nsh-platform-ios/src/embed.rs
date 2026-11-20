@@ -1762,8 +1762,8 @@ mod tests {
     #[test]
     fn the_sdk_serves_every_part_of_nsh_base() {
         let exports = |sets: &[nsh_core::element::Registry]| {
-            sets.iter()
-                .flat_map(nsh_core::element::Registry::sets)
+            nsh_core::element::Registry::served_sets(sets)
+                .into_iter()
                 .flat_map(nsh_core::element::Registry::specs)
                 .map(|spec| spec.export.clone())
                 .collect::<std::collections::BTreeSet<_>>()

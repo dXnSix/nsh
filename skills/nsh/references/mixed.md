@@ -333,6 +333,7 @@ TS gets only `Puts ... copied.` and `copy(text: string): Promise<number>`.
 - Share code with Cargo path dependencies. Only listed crates export to TSX.
 - A crate listed twice, two crates with one package name (`-` and `_` count as one), or two with one specifier all fail with both paths named.
 - With a `"root"`, it is a component of the first crate listed.
+- A library several apps use has a set of its own: its crate makes it in a plain function (`pub fn set() -> Registry`, `Registry::ui_set("acme/ui")`), and the app's crate serves it from its `#[native_module]` function (`registry.serve(acme_ui::set())`). TSX imports it as `acme/ui`; only the app's crate is listed. Two crates may serve one library: it is served once.
 
 ## The dev loop
 

@@ -38,7 +38,7 @@ impl Modules {
     pub(super) fn describe(&self, registries: &[Registry]) -> Result<Value, PropError> {
         let new = |key: String| self.described.borrow_mut().insert(key);
         let mut sets = Vec::new();
-        for registry in registries.iter().flat_map(Registry::sets) {
+        for registry in Registry::served_sets(registries) {
             let Some(specifier) = registry.specifier() else {
                 continue;
             };

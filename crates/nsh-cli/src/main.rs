@@ -54,8 +54,19 @@ pub(crate) fn own_sets() -> &'static [Registry] {
     OWN.get_or_init(|| vec![nsh_base::registry()])
 }
 
+/// [`own_sets`] as data, with every set they serve
+/// (`nsh_core::element::description::Description::of`).
+pub(crate) fn own_set_descriptions() -> &'static [SetDescription] {
+    static OWN: OnceLock<Vec<SetDescription>> = OnceLock::new();
+    OWN.get_or_init(|| nsh_core::element::description::Description::of(own_sets()).sets)
+}
+
 /// The UI sets of the command's app, as data ([`set_app_sets`]).
 static UI_SETS: RwLock<Option<Arc<[SetDescription]>>> = RwLock::new(None);
+
+/// The UI sets of the app's crates alone, as their description lists
+/// them ([`set_app_sets`]): each with its crate (`SetDescription::entry`).
+static APP_SETS: RwLock<Option<Arc<[SetDescription]>>> = RwLock::new(None);
 
 /// The UI sets the hosts serve, as data: what bundles import natively,
 /// what bytecode links against, what `.nsh/types` declares. `nsh/base`,
@@ -64,25 +75,32 @@ pub(crate) fn ui_sets() -> Arc<[SetDescription]> {
     if let Some(sets) = &*UI_SETS.read().unwrap_or_else(|e| e.into_inner()) {
         return sets.clone();
     }
-    let sets: Arc<[SetDescription]> = own_sets()
-        .iter()
-        .flat_map(nsh_core::element::Registry::sets)
-        .map(SetDescription::from)
-        .collect();
+    let sets: Arc<[SetDescription]> = own_set_descriptions().into();
     *UI_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(sets.clone());
     sets
+}
+
+/// The sets of the app's crates ([`set_app_sets`]; none without them),
+/// each with its crate's index in `nsh.json` `"rust"`
+/// (`SetDescription::entry`).
+pub(crate) fn app_sets() -> Arc<[SetDescription]> {
+    APP_SETS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default()
 }
 
 /// Makes [`ui_sets`] `nsh/base` and `app`, the sets of the app's crates
 /// (described again after a change to its Rust code).
 pub(crate) fn set_app_sets(app: Vec<SetDescription>) {
-    let sets: Arc<[SetDescription]> = own_sets()
+    let sets: Arc<[SetDescription]> = own_set_descriptions()
         .iter()
-        .flat_map(nsh_core::element::Registry::sets)
-        .map(SetDescription::from)
-        .chain(app)
+        .cloned()
+        .chain(app.iter().cloned())
         .collect();
     *UI_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(sets);
+    *APP_SETS.write().unwrap_or_else(|e| e.into_inner()) = Some(app.into());
 }
 
 #[derive(Parser)]

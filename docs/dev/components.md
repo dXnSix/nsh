@@ -18,7 +18,7 @@ places its first `limit` avatars.
   (`Toast`, `ToastStack` and the class `ToastManager`: "Toasts" below) and the
   module `AlertDialog`, beside the navigation `nsh-js` makes for it (`NavStack`, `NavPage`, `Dialog`, `createNavStack`); controls
   (toggles, sliders, selects, popovers, sheets, ...) join as their behavior is written. It is a UI set
-  (`Registry::ui_set("nsh/base")`), with the charts' parts `Plot`, `Line`, `Area`, `Bar`, `Grid`, `Pie`, `Arc`, `RadialLine`, `RadialGrid`, `Sankey`, `Treemap`, `PlotAxis`, `PlotLabel` and `PlotAppearScope` in its submodule `nsh/base/plot` (`Registry::submodule`, `js-modules.md`), every host serves by default (`set_ui_sets`' default; embedders with a list of their
+  (`Registry::ui_set("nsh/base")`), with the charts' parts `Plot`, `Line`, `Area`, `Bar`, `Grid`, `Pie`, `Arc`, `RadialLine`, `RadialGrid`, `Sankey`, `Treemap`, `PlotAxis`, `PlotLabel` and `PlotAppearScope` in its submodule `nsh/base/plot` (`Registry::submodule`, `js-modules.md`; a set under a specifier of its own, a library's, is served with `Registry::serve` instead, `rust-modules.md` "A library's set"), every host serves by default (`set_ui_sets`' default; embedders with a list of their
   own add `nsh_base::registry()` to it). `nsh_base::registry_of` makes it of some of its parts only
   (`nsh_base::parts`: `core`, the controls, popups, toasts and alerts every app has, and one part per larger
   component, `text_view`, `editor`, `diff`, `rich_editor`, `data_table`, `table`, `dock`, `resizable`, `plot`): a
@@ -39,7 +39,9 @@ places its first `limit` avatars.
   imported by the app's TSX by that specifier. This is the styled layer: an app's own component library (buttons,
   cards, list rows with its look), or a community library a third party publishes as a crate, built on `nsh-base`'s
   behavior and the primitives. `examples/gallery-rs` is one (`gallery/native`), and so is the crate
-  `nsh init --template rust` / `mixed` writes (`app/native`).
+  `nsh init --template rust` / `mixed` writes (`app/native`). A library several apps use has a set of its own
+  (`acme/ui`), which its crate makes in a plain function and each app's crate serves from its entry
+  (`registry.serve(acme_ui::set())`, `Registry::serve`; `docs/dev/rust-modules.md`, "A library's set").
   What such a crate keeps per engine (the languages and highlighters its editors know,
   `nsh_base::editor::register_language`; a value of `nsh_core::element::global`) it sets up in `Registry::setup`, a
   function each engine serving the set runs once in its runtime before the app's first op (`Core::set_components`).

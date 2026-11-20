@@ -277,9 +277,8 @@ pub(crate) fn start(this: &AppView, url: String, held: bool, cx: &mut Context<Ap
         device: device_name(host_name().as_deref()),
         platform: HostPlatform::Gpui,
         bytecode_version: BYTECODE_VERSION.to_owned(),
-        ui_sets: crate::app::ui_sets()
-            .iter()
-            .flat_map(nsh_core::element::Registry::sets)
+        ui_sets: nsh_core::element::Registry::served_sets(&crate::app::ui_sets())
+            .into_iter()
             .filter_map(|set| set.specifier().map(str::to_owned))
             .collect(),
         tests: true,

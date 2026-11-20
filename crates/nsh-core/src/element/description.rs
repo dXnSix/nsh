@@ -10,7 +10,10 @@
 //! only the app's crates and nsh-core, calls each crate's
 //! `#[native_module]` entry and prints a [`Description`] as JSON
 //! ([`Description::to_json`]), which `nsh` reads back
-//! ([`Description::from_json`]). The document carries its format
+//! ([`Description::from_json`]). It lists every set the entries serve
+//! ([`Registry::served_sets`]: their submodules and the libraries' sets
+//! they serve), each with the entry that serves it
+//! ([`SetDescription::entry`]). The document carries its format
 //! ([`FORMAT`]) and the version of nsh-core that wrote it ([`VERSION`]):
 //! `nsh` takes only its own.
 
@@ -20,7 +23,7 @@ use super::Registry;
 
 /// The version of the JSON format of a [`Description`]: bumped whenever
 /// what it holds or means changes.
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 
 /// The version of nsh-core that writes descriptions: the version of nsh
 /// the app's crates were built with.
@@ -93,6 +96,12 @@ pub struct AssetDescription {
 pub struct SetDescription {
     /// The specifier apps import it by (`nsh/base`, `gallery/native`).
     pub specifier: String,
+    /// The index, in the list of registries [`Description::of`] was given,
+    /// of the one that serves it (the first, when two do): an app's crate,
+    /// whose entry's own set is the first set of that index, then its
+    /// submodules and the sets it serves ([`Registry::serve`]). 0 for a set
+    /// described on its own ([`SetDescription::of`]).
+    pub entry: usize,
     /// Its exports, each name once, in the order a module declares them.
     pub exports: Vec<ExportDescription>,
     /// The TypeScript declarations of its components, modules and classes
@@ -155,6 +164,7 @@ impl SetDescription {
         let strings = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect();
         Some(SetDescription {
             specifier: specifier.to_owned(),
+            entry: 0,
             exports,
             declarations: super::declarations(registry, &[]),
             reexported_values: strings(values),
@@ -182,6 +192,7 @@ impl SetDescription {
     fn to_value(&self) -> Value {
         json!({
             "specifier": self.specifier,
+            "entry": self.entry,
             "exports": self.exports.iter().map(|e| json!({
                 "name": e.name,
                 "kind": e.kind.as_str(),
@@ -238,8 +249,14 @@ impl SetDescription {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let entry = set
+            .get("entry")
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+            .ok_or_else(|| format!("{at}: no index entry"))?;
         Ok(SetDescription {
             specifier,
+            entry,
             exports,
             declarations: string(set, "declarations", &at)?,
             reexported_values: strings(reexports, "values", &format!("{at}.reexports"))?,
@@ -272,7 +289,8 @@ impl From<Registry> for SetDescription {
 }
 
 /// The document an app's describe program prints: its crates' sets, in the
-/// order `nsh.json` `"rust"` lists the crates.
+/// order `nsh.json` `"rust"` lists the crates, each crate's own set, then
+/// its submodules and the sets it serves ([`SetDescription::entry`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Description {
     /// The version of nsh-core that wrote it ([`VERSION`]).
@@ -282,19 +300,24 @@ pub struct Description {
 }
 
 impl Description {
-    /// The description of `sets`, written by this nsh-core.
+    /// The description of `sets` and every set they serve, each once
+    /// ([`Registry::served_sets`]), with the index in `sets` of the one
+    /// serving it ([`SetDescription::entry`]); written by this nsh-core.
     ///
     /// # Panics
     ///
-    /// When one of `sets` has no specifier (it is no UI set).
+    /// When one of those sets has no specifier (it is no UI set), or two
+    /// different ones have one specifier.
     #[track_caller]
     pub fn of(sets: &[Registry]) -> Description {
         Description {
             nsh: VERSION.to_owned(),
-            sets: sets
-                .iter()
-                .flat_map(Registry::sets)
-                .map(SetDescription::from)
+            sets: Registry::served_sets_by_entry(sets)
+                .into_iter()
+                .map(|(entry, set)| SetDescription {
+                    entry,
+                    ..SetDescription::from(set)
+                })
                 .collect(),
         }
     }
@@ -465,6 +488,83 @@ mod tests {
             Description::from_json("{}")
                 .unwrap_err()
                 .contains("no format")
+        );
+    }
+}
+
+/// The sets an app's crates serve (`Registry::serve`) in its description:
+/// each once, with the crate that serves it.
+#[cfg(test)]
+mod served {
+    use super::*;
+    use crate::prelude::*;
+
+    /// A library's component.
+    #[component]
+    fn Chip() -> impl IntoElement {
+        view()
+    }
+
+    /// An app's component.
+    #[component]
+    fn Card() -> impl IntoElement {
+        view()
+    }
+
+    fn library() -> Registry {
+        let mut set = Registry::ui_set("acme/ui");
+        set.register::<Chip>();
+        set
+    }
+
+    fn app(specifier: &'static str) -> Registry {
+        let mut app = Registry::ui_set(specifier);
+        app.serve(library());
+        app
+    }
+
+    #[test]
+    fn each_set_is_described_once_with_the_entry_serving_it() {
+        let mut first = app("app/a");
+        first.register::<Card>();
+        let description = Description::of(&[first, app("app/b")]);
+        let sets: Vec<_> = description
+            .sets
+            .iter()
+            .map(|s| (s.specifier.as_str(), s.entry))
+            .collect();
+        assert_eq!(sets, [("app/a", 0), ("acme/ui", 0), ("app/b", 1)]);
+        assert_eq!(
+            description.sets[1]
+                .exports_of(ExportKind::Component)
+                .collect::<Vec<_>>(),
+            ["Chip"]
+        );
+        // In the JSON, as written.
+        let json = description.to_json();
+        assert!(json.contains("\"entry\":1"), "{json}");
+        assert_eq!(Description::from_json(&json).unwrap(), description);
+        // A set described on its own is its own entry.
+        assert_eq!(SetDescription::from(&library()).entry, 0);
+    }
+
+    #[test]
+    fn a_set_without_its_entry_is_refused() {
+        let json = Description::of(&[app("app/a")]).to_json();
+        let mut value: Value = serde_json::from_str(&json).unwrap();
+        value["sets"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("entry")
+            .unwrap();
+        let error = Description::from_json(&value.to_string()).unwrap_err();
+        assert_eq!(error, "sets[1] (acme/ui): no index entry");
+        // A description of format 2, before served sets, is refused.
+        let old = json.replace(&format!("\"format\":{FORMAT}"), "\"format\":2");
+        let error = Description::from_json(&old).unwrap_err();
+        assert_eq!(
+            error,
+            "the description is in format 2, and this nsh reads format 3"
         );
     }
 }

@@ -651,9 +651,8 @@ impl ModuleTable {
         let mut registries: Vec<Registry> = nsh_core::runtime::registries().to_vec();
         let host = registries.len();
         registries.extend(
-            ui_sets
-                .iter()
-                .flat_map(Registry::sets)
+            Registry::served_sets(ui_sets)
+                .into_iter()
                 .filter(|r| r.specifier().is_some())
                 .cloned(),
         );

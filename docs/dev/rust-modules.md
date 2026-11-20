@@ -41,6 +41,47 @@ others and registered them all under its specifier.
   (`nsh-app-charts-ef5aa537-describe`), so they do not clash with the crates' own binaries in the app's `target/`, and
   their names stay short however many crates an app lists (Windows' linker cannot open paths over 260 characters).
 
+## A library's set
+
+A library of components (a crate several apps build on) has a UI set of its own under a fixed specifier
+(`acme/ui`), so every app, and the library's own files (its examples, previews and docs), import its components by
+one name. The library makes its set in a plain function, and the crate of each app using it serves the set from its
+entry: nothing about the library is listed in `nsh.json`, and the app names it once, in Cargo.
+
+```rust
+// The library's crate, `acme-ui`: no `#[native_module]` of its own.
+pub fn set() -> Registry {
+    let mut registry = Registry::ui_set("acme/ui");
+    registry.register::<Chip>().register::<Card>();
+    registry
+}
+
+// An app's crate (`nsh.json` `"rust"`).
+#[native_module("app/native")]
+fn native(registry: &mut Registry) {
+    registry.register::<Gauge>().serve(acme_ui::set());
+}
+```
+
+- `Registry::serve` (nsh-core `element/component.rs`) serves a set wherever the set serving it is served, under its
+  own specifier; `Registry::submodule` is the other kind, a set under a path of the set's own (`nsh/base/plot`). It
+  panics for a set without a specifier, or one whose specifier is the serving set's or a path under it.
+- `Registry::sets` lists a set, its submodules, then the sets it serves, each with theirs. Two crates of one app built
+  on one library both serve its set: `Registry::served_sets` flattens a list of sets with each specifier once. A set
+  whose specifier is listed already is left out when it exports the same (components, modules and classes, by name
+  and Rust type: each crate made it with the library's function), and refused, naming the sets serving both, when it
+  is another (two versions of one library). Everything that takes a list of sets goes through it:
+  `Registry::merged`, `Description::of`, nsh-js's module table, the engine's fonts, nsh-testing, the platforms'
+  development hosts, the web runtime and the CLI.
+- The description (format 3) lists every set once, each with `entry`, the index of the crate whose entry serves it
+  (the first, when two do). `rust_app::read_description` takes each crate's sets by it: the crate's own set first,
+  imported by the crate's specifier, then its submodules and the sets it serves, which the generated code links with
+  the crate (the hosts' `set_<crate>()` returns the whole set; the web runtime's gate of the crate,
+  `nsh_ui_set_<specifier>`, registers them, so an app importing a served set keeps that crate's gate:
+  `web::app_set_gates`). `check_specifiers` refuses a set imported as one of nsh's modules, two sets of one
+  specifier, and a crate with no set of its own: one another crate serves too (list the library's crate in `"rust"`
+  or serve its set, not both). Submodules of an app's crate are described the same way.
+
 ## Why a list of crates
 
 The alternative, several `#[native_module]` entries in one crate, needs a collection of entries the generated code

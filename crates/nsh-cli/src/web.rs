@@ -834,9 +834,10 @@ impl GatePlan {
 /// name, an `import()` of a computed specifier) keeps everything,
 /// so a runtime never lacks what an app needs.
 /// An app's own UI sets (`nsh.json` `"rust"`) keep the gate of each one it
-/// imports ([`ui_set_gate`]).
+/// imports ([`ui_set_gate`]): a set a crate serves (its submodules, a
+/// library's set), the gate of that crate.
 pub(crate) fn linked_gates(uses: Option<&nsh_bundler::NativeUse>) -> Vec<String> {
-    linked_gates_of(uses, &app_set_specifiers())
+    linked_gates_of(uses, &app_set_gates(&crate::app_sets()))
 }
 
 /// Why [`linked_gates`] keeps every gate for code that uses `uses`, when
@@ -872,23 +873,27 @@ pub(crate) fn ui_set_gate(specifier: &str) -> String {
     format!("{UI_SET_GATE}{name}")
 }
 
-/// The specifiers of the app's own UI sets: those the command serves
-/// beyond nsh's own.
-fn app_set_specifiers() -> Vec<String> {
-    let own: Vec<&str> = crate::own_sets()
-        .iter()
-        .filter_map(|r| r.specifier())
-        .collect();
-    crate::ui_sets()
-        .iter()
-        .map(|set| set.specifier.clone())
-        .filter(|s| !own.contains(&s.as_str()) && !s.starts_with("nsh/"))
+/// The specifier of each of the app's own UI sets `sets` (described:
+/// [`crate::app_sets`]) with the gate that registers it: its crate's
+/// (`SetDescription::entry`), named by the crate's own set, the first of
+/// that crate's sets. A crate's gate registers its whole set, the sets it
+/// serves with it (`rust_app.rs` `set_gates`).
+fn app_set_gates(sets: &[nsh_core::element::description::SetDescription]) -> Vec<(String, String)> {
+    sets.iter()
+        .filter_map(|set| {
+            let own = sets.iter().find(|s| s.entry == set.entry)?;
+            Some((set.specifier.clone(), ui_set_gate(&own.specifier)))
+        })
         .collect()
 }
 
-/// [`linked_gates`] for an app whose own UI sets are `app_sets`: each one
-/// it imports keeps its gate, and keeping everything keeps all of them.
-fn linked_gates_of(uses: Option<&nsh_bundler::NativeUse>, app_sets: &[String]) -> Vec<String> {
+/// [`linked_gates`] for an app whose own UI sets are `app_sets`, each with
+/// the gate that registers it ([`app_set_gates`]): each one it imports
+/// keeps its gate, and keeping everything keeps all of them.
+fn linked_gates_of(
+    uses: Option<&nsh_bundler::NativeUse>,
+    app_sets: &[(String, String)],
+) -> Vec<String> {
     let all = || {
         let mut gates: Vec<String> = nsh_base::parts::ALL
             .iter()
@@ -898,7 +903,11 @@ fn linked_gates_of(uses: Option<&nsh_bundler::NativeUse>, app_sets: &[String]) -
         gates.push("nsh_std_crypto".into());
         gates.push("nsh_std_url".into());
         gates.push("nsh_feature_shader".into());
-        gates.extend(app_sets.iter().map(|s| ui_set_gate(s)));
+        for (_, gate) in app_sets {
+            if !gates.contains(gate) {
+                gates.push(gate.clone());
+            }
+        }
         gates
     };
     let Some(uses) = uses else { return all() };
@@ -946,8 +955,11 @@ fn linked_gates_of(uses: Option<&nsh_bundler::NativeUse>, app_sets: &[String]) -
                     }
                 }
             }
-            module if app_sets.iter().any(|s| s == module) => add(ui_set_gate(module)),
-            _ => {}
+            module => {
+                if let Some((_, gate)) = app_sets.iter().find(|(s, _)| s == module) {
+                    add(gate.clone());
+                }
+            }
         }
     }
     gates
@@ -959,12 +971,12 @@ fn linked_gates_of(uses: Option<&nsh_bundler::NativeUse>, app_sets: &[String]) -
 /// a scroll bar theme of its own (the core draws built-in bars). An app
 /// that only imports `nsh` gets the platform's scroll indicators either
 /// way, and `AlertDialog` and `Toast` are `nsh/base`'s.
-fn needs_base_core(uses: &nsh_bundler::NativeUse, app_sets: &[String]) -> bool {
+fn needs_base_core(uses: &nsh_bundler::NativeUse, app_sets: &[(String, String)]) -> bool {
     uses.scrollbar_theme
         || uses.imports.keys().any(|module| {
             module == nsh_base::SPECIFIER
                 || module.starts_with(&format!("{}/", nsh_base::SPECIFIER))
-                || app_sets.iter().any(|s| s == module)
+                || app_sets.iter().any(|(s, _)| s == module)
         })
 }
 
@@ -2150,7 +2162,13 @@ mod tests {
 
     #[test]
     fn a_linked_runtime_keeps_the_app_sets_the_app_imports() {
-        let sets = ["app/charts".to_owned(), "app/storage".to_owned()];
+        let sets = app_set_gates(
+            &nsh_core::element::description::Description::of(&[
+                nsh_core::element::Registry::ui_set("app/charts"),
+                nsh_core::element::Registry::ui_set("app/storage"),
+            ])
+            .sets,
+        );
         let gates = linked_gates_of(
             Some(&uses(&[
                 ("app/charts", Some(&["Chart"])),
@@ -2169,6 +2187,38 @@ mod tests {
         assert!(
             linked_gates_of(Some(&computed), &sets).contains(&"nsh_ui_set_app_storage".to_owned())
         );
+    }
+
+    /// A set an app's crate serves (`Registry::serve`, a submodule) is
+    /// registered by that crate's gate: importing it keeps the crate's.
+    #[test]
+    fn served_sets_keep_the_gate_of_the_crate_serving_them() {
+        use nsh_core::element::Registry;
+        let mut charts = Registry::ui_set("app/charts");
+        charts
+            .submodule(Registry::ui_set("app/charts/axes"))
+            .serve(Registry::ui_set("acme/ui"));
+        let mut storage = Registry::ui_set("app/storage");
+        storage.serve(Registry::ui_set("acme/ui"));
+        let described = nsh_core::element::description::Description::of(&[charts, storage]).sets;
+        let sets = app_set_gates(&described);
+        let gate_of = |module: &str| {
+            sets.iter()
+                .find(|(s, _)| s == module)
+                .map(|(_, gate)| gate.as_str())
+        };
+        assert_eq!(gate_of("app/charts/axes"), Some("nsh_ui_set_app_charts"));
+        // Served by both crates, through the first.
+        assert_eq!(gate_of("acme/ui"), Some("nsh_ui_set_app_charts"));
+        assert_eq!(gate_of("app/storage"), Some("nsh_ui_set_app_storage"));
+        let gates = linked_gates_of(Some(&uses(&[("acme/ui", Some(&["Chip"]))])), &sets);
+        assert!(gates.contains(&"nsh_ui_set_app_charts".to_owned()));
+        assert!(!gates.contains(&"nsh_ui_set_app_storage".to_owned()));
+        assert!(!gates.iter().any(|g| g.contains("acme")), "{gates:?}");
+        // Everything: each crate's gate once, none of a served set's own.
+        let mut all = linked_gates_of(None, &sets);
+        all.retain(|g| g.starts_with("nsh_ui_set_"));
+        assert_eq!(all, ["nsh_ui_set_app_charts", "nsh_ui_set_app_storage"]);
     }
 
     #[test]

@@ -490,9 +490,11 @@ fn readable_sources(map: &str, dir: &Path) -> String {
     json.to_string()
 }
 
-/// The files `sets` ship, by their path among an app's assets.
+/// The files `sets`, their submodules and the sets they serve ship, by
+/// their path among an app's assets.
 fn set_files(sets: &[Registry]) -> Vec<(String, PathBuf)> {
-    sets.iter()
+    Registry::served_sets(sets)
+        .into_iter()
         .flat_map(Registry::asset_files)
         .map(|file| (file.path().to_owned(), PathBuf::from(file.source)))
         .collect()

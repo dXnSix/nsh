@@ -910,15 +910,17 @@ program that describes them, builds the hosts and runners with them, and does ev
   workspace is written: a crate listed twice (by any path), two packages of one name (Cargo takes `-` and `_` as
   one) or two crates whose `#[native_module("…")]` has the same specifier (read from the crate's `[lib] path` or
   `src/lib.rs`) fail with the two paths and what to change. `Registry::merged` refuses two sets registering
-  components or modules of the same name when an engine starts. Crates may depend on each other, or on crates not
-  listed (a shared crate of components), through plain Cargo path dependencies; only listed ones export to TS.
+  components or modules of the same name when an engine starts. A crate may serve a library's set besides its own
+  (`Registry::serve`, `docs/dev/rust-modules.md`). Crates may depend on each other, or on crates not listed (a
+  shared crate of components), through plain Cargo path dependencies; only listed ones export to TS.
 - A Cargo workspace in `<app>/.nsh/rust`, written on every command (files only when they change; the `cli` crate and
   `app.json` earlier versions wrote are removed), each member depending on every listed crate:
   - `describe` (nsh-core and the app's crates, nothing else): calls each crate's entry and prints one JSON document,
     `nsh_core::element::description::Description` (format `FORMAT`, the nsh-core version that wrote it, then per crate in
-    `"rust"`'s order its specifier, exports with their kinds, TypeScript declarations, re-exported runtime values and
-    types, the values nsh-js makes for it, the files it ships and the exports TS sees without a doc comment, which
-    `nsh` warns of as it writes `.nsh/types`);
+    `"rust"`'s order its sets, `Registry::served_sets`: its own, its submodules and the sets it serves, each once, each
+    with its specifier, `entry` (the index of the crate serving it), exports with their kinds, TypeScript
+    declarations, re-exported runtime values and types, the values nsh-js makes for it, the files it ships and the
+    exports TS sees without a doc comment, which `nsh` warns of as it writes `.nsh/types`);
   - `test` (`nsh-testing` without `bundle`, `nsh/base` and the app's sets, and a Rust app's root): the headless
     runner of `nsh test` (`nsh_testing::runner`);
   - the hosts and runners, passing the sets after `nsh/base`'s (`vec![nsh_base::registry(), set_app_charts(),
@@ -973,8 +975,9 @@ program that describes them, builds the hosts and runners with them, and does ev
 - Before a command on the app (`build`, `test`, `dev`, `run`, `package`, `publish`, `check`) `nsh` builds `describe`
   ("building the Rust crate …": Cargo decides whether the app's Rust code changed) and runs it when the program is
   new, keeping its output in `.nsh/rust/description.json` with the program's size and time (`RustApp::describe`). The
-  description must be in this `nsh`'s format and of its version, with one set per crate and a specifier each that is
-  neither one of nsh's modules (`nsh`, `nsh/...`, the runtime's registries, `nsh/base`) nor another crate's; a
+  description must be in this `nsh`'s format and of its version, with a set of each crate's own (the first of those
+  its `entry` names) and a specifier each that is neither one of nsh's modules (`nsh`, `nsh/...`, the runtime's
+  registries, `nsh/base` and its submodules) nor another set's; a
   program that panics (a component registered twice) fails the command with its output. From then on the command
   runs in the prebuilt `nsh` with `nsh/base` and those sets (`main.rs` `set_app_sets`): the bundler keeps their
   imports and hints at their components, bytecode links against their exports' names (`ModuleTable::compiling`,
