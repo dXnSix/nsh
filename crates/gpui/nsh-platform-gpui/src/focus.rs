@@ -800,10 +800,15 @@ fn still_stop(surface: &Surface, scope: &NshView, view: &NshView) -> (bool, Opti
 /// went took the focus from gets it back.
 pub(crate) fn end_batch(surface: &Rc<Surface>) {
     let held = focused(surface);
-    let scope = crate::navigation::focus_scope(surface);
+    // Each view in the scope of its own window: no window's input is
+    // entered while a batch is applied, and an app in a window of its own
+    // (`<Window>`, as `nsh test` opens it) would lose its focus to the
+    // main window's scope.
+    let scope_of = |view: &NshView| crate::navigation::focus_scope_of(surface, view);
+    let scope = crate::navigation::active_focus_scope(surface);
     if let Some(view) = held {
         {
-            let (stop, cover) = still_stop(surface, &scope, &view);
+            let (stop, cover) = still_stop(surface, &scope_of(&view), &view);
             if let Some(cover) = cover {
                 surface.focus.layers.borrow_mut().entered(cover, view.id());
             }
@@ -817,7 +822,7 @@ pub(crate) fn end_batch(surface: &Rc<Surface>) {
             |layer| surface.view(layer).is_none_or(|view| !view.attached()),
             |id| {
                 surface.view(id).is_some_and(|view| {
-                    still_stop(surface, &scope, &view).0 && shows_in_window(&view)
+                    still_stop(surface, &scope_of(&view), &view).0 && shows_in_window(&view)
                 })
             },
         );
@@ -833,7 +838,7 @@ pub(crate) fn end_batch(surface: &Rc<Surface>) {
     // The stop a `focus()` of the batch named.
     let asked = surface.focus.asked.borrow_mut().take();
     if let Some(view) = asked
-        && still_stop(surface, &scope, &view).0
+        && still_stop(surface, &scope_of(&view), &view).0
     {
         surface.window_focus_requested.set(true);
         focus_stop(surface, &view);
