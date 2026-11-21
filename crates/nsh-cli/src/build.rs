@@ -58,6 +58,9 @@ pub(crate) struct Built {
     /// The directories outside the app its `import.meta.glob` patterns
     /// search (`nsh_bundler::Bundle::glob_dirs`).
     pub(crate) glob_dirs: Vec<nsh_bundler::GlobDir>,
+    /// Every `import.meta.glob` pattern it searched, in the app or outside
+    /// it (`nsh_bundler::Bundle::glob_patterns`).
+    pub(crate) glob_patterns: Vec<nsh_bundler::GlobDir>,
     /// What the app declares it may reach (`nsh.json` `capabilities`).
     pub(crate) capabilities: Option<nsh_core::access::Capabilities>,
     /// The UI sets it imports, by specifier ([`imported_sets`]).
@@ -90,6 +93,7 @@ pub(crate) fn rust_root() -> Built {
         asset_root: None,
         watch_files: Vec::new(),
         glob_dirs: Vec::new(),
+        glob_patterns: Vec::new(),
         capabilities: None,
         ui_sets: Vec::new(),
         native_use: None,
@@ -301,6 +305,7 @@ fn compile_with(
         asset_root: Some(bundle.asset_root),
         watch_files: bundle.watch_files,
         glob_dirs: bundle.glob_dirs,
+        glob_patterns: bundle.glob_patterns,
         capabilities: bundle.capabilities,
         ui_sets: imported_sets(&bundle.natives),
         native_use: Some(bundle.native_use),
@@ -328,6 +333,7 @@ pub(crate) fn compile_hot(entry: &Path) -> Result<(Built, nsh_bundler::HotBundle
         asset_root: Some(hot.asset_root.clone()),
         watch_files: hot.watch_files.clone(),
         glob_dirs: hot.glob_dirs.clone(),
+        glob_patterns: hot.glob_patterns.clone(),
         capabilities: hot.capabilities.clone(),
         ui_sets: imported_sets(hot.natives()),
         native_use: None,

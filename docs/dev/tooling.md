@@ -171,6 +171,12 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
   are cleared by the next owner. All cooperating commands use the same cache directory. A listener
   outside this mechanism (including an older CLI) given by `--port` produces a bind error naming the port; `--port 0`
   asks the OS for a free port. The control files stay local to the machine.
+- A change rebuilds when it is to a module (`.ts`, `.tsx`, `.js`, `.jsx`) or to a `.json` file the app takes
+  (`dev::uses_json`): one the last good build read (an imported JSON module, the theme, its overrides, the
+  translations: `nsh_bundler::Bundle::watch_files`), the app's `nsh.json`, one in its `locales/` (the build reads every
+  translation there, `nsh_i18n::locale_files`), or one an `import.meta.glob` pattern of it matches
+  (`nsh_bundler::Bundle::glob_patterns`), a new file too. Other JSON files in the app's directory (data a
+  tool writes beside the code) rebuild nothing; before a good build, or after a failed one, every JSON file does.
 - Imported source directories and theme files (`nsh.json`'s `"theme"` and `"themeOverrides"`) outside the entry
   directory are watched too, using the last
   successful bundle's dependencies. The gallery and website demos share `examples/nsh-gallery-ui`; saving one of

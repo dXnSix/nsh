@@ -42,6 +42,12 @@ pub(crate) struct DevSession {
     /// `import.meta.glob` patterns search, with their patterns: a watcher
     /// of their own reports the files they match ([`glob_watcher`]).
     glob_dirs: Arc<Mutex<Vec<nsh_bundler::GlobDir>>>,
+    /// Every `import.meta.glob` pattern the last good build searched, in
+    /// the app or outside it: a JSON file one matches is one the app takes
+    /// ([`uses_json`]).
+    glob_patterns: std::cell::RefCell<Vec<nsh_bundler::GlobDir>>,
+    /// The last build failed: which files it would read is not known.
+    last_failed: Cell<bool>,
     /// Good builds so far: the first one is "built", the next "rebuilt".
     builds: Cell<u32>,
     /// A Rust app (`nsh.json` `"root"`): nothing to bundle, the hosts run
@@ -102,6 +108,8 @@ impl DevSession {
             hot: Default::default(),
             watch_files: Default::default(),
             glob_dirs: Default::default(),
+            glob_patterns: Default::default(),
+            last_failed: Cell::new(false),
             builds: Cell::new(0),
             rust_root,
         };
@@ -234,7 +242,7 @@ impl DevSession {
             {
                 return Err(crate::rust_app::Restart.into());
             }
-            if !is_source(&event, &self.src_dir) {
+            if !is_source(&event, &self.src_dir, &|path| self.takes_json(path)) {
                 continue;
             }
             // A Rust change saved with this one (a checkout, a formatter)
@@ -272,6 +280,19 @@ impl DevSession {
         Ok(())
     }
 
+    /// Whether the app takes the JSON file `path` ([`uses_json`]), as its
+    /// last good build says; every one, before a good build or after a
+    /// failed one.
+    fn takes_json(&self, path: &Path) -> bool {
+        uses_json(
+            path,
+            &self.src_dir,
+            &self.watch_files.borrow(),
+            &self.glob_patterns.borrow(),
+            self.builds.get() == 0 || self.last_failed.get(),
+        )
+    }
+
     /// Serves the assets `built` imports by name, whatever their type: the
     /// app's directory itself serves only its media files. It is the one
     /// the build named them from (an entry below its app names them from
@@ -300,6 +321,7 @@ impl DevSession {
                 Ok(built) => {
                     self.watch_files.replace(built.watch_files.clone());
                     *lock(&self.glob_dirs) = built.glob_dirs.clone();
+                    self.glob_patterns.replace(built.glob_patterns.clone());
                     self.serve_assets(&built);
                     let capabilities = built.capabilities_json();
                     let summary = self.summary(&built);
@@ -326,6 +348,7 @@ impl DevSession {
             Ok((built, hot)) => {
                 self.watch_files.replace(built.watch_files.clone());
                 *lock(&self.glob_dirs) = built.glob_dirs.clone();
+                self.glob_patterns.replace(built.glob_patterns.clone());
                 self.serve_assets(&built);
                 let summary = self.summary(&built);
                 // Other capabilities: the app starts again under them.
@@ -375,6 +398,7 @@ impl DevSession {
 
     /// `✓ built App.tsx (...)`, then `✓ rebuilt App.tsx (18ms), 2 devices`.
     fn published(&self, summary: String) {
+        self.last_failed.set(false);
         let entry = ui::path(&self.entry);
         let builds = self.builds.get();
         self.builds.set(builds + 1);
@@ -390,6 +414,7 @@ impl DevSession {
     }
 
     fn failed(&self, err: build::BuildError) {
+        self.last_failed.set(true);
         let plain = err.plain.clone();
         ui::report(&err.into_error(&self.entry));
         self.server.publish_error(plain);
@@ -657,16 +682,55 @@ fn watch_globs(
     }
 }
 
-fn is_source(event: &notify::Event, root: &Path) -> bool {
+/// Whether `event` changed what a build of the app in `root` takes: a module
+/// (`.ts`, `.tsx`, `.js`, `.jsx`), or a `.json` file the app takes
+/// (`takes_json`, [`uses_json`]), not in `.nsh/`, `node_modules/` or another
+/// checkout kept in the app. A JSON file the app keeps beside its code
+/// without importing it (data a tool writes there) starts no build.
+fn is_source(event: &notify::Event, root: &Path, takes_json: &dyn Fn(&Path) -> bool) -> bool {
     event.paths.iter().any(|p| {
         !p.components()
             .any(|c| c.as_os_str() == ".nsh" || c.as_os_str() == "node_modules")
             && !in_nested_checkout(root, p)
-            && matches!(
-                p.extension().and_then(|e| e.to_str()),
-                Some("ts" | "tsx" | "js" | "jsx" | "json")
-            )
+            && match p.extension().and_then(|e| e.to_str()) {
+                Some("ts" | "tsx" | "js" | "jsx") => true,
+                Some("json") => takes_json(p),
+                _ => false,
+            }
     })
+}
+
+/// Whether the app in `app` takes the JSON file `path`: the last good build
+/// read it (`read`: an imported JSON module, the theme, its overrides, the
+/// translations), it is the app's `nsh.json`, it is in the app's translations
+/// folder (`locales/`, whose files the build reads all of: a new one too), or
+/// one of the build's `import.meta.glob` patterns matches it (`globs`), a
+/// file new too.
+/// `unknown`: there is no good build to tell (none yet, or the last
+/// failed), and every one is taken.
+fn uses_json(
+    path: &Path,
+    app: &Path,
+    read: &[PathBuf],
+    globs: &[nsh_bundler::GlobDir],
+    unknown: bool,
+) -> bool {
+    if unknown {
+        return true;
+    }
+    // Events name a file as the system does; the build, as it resolved it.
+    let canonical = dunce::canonicalize(path).ok();
+    let named = |file: &Path| file == path || canonical.as_deref() == Some(file);
+    let locales = app.join(nsh_i18n::LOCALES_DIR);
+    named(&app.join("nsh.json"))
+        || path.starts_with(&locales)
+        || canonical
+            .as_deref()
+            .is_some_and(|c| c.starts_with(&locales))
+        || read.iter().any(|file| named(file))
+        || globs
+            .iter()
+            .any(|glob| glob.matches(path) || canonical.as_deref().is_some_and(|c| glob.matches(c)))
 }
 
 /// Whether `path` is in another Git checkout kept below `root` (a
@@ -979,13 +1043,112 @@ mod tests {
         let saved = |path: std::path::PathBuf| {
             Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(path)
         };
-        assert!(super::is_source(&saved(dir.join("App.tsx")), &dir));
-        assert!(super::is_source(&saved(dir.join("src/view.tsx")), &dir));
-        assert!(!super::is_source(&saved(nested.join("App.tsx")), &dir));
-        assert!(!super::is_source(&saved(nested.join("src/view.tsx")), &dir));
+        let any_json = |_: &std::path::Path| true;
+        assert!(super::is_source(
+            &saved(dir.join("App.tsx")),
+            &dir,
+            &any_json
+        ));
+        assert!(super::is_source(
+            &saved(dir.join("src/view.tsx")),
+            &dir,
+            &any_json
+        ));
+        assert!(!super::is_source(
+            &saved(nested.join("App.tsx")),
+            &dir,
+            &any_json
+        ));
+        assert!(!super::is_source(
+            &saved(nested.join("src/view.tsx")),
+            &dir,
+            &any_json
+        ));
         // The app's own `.git` is not a checkout below it.
         std::fs::create_dir_all(dir.join(".git")).unwrap();
-        assert!(super::is_source(&saved(dir.join("App.tsx")), &dir));
+        assert!(super::is_source(
+            &saved(dir.join("App.tsx")),
+            &dir,
+            &any_json
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_json_file_rebuilds_only_when_the_app_takes_it() {
+        use notify::{
+            Event, EventKind,
+            event::{DataChange, ModifyKind},
+        };
+        use nsh_bundler::GlobDir;
+
+        let made = std::env::temp_dir().join(format!("nsh-json-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&made);
+        for dir in ["data", "content/posts", "design/pages", "tools", "locales"] {
+            std::fs::create_dir_all(made.join(dir)).unwrap();
+        }
+        let dir = dunce::canonicalize(&made).unwrap();
+        for file in [
+            "nsh.json",
+            "App.tsx",
+            "data/strings.json",
+            "content/posts/one.json",
+            "design/pages/a.json",
+            "tools/nsh.json",
+        ] {
+            std::fs::write(dir.join(file), "{}").unwrap();
+        }
+        let saved = |path: std::path::PathBuf| {
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(path)
+        };
+        // The last good build read the app and its strings, and searched
+        // `content/` with a pattern.
+        let read = [dir.join("App.tsx"), dir.join("data/strings.json")];
+        let globs = [GlobDir::new(dir.join("content"), "**/*.json")];
+        let takes = |path: &std::path::Path| super::uses_json(path, &dir, &read, &globs, false);
+        let rebuilds = |file: &str| super::is_source(&saved(dir.join(file)), &dir, &takes);
+        // A module, as before; the app's nsh.json, a JSON module it imports,
+        // and one its pattern matches, a new file too.
+        assert!(rebuilds("App.tsx"));
+        assert!(rebuilds("src/New.tsx"));
+        assert!(rebuilds("nsh.json"));
+        assert!(rebuilds("data/strings.json"));
+        assert!(rebuilds("content/posts/one.json"));
+        assert!(rebuilds("content/posts/two.json"));
+        // A translation added: the build reads every file of `locales/`.
+        assert!(rebuilds("locales/new.json"));
+        assert!(rebuilds("locales/fr/app.json"));
+        // Data a tool keeps in the app, which nothing imports, and another
+        // folder's nsh.json: nothing to build.
+        assert!(!rebuilds("design/pages/a.json"));
+        assert!(!rebuilds("design/pages/b.json"));
+        assert!(!rebuilds("tools/nsh.json"));
+        // Named as the system names it (a link to the app), it is the same.
+        #[cfg(unix)]
+        {
+            let link = std::env::temp_dir().join(format!("nsh-json-link-{}", std::process::id()));
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&dir, &link).unwrap();
+            assert!(super::is_source(
+                &saved(link.join("data/strings.json")),
+                &dir,
+                &takes
+            ));
+            assert!(!super::is_source(
+                &saved(link.join("design/pages/a.json")),
+                &dir,
+                &takes
+            ));
+            std::fs::remove_file(&link).unwrap();
+        }
+        // No good build to tell (none yet, or the last failed): every JSON
+        // file builds.
+        let unknown = |path: &std::path::Path| super::uses_json(path, &dir, &read, &globs, true);
+        assert!(super::is_source(
+            &saved(dir.join("design/pages/a.json")),
+            &dir,
+            &unknown
+        ));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
