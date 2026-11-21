@@ -150,6 +150,11 @@ pub struct Bundle {
     /// patterns search, sorted: development servers watch them recursively,
     /// so that a file added there, in a new directory too, is built.
     pub glob_dirs: Vec<crate::GlobDir>,
+    /// Every `import.meta.glob` pattern the build searched, in the app or
+    /// outside it, with its directory, sorted: a file one matches
+    /// ([`crate::GlobDir::matches`]) is one the build takes, so a
+    /// development server rebuilds when one comes, changes or goes.
+    pub glob_patterns: Vec<crate::GlobDir>,
     /// The native modules the app imports (`nsh`, `nsh/mobile`,
     /// `nsh/base`, an app's own UI set), sorted: what a host must
     /// serve to run it.
@@ -929,6 +934,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         native_use.merge(&uses);
         chunk_native_use.insert(chunk.id.clone(), uses);
     }
+    let (glob_dirs, glob_patterns) = searched_globs(&globs, &asset_root);
     Ok(Bundle {
         code,
         source_map,
@@ -937,7 +943,8 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         assets,
         asset_root,
         watch_files: watch_files(&bundler, &cwd_root),
-        glob_dirs: glob_dirs(&globs),
+        glob_dirs,
+        glob_patterns,
         natives: natives.into_iter().collect(),
         native_use,
         entry_native_use,
@@ -990,13 +997,22 @@ fn watch_files(bundler: &rolldown::Bundler, dir: &std::path::Path) -> Vec<PathBu
     files
 }
 
-/// The directories outside the app the build's `import.meta.glob` patterns
-/// searched ([`Bundle::glob_dirs`]), each with its pattern once, sorted.
-fn glob_dirs(globs: &Mutex<Vec<crate::GlobDir>>) -> Vec<crate::GlobDir> {
-    let mut dirs = std::mem::take(&mut *globs.lock().expect("globs lock"));
-    dirs.sort();
-    dirs.dedup();
-    dirs
+/// The directories the build's `import.meta.glob` patterns searched, each
+/// with its pattern once, sorted: those outside the app's directory `app`
+/// ([`Bundle::glob_dirs`]), and all of them ([`Bundle::glob_patterns`]).
+fn searched_globs(
+    globs: &Mutex<Vec<crate::GlobDir>>,
+    app: &std::path::Path,
+) -> (Vec<crate::GlobDir>, Vec<crate::GlobDir>) {
+    let mut all = std::mem::take(&mut *globs.lock().expect("globs lock"));
+    all.sort();
+    all.dedup();
+    let outside = all
+        .iter()
+        .filter(|glob| !glob.dir.starts_with(app))
+        .cloned()
+        .collect();
+    (outside, all)
 }
 
 /// The warning for an app that calls the host's functions (`host.call` /
@@ -1075,6 +1091,8 @@ pub struct HotBundle {
     pub watch_files: Vec<PathBuf>,
     /// As in [`Bundle::glob_dirs`].
     pub glob_dirs: Vec<crate::GlobDir>,
+    /// As in [`Bundle::glob_patterns`].
+    pub glob_patterns: Vec<crate::GlobDir>,
     /// As in [`Bundle::capabilities`].
     pub capabilities: Option<nsh_core::access::Capabilities>,
     /// As in [`Bundle::url_schemes`].
@@ -1355,6 +1373,7 @@ pub async fn bundle_hot_in_async(
     ) {
         log::warn!(target: "nsh::build", "{warning}");
     }
+    let (glob_dirs, glob_patterns) = searched_globs(&globs, &app);
     Ok(HotBundle {
         modules,
         natives: natives.into_iter().collect(),
@@ -1365,7 +1384,8 @@ pub async fn bundle_hot_in_async(
         assets,
         asset_root: app,
         watch_files: watch_files(&bundler, &cwd),
-        glob_dirs: glob_dirs(&globs),
+        glob_dirs,
+        glob_patterns,
         capabilities,
         url_schemes,
         elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
