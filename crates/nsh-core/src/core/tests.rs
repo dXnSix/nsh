@@ -52712,6 +52712,8 @@ mod download_decisions {
     }
 }
 
+#[path = "each_child_tests.rs"]
+mod children_each_bare_child;
 #[path = "reconciliation_tests.rs"]
 mod reconciliation_cleanup;
 

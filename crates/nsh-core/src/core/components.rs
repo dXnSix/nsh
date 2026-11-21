@@ -4177,7 +4177,12 @@ impl<M: TextEngine> Core<M> {
                     old[j] = None;
                 }
                 if inst.js_children.contains(&id) {
-                    out.push(Expanded::js(id, Part::JsChild));
+                    // A `children_each` row placing its child as it is
+                    // keeps its row's key: a run that keeps the row finds
+                    // it by that key (`NewChild::Kept`).
+                    let mut e = Expanded::js(id, Part::JsChild);
+                    e.key = el.key;
+                    out.push(e);
                 }
             }
             // Expanded above.
