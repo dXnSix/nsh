@@ -509,7 +509,20 @@ impl<M: TextEngine> Core<M> {
             return;
         }
         match patch {
-            Patch::Region { region, elements } => self.reconcile_region(region, elements),
+            Patch::Region { region, elements } => {
+                // A region of a view's root: what the host holds changed,
+                // which decides whether a slot looks through it.
+                let root = self
+                    .components
+                    .regions
+                    .get(&region)
+                    .filter(|state| state.parent == state.host)
+                    .map(|state| state.host);
+                self.reconcile_region(region, elements);
+                if let Some(host) = root {
+                    self.retarget_through(host);
+                }
+            }
             Patch::Rows { list, count, keys } => self.set_list_rows(list, count, keys),
             Patch::NestedAttrs { host, attrs } => {
                 if self.is_host(host) {

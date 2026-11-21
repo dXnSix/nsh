@@ -20,6 +20,7 @@ pub(crate) fn registry() -> Registry {
         .register::<Card>()
         .register::<Disclosure>()
         .register::<Passage>()
+        .register::<Marker>()
         .register::<Field>()
         .register::<Group>()
         .register::<ListView>()
@@ -202,6 +203,35 @@ pub(crate) struct PassageProps {
 #[component]
 pub(crate) fn Passage(props: PassageProps) -> impl IntoElement {
     view().child(props.children)
+}
+
+// --- Marker: marks a place, hidden while empty -----------------------------
+
+/// The app's content, and how the place looks while it is empty.
+#[derive(Debug, Clone, PartialEq, Props)]
+pub(crate) struct MarkerProps {
+    /// While empty, a dashed box with its name, instead of nothing.
+    #[prop(default)]
+    pub(crate) outlined: Prop<bool>,
+    /// The content.
+    pub(crate) children: Prop<Children>,
+}
+
+/// Its children placed one by one in its root ([`MarkerProps`]), which has
+/// styles of its own and nothing else: hidden while empty, so that it
+/// takes no space and no gap, or outlined with its name. A slot's props go
+/// through it to the app's one element in it.
+#[component]
+pub(crate) fn Marker(props: MarkerProps) -> impl IntoElement {
+    let empty = move || props.children.get().is_empty();
+    view()
+        .style_when(move || empty() && !props.outlined.get(), |s| s.hidden())
+        .style_when(props.outlined, |s| s.p_2().border_1().border_dashed())
+        .child(when(
+            move || empty() && props.outlined.get(),
+            || text("Marker"),
+        ))
+        .children_each(props.children, |child, _| child)
 }
 
 // --- Field: a slot placed as it is, in a row -------------------------------

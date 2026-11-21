@@ -143,3 +143,65 @@ fn a_slots_props_go_to_the_apps_element_in_a_wrapper_that_only_places_it() {
         Some(true)
     );
 }
+
+const MARKED: &str = r##"import { mount, signal, Text, View } from "nsh";
+import { Disclosure, Marker } from "test/ui";
+
+function App() {
+  const presses = signal(0);
+  return (
+    <View>
+      <Disclosure
+        trigger={
+          <Marker testID="marker" outlined>
+            <View
+              testID="toggle"
+              class="w-[40px] h-[20px]"
+              onPress={() => presses.set(presses() + 1)}
+            >
+              <Text>Toggle</Text>
+            </View>
+          </Marker>
+        }
+      />
+      <Text>{`Presses: ${presses()}`}</Text>
+    </View>
+  );
+}
+
+mount(App);
+"##;
+
+/// The same through a marker: a component with styles of its own (hidden
+/// or outlined while empty) that places its children one by one.
+#[test]
+fn a_slots_props_go_to_the_apps_element_in_a_marker() {
+    let (engine, rx) = start_with(MARKED, Environment::default(), None, None);
+    let mut mounted = Mounted::default();
+    mounted.until(&rx, |m| m.shows("Presses: 0") && m.is_button("toggle"));
+    let toggle = mounted.view("toggle").expect("the app's element");
+    let marker = mounted.view("marker").expect("the marker's host");
+    assert!(!mounted.shows("Marker"), "its name only while empty");
+
+    let props = mounted.props(toggle);
+    assert_eq!(props.accessibility.role, AccessibilityRole::Button);
+    assert_eq!(props.focusable, Some(true));
+    assert_eq!(props.accessibility.state.expanded, Some(false));
+    assert!(mounted.hears_press(toggle));
+    let props = mounted.props(marker);
+    assert_eq!(props.accessibility.role, AccessibilityRole::None);
+    assert_eq!(props.focusable, None);
+    assert!(!mounted.hears_press(marker));
+
+    engine
+        .control()
+        .dispatch_event(toggle, EventKind::Press, EventPayload::None);
+    mounted.until(&rx, |m| {
+        m.shows("Presses: 1") && m.props(toggle).accessibility.state.expanded == Some(true)
+    });
+    assert!(mounted.shows("Presses: 1"));
+    assert_eq!(
+        mounted.props(toggle).accessibility.state.expanded,
+        Some(true)
+    );
+}

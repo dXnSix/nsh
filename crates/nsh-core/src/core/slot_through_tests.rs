@@ -26,12 +26,6 @@ fn Wrap(props: WrapProps) -> impl IntoElement {
     view().child(props.children)
 }
 
-/// Places its children in a root it styles.
-#[component]
-fn Padded(props: WrapProps) -> impl IntoElement {
-    view().p_2().child(props.children)
-}
-
 /// Places its children in a root that listens.
 #[component]
 fn Hearing(props: WrapProps) -> impl IntoElement {
@@ -77,7 +71,6 @@ fn mount() -> Core<FakeEngine> {
     registry
         .register::<Pressable>()
         .register::<Wrap>()
-        .register::<Padded>()
         .register::<Hearing>()
         .register::<Labelled>()
         .register::<Boxed>();
@@ -351,9 +344,10 @@ fn the_apps_own_props_on_the_element_combine_and_come_back() {
     assert_target(&c, 6, &[4]);
 }
 
-/// A component with anything of its own is the target itself, as before:
-/// a style, a listener or a node of its own on or in its root, or its
-/// children placed deeper than its root.
+/// A component with anything of its own but styles is the target itself,
+/// as before: a listener or a node of its own on or in its root, or its
+/// children placed deeper than its root. (A root with styles alone is
+/// looked through: `markers`.)
 #[test]
 fn a_component_with_anything_of_its_own_stays_the_target() {
     fn check<C: Component>() {
@@ -363,7 +357,6 @@ fn a_component_with_anything_of_its_own_stays_the_target() {
         assert_target(&c, 6, &[8, 4]);
         assert_pressed(&mut c, 6, 1);
     }
-    check::<Padded>();
     check::<Hearing>();
     check::<Labelled>();
     check::<Boxed>();
@@ -558,3 +551,6 @@ fn a_rust_apps_element_in_a_wrapper_is_the_target() {
     assert!(c.component_event(element, EventKind::Press, &EventPayload::None));
     assert_eq!(settle(&mut c).as_deref(), Some("pressed 1"));
 }
+
+#[path = "slot_marker_tests.rs"]
+mod markers;
