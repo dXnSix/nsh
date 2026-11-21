@@ -137,6 +137,14 @@ impl<M: TextEngine> Core<M> {
                 Request::Pick(page, skip, answer) => {
                     answer.borrow_mut().deliver(self.dev_pick(page, skip))
                 }
+                Request::Window(id, answer) => {
+                    let root = self
+                        .window_ids
+                        .get(&id)
+                        .map(|(node, _)| *node)
+                        .filter(|&node| self.key(node).is_ok());
+                    answer.borrow_mut().deliver(root)
+                }
                 script => self.queue_inspect(script),
             }
         }

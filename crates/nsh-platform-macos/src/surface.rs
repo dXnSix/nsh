@@ -285,6 +285,10 @@ pub(crate) struct Surface {
     /// The model of a test session's app (`nsh test --target`).
     #[cfg(feature = "dev")]
     test_model: RefCell<Option<std::sync::Arc<nsh_testing::agent::Model>>>,
+    /// How many batches it applied: what a design tool's window settles
+    /// on ([`crate::design`]).
+    #[cfg(feature = "dev")]
+    applied: Cell<u64>,
     /// The display link, once something wanted frames, and the root it
     /// was made from (it is made again from another window's:
     /// [`Surface::follow_windows`]).
@@ -426,6 +430,8 @@ impl Surface {
             cosmetic_frames: Cell::new(0),
             #[cfg(feature = "dev")]
             test_model: RefCell::default(),
+            #[cfg(feature = "dev")]
+            applied: Cell::new(0),
             link: RefCell::new(None),
             link_rate: Cell::new(None),
             link_screen_max: Cell::new(0.0),
@@ -866,8 +872,11 @@ impl Surface {
         crate::access::batch_applied();
         crate::window::batch_applied(self);
         #[cfg(feature = "dev")]
-        if let Some(model) = &*self.test_model.borrow() {
-            model.apply(batch);
+        {
+            self.applied.set(self.applied.get() + 1);
+            if let Some(model) = &*self.test_model.borrow() {
+                model.apply(batch);
+            }
         }
     }
 
@@ -974,6 +983,35 @@ impl Surface {
         self.anim.borrow().finishing()
             || self.frame_callbacks.borrow().len() > self.cosmetic_frames.get()
             || !self.queued.borrow().is_empty()
+    }
+
+    /// How many batches it applied so far.
+    #[cfg(feature = "dev")]
+    pub(crate) fn applied(&self) -> u64 {
+        self.applied.get()
+    }
+
+    /// Whether batches wait for a frame ([`Surface::apply_queued`]).
+    #[cfg(feature = "dev")]
+    pub(crate) fn batches_waiting(&self) -> bool {
+        !self.queued.borrow().is_empty()
+    }
+
+    /// The surface whose views `view` shows: its root is `view` or under
+    /// it (a window's content).
+    #[cfg(feature = "dev")]
+    pub(crate) fn showing(view: &objc2_app_kit::NSView) -> Option<Rc<Surface>> {
+        SURFACES.with(|s| {
+            s.borrow()
+                .values()
+                .filter_map(Weak::upgrade)
+                .find(|surface| {
+                    let root = surface.root.ns();
+                    std::ptr::eq(root, view)
+                        || root.isDescendantOf(view)
+                        || crate::window::shows(surface, view)
+                })
+        })
     }
 
     /// Keeps the model `nsh test --target` steps see of the app

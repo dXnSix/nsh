@@ -191,6 +191,17 @@ impl Animator {
         self.graph.is_finishing()
     }
 
+    /// A copy whose animations that loop with no end stand at the start of
+    /// their run at `now` ([`Graph::at_loop_starts`]): what a still picture
+    /// of the views writes, the animator itself left as it is.
+    pub fn at_loop_starts(&self, now: f64) -> Animator {
+        Animator {
+            graph: self.graph.at_loop_starts(now),
+            finished: Vec::new(),
+            ..self.clone()
+        }
+    }
+
     /// A scroll view moved to `offset`: feeds its scroll value. False if no
     /// value is bound to it.
     pub fn scrolled(&mut self, id: u32, offset: Point<Points>) -> bool {

@@ -1359,6 +1359,18 @@ fn close_request(surface: &Rc<Surface>, id: NodeId, window: &NSWindow) {
     dismiss(surface, id, WindowCloseCause::ClosePress);
 }
 
+/// Whether one of `surface`'s own windows shows its root in `view` (its
+/// content).
+#[cfg(feature = "dev")]
+pub(crate) fn shows(surface: &Surface, view: &NSView) -> bool {
+    surface.windows.try_borrow().is_ok_and(|windows| {
+        windows.values().any(|w| {
+            let root = w.view.ns();
+            std::ptr::eq(root, view) || root.isDescendantOf(view)
+        })
+    })
+}
+
 // --- Opening ------------------------------------------------------------------------------
 
 /// Shows dialog root `view` in a new window.

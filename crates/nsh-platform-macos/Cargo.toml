@@ -106,3 +106,14 @@ harness = false
 [[test]]
 name = "draw_on_show"
 harness = false
+
+# A design tool's pictures, drawn in process (feature `dev`).
+[[test]]
+name = "design_pictures"
+harness = false
+required-features = ["dev"]
+
+[[test]]
+name = "design_picture_shadows"
+harness = false
+required-features = ["dev"]

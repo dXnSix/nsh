@@ -44,6 +44,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRange, NSRect, NSSize, NSString};
 use rustc_hash::FxHashMap;
 
+pub use crate::picture::Raw;
 use crate::{app::AppView, image::AssetBase};
 
 /// The client of the most recent session: logs go there.
@@ -851,6 +852,28 @@ fn hide_error(ui: &RefCell<DevUi>) {
     if let Some(error) = ui.borrow_mut().error.take() {
         error.removeFromSuperview();
     }
+}
+
+/// A picture of `content` (a window's content view) as a design tool's
+/// `design.picture` draws it, in process ([`crate::picture`]): at `scale`
+/// pixels a point, all of it or `rect` (its points from its top left), with
+/// the outer box shadows drawn and endless animations at their first frame.
+/// For tests of the pictures against what the window server composites
+/// ([`composited`]).
+#[doc(hidden)]
+pub fn picture(content: &NSView, scale: f64, rect: Option<NSRect>) -> Result<Raw, String> {
+    let surface = crate::surface::Surface::showing(content);
+    crate::picture::draw(content, scale, rect, surface.as_ref())
+        .map_err(|(code, message)| format!("{code}: {message}"))
+}
+
+/// `window`'s content as the window server composites it, at the display's
+/// backing scale, as sRGB pixels ([`crate::picture::Raw`]): the window must
+/// be on a screen (it may be below every other window). Needs no Screen
+/// Recording permission: the window is the app's own.
+#[doc(hidden)]
+pub fn composited(window: &objc2_app_kit::NSWindow) -> Result<Raw, String> {
+    crate::synth::composited_image(window).map(|image| crate::picture::rgba(&image))
 }
 
 #[cfg(test)]

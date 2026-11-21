@@ -490,6 +490,18 @@ const IMAGE_BEST_RESOLUTION: u32 = 1 << 3;
 /// Recording permission; the picture is of the window's own surface, so
 /// windows over it do not matter.
 fn composited(window: &NSWindow) -> Result<Vec<u8>, String> {
+    let image = composited_image(window)?;
+    let rep = objc2_app_kit::NSBitmapImageRep::initWithCGImage(
+        <objc2_app_kit::NSBitmapImageRep as objc2::AnyThread>::alloc(),
+        &image,
+    );
+    png(&rep)
+}
+
+/// [`composited`]'s picture, as the window server gives it.
+pub(crate) fn composited_image(
+    window: &NSWindow,
+) -> Result<objc2_core_foundation::CFRetained<objc2_core_graphics::CGImage>, String> {
     use objc2_app_kit::NSScreen;
     use objc2_core_foundation::{CFArray, CFRetained, CGPoint, CGRect, CGSize};
 
@@ -553,11 +565,7 @@ fn composited(window: &NSWindow) -> Result<Vec<u8>, String> {
         // A locked screen, or a window the window server has no surface of.
         return Err("the window server's picture is blank".into());
     }
-    let rep = objc2_app_kit::NSBitmapImageRep::initWithCGImage(
-        <objc2_app_kit::NSBitmapImageRep as objc2::AnyThread>::alloc(),
-        &image,
-    );
-    png(&rep)
+    Ok(image)
 }
 
 /// The numbers of `window`, its sheets and its visible child windows,

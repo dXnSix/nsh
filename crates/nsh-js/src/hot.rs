@@ -84,6 +84,10 @@ struct Inner {
     forced: bool,
     /// Components to render again once the update ran.
     stale: Vec<String>,
+    /// Module id -> its hot key (`src/Card.tsx`, as its stamps and
+    /// components name it), learned as it runs: what a design tool is told
+    /// an update ran again ([`nsh_core::runtime::design::hot_updated`]).
+    keys: HashMap<String, String>,
 }
 
 /// A `mount` call.
@@ -120,6 +124,17 @@ impl Hot {
     /// Frees every JS value it holds (before the context goes).
     pub(crate) fn free_all(&self) {
         drop(std::mem::take(&mut *self.0.borrow_mut()));
+    }
+}
+
+/// The module running now has hot key `key`: its stamps (`anchor`) and
+/// components name it so.
+pub(crate) fn learn_key(cx: Ctx, key: &str) {
+    if let Ok(mut h) = hot(cx).0.try_borrow_mut()
+        && let Some(id) = h.current.clone()
+        && h.keys.get(&id).is_none_or(|k| k != key)
+    {
+        h.keys.insert(id, key.to_owned());
     }
 }
 
@@ -311,13 +326,21 @@ native! {
             return Ok(V::bool(false));
         };
         let mut result = Ok(());
+        let mut ran = 0;
         for id in &order {
             with(cx, |h| h.forced = !defined.contains(id));
             result = run(cx, id);
+            ran += 1;
             if result.is_err() {
                 break;
             }
         }
+        // A design tool draws again what the modules that ran show, by the
+        // keys their stamps have (a module without JSX has none: what shows
+        // it is in an importer that ran too).
+        let keys: BTreeSet<String> =
+            with(cx, |h| order[..ran].iter().filter_map(|id| h.keys.get(id).cloned()).collect());
+        nsh_core::runtime::design::hot_updated(&keys.into_iter().collect::<Vec<_>>());
         let stale = with(cx, |h| {
             h.forced = false;
             let stale = std::mem::take(&mut h.stale);
@@ -602,6 +625,7 @@ native! {
         );
         let sig = js::to_string(cx, args.get(3))?;
         let fun = V::dup(cx, args.get(2));
+        learn_key(cx, &js::to_string(cx, args.get(0))?);
         let existing = with(cx, |h| {
             if let Some(m) = h.current.clone().and_then(|id| h.modules.get_mut(&id)) {
                 m.components += 1;

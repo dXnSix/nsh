@@ -1547,6 +1547,19 @@ pub fn dev_pick(
     answer
 }
 
+/// The root node of the app's window opened as `id` (`Window.open`'s
+/// `id`) as the next commit has it; `None` when no such window is open
+/// (dev tools, feature `inspect`). To await in a task.
+#[cfg(feature = "inspect")]
+pub fn dev_window(id: impl Into<String>) -> Answer<Option<crate::NodeId>> {
+    let (answer, slot) = Answer::new();
+    act(Action::Inspect(crate::inspect::Request::Window(
+        id.into(),
+        slot,
+    )));
+    answer
+}
+
 /// Sets the app's address (TS: `UrlScheme.setUrl`): on the web it replaces
 /// the current history entry's; the native platforms keep it for
 /// [`app_url`] ([`crate::url_scheme`]). An address longer than

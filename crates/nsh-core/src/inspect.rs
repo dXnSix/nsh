@@ -355,6 +355,9 @@ pub(crate) enum Request {
     Instances(NodeId, crate::element::AnswerSlot<Vec<DevInstance>>),
     Props(u32, crate::element::AnswerSlot<Vec<(String, DevProp)>>),
     HostProps(NodeId, crate::element::AnswerSlot<Vec<(String, DevProp)>>),
+    /// The root node of the app's window opened as `id` (`Window.open`),
+    /// while it is open.
+    Window(String, crate::element::AnswerSlot<Option<NodeId>>),
 }
 
 impl Request {
