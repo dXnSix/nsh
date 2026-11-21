@@ -21,13 +21,16 @@
 //! takes them, as the innermost press target.
 //!
 //! A component that only places its children is no target: its view's
-//! root is a view with nothing of its own, holding the place of the
-//! children and nothing else ([`Core::places_children_only`]), so it
-//! draws and hears nothing. Holding exactly one element of the app's, it
+//! root is a view whose own parts are only styles (static or bound: it
+//! may hide itself while empty), holding the place of the children and
+//! nothing else, or regions (`children_each`'s, content shown only while
+//! it is empty) ([`Core::places_children_only`]), so it hears nothing.
+//! Holding exactly one element of the app's, and nothing beside it, it
 //! is looked through and that element is the target, as deep as such
 //! components nest ([`Core::placed_through`]); the target follows its
 //! content as it follows the holder's ([`Core::retarget_through`]). With
-//! no child or several, it is the target, as any host.
+//! no child, several, or anything shown beside the one, it is the target,
+//! as any host.
 //!
 //! On the app's element the two sides combine ([`merged`]): what the
 //! component sets wins and the app's props fill in the rest, field by
@@ -297,13 +300,14 @@ impl<M: TextEngine> Core<M> {
             && !self.is_render_holder(id)
     }
 
-    /// The children of component host `host` changed, or its view was
-    /// made: when its component only places its children and a slot's
-    /// holder holds it as its one element (through other such components),
-    /// the slot's target follows ([`Self::retarget_slot`]). Nothing for
-    /// any other host.
+    /// The children of component host `host` changed, its view was made,
+    /// or a region of its view's root changed: when a slot's holder holds
+    /// it as its one element (directly, or through components that only
+    /// place their children), the slot's target follows
+    /// ([`Self::retarget_slot`]), whether `host` can be looked through now
+    /// or no longer can (its view made again with something of its own).
     pub(super) fn retarget_through(&mut self, host: NodeId) {
-        if self.components.slot_targets.is_empty() || !self.places_children_only(host) {
+        if self.components.slot_targets.is_empty() {
             return;
         }
         let mut at = host;
@@ -401,7 +405,7 @@ impl<M: TextEngine> Core<M> {
             .map(|key| self.nodes[key as usize].parent)
             .filter(|&parent| parent != super::NO_KEY)
             .map(|parent| self.nodes[parent as usize].id)
-            .filter(|&parent| parent != holder && self.places_children_only(parent))
+            .filter(|&parent| parent != holder && self.placed_through(parent) == Some(id))
             .unwrap_or(holder)
     }
 

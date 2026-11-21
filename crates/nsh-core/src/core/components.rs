@@ -215,6 +215,8 @@ pub(super) struct Instance {
     pub(super) root_insets_applied: (Option<crate::EdgeInsets>, Option<crate::EdgeInsets>),
     /// The test id its root's node has (its own, or given it).
     pub(super) root_test_id_applied: Option<Arc<str>>,
+    /// Its view's root binds props (not only styles).
+    root_binds_attrs: bool,
 }
 
 /// The test id among `attrs`' props.
@@ -344,6 +346,7 @@ impl Instance {
             given_changed: false,
             root_insets_applied: (None, None),
             root_test_id_applied: None,
+            root_binds_attrs: false,
         }
     }
 }
@@ -2626,8 +2629,8 @@ impl<M: TextEngine> Core<M> {
             inst.dirty = false;
             let failed = self.render(host, &mut inst);
             self.components.instances.insert(host, inst);
-            // Its view only places its children: a slot it is the one
-            // element of goes through it now.
+            // A slot it is the one element of goes through it now, or no
+            // longer does.
             self.retarget_through(host);
             if let Some(message) = failed {
                 self.component_failed(host, message);
@@ -3151,6 +3154,7 @@ impl<M: TextEngine> Core<M> {
             el.text = None;
             el.children.insert(0, first);
         }
+        inst.root_binds_attrs = !el.bound_attrs.is_empty();
         // Bound parts are bound first: what they read now is applied with
         // the static parts.
         let bound = super::views::Bound::take(&mut el).map(|bound| {
@@ -3319,10 +3323,14 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Whether the view of the component on host `id` only places its
-    /// children: its root is a view with nothing of its own (no style,
-    /// class, prop, ref, listener, responder, text or binding), and all it
-    /// holds is the place of the children. Such a host draws and hears
-    /// nothing its view decides; false until its view is made.
+    /// children, so that it can be looked through while it holds one
+    /// element ([`Self::placed_through`]): its root is a view whose own
+    /// parts are only styles and classes, static or bound (`hidden`,
+    /// `invisible` among them), with no prop, ref, listener, responder or
+    /// text, and all it holds is the place of the children
+    /// (`.child(children)`) or regions (`children_each`'s, content shown
+    /// while some condition holds), whose nodes [`Self::placed_through`]
+    /// checks as they are. False until its view is made.
     pub(super) fn places_children_only(&self, id: NodeId) -> bool {
         let Some(inst) = self.components.instances.get(&id) else {
             return false;
@@ -3336,23 +3344,36 @@ impl<M: TextEngine> Core<M> {
             && root.part == Part::Node
             && root.tag == Tag::View
             && root.text.is_none()
-            && root.attrs == Attrs::default()
-            && root.style.is_empty()
+            && !inst.root_binds_attrs
+            && (root.attrs == Attrs::default()
+                || root.attrs.class.is_some() && {
+                    let mut own = root.attrs.clone();
+                    own.class = None;
+                    own == Attrs::default()
+                })
             && root.events == EventMask::default()
-            && !inst.bound.contains_key(&id)
-            && matches!(&root.children[..], [children] if children.part == Part::Children)
+            && !root.children.is_empty()
+            && root
+                .children
+                .iter()
+                .all(|e| matches!(e.part, Part::Children | Part::Region(_)))
     }
 
     /// The app's one element in host `id`, when its component only places
-    /// its children ([`Self::places_children_only`]) and the app gave it
-    /// exactly one: what a slot's props go to in its place
-    /// ([`Self::slot_target_of`]).
+    /// its children ([`Self::places_children_only`]), the app gave it
+    /// exactly one, and that one is all its node holds now (nothing a
+    /// region of its view shows beside it): what a slot's props go to in
+    /// its place ([`Self::slot_target_of`]).
     pub(super) fn placed_through(&self, id: NodeId) -> Option<NodeId> {
         if !self.places_children_only(id) {
             return None;
         }
-        match self.components.instances[&id].js_children[..] {
-            [child] => Some(child),
+        let [child] = self.components.instances[&id].js_children[..] else {
+            return None;
+        };
+        let key = self.key(id).ok()?;
+        match self.nodes[key as usize].children[..] {
+            [only] if self.nodes[only as usize].id == child => Some(child),
             _ => None,
         }
     }
