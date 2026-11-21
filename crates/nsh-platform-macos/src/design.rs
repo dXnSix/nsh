@@ -11,6 +11,12 @@
 //! AppKit gives it. When the tool's connection closes the app stops, with
 //! the dev session that runs it (its process group). `NSH_DESIGN_ALPHA` (0
 //! to 1) shows the windows, for looking at what the tool draws.
+//!
+//! Pictures (`design.settled`, `design.picture`): a window settles by the
+//! core's rule ([`core::Settling`]) on what its surface applied and runs,
+//! looked at every [`core::SETTLE_POLL`]; a picture waits until no batch
+//! waits for a frame, and a frame more, and is drawn in process
+//! ([`crate::picture`]) into the tool's file.
 
 use std::{
     cell::{Cell, RefCell},
@@ -148,6 +154,23 @@ pub(crate) fn start(mtm: MainThreadMarker) {
     if !core::connect(endpoint, hooks) {
         return;
     }
+    core::set_picture_hooks(core::PictureHooks {
+        settled: Box::new(|ask| {
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                let start = std::time::Instant::now();
+                match target(&ask.window).map(|(_, _, s)| s.applied()) {
+                    Some(applied) => settle(ask, core::Settling::new(start, applied)),
+                    None => {
+                        let failure = no_window(&ask.window);
+                        ask.reply.send(Err(failure));
+                    }
+                }
+            });
+        }),
+        picture: Box::new(|ask| {
+            dispatch2::DispatchQueue::main().exec_async(move || picture(ask, 0));
+        }),
+    });
     ACTIVE.store(true, Ordering::Relaxed);
     treat_app(mtm);
     // The windows: found, made unseen and reported, from the main thread.
@@ -313,6 +336,89 @@ fn context_id(content: &NSView) -> Option<u32> {
         let id: u32 = msg_send![context, contextId];
         Some(id)
     }
+}
+
+/// The window the tool calls `id`: its content and the surface showing it.
+fn target(
+    id: &str,
+) -> Option<(
+    Retained<NSWindow>,
+    Retained<NSView>,
+    std::rc::Rc<crate::surface::Surface>,
+)> {
+    let mtm = MainThreadMarker::new()?;
+    let (window, content, _) = window(mtm, id)?;
+    let surface = crate::surface::Surface::showing(&content)?;
+    Some((window, content, surface))
+}
+
+fn no_window(id: &str) -> core::Failure {
+    core::Failure::new(core::codes::NO_WINDOW, format!("no window {id:?} is open"))
+}
+
+/// Looks at window `ask.window` again until it settles by `settling`.
+fn settle(ask: core::SettleAsk, mut settling: core::Settling) {
+    let Some((_, _, surface)) = target(&ask.window) else {
+        let failure = no_window(&ask.window);
+        ask.reply.send(Err(failure));
+        return;
+    };
+    let now = std::time::Instant::now();
+    match settling.step(now, surface.applied(), surface.animating()) {
+        Some(settled) => ask.reply.send(Ok(settled)),
+        None => crate::surface::after(core::SETTLE_POLL.as_millis() as u64, move || {
+            settle(ask, settling)
+        }),
+    }
+}
+
+/// How many times a picture looks whether batches still wait for a frame
+/// ([`core::SETTLE_POLL`] apart) before it draws anyway.
+const PICTURE_WAITS: u32 = 200;
+
+/// About a display frame, in milliseconds.
+const FRAME_MS: u64 = 17;
+
+/// Draws `ask`'s picture once the batches sent before it are applied (the
+/// overrides it put on among them) and a frame has followed them.
+fn picture(ask: core::PictureAsk, waited: u32) {
+    let Some((_, content, surface)) = target(&ask.window) else {
+        let failure = no_window(&ask.window);
+        ask.reply.send(Err(failure));
+        return;
+    };
+    if waited < PICTURE_WAITS {
+        let (next, after) = if surface.batches_waiting() {
+            (waited + 1, core::SETTLE_POLL.as_millis() as u64)
+        } else {
+            // A frame more: what the batches changed is laid out and shown.
+            (PICTURE_WAITS, FRAME_MS)
+        };
+        crate::surface::after(after, move || picture(ask, next));
+        return;
+    }
+    let rect = ask.rect.map(|r| {
+        NSRect::new(
+            NSPoint::new(f64::from(r.origin.x.0), f64::from(r.origin.y.0)),
+            NSSize::new(f64::from(r.size.width.0), f64::from(r.size.height.0)),
+        )
+    });
+    let drawn = crate::picture::draw(&content, ask.scale, rect, Some(&surface))
+        .map_err(|(code, message)| core::Failure::new(code, message))
+        .and_then(|raw| {
+            std::fs::write(&ask.path, &raw.pixels)
+                .map_err(|e| {
+                    core::Failure::new(
+                        core::codes::PATH,
+                        format!("cannot write the picture to {}: {e}", ask.path.display()),
+                    )
+                })
+                .map(|()| core::Drawn {
+                    width: raw.width,
+                    height: raw.height,
+                })
+        });
+    ask.reply.send(drawn);
 }
 
 /// The waiting input, one message at a time: handling one may run a

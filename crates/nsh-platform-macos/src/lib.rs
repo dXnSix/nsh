@@ -51,6 +51,8 @@ mod native;
 mod navigation;
 mod net;
 mod picker;
+#[cfg(feature = "dev")]
+mod picture;
 mod screen_color;
 mod scroll;
 mod selectable_view;

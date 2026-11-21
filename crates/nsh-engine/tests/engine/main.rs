@@ -25,6 +25,8 @@ mod counter;
 mod design_layers;
 mod design_mode;
 #[cfg(feature = "inspect")]
+mod design_pictures;
+#[cfg(feature = "inspect")]
 mod design_slot_places;
 #[cfg(feature = "inspect")]
 mod dev_sources;

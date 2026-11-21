@@ -770,7 +770,7 @@ fn picture_size(
 /// Draws the layers of `layer`'s tree that are due to draw (text and
 /// canvases, which draw through a delegate): `renderInContext:` takes
 /// their contents as they are.
-fn display_tree(layer: &CALayer) {
+pub(crate) fn display_tree(layer: &CALayer) {
     layer.displayIfNeeded();
     // SAFETY: a getter; the sublayers are retained while they are drawn.
     if let Some(sublayers) = unsafe { layer.sublayers() } {

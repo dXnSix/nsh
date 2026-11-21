@@ -26,6 +26,7 @@ modules (`import.meta.glob`) and opens their windows (`Window.open`).
 | tool | `{"wheel":{"id","x","y","dx","dy"}}`, `{"key":{"id","down","key",…}}`, `{"resize":{"id","width","height"}}` | The same; a key as the DOM names it. |
 | tool | anything else | The app's: `design.next()`. |
 | app | `design.send(object)` | To the tool. |
+| host | `{"hotUpdate":{"modules":[…]}}` | Dev builds (`inspect`): a hot update ran these modules again, named by their hot keys as stamps name them (`src/Card.tsx`, `@acme-ui/src/Card.tsx`), so the tool draws again what they show. A module with no JSX has no key and is not named; what shows it is in an importer that ran too, and is. |
 
 The connection's thread connects (the tool may start listening later), routes input to the platform
 (`DesignHooks::input`), queues the rest for `next()`, and calls `DesignHooks::closed` when the tool
@@ -56,6 +57,25 @@ app's own windows for `report`, which tells the tool what changed:
   and wheel input go through `crate::input::simulate` in the window's root; keys type text, Enter
   and Backspace into the focused widget (`crate::synth`).
 
+Pictures (`design.settled`, `design.picture`, below) are a platform's to draw
+(`nsh_core::runtime::design::PictureHooks`, given with `set_picture_hooks` after `connect`); macOS draws them,
+and the other platforms answer `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`:
+
+- **Settling** follows the core's rule (`Settling`): quiet for 50 ms since the question (no batch applied, no
+  animation that ends by itself running, no batch waiting for a frame; an animation that loops with no end does
+  not count), given up at 1 s. The platform looks every 5 ms on its main thread, at the surface the window shows
+  (on macOS one surface holds every window of the app, so a window is quiet when the app is).
+- **macOS** draws in process (`crate::picture`): once no batch waits for a frame, and a frame more, Core
+  Animation's `renderInContext:` of the window's content at the scale and the part asked for, into an sRGB bitmap,
+  written to the tool's file. Neither the Screen Recording permission nor the window shown is needed. Two things an
+  in-process rendering leaves out are drawn for it: the outer box shadows (`visual.rs`'s casters, found by their
+  holder's name `nsh.shadows`: their shapes' shadows drawn into an image by their offset, radius, colour and
+  opacity, the box cut out where the holder's mask cuts it, in their place while the picture is taken), and an
+  animation that loops with no end stands at the start of the run it is in (`Animator::at_loop_starts`). What the
+  picture changes in the layers is put back in the same Core Animation transaction, so the window shows nothing
+  of it. The tests compare it with the window server's picture of the window (`synth::composited_image`): at most
+  2 % of the pixels differ by more than 8 of 255 (`tests/design_pictures.rs`, `tests/design_picture_shadows.rs`).
+
 ## `nsh/design`
 
 ```ts
@@ -66,6 +86,9 @@ design.send({ called: { id: "a" } });
 const layers = await design.layers("board:", ".tool-module"); // dev builds
 const detail = await design.detail(layerId);
 design.setOverrides({ "src/Card.tsx:12:5": { class: "gap-4", replace: false, states: 0 } });
+const { timedOut } = await design.settled("card:a");                    // dev builds a tool started
+const picture = await design.picture("card:a", { scale: 2, path: "/tmp/tool/a.rgba" });
+const part = await design.picture("card:a", { scale: 1, path: "/tmp/tool/b.rgba", rect: { x: 0, y: 0, width: 100, height: 50 } });
 ```
 
 A Rust component asks the same with `design_mode()` (`nsh_core::prelude`): true in an app a design
@@ -216,3 +239,42 @@ element made again (a list's row, an `If`, a hot reload) gets them again, which 
 does not survive. Modules are named there as the development bundle's stamps name them, the same on
 every machine (`native-pipeline.md`): a library's module outside the app by its package
 (`@acme-ui/src/Card.tsx:12:5`), so a tool may keep the keys in files people share.
+
+### Pictures
+
+A tool that shows most of an app's windows as pictures, and runs few of them live, asks for them by the window's
+`id` (`Window.open`'s). Dev builds with the dev tool hooks (`inspect`) only, in an app a design tool started; a
+Rust component asks the same with `nsh_core::runtime::design::settled` and `picture` (`PictureOptions`, `Picture`).
+
+- `settled(id)` resolves once the window has settled (above: quiet for 50 ms, at most 1 s), after what the app did
+  before asking has been sent to the platform: `{ timedOut }`, true when it was still busy at 1 s.
+- `picture(id, { scale, path, rect?, hide? })` puts the overrides of `setOverrides` on the window's layers and lets
+  the next commit lay them out, reads the tree, has the platform draw the window's content (or `rect` of it, in the
+  content's points from its top left) at `scale` pixels a point once the batches before are applied and a frame
+  has followed, into the file at `path`, and resolves to `{ width, height, layers, modules }`:
+  - the file: raw pixels, 4 bytes each (red, green, blue, alpha; alpha premultiplied; sRGB), rows from the top,
+    no padding and nothing else, `width * height * 4` bytes, which the tool maps. The app writes that path only;
+  - `layers`: every layer under the window's root in `layers()`' node shape (components, hosts, `slot`, `place`),
+    leaving out instances whose key or call site contains `hide`. `layers()`' "since the last call" is not touched:
+    a picture neither reports nor hides a change to `layers()`;
+  - `modules`: the modules the layers were written in, and those of their component instances (where each was used
+    and where its component is), sorted, named as stamps name them: what a tool compares with the `hotUpdate`
+    notice's modules;
+  - an animation that loops with no end stands at its first frame; one that ends by itself, as it is.
+
+Each rejects with a `code` (`nsh_core::runtime::design::codes`):
+
+| Code | When |
+|---|---|
+| `ERR_NSH_DESIGN_NOT_ACTIVE` | No design tool started the app, or the build has no dev tool hooks |
+| `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` | The platform draws no pictures |
+| `ERR_INVALID_ARG_VALUE` | `scale` not above 0 and at most 16, `path` not absolute, a `rect` without a size or with numbers that are not finite, an option of the wrong type |
+| `ERR_NSH_DESIGN_NO_WINDOW` | No window of the app's own is open with that `id` |
+| `ERR_NSH_DESIGN_RECT_OUTSIDE` | `rect` is not within the window's content |
+| `ERR_NSH_DESIGN_PATH` | The file cannot be written at `path` |
+
+Tests: `cargo test -p nsh-engine --features inspect --test engine design_pictures` (the core's part, with a
+stand-in platform that settles on the batches and the animation graph and writes the file: the settle rule, the
+overrides laid out before the tree, the tree and modules, `rect`, a loop at its first frame, the codes, outside
+design mode, the hot update's notice); on macOS `cargo test -p nsh-platform-macos --features dev --test
+design_pictures` and `--test design_picture_shadows` (above).

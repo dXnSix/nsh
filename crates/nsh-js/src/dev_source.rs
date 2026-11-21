@@ -206,6 +206,7 @@ pub(crate) unsafe extern "C" fn anchor(
         };
     };
     let line = line.max(1.0) as u32;
+    crate::hot::learn_key(cx, &module);
     let mut anchors = dev(cx).anchors.borrow_mut();
     let anchors = &mut *anchors;
     let id = match anchors.ids.get(&(module.clone(), statement.clone())) {

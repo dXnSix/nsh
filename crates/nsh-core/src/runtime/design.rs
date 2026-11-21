@@ -29,19 +29,30 @@
 //! element written at a place in the source, again whenever it is made
 //! anew. Without the hooks they answer nothing.
 //!
+//! For a tool that shows the app's windows as pictures, a dev build with
+//! the hooks also has [`settled`] (`design.settled()`: a window has
+//! been quiet for [`SETTLE_QUIET`], at most [`SETTLE_LIMIT`]) and
+//! [`picture`] (`design.picture()`: the window's content drawn into a
+//! file the tool names, with its full layer tree and the source modules it
+//! uses), both the platform's to answer ([`PictureHooks`]), and tells the
+//! tool which modules each hot update ran again ([`hot_updated`]:
+//! `{"hotUpdate":{"modules":[…]}}`). Elsewhere they reject ([`codes`]).
+//!
 //! One design host per process: a design tool starts the app for itself.
 
 use std::{
     collections::{HashMap, VecDeque},
     io::{BufRead, BufReader, Write},
-    sync::{Mutex, OnceLock},
+    path::PathBuf,
+    sync::{Arc, Mutex, OnceLock},
     task::{Poll, Waker},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
     JsonValue,
     element::{JsError, module},
+    geometry::{Bounds, Points},
 };
 
 /// The variable naming where the tool listens.
@@ -233,6 +244,420 @@ pub fn report(windows: &[DesignWindow]) {
     }
 }
 
+/// The `code`s [`settled`] and [`picture`] reject with. Tools branch on
+/// them; the messages are for people and may change.
+pub mod codes {
+    /// No design tool started the app, or the build has no dev hooks
+    /// (`inspect`): there is nothing to answer.
+    pub const NOT_ACTIVE: &str = "ERR_NSH_DESIGN_NOT_ACTIVE";
+    /// The platform draws no pictures (Node's).
+    pub const UNAVAILABLE: &str = crate::element::codes::UNAVAILABLE;
+    /// No window of the app's own is open with that id.
+    pub const NO_WINDOW: &str = "ERR_NSH_DESIGN_NO_WINDOW";
+    /// The `rect` asked for is not within the window's content.
+    pub const RECT_OUTSIDE: &str = "ERR_NSH_DESIGN_RECT_OUTSIDE";
+    /// The picture's file cannot be written at the path the tool gave.
+    pub const PATH: &str = "ERR_NSH_DESIGN_PATH";
+    /// An argument is not what the call takes (Node's).
+    pub const INVALID: &str = "ERR_INVALID_ARG_VALUE";
+}
+
+/// How long a window must have been quiet to be settled ([`Settling`]):
+/// no batch applied and no animation that ends by itself running.
+pub const SETTLE_QUIET: Duration = Duration::from_millis(50);
+/// How long [`settled`] waits at most, then answers that it timed out.
+pub const SETTLE_LIMIT: Duration = Duration::from_millis(1000);
+/// How often a platform looks at its windows while one settles.
+pub const SETTLE_POLL: Duration = Duration::from_millis(5);
+
+/// The settle rule, which each platform applies to what it knows on its
+/// main thread: a window is settled once, since the question, no batch has
+/// been applied and no animation that ends by itself has run for
+/// [`SETTLE_QUIET`]; animations that loop with no end (a spinner) do not
+/// count, or nothing that shows one would settle. Past [`SETTLE_LIMIT`]
+/// it is given up ([`Settled::timed_out`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Settling {
+    started: Instant,
+    batches: u64,
+    quiet_since: Instant,
+}
+
+/// How [`settled`] ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Settled {
+    /// It was still busy at [`SETTLE_LIMIT`].
+    pub timed_out: bool,
+}
+
+impl Settling {
+    /// Starts at `now`, with `batches` applied so far (a count the
+    /// platform keeps).
+    pub fn new(now: Instant, batches: u64) -> Self {
+        Self {
+            started: now,
+            batches,
+            quiet_since: now,
+        }
+    }
+
+    /// Looks again at `now`: `batches` applied so far, and whether an
+    /// animation that ends by itself runs or batches wait for a frame
+    /// (`busy`). `Some` once it is settled or given up.
+    pub fn step(&mut self, now: Instant, batches: u64, busy: bool) -> Option<Settled> {
+        if batches != self.batches || busy {
+            self.batches = batches;
+            self.quiet_since = now;
+        }
+        if now.duration_since(self.quiet_since) >= SETTLE_QUIET {
+            return Some(Settled { timed_out: false });
+        }
+        (now.duration_since(self.started) >= SETTLE_LIMIT).then_some(Settled { timed_out: true })
+    }
+}
+
+/// Why the platform could not answer a question of [`PictureHooks`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    /// One of [`codes`].
+    pub code: &'static str,
+    /// For people.
+    pub message: String,
+}
+
+impl Failure {
+    /// A failure with `code` and `message`.
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<Failure> for JsError {
+    fn from(failure: Failure) -> Self {
+        JsError::Error(format!("nsh/design: {}", failure.message)).with_code(failure.code)
+    }
+}
+
+/// Where the platform's answer goes: [`Reply::send`] it from any thread.
+/// Dropped unsent, the question fails as [`codes::UNAVAILABLE`].
+pub struct Reply<T> {
+    pending: Arc<Mutex<Pending<T>>>,
+}
+
+struct Pending<T> {
+    value: Option<T>,
+    /// Sent, or dropped unsent.
+    done: bool,
+    waker: Option<Waker>,
+}
+
+impl<T> Reply<T> {
+    fn pair() -> (Self, impl Future<Output = Option<T>>) {
+        let pending = Arc::new(Mutex::new(Pending {
+            value: None,
+            done: false,
+            waker: None,
+        }));
+        let waiting = pending.clone();
+        let answer = std::future::poll_fn(move |cx| {
+            let mut p = waiting.lock().unwrap_or_else(|e| e.into_inner());
+            if p.done {
+                return Poll::Ready(p.value.take());
+            }
+            p.waker = Some(cx.waker().clone());
+            Poll::Pending
+        });
+        (Self { pending }, answer)
+    }
+
+    /// Answers the question.
+    pub fn send(self, value: T) {
+        self.finish(Some(value));
+    }
+
+    fn finish(&self, value: Option<T>) {
+        let waker = {
+            let mut p = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            if p.done {
+                return;
+            }
+            p.done = true;
+            p.value = value;
+            p.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl<T> Drop for Reply<T> {
+    fn drop(&mut self) {
+        self.finish(None);
+    }
+}
+
+/// [`settled`]'s question to the platform.
+pub struct SettleAsk {
+    /// The window's id (`Window.open`'s).
+    pub window: String,
+    /// Where [`Settling`]'s answer goes.
+    pub reply: Reply<Result<Settled, Failure>>,
+}
+
+/// [`picture`]'s question to the platform: once the batches the core has
+/// sent are applied and a frame has followed them, draw window `window`'s
+/// content (only `rect` of it, in the content's points from its top left,
+/// when given) at `scale` pixels a point into the file at `path`: raw
+/// pixels, 4 bytes each (red, green, blue and alpha, premultiplied, sRGB),
+/// rows from the top, no padding and nothing else, which a tool maps.
+/// Animations that loop with no end stand at their first frame.
+pub struct PictureAsk {
+    /// The window's id (`Window.open`'s).
+    pub window: String,
+    /// Pixels a point.
+    pub scale: f64,
+    /// The part drawn; `None`: all of it.
+    pub rect: Option<Bounds<Points>>,
+    /// The file written.
+    pub path: PathBuf,
+    /// The picture's size in pixels, or why there is none
+    /// ([`codes::NO_WINDOW`], [`codes::RECT_OUTSIDE`], [`codes::PATH`]).
+    pub reply: Reply<Result<Drawn, Failure>>,
+}
+
+/// What a platform drew ([`PictureAsk`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Drawn {
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
+}
+
+/// The platform's part of [`settled`] and [`picture`]: each takes its
+/// question on the engine's thread and answers it later, from its main
+/// thread ([`Reply`]).
+pub struct PictureHooks {
+    /// Settles a window by [`Settling`]'s rule.
+    pub settled: Box<dyn Fn(SettleAsk) + Send + Sync>,
+    /// Draws a window ([`PictureAsk`]).
+    pub picture: Box<dyn Fn(PictureAsk) + Send + Sync>,
+}
+
+static PICTURES: OnceLock<PictureHooks> = OnceLock::new();
+
+/// Gives design mode the platform's pictures ([`PictureHooks`]); once, by
+/// a platform's design host that draws them, after [`connect`]. A
+/// platform that never calls it rejects [`picture`] and [`settled`] with
+/// [`codes::UNAVAILABLE`].
+pub fn set_picture_hooks(hooks: PictureHooks) -> bool {
+    PICTURES.set(hooks).is_ok()
+}
+
+/// A picture of a window ([`picture`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Picture {
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
+    /// The full tree of the window's root, in `design.layers`' node shape.
+    pub layers: Vec<JsonValue>,
+    /// The source modules the tree's layers were written in or rendered
+    /// by, as stamps name them (`src/Card.tsx`, `@acme-ui/src/Card.tsx`).
+    pub modules: Vec<String>,
+}
+
+/// How [`picture`] draws.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PictureOptions {
+    /// Pixels a point, above 0 (at most 16).
+    pub scale: f64,
+    /// The file to write (absolute): a path the tool chose, outside the
+    /// app.
+    pub path: PathBuf,
+    /// Only this part of the content, in its points from its top left.
+    pub rect: Option<Bounds<Points>>,
+    /// Instances whose key or call site contains it are left out of the
+    /// layers, as `design.layers`' `hide`.
+    pub hide: Option<String>,
+}
+
+impl PictureOptions {
+    /// `{ scale, path, rect?: { x, y, width, height }, hide? }`, as the
+    /// script gives them.
+    fn from_json(options: &JsonValue) -> Result<Self, JsError> {
+        let invalid = |what: &str| {
+            JsError::Type(format!("nsh/design: picture takes {what}")).with_code(codes::INVALID)
+        };
+        let scale = options["scale"]
+            .as_f64()
+            .ok_or_else(|| invalid("a scale (a number)"))?;
+        let path = options["path"]
+            .as_str()
+            .ok_or_else(|| invalid("a path (a string)"))?;
+        let rect = match &options["rect"] {
+            JsonValue::Null => None,
+            rect => {
+                let n = |key: &str| {
+                    rect[key]
+                        .as_f64()
+                        .ok_or_else(|| invalid("a rect of numbers: { x, y, width, height }"))
+                };
+                Some(crate::geometry::bounds(
+                    crate::geometry::point(Points(n("x")? as f32), Points(n("y")? as f32)),
+                    crate::geometry::size(Points(n("width")? as f32), Points(n("height")? as f32)),
+                ))
+            }
+        };
+        let hide = match &options["hide"] {
+            JsonValue::Null => None,
+            hide => Some(
+                hide.as_str()
+                    .ok_or_else(|| invalid("a hide that is a string"))?
+                    .to_owned(),
+            ),
+        };
+        Ok(Self {
+            scale,
+            path: PathBuf::from(path),
+            rect,
+            hide,
+        })
+    }
+
+    /// The scale, path and rect checked.
+    fn check(&self) -> Result<(), JsError> {
+        let invalid =
+            |what: String| JsError::Range(format!("nsh/design: {what}")).with_code(codes::INVALID);
+        if !(self.scale.is_finite() && self.scale > 0.0 && self.scale <= 16.0) {
+            return Err(invalid(format!(
+                "a picture's scale is above 0 and at most 16, not {}",
+                self.scale
+            )));
+        }
+        if !self.path.is_absolute() {
+            return Err(invalid("a picture's path is absolute".to_owned()));
+        }
+        if let Some(rect) = self.rect {
+            let numbers = [
+                rect.origin.x.0,
+                rect.origin.y.0,
+                rect.size.width.0,
+                rect.size.height.0,
+            ];
+            if numbers.iter().any(|n| !n.is_finite())
+                || rect.size.width.0 <= 0.0
+                || rect.size.height.0 <= 0.0
+            {
+                return Err(invalid(
+                    "a picture's rect has a size above 0 in finite points".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The platform's pictures, in a dev build a design tool started.
+fn pictures() -> Result<&'static PictureHooks, JsError> {
+    if !(cfg!(feature = "inspect") && attached()) {
+        return Err(Failure::new(
+            codes::NOT_ACTIVE,
+            "pictures are a design tool's, in a dev build it started",
+        )
+        .into());
+    }
+    PICTURES
+        .get()
+        .ok_or_else(|| Failure::new(codes::UNAVAILABLE, "this platform draws no pictures").into())
+}
+
+#[cfg_attr(not(feature = "inspect"), allow(dead_code))]
+fn no_window(window: &str) -> JsError {
+    Failure::new(codes::NO_WINDOW, format!("no window {window:?} is open")).into()
+}
+
+fn unanswered() -> JsError {
+    Failure::new(codes::UNAVAILABLE, "the platform did not answer").into()
+}
+
+/// Resolves once window `window` (`Window.open`'s `id`) has settled by
+/// [`Settling`]'s rule, after what the app did before asking has been
+/// sent: `timed_out` when it was still busy at [`SETTLE_LIMIT`]. Rejects
+/// with [`codes`]: no tool started the app or no dev hooks, a platform
+/// without pictures, no such window.
+pub async fn settled(window: &str) -> Result<Settled, JsError> {
+    let hooks = pictures()?;
+    #[cfg(feature = "inspect")]
+    if crate::element::dev_window(window).await.is_none() {
+        return Err(no_window(window));
+    }
+    let (reply, answer) = Reply::pair();
+    (hooks.settled)(SettleAsk {
+        window: window.to_owned(),
+        reply,
+    });
+    answer.await.ok_or_else(unanswered)?.map_err(Into::into)
+}
+
+/// Draws window `window` (`Window.open`'s `id`) as [`PictureAsk`] says,
+/// after putting on its layers the overrides the tool asked for
+/// (`design.setOverrides`) and laying them out, and answers with the
+/// picture's size, the full tree of the window's root as `design.layers`
+/// lists a root (taken apart from `layers`' "since the last call", which it
+/// leaves as it is) and the modules that tree uses. Rejects with
+/// [`codes`]: no tool started the app or no dev hooks, a platform without
+/// pictures, options it does not take, no such window, a `rect` outside the
+/// content, a path it cannot write.
+pub async fn picture(window: &str, options: &PictureOptions) -> Result<Picture, JsError> {
+    let hooks = pictures()?;
+    options.check()?;
+    #[cfg(feature = "inspect")]
+    {
+        let root = crate::element::dev_window(window)
+            .await
+            .ok_or_else(|| no_window(window))?;
+        let (layers, modules) = layers::window(root, options.hide.as_deref())
+            .await
+            .ok_or_else(|| no_window(window))?;
+        let (reply, answer) = Reply::pair();
+        (hooks.picture)(PictureAsk {
+            window: window.to_owned(),
+            scale: options.scale,
+            rect: options.rect,
+            path: options.path.clone(),
+            reply,
+        });
+        let drawn = answer.await.ok_or_else(unanswered)??;
+        Ok(Picture {
+            width: drawn.width,
+            height: drawn.height,
+            layers,
+            modules,
+        })
+    }
+    #[cfg(not(feature = "inspect"))]
+    {
+        let _ = (hooks, window);
+        Err(Failure::new(codes::NOT_ACTIVE, "pictures need the dev hooks").into())
+    }
+}
+
+/// A hot update ran `modules` again (by their hot keys, as stamps name
+/// them: `src/Card.tsx`): a dev build tells the design tool,
+/// `{"hotUpdate":{"modules":[…]}}`, so that it draws again what they
+/// show. Nothing outside design mode.
+pub fn hot_updated(modules: &[String]) {
+    if cfg!(feature = "inspect") && attached() {
+        send_line(&serde_json::json!({ "hotUpdate": { "modules": modules } }));
+    }
+}
+
 /// The app's side of a design tool's connection.
 #[module]
 pub(crate) struct Design;
@@ -332,6 +757,44 @@ impl Design {
     pub(crate) fn set_overrides(overrides: JsonValue) {
         layers::set_overrides(&overrides);
     }
+
+    /// Resolves once window `id` (`Window.open`'s) has been quiet for 50 ms
+    /// (no batch applied, no animation that ends by itself running;
+    /// animations that loop forever do not count), at most 1 s: `{
+    /// timedOut }`, true when it was still busy then. Dev builds a design
+    /// tool started; otherwise, and for a window that is not open, it
+    /// rejects (`code`: `ERR_NSH_DESIGN_NOT_ACTIVE`,
+    /// `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`, `ERR_NSH_DESIGN_NO_WINDOW`).
+    pub(crate) async fn settled(id: String) -> Result<JsonValue, JsError> {
+        let settled = settled(&id).await?;
+        Ok(serde_json::json!({ "timedOut": settled.timed_out }))
+    }
+
+    /// Draws window `id`'s content, or `rect` of it (its points from the
+    /// content's top left), at `scale` pixels a point into the file at
+    /// `path` (absolute; a path the tool chose): raw pixels, RGBA with
+    /// alpha premultiplied, sRGB, rows from the top, no padding. The
+    /// overrides of `setOverrides` are put on first and laid out, and the
+    /// picture waits for a frame after them; animations that loop forever
+    /// stand at their first frame. Resolves to `{ width, height, layers,
+    /// modules }`: the pixel size, every layer under the window's root in
+    /// `layers()`' node shape (instances whose key or call site contains
+    /// `hide` left out; `layers()`' own "since the last call" is not
+    /// touched) and the source modules those layers use. Rejects with a
+    /// `code`: `ERR_NSH_DESIGN_NOT_ACTIVE`,
+    /// `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`, `ERR_INVALID_ARG_VALUE`,
+    /// `ERR_NSH_DESIGN_NO_WINDOW`, `ERR_NSH_DESIGN_RECT_OUTSIDE`,
+    /// `ERR_NSH_DESIGN_PATH`.
+    pub(crate) async fn picture(id: String, options: JsonValue) -> Result<JsonValue, JsError> {
+        let options = PictureOptions::from_json(&options)?;
+        let picture = picture(&id, &options).await?;
+        Ok(serde_json::json!({
+            "width": picture.width,
+            "height": picture.height,
+            "layers": picture.layers,
+            "modules": picture.modules,
+        }))
+    }
 }
 
 pub(crate) mod layers {
@@ -357,7 +820,7 @@ pub(crate) mod layers {
     pub(crate) fn set_overrides(_overrides: &JsonValue) {}
 
     #[cfg(feature = "inspect")]
-    pub(crate) use shown::{detail, layers, set_overrides};
+    pub(crate) use shown::{detail, layers, set_overrides, window};
 
     #[cfg(feature = "inspect")]
     mod shown {
@@ -459,7 +922,7 @@ pub(crate) mod layers {
                 }
                 STATE.with_borrow_mut(|s| s.seen.insert(root.to_owned(), print));
                 let facts = facts(nodes).await;
-                apply(nodes, &facts).await;
+                let _changed = apply(nodes, &facts).await;
                 roots.insert(
                     root.to_owned(),
                     json!({ "nodes": list(&shown, &facts, hide) }),
@@ -481,6 +944,62 @@ pub(crate) mod layers {
                 return Value::Null;
             }
             json!({ "roots": roots, "gone": gone })
+        }
+
+        /// Every layer under `root` (a window's root node), the overrides
+        /// asked for put on first and laid out, listed as [`layers`] lists
+        /// a root's, and the modules they use, as stamps name them: where
+        /// each layer was written, and each component instance's module.
+        /// The state of [`layers`]' "since the last call" stays as it is.
+        /// `None` once the root is gone.
+        pub(crate) async fn window(
+            root: NodeId,
+            hide: Option<&str>,
+        ) -> Option<(Vec<Value>, Vec<String>)> {
+            let tree = dev_tree().await;
+            let changed = {
+                let by_id: HashMap<NodeId, &DevNode> =
+                    tree.nodes.iter().map(|n| (n.id, n)).collect();
+                let shown = below(by_id.get(&root)?, &by_id);
+                let facts = facts(&shown.nodes).await;
+                apply(&shown.nodes, &facts).await
+            };
+            // The tree as the commit after the overrides lays it out.
+            let tree = if changed { dev_tree().await } else { tree };
+            let by_id: HashMap<NodeId, &DevNode> = tree.nodes.iter().map(|n| (n.id, n)).collect();
+            let shown = below(by_id.get(&root)?, &by_id);
+            let facts = facts(&shown.nodes).await;
+            let layers = list(&shown, &facts, hide);
+            Some((layers, modules(&shown, &facts, hide)))
+        }
+
+        /// The modules `shown`'s layers were written in, and those of the
+        /// component instances that rendered them (where each was used, and
+        /// where its component is), sorted.
+        fn modules(
+            shown: &Shown<'_>,
+            facts: &HashMap<NodeId, Facts>,
+            hide: Option<&str>,
+        ) -> Vec<String> {
+            let hidden = |key: &str| hide.is_some_and(|h| !h.is_empty() && key.contains(h));
+            let mut modules = std::collections::BTreeSet::new();
+            for node in &shown.nodes {
+                let Some(f) = facts.get(&node.id) else {
+                    continue;
+                };
+                if let Some(source) = &f.source {
+                    modules.insert(source.module.to_string());
+                }
+                for instance in f.instances.iter().filter(|i| !hidden(&i.key)) {
+                    if let Some((module, _)) = instance.key.rsplit_once(':') {
+                        modules.insert(module.to_owned());
+                    }
+                    if let Some(site) = instance.call_site.as_ref().filter(|s| !hidden(&s.module)) {
+                        modules.insert(site.module.to_string());
+                    }
+                }
+            }
+            modules.into_iter().collect()
         }
 
         pub(crate) async fn detail(id: f64) -> Value {
@@ -621,8 +1140,8 @@ pub(crate) mod layers {
         }
 
         /// Puts on each node the override its source asks for, and takes
-        /// it off the others.
-        async fn apply(nodes: &[&DevNode], facts: &HashMap<NodeId, Facts>) {
+        /// it off the others; whether any changed.
+        async fn apply(nodes: &[&DevNode], facts: &HashMap<NodeId, Facts>) -> bool {
             let changes: Vec<(NodeId, Option<Layer>)> = STATE.with_borrow_mut(|s| {
                 let mut changes = Vec::new();
                 for node in nodes {
@@ -662,9 +1181,11 @@ pub(crate) mod layers {
                     )
                 })
                 .collect();
+            let changed = !asked.is_empty();
             for answer in asked {
                 answer.await;
             }
+            changed
         }
 
         /// The layers, parents before children: each node, and each

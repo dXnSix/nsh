@@ -16,7 +16,8 @@
 //! a scroll of the gallery's Lists (a shadow on every card) was composited
 //! at ~60 of 120 Hz with them. Inset shadows are clipped by their holder's
 //! rounded bounds for the same reason, masked only for differing corners.
-//! In-process renderings (`shot`) do not show unmasked outer shadows.
+//! In-process renderings (`shot`) do not show outer shadows; a design
+//! tool's pictures draw them (`picture.rs`), finding their holders by name.
 
 use std::cell::Cell;
 
@@ -646,6 +647,8 @@ impl Visual {
         let (holder, casters) = self.shadows.get_or_insert_with(|| {
             let h = CALayer::new();
             h.setZPosition(SHADOW_Z);
+            // An in-process picture draws its shadows itself (`picture.rs`).
+            h.setName(Some(ns_string!("nsh.shadows")));
             layer.addSublayer(&h);
             (h, Vec::new())
         });

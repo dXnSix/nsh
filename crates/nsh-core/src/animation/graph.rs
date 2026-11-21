@@ -513,6 +513,21 @@ impl Step {
         }
     }
 
+    /// When the run of the outermost loop that runs now started: what a
+    /// loop with no end shows at its first frame is its run's start.
+    fn loop_start(&self) -> Option<f64> {
+        match self {
+            Step::Run { .. } | Step::Delay { .. } => None,
+            Step::Sequence { steps, index, .. } => steps.get(*index).and_then(Step::loop_start),
+            Step::Parallel { steps, ends, .. } => steps
+                .iter()
+                .zip(ends)
+                .filter(|(_, end)| end.is_none())
+                .find_map(|(step, _)| step.loop_start()),
+            Step::Loop { at, .. } => *at,
+        }
+    }
+
     /// Moves the times it has started at (and what it runs) `by` seconds
     /// later: a composite counting from its first display frame
     /// ([`Graph::tick_frame`]).
@@ -1587,6 +1602,34 @@ impl Graph {
             !snap.done
         });
         changed
+    }
+
+    /// A copy of the graph at `now` with its animations that loop with no
+    /// end ([`Graph::is_finishing`]'s exceptions: a spinner) back at the
+    /// start of the run they are in, the rest as they are: what a still
+    /// picture of the app shows, where such a loop stands at its first
+    /// frame rather than wherever it turned to. The graph itself is left
+    /// as it is.
+    pub fn at_loop_starts(&self, now: f64) -> Graph {
+        let mut g = self.clone();
+        let mut programs = std::mem::take(&mut g.programs);
+        for p in &mut programs {
+            if !p.root.endless() {
+                continue;
+            }
+            if let Some(start) = p.root.loop_start() {
+                let by = now - start;
+                if by > 0.0 {
+                    p.at = p.at.map(|at| at + by);
+                    p.root.shift(&mut g, by);
+                }
+            }
+        }
+        programs.append(&mut g.programs);
+        g.programs = programs;
+        let mut finished = Vec::new();
+        g.tick(now, &mut finished);
+        g
     }
 
     /// Advances all animations to `now` (seconds, monotonic). Completed
@@ -3060,6 +3103,48 @@ mod tests {
             assert!(g.is_animating() && !g.is_finishing());
             g.apply(AnimationOp::StopAnimation { animation }, &mut f);
         }
+    }
+
+    /// A still picture of a spinner shows the start of the run it is in;
+    /// an animation that ends by itself stays where it is, and so does the
+    /// graph the copy was made from.
+    #[test]
+    fn a_copy_at_loop_starts_stands_endless_loops_at_their_first_frame() {
+        let mut g = Graph::default();
+        let mut f = Vec::new();
+        values(&mut g, &mut f, &[1, 2]);
+        g.apply(
+            AnimationOp::StartComposite {
+                animation: 1,
+                key: 1,
+                spec: Composite::Loop {
+                    child: Box::new(Composite::Run {
+                        node: 1,
+                        driver: timing(360.0, 1000.0),
+                    }),
+                    iterations: None,
+                    reset: true,
+                },
+            },
+            &mut f,
+        );
+        g.apply(
+            AnimationOp::Start {
+                node: 2,
+                animation: 2,
+                driver: timing(100.0, 4000.0),
+            },
+            &mut f,
+        );
+        // Two and a half turns in: half way round, the fade at 62.5.
+        run(&mut g, &mut f, 0.0, 2.5);
+        let turned = g.value(1).unwrap();
+        assert!((turned - 180.0).abs() < 8.0, "{turned}");
+        let still = g.at_loop_starts(2.5);
+        assert!(still.value(1).unwrap().abs() < 1e-3, "{:?}", still.value(1));
+        assert!((still.value(2).unwrap() - g.value(2).unwrap()).abs() < 1e-3);
+        assert_eq!(g.value(1), Some(turned));
+        assert!(g.is_animating() && g.is_finishing());
     }
 
     #[test]
