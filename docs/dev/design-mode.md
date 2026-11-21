@@ -87,6 +87,28 @@ fn Section(props: SectionProps) -> impl IntoElement {
 The variable alone does not set it: a host without design mode (a release host, a platform with no
 design host) leaves `design_mode()` and `design.active()` false.
 
+A slot marker component (one a component's view puts where an app's content for a slot goes, around that
+content) calls `design_slot(name)` (`nsh_core::prelude`) in its view, so a design tool finds the slot even
+while it is empty: the marker's host is the place of slot `name` of the component whose view drew it.
+`name` is the JS name of the prop that fills the slot, a value or a binding, read when a tool asks (what
+it reads it does not subscribe to). The marker draws what the slot should look like while empty in a
+design tool (with `design_mode()`); without dev tools (`inspect`) `design_slot` does nothing.
+
+```rust
+#[component]
+fn Mark(props: MarkProps) -> impl IntoElement {
+    design_slot(props.name);
+    view().children_each(props.children, |child, _| child)
+}
+
+#[component]
+fn Chip(props: ChipProps) -> impl IntoElement {
+    view()
+        .child(mark().name("left").child(props.left.place(|s| s)))
+        .child(text(props.text))
+}
+```
+
 `layers(prefix, hide)` reads, with the dev tool hooks (`inspect`), the live tree under each view whose
 test id starts with `prefix`, keyed by the rest of the test id, with each component instance between
 the nodes it rendered and their parent (ids from `1 << 32`), leaving out instances whose key or call
@@ -95,7 +117,7 @@ when nothing changed: `{ roots: { <root>: { nodes } }, gone }`. A layer is one o
 
 | Layer | Shape |
 |---|---|
-| A node | `{ id, parent, kind, name, class, testId, text, x, y, width, height, source, hidden, overridden, slot }`. `kind` is the node's (`view`, `text`, `list`, `cell`, …), `name` its title (`View`); `source` is `{ module, line, column }`, where it was written. |
+| A node | `{ id, parent, kind, name, class, testId, text, x, y, width, height, source, hidden, overridden, slot, place }`. `kind` is the node's (`view`, `text`, `list`, `cell`, …), `name` its title (`View`); `source` is `{ module, line, column }`, where it was written. |
 | A component written in TSX | `{ id, parent, kind: "component", name, key, source }`: an instance of a hot component, no node. `source` is where it was used. |
 | A view hosting a Rust component | A node with `kind: "host"` and the component's JS export as `name` (`Button`). `source` is where the app wrote it. |
 | A registered native view (`<native>`) | A node with `kind: "native"` and its registered name. |
@@ -116,6 +138,12 @@ core's. A layer tree is what the app wrote, so:
     Every other layer has `slot: null`.
 - A row a component's list wraps (a `cell` under that list) lists the app's row only, not the
   wrapper the component draws around it.
+- A slot marker (a component whose view calls `design_slot`) has `place`, its slot's name; every other
+  layer has `place: null`. A marker the component's view draws is listed under the host, empty or
+  filled, as the host it is (`kind: "host"`, no `source`), with the slot's holder and the app's content
+  under it. A marker that a component nested in the view draws for a slot of its own is that
+  component's, part of the view, and not listed. A marker the app writes is a layer as any of the
+  app's, with its `place`. A slot the view does not make (behind a `when` that is off) has no marker.
 - A host in a slot or among the children is the app's, a layer like any other.
 
 ```tsx
@@ -133,9 +161,21 @@ host Card
     host Button
 ```
 
+With the `Chip` above, `<Chip text="A" left={<Text>L</Text>} />` and an empty `<Chip text="B" />`:
+
+```text
+host Chip
+  host Mark      place: "left"
+    view View    slot: "left"
+      text Text  "L"
+host Chip
+  host Mark      place: "left"     (its frame: what the marker draws while empty)
+```
+
 The core's tree says the same (`dev_tree`): a host has `flags.host` and its component's export as
-`component`, and a node of the script's inside a component's view has `given: { host, slot }`, the
-nearest host above it that the script made. The core's nodes have odd ids and were written nowhere:
+`component`, a node of the script's inside a component's view has `given: { host, slot }`, the
+nearest host above it that the script made, and a marker's host has `place: { name, of }`, `of` the
+host whose view drew it (`None` when the script made it). The core's nodes have odd ids and were written nowhere:
 `dev_source` and `dev_instances` answer nothing for them.
 
 `detail(id)` is a layer in full. For a node: `{ style, width, height, padding, border, margin,

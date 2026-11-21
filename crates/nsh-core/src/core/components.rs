@@ -8436,6 +8436,22 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// The hosts that are slot places ([`crate::element::design_slot`]):
+    /// each with its slot's name, and the host whose view made it (`None`
+    /// when the script made it).
+    pub(super) fn dev_slot_places(&self) -> FxHashMap<NodeId, (Arc<str>, Option<NodeId>)> {
+        let _entered = self.components.runtime.enter();
+        let mut places = FxHashMap::default();
+        for (owner, name) in crate::element::reactive::design_slots() {
+            let Some(host) = self.host_of_owner(owner) else {
+                continue;
+            };
+            let of = self.components.owners.get(&host).copied();
+            places.insert(host, (Arc::from(&*name), of));
+        }
+        places
+    }
+
     /// The prop whose content the script's node `id` holds in a host: a
     /// named slot's or the rows' holder, or what a render function
     /// rendered.

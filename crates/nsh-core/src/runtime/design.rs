@@ -279,7 +279,7 @@ impl Design {
     /// when nothing changed or the build has no dev hooks. All roots again
     /// after `setOverrides`. A node is `{ id, parent, kind, name, class,
     /// testId, text, x, y, width, height, source, hidden, overridden,
-    /// slot }`; a component instance (`kind: "component"`, `{ id, parent,
+    /// slot, place }`; a component instance (`kind: "component"`, `{ id, parent,
     /// name, key, source }`) sits between the nodes it rendered and their
     /// parent, its id above every node's ([`layers::INSTANCE_IDS`]).
     /// Instances whose key contains `hide` (the tool's own components) are
@@ -296,6 +296,13 @@ impl Design {
     /// a render function rendered: the glue's nodes, with no `source`; the
     /// app's own are under them). A row a component's list wraps lists
     /// only the app's row.
+    ///
+    /// A slot marker (a component whose view calls
+    /// [`crate::element::design_slot`]) has `place`, its slot's name (every
+    /// other layer `place: null`). One the component's view draws is listed
+    /// under that component's host, empty or not, with what it holds under
+    /// it; one a component nested in that view draws for its own slot is
+    /// not.
     pub(crate) async fn layers(prefix: String, hide: Option<String>) -> JsonValue {
         layers::layers(&prefix, hide.as_deref()).await
     }
@@ -520,8 +527,8 @@ pub(crate) mod layers {
 
         /// The nodes under `root`, in tree order, without `root`. Under a
         /// host only what the app gave its component is listed, wherever
-        /// the component's view placed it, as the host's own: what the
-        /// view draws is not.
+        /// the component's view placed it, as the host's own, and the slot
+        /// markers its view draws: what else the view draws is not.
         fn below<'a>(root: &'a DevNode, by_id: &HashMap<NodeId, &'a DevNode>) -> Shown<'a> {
             let mut shown = Shown {
                 nodes: Vec::new(),
@@ -544,7 +551,11 @@ pub(crate) mod layers {
                 let Some(node) = by_id.get(&id) else {
                     continue;
                 };
-                if in_view && node.given.is_none() {
+                // A slot marker the host's own view drew (not one a component
+                // it nests drew for its own slot) is the host's layer.
+                let marks_slot = parent
+                    .is_some_and(|host| node.place.as_ref().is_some_and(|p| p.of == Some(host)));
+                if in_view && node.given.is_none() && !marks_slot {
                     // The view's own: looked through for what it places.
                     stack.extend(
                         node.children
@@ -574,6 +585,7 @@ pub(crate) mod layers {
                 node.class.hash(&mut hasher);
                 node.test_id.hash(&mut hasher);
                 node.text.hash(&mut hasher);
+                node.place.as_ref().map(|p| &p.name).hash(&mut hasher);
                 let page = node.page.unwrap_or(node.frame.origin);
                 for value in [
                     page.x,
@@ -678,7 +690,14 @@ pub(crate) mod layers {
             for node in &shown.nodes {
                 let parent = shown.parents.get(&node.id).copied();
                 let mine = chain(node.id);
-                let theirs = parent.map(chain).unwrap_or_default();
+                // A node the core made (odd ids: a slot marker a view drew)
+                // renders in no instance: the chain to compare with is that
+                // of the nearest layer above it that the script made.
+                let mut script_parent = parent;
+                while let Some(p) = script_parent.filter(|p| p % 2 == 1) {
+                    script_parent = shown.parents.get(&p).copied();
+                }
+                let theirs = script_parent.map(chain).unwrap_or_default();
                 let shared = mine
                     .iter()
                     .zip(theirs.iter())
@@ -722,6 +741,7 @@ pub(crate) mod layers {
                     "hidden": node.flags.hidden || node.flags.culled,
                     "overridden": source.is_some_and(|s| wanted.contains(&key(s))),
                     "slot": node.given.as_ref().and_then(|g| g.slot.as_deref()),
+                    "place": node.place.as_ref().map(|p| &*p.name),
                 }));
             }
             out

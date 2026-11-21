@@ -11,7 +11,8 @@ use crate::{
     geometry::{Point, Points, point, size_pt},
     inspect::{
         DevBox, DevComponent, DevDetail, DevEdges, DevEventSpec, DevFlags, DevGiven, DevList,
-        DevNode, DevOverride, DevPropSpec, DevScroll, DevState, DevTree, NodeDev, Request,
+        DevNode, DevOverride, DevPlace, DevPropSpec, DevScroll, DevState, DevTree, NodeDev,
+        Request,
     },
     text::TextEngine,
 };
@@ -218,6 +219,7 @@ impl<M: TextEngine> Core<M> {
     /// whose content it is ([`DevNode::given`]).
     pub fn dev_tree(&self) -> DevTree {
         let mut nodes = Vec::new();
+        let mut places = self.dev_slot_places();
         // With each node, the host whose view it is in.
         let mut stack = vec![(self.root, None::<NodeId>)];
         while let Some((key, within)) = stack.pop() {
@@ -241,6 +243,9 @@ impl<M: TextEngine> Core<M> {
             } else {
                 within
             };
+            dev.place = places
+                .remove(&node.id)
+                .map(|(name, of)| DevPlace { name, of });
             nodes.push(dev);
             stack.extend(node.children.iter().rev().map(|&child| (child, below)));
         }
@@ -267,6 +272,7 @@ impl<M: TextEngine> Core<M> {
                 .map(|spec| Arc::from(spec.export.as_str()))
                 .or_else(|| node.component.as_deref().and_then(|c| c.name.clone())),
             given: None,
+            place: None,
             class: node
                 .class_names
                 .as_deref()

@@ -64,6 +64,43 @@ pub(crate) struct RustData {
     /// The error boundaries ([`super::catch_error`]): what fails under the
     /// owner sets its signal.
     boundaries: rustc_hash::FxHashMap<Owner, Signal<Option<super::ComponentError>>>,
+    /// The slot places views marked for a design tool, by the owner of the
+    /// view that marked them ([`super::design_slot`]).
+    #[cfg(feature = "inspect")]
+    design_slots: rustc_hash::FxHashMap<Owner, Rc<dyn Fn() -> super::SharedString>>,
+}
+
+/// Marks the component whose view runs now as the place of slot `name`, for
+/// as long as the current owner lives ([`super::design_slot`]).
+#[cfg(feature = "inspect")]
+pub(crate) fn register_design_slot(name: super::Reactive<super::SharedString>) {
+    let owner = Owner::current();
+    let name: Rc<dyn Fn() -> super::SharedString> = match name {
+        super::Reactive::Static(name) => Rc::new(move || name.clone()),
+        super::Reactive::Bound(name) => name,
+    };
+    with_data(|d| d.design_slots.insert(owner, name));
+    cleanup(move || {
+        with_data(|d| d.design_slots.remove(&owner));
+    });
+}
+
+/// The slot places views marked, each by the owner of the view that marked
+/// it, with its name as it is now (read untracked).
+#[cfg(feature = "inspect")]
+pub(crate) fn design_slots() -> Vec<(Owner, super::SharedString)> {
+    let marked: Vec<_> = with_data(|d| {
+        d.design_slots
+            .iter()
+            .filter(|(owner, _)| owner.is_live())
+            .map(|(owner, name)| (*owner, name.clone()))
+            .collect()
+    });
+    // Out of the data first: a name may read signals.
+    marked
+        .into_iter()
+        .map(|(owner, name)| (owner, untracked(|| name())))
+        .collect()
 }
 
 /// Makes the current owner an error boundary: what fails under it sets
