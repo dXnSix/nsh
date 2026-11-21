@@ -64,6 +64,9 @@ pub struct DevNode {
     pub component: Option<Arc<str>>,
     /// On a node the script gave a Rust component: whose content it is.
     pub given: Option<DevGiven>,
+    /// On the host of a slot marker component: the slot it is the place of
+    /// ([`crate::element::design_slot`]).
+    pub place: Option<DevPlace>,
     /// `class` and `classList` as written, joined by a space.
     pub class: Option<String>,
     /// `testID`.
@@ -91,6 +94,18 @@ pub struct DevGiven {
     /// slot's or the rows' holder (the glue's node, not the app's), or what
     /// a render function rendered. `None` for a JSX child.
     pub slot: Option<Arc<str>>,
+}
+
+/// What the host of a slot marker component marks
+/// ([`crate::element::design_slot`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevPlace {
+    /// The slot's name, as the marker's view gives it now: the JS name of
+    /// the prop that fills it.
+    pub name: Arc<str>,
+    /// The host of the component whose view drew the marker, whose slot it
+    /// is; `None` when the script made it (a marker the app's code wrote).
+    pub of: Option<NodeId>,
 }
 
 /// The states of a node a tree view marks.

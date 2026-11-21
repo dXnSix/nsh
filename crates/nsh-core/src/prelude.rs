@@ -2,6 +2,8 @@
 
 /// Whether a design tool shows the app ([`crate::runtime::design`]).
 pub use crate::element::design_mode;
+/// Marks a slot marker's host for a design tool ([`crate::runtime::design`]).
+pub use crate::element::design_slot;
 // Components that run once: signals, bindings, control flow; what they
 // read of the surface and ask of the platform.
 pub use crate::element::{

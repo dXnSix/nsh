@@ -339,8 +339,11 @@ A view that hosts a Rust component says so in the tree: `flags.host`, and `compo
 component's view, the core's nodes, but for what the script gave the component: such a node has `given: { host,
 slot }`, the nearest host above it that the script made (a component a view nests is part of that view) and, for the
 glue's holder of a named slot, of the rows or of what a render function rendered, the prop's JS name. A row a
-component's list wraps is a host without a name. `docs/dev/design-mode.md` has the layer tree a design tool reads
-from this; `crates/nsh-engine/tests/engine/design_layers.rs` covers both.
+component's list wraps is a host without a name. The host of a slot marker component (its view calls
+`design_slot(name)`) has `place: { name, of }`: the slot's name as the view gives it now, and the host whose view
+drew the marker (`Components::owners`), `None` when the script made it. `docs/dev/design-mode.md` has the layer tree
+a design tool reads from this; `crates/nsh-engine/tests/engine/design_layers.rs` and `design_slot_places.rs` cover
+both.
 
 `dev_override(id, layer)` puts a `DevOverride` over a node: classes over its own (or instead of them, `replace_class`),
 inline declarations applied after its classes and `style`, and forced interaction states (`tailwind::state`). Nothing

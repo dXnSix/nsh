@@ -653,6 +653,25 @@ pub fn design_mode() -> bool {
     crate::runtime::design::attached()
 }
 
+/// Marks the component whose view calls it as the place of slot `name` of
+/// the component whose view made it, for a design tool: a slot marker
+/// component (one that a component's view puts where an app's content for a
+/// slot goes, around that content) calls it in its view, so a design tool
+/// finds the slot, shows it while it is empty and fills it. Design mode
+/// lists the marker under the component that drew it, its `place` the name
+/// (`docs/dev/design-mode.md`). The name is read when a tool asks (a
+/// binding: what it reads it does not subscribe to). Without dev tools
+/// (`inspect`) it does nothing and costs nothing.
+#[cfg_attr(not(feature = "inspect"), inline(always))]
+#[cfg_attr(
+    not(feature = "inspect"),
+    allow(unused_variables, reason = "dev tools only")
+)]
+pub fn design_slot<M>(name: impl super::IntoProp<super::SharedString, M>) {
+    #[cfg(feature = "inspect")]
+    super::reactive::register_design_slot(name.into_prop());
+}
+
 /// The design tokens the app is drawn with (reading them subscribes to
 /// every token: a change of any reaches what read them; [`token`] reads
 /// one).
