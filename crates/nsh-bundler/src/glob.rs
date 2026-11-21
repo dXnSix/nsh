@@ -22,9 +22,10 @@
 //! `import` (an export's name). Keys are sorted, so the object is the same
 //! on every machine.
 //!
-//! A pattern that searches a directory outside the app (`/../lib/**/*.tsx`)
-//! reports it ([`GlobDir`]): development servers watch it, so a file added
-//! there, in a new directory too, is built as one added in the app is.
+//! Every pattern reports the directory it searches ([`GlobDir`]), so that
+//! development servers know which files a build would take: one outside the
+//! app (`/../lib/**/*.tsx`) they watch, so a file added there, in a new
+//! directory too, is built as one added in the app is.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -39,10 +40,11 @@ use oxc::{
     span::{GetSpan, SourceType, Span},
 };
 
-/// A directory outside the app that an `import.meta.glob` pattern
-/// searches, with the pattern below it: development servers watch it,
-/// recursively, so that a file the pattern matches added or removed there,
-/// in a directory new too, is built ([`GlobDir::matches`]).
+/// A directory that an `import.meta.glob` pattern searches, with the
+/// pattern below it: a file the pattern matches there is one the build
+/// takes ([`GlobDir::matches`]). Development servers watch one outside the
+/// app, recursively, so that a file the pattern matches added or removed
+/// there, in a directory new too, is built.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub struct GlobDir {
@@ -55,6 +57,15 @@ pub struct GlobDir {
 }
 
 impl GlobDir {
+    /// The pattern `pattern` (`/`-separated, `**/*.json`) below the
+    /// directory `dir`.
+    pub fn new(dir: impl Into<PathBuf>, pattern: impl Into<String>) -> Self {
+        Self {
+            dir: dir.into(),
+            pattern: pattern.into(),
+        }
+    }
+
     /// Whether `path` is a file below [`GlobDir::dir`] that the pattern
     /// matches, as the expansion searches: not in a directory it skips
     /// (`node_modules`, `.nsh`, `target`, one starting with `.`) unless the
@@ -94,16 +105,16 @@ struct Call {
 
 /// Replaces the `import.meta.glob` calls of `source` (the module at
 /// `importer`, of `source_type`); `root` is the app's directory, which `/`
-/// patterns start from. The directories outside it the patterns search go
-/// into `outside`. `None`: the module makes none. `Err`: a call this
-/// cannot read (its patterns or options are not literals), or a pattern
-/// that names no directory it can search.
+/// patterns start from. The directories the patterns search, in the app or
+/// outside it, go into `searched`. `None`: the module makes none. `Err`: a
+/// call this cannot read (its patterns or options are not literals), or a
+/// pattern that names no directory it can search.
 pub(crate) fn expand(
     source: &str,
     source_type: SourceType,
     importer: &Path,
     root: &Path,
-    outside: &mut Vec<GlobDir>,
+    searched: &mut Vec<GlobDir>,
 ) -> Result<Option<String>, String> {
     if !source.contains("import.meta.glob") {
         return Ok(None);
@@ -127,7 +138,7 @@ pub(crate) fn expand(
     let mut hoisted = String::new();
     let mut at = 0;
     for (n, call) in finder.calls.iter().enumerate() {
-        let files = matches(&call.patterns, dir, root, outside)?;
+        let files = matches(&call.patterns, dir, root, searched)?;
         code.push_str(&source[at..call.span.start as usize]);
         code.push_str(&object(call, n, &files, &mut hoisted));
         at = call.span.end as usize;
@@ -178,12 +189,12 @@ fn object(call: &Call, n: usize, files: &[(String, PathBuf)], hoisted: &mut Stri
 }
 
 /// The files `patterns` match, as (key, path), sorted by key; the
-/// directories outside `root` they search go into `outside`.
+/// directories they search go into `searched`.
 fn matches(
     patterns: &[String],
     dir: &Path,
     root: &Path,
-    outside: &mut Vec<GlobDir>,
+    searched: &mut Vec<GlobDir>,
 ) -> Result<Vec<(String, PathBuf)>, String> {
     let mut found = std::collections::BTreeMap::new();
     let (excluded, included): (Vec<&String>, Vec<&String>) =
@@ -195,8 +206,8 @@ fn matches(
         for pattern in braces(pattern) {
             let (base, rest, key_base) = split(&pattern, dir, root)?;
             // Searched (`rest` is not the `\0` of a missing directory).
-            if !base.starts_with(root) && base.is_dir() {
-                outside.push(GlobDir {
+            if base.is_dir() {
+                searched.push(GlobDir {
                     dir: base.clone(),
                     pattern: rest.clone(),
                 });
@@ -641,11 +652,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// The directories a pattern searches outside the app are reported,
-    /// each with the pattern below it; the app's own and missing ones are
-    /// not.
+    /// The directories a pattern searches are reported, the app's and those
+    /// outside it, each with the pattern below it; missing ones are not.
     #[test]
-    fn glob_watch_reports_the_directories_searched_outside_the_app() {
+    fn glob_watch_reports_the_directories_searched() {
         let top = tree(
             "watch-outside",
             &[
@@ -655,14 +665,14 @@ mod tests {
             ],
         );
         let app = top.join("app");
-        let mut outside = Vec::new();
+        let mut searched = Vec::new();
         let out = expand(
             "const all = import.meta.glob([\"/**/*.preview.tsx\", \"/../registry/*/src/**/*.preview.tsx\"]);\n\
              const icons = import.meta.glob(\"../lib/{icons,missing}/*.ts\");\n",
             SourceType::ts(),
             &app.join("Stage.ts"),
             &app,
-            &mut outside,
+            &mut searched,
         )
         .unwrap()
         .unwrap();
@@ -671,8 +681,12 @@ mod tests {
             "{out}"
         );
         assert_eq!(
-            outside,
+            searched,
             [
+                GlobDir {
+                    dir: app.clone(),
+                    pattern: "**/*.preview.tsx".to_owned(),
+                },
                 GlobDir {
                     dir: top.join("registry"),
                     pattern: "*/src/**/*.preview.tsx".to_owned(),
