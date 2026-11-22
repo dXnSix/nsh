@@ -12,6 +12,7 @@ use nsh_core::MountBatch;
 use nsh_engine::MountSink;
 
 mod assets;
+mod call_owners;
 mod canvas;
 mod class_bench;
 mod class_extensions;
@@ -75,6 +76,7 @@ mod rust_platform;
 mod rust_popups;
 mod rust_renderers;
 mod rust_scrolling;
+mod rust_signals;
 mod rust_styles;
 mod rust_touch;
 mod served_assets;

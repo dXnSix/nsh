@@ -951,6 +951,11 @@ fn render_component(
 ) -> Result<JsValue, JsValue> {
     let node = dom::create_host_element(cx, nsh_core::Tag::View)?;
     let guard = Owned(cx, node);
+    // Its view is made under the Rust owner tied to the JS owner it is
+    // made in, if there is one: it sees that owner's context.
+    if let Some(id) = dom::node_id(cx, node) {
+        crate::ties::place_component(cx, id);
+    }
     let name = new_string(cx, spec.name);
     let r = dom::set_prop_value(cx, node, "component", name);
     // SAFETY: ours.
@@ -1149,6 +1154,14 @@ fn render_component(
     // them.
     if spec.takes_children() && has(cx, props, "children") {
         let reader = Owned(cx, prop_reader(cx, props, "children"));
+        // Made under a JS owner marked as the component's place: lazy
+        // children (made once it places them) see where it placed them.
+        let reader = match dom::node_id(cx, node)
+            .and_then(|id| crate::ties::placed_reader(cx, id, reader.1, lazy.is_some()))
+        {
+            Some(placed) => Owned(cx, placed),
+            None => reader,
+        };
         // A `ThemeScope`'s children are made in its scope: `colorScheme()`
         // and `token()` in them read its appearance.
         let reader = if nsh_core::element::is_theme_scope(spec.name) {

@@ -100,6 +100,7 @@ pub use crate::element::{
     JsError,
     JsHandle,
     JsObject,
+    JsSignal,
     JsValue,
     KeyCapture,
     KeyEvent,

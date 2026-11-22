@@ -24,6 +24,10 @@ pub(crate) struct SystemConfig {
     /// come near (`EngineConfig::content_culling`).
     #[cfg_attr(not(feature = "js-core"), allow(dead_code))]
     pub(crate) lazy_rows: bool,
+    /// The core's Rust reactive graph, where synchronous calls from JS run
+    /// their Rust reactive code (`CallCx::with_owner`).
+    #[cfg_attr(not(feature = "js-core"), allow(dead_code))]
+    pub(crate) rust_runtime: nsh_core::element::RuntimeHandle,
 }
 
 #[cfg(not(any(feature = "js-core", all(feature = "browser", target_arch = "wasm32"))))]
@@ -187,6 +191,7 @@ mod imp {
             host.set_system_wake(system.wake);
             host.set_host_bridge(system.host);
             host.set_lazy_rows(system.lazy_rows);
+            host.set_rust_runtime(Some(system.rust_runtime));
             host.set_stop_flag(stop.clone());
             let exit_requested = Rc::new(Cell::new(false));
             let request = exit_requested.clone();

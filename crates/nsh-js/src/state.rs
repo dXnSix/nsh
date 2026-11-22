@@ -41,6 +41,8 @@ pub(crate) struct State {
     pub(crate) chunks: crate::chunks::Chunks,
     /// The native modules the context serves (the loader reads it).
     pub(crate) modules: ModuleTable,
+    /// The Rust owners tied to JS owners (`CallCx::with_owner`).
+    pub(crate) ties: crate::ties::Ties,
 }
 
 thread_local! {
@@ -98,6 +100,7 @@ pub(crate) fn install(
             host_channel: Default::default(),
             chunks: Default::default(),
             modules: ModuleTable::new(ui_sets),
+            ties: Default::default(),
         }));
         qjs::JS_SetContextOpaque(raw, state as *mut c_void);
         STATES.with(|m| m.borrow_mut().insert(rt as usize, state as usize));
@@ -129,6 +132,7 @@ pub(crate) fn uninstall(cx: &Ctx<'_>) {
         // First: what the frees below finalize finds Rust's callbacks
         // released and their calls refused.
         state.classes.free_all();
+        state.ties.free_all();
         state.hot.free_all();
         state.chunks.free_all();
         state.keymap.free_all();

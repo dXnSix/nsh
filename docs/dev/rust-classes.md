@@ -103,14 +103,16 @@ so a class's methods can run directly inside the JS call, as the web classes nsh
 
 - **Instances live in Rust, owned by their JS object.** A JS object of the class holds the Rust value as its opaque
   (`Rc<RefCell<T>>`, the web classes' slot, `nsh-js` `web/mod.rs`); the object being collected drops it.
-  `dispose()` (and `[Symbol.dispose]`, for `using`) drops it now (a value holding a file or a large buffer); any use
-  after throws. `T: 'static`, not
+  `dispose()` (and `[Symbol.dispose]`, for `using`) drops it now (a value holding a file or a large buffer), inside
+  that call from JS, so the callbacks its drop calls run on the spot (as in a synchronous member); any use after
+  throws. `T: 'static`, not
   `Send`: it never leaves the engine thread.
 - **Synchronous members run in the JS call.** `&self` / `&mut self` methods, getters and setters, statics and the
   constructor run inside the JS turn, outside the core: they compute and keep state, and cannot use the UI's free
   functions (signals, `dialog`, `theme()`): the reactive graph is not entered there, and calling one panics with a
-  message saying so (as on any thread without it). `runtime_entered()` tells code that runs in both places which
-  one it is in, and `start_task(future)` starts a task of the core from either (below). A method borrows its instance for its call; a re-entrant call
+  message saying so (as on any thread without it), except in `cx.with_owner(f)` (below), where the Rust graph's
+  own functions work. `runtime_entered()` tells code that runs in both places which one it is in, and
+  `start_task(future)` starts a task of the core from either (below). A method borrows its instance for its call; a re-entrant call
   (a method reaching the same instance again) throws instead of aliasing, as the web classes do.
 - **`async` members are core tasks.** An `async fn` method gets `this: Instance<Self>` (a handle: `with` /
   `with_mut` borrow the value between awaits) and returns a promise; it runs as a task of the core, where the free
@@ -235,6 +237,31 @@ For that, two choices of the first version change:
   `async` one) starts a task of the core in order with the ops (`cx.start(future)`, nothing waits for it) and ties
   work to what owns the call in JS (`cx.on_cleanup(f)`: the reactive owner, else the module's run under hot
   reload). `process.spawn` returns its child at once and delivers the child's events from such a task.
+- **Rust reactive code in a synchronous call**: `cx.with_owner(f)` runs `f` in the engine's Rust graph under the
+  Rust owner tied to the call's JS owner (`cx.has_owner()`: a component's body, an effect, a root), as a Rust
+  component's body runs under its own. The tied owner is made by the first call under that JS owner that asks for
+  it (a Rust root, its context's parent the nearest tied owner above, found by walking the JS owners up) and is
+  disposed when the JS owner goes. In `f`, `provide_context` provides to what that JS owner makes from then on,
+  `use_context` finds what the tied owners above provided, `cleanup` runs when the JS owner goes, and signals,
+  memos and effects are the owner's; `f` is untracked and its writes notify at its end. A JS component's body has
+  no owner of its own (as in Solid): components made under one JS owner (siblings in a view) share its tied owner,
+  and one under an owner of its own (an `<If>`'s branch, an `<Each>`'s row, a provider) has its own. The Rust
+  components JS makes under a tied owner make their view under it, so they see its context, unless the component
+  they are placed in is nearer (`Core::view_owner`). A Rust component's JS children are made under a JS owner
+  marked as its place: lazy ones (`#[prop(lazy)]`, made once it places them) see where it placed them, its
+  context; eager ones are made before its view, so the calls in them see the context around the component, and
+  the Rust components in them are placed by the core under the component. Without a JS owner `f` runs under none.
+  The core's executor is not the call's: tasks start as in any synchronous call (`cx.start`, `start_task`),
+  `spawn` panics, theme writes go as below, and `runtime_entered()` stays `false`. The engine gives its VM the
+  core's graph (`Host::set_rust_runtime`, `Core::runtime_handle`); a VM without one runs `f` as it is
+  (`nsh-js` `ties.rs`).
+- **A signal Rust writes**: `cx.signal(value)` makes a signal of the call's VM holding `value` (any `JsValue`)
+  and gives a `JsSignal<T>` (`element/js_signal.rs`, prelude), which the call returns to JS and Rust keeps: JS
+  reads it by calling it, tracked like any signal (the declarations type it `import("nsh").Accessor<T>`), and
+  `JsSignal::set(value)` writes it later, on the engine thread: on the spot where JS can run now (inside a
+  synchronous call, in a task between JS's turns), else in the VM's next turn; once the VM is gone it does
+  nothing. A clone is the same signal; it is not `Send`. Hosts make it through `JsHost::new_signal` (`nsh-js`'s
+  `CallHost`, the signal `signal()` makes); one without signals refuses.
 - **Starting a task without `cx`**: `start_task(future)` (`nsh_core::element`, prelude) starts a root task of the
   core (no owner ends it, nothing waits for it) from Rust code that has no `CallCx` at hand: inside a synchronous
   call from JS it goes as `cx.start` does, in order with what JS sent before the call, when the core takes the
@@ -242,7 +269,7 @@ For that, two choices of the first version change:
   executor's next run. Elsewhere (off the engine thread, in a finalizer, once the VM is gone) it is not started:
   `Err(NotStarted(future))` gives it back. `runtime_entered()` says whether the reactive runtime is entered on this
   thread (the engine thread while the core runs Rust: a task, a component, an op), where signals and `spawn`
-  work; `false` in a synchronous call from JS. The JS host registers itself per VM (`CallTasks`,
+  work; `false` in a synchronous call from JS, `cx.with_owner`'s `f` included. The JS host registers itself per VM (`CallTasks`,
   `register_call_tasks`: `nsh-js`'s callbacks' table, the web player's bindings) so `start_task` finds the VM in a
   call; with two VMs in calls at once (one's JS calling the other's Rust) it starts none.
 - **Theme writes in a call**: `set_modifier`, `set_color_scheme`, `update_tokens`, `reset_tokens` and
@@ -681,7 +708,7 @@ Nothing crosses between JS and the core as JSON for a Rust component, module or 
   methods with `#[class]`'s member code (`class.rs`' `member_def`, `this` an `Instance<C>`) and implements
   `element::ClassExtension` (`ClassExtension::DEF`, a `ClassExtensionDef`: the class, the holder's type and the
   methods' `Member`s).
-- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()` and `can_run_now()`; `JsHandle::get` too), `Posts`, `runtime_entered`, `start_task` (`engine_thread.rs`),
+- **`nsh-core`:** `element::Class`, `ClassSpec` (for the declarations), `Instance<T>`, `Constructor`, `Callback<A, R>`, `JsHandle` (both with `can_call_now()` and `can_run_now()`; `JsHandle::get` too), `Posts`, `runtime_entered`, `start_task` (`engine_thread.rs`), `CallCx::with_owner` with `RuntimeHandle` (`element/reactive.rs`: `enter_call`, `set_component_owner`, `children_owner`), `CallCx::signal` and `JsSignal` (`element/js_signal.rs`),
   `Registry::class::<C>()`, `ClassExtension` and `Registry::class_extension::<E>()` / `class_extensions()` /
   `class_extensions_in(sets)` (`class_extension.rs`, the clash checks in `component.rs`), `TsAlias` and `Registry::ts_alias` (`ts_alias.rs`), `Interface` and `Registry::interface::<I>()` (`interface.rs`: the stand-in's calls, a
   `JsCall` whose `JsTarget` is the object's method or property); the direct conversions (`JsHost`, `JsIn`, `JsOwned`; `JsValue`'s `from_js` /

@@ -372,6 +372,27 @@ pub trait JsHost {
         drop(f);
         Box::new(|| {})
     }
+
+    /// A new signal of the VM holding `value` (borrowed), owned: a callable
+    /// object JS reads it by, with a bound `set` (`CallCx::signal`). A host
+    /// without signals refuses.
+    fn new_signal(&self, value: JsRaw) -> Result<JsRaw, PropError> {
+        let _ = value;
+        Err(PropError("a signal cannot be made here".into()))
+    }
+
+    /// Whether a JS reactive owner owns the call (`CallCx::has_owner`): a
+    /// component's body, an effect, a root. A host without owners has none.
+    fn has_owner(&self) -> bool {
+        false
+    }
+
+    /// Runs `f` in the engine's Rust reactive graph under the Rust owner tied
+    /// to the call's JS owner (`CallCx::with_owner`). A host without the
+    /// engine's graph runs it as it is.
+    fn with_owner(&self, f: &mut dyn FnMut()) {
+        f();
+    }
 }
 
 /// A JS value borrowed for a call: read it with its methods, convert it

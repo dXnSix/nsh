@@ -28,6 +28,10 @@ when it was written; NSH now ships capabilities and no styled components, and th
   signals that make every later update cost only what it changes (`docs/dev/performance.md`). A binding's first
   value is applied with its element's static parts, not as a patch after them.
 - **One pull request**, not one per step: the old model went in the same change.
+- **Context reaches Rust from JS through tied owners.** A synchronous call from JS can run its Rust code under a
+  Rust owner tied to its JS owner (`CallCx::with_owner`, `docs/dev/rust-classes.md`): what it provides there is
+  seen by the calls under the JS owners below and by the Rust components JS makes under them. The graphs stay
+  two; only owners are tied.
 
 Rust components move from today's model (a component's `render` runs again on every change, the core rebuilds its
 element tree and diffs it against the last one) to the model TSX already uses: **a component runs once, signals drive

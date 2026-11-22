@@ -340,6 +340,7 @@ impl super::Runtime {
     pub(crate) fn forget_host(&self, host: NodeId) {
         let _entered = self.enter();
         with_data(|d| d.ambient.insets.remove(&host));
+        super::reactive::forget_component(host);
     }
 }
 
@@ -350,11 +351,20 @@ fn env<T: Clone + 'static>(part: impl FnOnce(&EnvSignals) -> Memo<T>) -> T {
 }
 
 pub(super) fn executor() -> Rc<Executor> {
+    assert!(
+        !super::reactive::entered_for_call(),
+        "tasks and the core's actions start where the engine runs Rust code, not in a \
+         synchronous call from JS: use `CallCx::start` or `start_task`"
+    );
     with_data(|d| d.ambient.executor.clone()).expect("the core sets the executor")
 }
 
-/// The core's executor where a reactive runtime of an engine is entered.
+/// The core's executor where a reactive runtime of an engine is entered
+/// (not for a synchronous call from JS, [`super::RuntimeHandle::enter_call`]).
 pub(super) fn try_executor() -> Option<Rc<Executor>> {
+    if super::reactive::entered_for_call() {
+        return None;
+    }
     super::reactive::try_with_data(|d| d.ambient.executor.clone()).flatten()
 }
 
@@ -393,8 +403,7 @@ fn write_theme(action: Action) {
 /// [`act`] while the engine runs Rust code, else nothing: for cleanups and
 /// handles that may outlive it.
 pub(super) fn act_if_running(action: Action) {
-    if let Some(executor) = super::reactive::try_with_data(|d| d.ambient.executor.clone()).flatten()
-    {
+    if let Some(executor) = try_executor() {
         executor.act(action);
     }
 }
@@ -2016,7 +2025,7 @@ impl Future for Delay {
             timer.set_waker(cx.waker());
             return std::task::Poll::Pending;
         }
-        match super::reactive::try_with_data(|d| d.ambient.executor.clone()).flatten() {
+        match try_executor() {
             Some(executor) => {
                 self.timer = Some(executor.add_timer(self.at, cx.waker().clone()));
                 std::task::Poll::Pending
