@@ -157,6 +157,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+          # The web runtime builds the core for WebAssembly (step below).
+          targets: wasm32-unknown-unknown
       # Upstream's action, as it is: huacnlee/cargo and the dependencies'
       # builds, which main's runs save and pull requests restore.
       - name: Cargo
@@ -167,6 +169,10 @@ jobs:
         run: cargo clippy --all-targets $PACKAGES -- -D warnings
       - name: Test
         run: bash .github/fork/retry.sh cargo test $PACKAGES
+      # The web runtime compiles the core and `nsh/base` for wasm32, where
+      # nsh-core leaves out its native-only dependencies (upstream's step).
+      - name: Check WebAssembly
+        run: cargo check -p nsh-core -p nsh-base --all-features --target wasm32-unknown-unknown
 
   # Upstream's `linux.yml`, job `check`, without each optional feature
   # alone, the AT-SPI tests and the examples' tests in GTK windows
@@ -231,6 +237,14 @@ jobs:
         uses: ./.github/actions/cargo
         with:
           cache: windows
+      # Cargo retries oversized compiler commands with an argument file when
+      # it receives the Windows launch error directly from starting rustc.
+      - name: Use the toolchain compiler directly
+        shell: pwsh
+        run: |
+          $rustc = rustup which rustc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RUSTC=$rustc" >> $env:GITHUB_ENV
       - name: Clippy
         run: >
           cargo clippy --all-targets
@@ -383,9 +397,9 @@ jobs:
         with:
           cache: rust-app
       - name: Clippy
-        run: cargo clippy -p gallery-native --all-targets --locked -- -D warnings
+        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/push --locked -- -D warnings
       - name: Test the crate
-        run: bash .github/fork/retry.sh cargo test -p gallery-native --locked
+        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/push --locked
       - name: Check the native dependency graph
         run: |
           cargo tree -p gallery-native --locked -e normal > "$RUNNER_TEMP/rust-app-dependencies.txt"

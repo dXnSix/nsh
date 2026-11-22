@@ -1156,6 +1156,7 @@ impl Nav {
     /// Sizes modal `id` to the surface and reports it (with the surface's
     /// safe area).
     fn size_modal(&mut self, surface: &Surface, id: NodeId) {
+        let presenting = self.presenting.contains(&id);
         let Some(m) = self.modals.get_mut(&id) else {
             return;
         };
@@ -1172,6 +1173,13 @@ impl Nav {
         } else {
             EdgeInsets::default()
         };
+        // Reported once its batch is applied ([`end_batch`]): a window
+        // of the app's own (`Window.open`) is presented first and only
+        // claimed by the batch's commands, and must not be laid out at the
+        // surface's size in between.
+        if presenting {
+            return;
+        }
         report(surface, id, &mut m.reported, size, insets);
     }
 
@@ -1557,6 +1565,7 @@ pub(crate) fn end_batch(surface: &Rc<Surface>) {
         nav.reconcile(surface, stack);
     }
     for id in std::mem::take(&mut nav.presenting) {
+        nav.size_modal(surface, id);
         nav.show_modal(surface, id);
     }
     // Screen sizes change with the app's layout.

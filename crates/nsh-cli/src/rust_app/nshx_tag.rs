@@ -49,18 +49,19 @@ fn probe_manifest(url: &str, tag: &str) -> String {
     )
 }
 
-/// nsh's crates from `url` at `tag`: Cargo's checkout of it ([`Nsh::of`]).
+/// nsh's crates from `url` at `tag`: Cargo's checkout of it ([`Nsh::resolve`]).
 fn at_tag(url: &str, tag: &str, workspace: &Path) -> anyhow::Result<Nsh> {
     let dir = workspace.join("nshx-tag");
     fs::create_dir_all(dir.join("src")).with_context(|| format!("create {}", dir.display()))?;
     fs::write(dir.join("Cargo.toml"), probe_manifest(url, tag))?;
     fs::write(dir.join("src/lib.rs"), "")?;
-    let nsh = Nsh::of(&[AppCrate {
-        package: "nshx-tag".into(),
-        dir,
-    }])
-    .with_context(|| format!("nsh's crates from {url} at {tag}"))?;
-    if !matches!(nsh, Nsh::Git { .. }) {
+    // Resolved alone, then checked by version: the tag is this CLI's own
+    // (`NSHX_TAG`), whose commit a build need not be (the revision check of
+    // [`Nsh::of`]).
+    let nsh = Nsh::resolve(&[AppCrate::new("nshx-tag".into(), dir)])
+        .with_context(|| format!("nsh's crates from {url} at {tag}"))?;
+    let at_version = matches!(&nsh, Nsh::Git { checkout, .. } if super::check_checkout(checkout, None, "unknown").is_ok());
+    if !at_version {
         bail!("{url} at {tag} has nsh's crates at another version than this CLI's ({VERSION})");
     }
     Ok(nsh)
@@ -149,6 +150,7 @@ mod tests {
         let Nsh::Git {
             checkout,
             url: resolved,
+            ..
         } = &nsh
         else {
             panic!("a release takes the fork's crates from Git: {nsh:?}");

@@ -21,6 +21,7 @@ mod link;
 mod minify;
 #[cfg(feature = "bundle")]
 mod natives;
+pub mod nshm;
 #[cfg(feature = "bundle")]
 mod plugin;
 mod props;
