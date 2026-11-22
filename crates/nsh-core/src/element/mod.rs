@@ -141,6 +141,17 @@ pub use nsh_theme::{Diagnostic, Patch, RoleDeclaration, ThemeDocument, ValueType
 pub use self::host::{modal, screen, stack};
 #[doc(hidden)]
 pub use self::theme_scope::is_theme_scope;
+pub(crate) use self::{
+    ambient::act,
+    animated::LiveNode,
+    back::BackListener,
+    builder::{ElKind, PlaceFn},
+    component::{AnyInstance, caught, panic_message},
+    task::{
+        Action, AfterAnswer, AnswerSlot, AudioAction, ClipboardRead, Executor, FileAnswer,
+        NotificationAction, SpeechAction,
+    },
+};
 pub use self::{
     ambient::*,
     animated::{
@@ -230,8 +241,8 @@ pub use self::{
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
     task::{
-        Answer, ClipboardImage, ClipboardItem, DialogAnswer, DialogCloser, DialogReply, ImageSize,
-        Task,
+        Answer, ClipboardImage, ClipboardItem, ClipboardWrite, DialogAnswer, DialogCloser,
+        DialogReply, ImageSize, Task,
     },
     theme_scope::{
         ModifierContext, ScopeModifiers, ThemeScope, ThemeScopeElement, ThemeScopeProps,
@@ -250,16 +261,6 @@ pub use self::{
     value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
     watch::OrderWatch,
-};
-pub(crate) use self::{
-    animated::LiveNode,
-    back::BackListener,
-    builder::{ElKind, PlaceFn},
-    component::{AnyInstance, caught, panic_message},
-    task::{
-        Action, AfterAnswer, AnswerSlot, AudioAction, ClipboardRead, Executor, FileAnswer,
-        NotificationAction, SpeechAction,
-    },
 };
 /// The geometry Rust components style with (`crate::geometry`).
 pub use crate::geometry::{

@@ -10,6 +10,8 @@
 //!   dXn.GpuiTizen's cross driver (`DXN_GPUI_TIZEN`).
 //! - `dist`: the distribution in `dist/nsh`: the `nsh` CLI plus every
 //!   prebuilt runtime, so app developers never need Rust.
+//! - `android-embed`: only the Android embedding libraries (`nsh.aar`,
+//!   `nsh-dev.aar`) into `dist/nsh/embed/android`.
 //! - `ios-embed`: only the iOS embedding SDK (`NativeShell.xcframework`,
 //!   `NativeShellDev.xcframework`) into `dist/nsh/embed/ios`.
 //! - `web`: the WebAssembly runtime, its player and the website's demos
@@ -76,7 +78,8 @@ enum Task {
         #[arg(long)]
         abi: Vec<String>,
     },
-    /// Run clippy on the Android crate (with the NDK set up).
+    /// Run clippy on the Android crate and `nsh-extra`'s modules for
+    /// Android (with the NDK set up).
     ClippyAndroid,
     /// Build the Tizen runtime (Samsung TVs) through dXn.GpuiTizen's cross
     /// driver: its checkout is `DXN_GPUI_TIZEN`, else `../dXn.GpuiTizen`.
@@ -92,6 +95,8 @@ enum Task {
         #[arg(long, env = "NSH_TIZEN_CARGO_CONFIG", value_delimiter = ',')]
         config: Vec<std::path::PathBuf>,
     },
+    /// Build only the Android embedding libraries.
+    AndroidEmbed(android::EmbedOptions),
     /// Build the distribution in `dist/nsh`.
     Dist,
     /// Build only the iOS embedding XCFrameworks.
@@ -188,6 +193,7 @@ fn task(task: Task) -> anyhow::Result<()> {
             };
             tizen::build(variant, &archs, &config).map(|_| ())
         }
+        Task::AndroidEmbed(options) => android::embed(options).map(|out| term::note(out.display())),
         Task::Dist => dist::dist(),
         Task::IosEmbed(options) => ios::build(options).map(|out| term::note(out.display())),
         Task::Web { out } => web::build(&out),
