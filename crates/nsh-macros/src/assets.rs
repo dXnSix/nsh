@@ -334,7 +334,7 @@ fn asset_in(dir: &Path, package: &str, lit: LitStr) -> syn::Result<TokenStream> 
             })?;
             let (width, height) = (w as f32, h as f32);
             quote! {{
-                ::nsh_core::__require_svg!();
+                #nsh_core::__require_svg!();
                 const _: &[u8] = ::core::include_bytes!(#source);
                 #ui::ImageAsset {
                     url: #uri,
@@ -416,7 +416,7 @@ fn assets_in(dir: &Path, package: &str, span: Span) -> syn::Result<TokenStream> 
     let require_svg = found
         .iter()
         .any(|f| matches!(kind(f), Kind::Svg))
-        .then(|| quote!(::nsh_core::__require_svg!();));
+        .then(|| quote!(#nsh_core::__require_svg!();));
     Ok(quote! {{
         #require_svg
         const FILES: &[#ui::AssetFile] = &[#(#entries),*];
@@ -562,6 +562,30 @@ mod tests {
             icon.contains("Points(24f32)") && icon.contains("scales:&[]"),
             "{icon}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A crate that takes nsh through a framework re-exporting it has no
+    /// `::nsh_core`: an SVG's renderer check names the `nsh_core` in scope,
+    /// as the rest of the asset does, in `asset!` and in `assets!`.
+    #[test]
+    fn an_svg_in_a_crate_without_nsh_core_checks_the_renderer_through_the_one_in_scope() {
+        let dir = crate_assets("svg-reexported");
+        std::fs::write(
+            dir.join("icon.svg"),
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0"/></svg>"#,
+        )
+        .unwrap();
+        let (one, all) = crate::root::as_reexported(|| {
+            (
+                code(asset_in(&dir, "app", lit("icon.svg")).unwrap()),
+                code(assets_in(&dir, "app", Span::call_site()).unwrap()),
+            )
+        });
+        for out in [&one, &all] {
+            assert!(out.contains("{nsh_core::__require_svg!();"), "{out}");
+            assert!(!out.contains(concat!(":", ":nsh_core")), "{out}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
