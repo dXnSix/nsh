@@ -1754,6 +1754,13 @@ impl<M: TextEngine> Core<M> {
         self.components.posts = posts;
     }
 
+    /// The reactive graph of the Rust components, for the engine's JS host:
+    /// a synchronous call from JS runs its Rust reactive code there
+    /// (`CallCx::with_owner`).
+    pub fn runtime_handle(&self) -> crate::element::RuntimeHandle {
+        self.components.runtime.handle()
+    }
+
     /// Wakes the engine when a component's task is woken (from any
     /// thread): it then calls [`Self::run_component_tasks`].
     pub fn set_task_notify(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
@@ -2972,6 +2979,19 @@ impl<M: TextEngine> Core<M> {
         crate::element::Owner::detached()
     }
 
+    /// The owner a component JS made on `host` makes its view under: the
+    /// Rust owner tied to the JS owner JS made it in (`CallCx::with_owner`),
+    /// unless the component above it is nearer (that owner is above the
+    /// component's placement), else the component above's
+    /// ([`Self::owner_above`]).
+    fn view_owner(&self, host: NodeId) -> crate::element::Owner {
+        let above = self.owner_above(host);
+        match crate::element::reactive::take_component_owner(host) {
+            Some(tied) if !is_above(tied, above) => tied,
+            _ => above,
+        }
+    }
+
     /// The host of the component that runs once whose owner is `owner`, or
     /// whose view made it (a binding's own owner is under the component's).
     fn host_of_owner(&self, owner: crate::element::Owner) -> Option<NodeId> {
@@ -3033,7 +3053,7 @@ impl<M: TextEngine> Core<M> {
                     self.restyle_view(host, inst);
                     return None;
                 }
-                inner.adopt(self.owner_above(host));
+                inner.adopt(self.view_owner(host));
                 // A view that fails shows nothing.
                 caught(|| inner.view()).unwrap_or_else(|message| {
                     failure = Some(message);
@@ -4293,7 +4313,10 @@ impl<M: TextEngine> Core<M> {
                     old[j] = None;
                 }
                 *placeholder = Some(out.len());
-                inst.children_owner = Some(crate::element::Owner::current());
+                let owner = crate::element::Owner::current();
+                inst.children_owner = Some(owner);
+                // What JS makes in them from now on (lazy children) sees it.
+                crate::element::reactive::set_children_owner(host, owner);
                 out.push(Expanded::js(0, Part::Children));
             }
             ElKind::JsChild(id) => {
@@ -8733,4 +8756,16 @@ fn page_content(url: &str) -> bool {
     let scheme = url.split(':').next().unwrap_or_default();
     url.contains(':')
         && (scheme.eq_ignore_ascii_case("data") || scheme.eq_ignore_ascii_case("blob"))
+}
+
+/// Whether `owner` is `of` or one of the owners above it.
+fn is_above(owner: crate::element::Owner, of: crate::element::Owner) -> bool {
+    let mut at = Some(of);
+    while let Some(o) = at.filter(crate::element::Owner::is_live) {
+        if o == owner {
+            return true;
+        }
+        at = o.parent();
+    }
+    false
 }

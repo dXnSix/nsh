@@ -57,6 +57,7 @@ pub mod header;
 pub(crate) mod host;
 mod interface;
 mod js;
+mod js_signal;
 pub(crate) mod json_host;
 mod keyboard;
 pub(crate) mod keys;
@@ -212,6 +213,7 @@ pub use self::{
     },
     interface::{Interface, InterfaceDef, InterfaceMember, InterfaceRet},
     js::{JsClass, JsHost, JsIn, JsKind, JsOwned, JsPrimitive, JsRaw},
+    js_signal::JsSignal,
     json_host::from_json,
     keyboard::Keyboard,
     module::{
@@ -221,9 +223,9 @@ pub use self::{
     once::Scope,
     prop::{IntoProp, Prop},
     reactive::{
-        IntoReactive, Memo, Owner, Reactive, ReadSignal, Runtime, Signal, SignalEquals, Stored,
-        batch, cleanup, computed, create_root, effect, provide_context, signal, signal_with,
-        stored, untracked, use_context,
+        IntoReactive, Memo, Owner, Reactive, ReadSignal, Runtime, RuntimeHandle, Signal,
+        SignalEquals, Stored, batch, cleanup, computed, create_root, effect, provide_context,
+        signal, signal_with, stored, untracked, use_context,
     },
     renderer::{__decoding_props_of, RenderValue, Rendered, Renderer},
     resource::{Resource, ResourceInfo, ResourceState, resource, resource_with_value},

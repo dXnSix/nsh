@@ -18,11 +18,12 @@ use super::{TaskStart, ToJs};
 /// thread while it runs Rust code of the core (a task, a component, an
 /// `async` member's body, an op), where signals, [`super::spawn`] and the
 /// other free functions work. `false` inside a synchronous call from JS (a
-/// `#[class]` member or a module function that is not `async`), off the
-/// engine thread, and outside an engine (a unit test of a model). Asking
-/// costs a thread-local read.
+/// `#[class]` member or a module function that is not `async`, its
+/// `CallCx::with_owner` included, where the Rust graph is entered but the
+/// core's executor is not), off the engine thread, and outside an engine (a
+/// unit test of a model). Asking costs a thread-local read.
 pub fn runtime_entered() -> bool {
-    super::reactive::try_with_data(|_| ()).is_some()
+    super::reactive::try_with_data(|_| ()).is_some() && !super::reactive::entered_for_call()
 }
 
 /// A task [`start_task`] could not start, given back (to queue it some

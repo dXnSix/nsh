@@ -721,6 +721,18 @@ impl Host {
         });
     }
 
+    /// The engine's Rust reactive graph ([`nsh_core::Core::runtime_handle`]):
+    /// a synchronous call from JS runs its Rust reactive code there, under
+    /// the Rust owner tied to the call's JS owner
+    /// ([`nsh_core::element::CallCx::with_owner`]), and the Rust components
+    /// JS makes see the context of the nearest such owner. Without it a
+    /// call's `with_owner` runs its code as it is. Set before evaluating the
+    /// bundle.
+    pub fn set_rust_runtime(&self, runtime: Option<nsh_core::element::RuntimeHandle>) {
+        self.cx
+            .with(|cx| crate::ties::set_runtime(cx.as_raw().as_ptr(), runtime));
+    }
+
     /// Whether `<Each>` leaves the rows the core may cull unrendered, as
     /// placeholders, until the core asks for them (`content_culling`);
     /// off by default. Set before evaluating the bundle.

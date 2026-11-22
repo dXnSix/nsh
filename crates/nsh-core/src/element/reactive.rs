@@ -64,6 +64,13 @@ pub(crate) struct RustData {
     /// The error boundaries ([`super::catch_error`]): what fails under the
     /// owner sets its signal.
     boundaries: rustc_hash::FxHashMap<Owner, Signal<Option<super::ComponentError>>>,
+    /// The Rust owners JS made components under, by host: the owner tied to
+    /// the JS owner they were made in ([`set_component_owner`]), which their
+    /// view is made under.
+    component_owners: rustc_hash::FxHashMap<crate::NodeId, Owner>,
+    /// Where each component places its JS children, by host: the owner they
+    /// see the context of ([`children_owner`]).
+    children_owners: rustc_hash::FxHashMap<crate::NodeId, Owner>,
     /// The slot places views marked for a design tool, by the owner of the
     /// view that marked them ([`super::design_slot`]).
     #[cfg(feature = "inspect")]
@@ -101,6 +108,41 @@ pub(crate) fn design_slots() -> Vec<(Owner, super::SharedString)> {
         .into_iter()
         .map(|(owner, name)| (owner, untracked(|| name())))
         .collect()
+}
+
+/// A JS host made the component on `host` while JS ran under the JS owner
+/// `owner` is tied to (`CallCx::with_owner`): its view is made under
+/// `owner`, so it sees its context, unless the component it is placed in is
+/// nearer. Call it in a call's entry ([`RuntimeHandle::enter_call`]).
+#[doc(hidden)]
+pub fn set_component_owner(host: crate::NodeId, owner: Owner) {
+    with_data(|d| d.component_owners.insert(host, owner));
+}
+
+/// The owner [`set_component_owner`] gave the component on `host`, taken.
+pub(crate) fn take_component_owner(host: crate::NodeId) -> Option<Owner> {
+    with_data(|d| d.component_owners.remove(&host)).filter(Owner::is_live)
+}
+
+/// The component on `host` places its JS children under `owner`.
+pub(crate) fn set_children_owner(host: crate::NodeId, owner: Owner) {
+    with_data(|d| d.children_owners.insert(host, owner));
+}
+
+/// Where the component on `host` places its JS children, once its view did:
+/// what a JS host ties the owners of children it makes then under. Call it
+/// in a call's entry ([`RuntimeHandle::enter_call`]).
+#[doc(hidden)]
+pub fn children_owner(host: crate::NodeId) -> Option<Owner> {
+    with_data(|d| d.children_owners.get(&host).copied()).filter(Owner::is_live)
+}
+
+/// The component on `host` goes: what was kept of it here.
+pub(crate) fn forget_component(host: crate::NodeId) {
+    with_data(|d| {
+        d.component_owners.remove(&host);
+        d.children_owners.remove(&host);
+    });
 }
 
 /// Makes the current owner an error boundary: what fails under it sets
@@ -183,6 +225,15 @@ thread_local! {
         reason = "it is const; clippy misreads Android's expansion"
     )]
     static CURRENT: Cell<*mut r::Graph<Rust>> = const { Cell::new(std::ptr::null_mut()) };
+    /// Whether the graph entered is entered for a synchronous call from JS
+    /// ([`RuntimeHandle::enter_call`]).
+    static IN_CALL: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the graph entered was entered for a synchronous call from JS
+/// ([`RuntimeHandle::enter_call`]): the core's executor is not the call's.
+pub(crate) fn entered_for_call() -> bool {
+    IN_CALL.with(Cell::get)
 }
 
 // SAFETY: the graph is the one entered on this thread; the graph's
@@ -305,14 +356,51 @@ fn graph<'a>() -> &'a mut r::Graph<Rust> {
 
 /// The reactive graph of an engine's Rust components.
 pub struct Runtime {
-    graph: Box<UnsafeCell<r::Graph<Rust>>>,
+    graph: Rc<UnsafeCell<r::Graph<Rust>>>,
 }
 
 impl Default for Runtime {
     fn default() -> Self {
         Self {
-            graph: Box::new(UnsafeCell::new(r::Graph::new(RustData::default()))),
+            graph: Rc::new(UnsafeCell::new(r::Graph::new(RustData::default()))),
         }
+    }
+}
+
+/// What a JS host enters an engine's [`Runtime`] with for a synchronous
+/// call from JS ([`RuntimeHandle::enter_call`]), so that the call can run
+/// under the Rust owner tied to its JS owner (`CallCx::with_owner`). It
+/// does not keep the runtime: once the engine's core is gone, it enters
+/// nothing.
+#[derive(Clone, Default)]
+pub struct RuntimeHandle(std::rc::Weak<UnsafeCell<r::Graph<Rust>>>);
+
+impl fmt::Debug for RuntimeHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RuntimeHandle")
+    }
+}
+
+impl RuntimeHandle {
+    /// Enters the runtime for a synchronous call from JS, until the guard
+    /// drops: signals, memos, effects, context, `cleanup` and `global` work,
+    /// with no owner current until the host makes one current
+    /// ([`Owner::run`]). The core's executor is not the call's: tasks, timers
+    /// and theme writes go as they go in a call ([`super::runtime_entered`]
+    /// stays `false`). `None` once the runtime is gone.
+    pub fn enter_call(&self) -> Option<Entered> {
+        let graph = self.0.upgrade()?;
+        let previous = CURRENT.with(|c| c.replace(graph.get()));
+        let previous_call = IN_CALL.with(|c| c.replace(true));
+        // No owner of the code around (a component's, while a Rust listener
+        // calls JS that calls Rust) is the call's.
+        // SAFETY: the graph entered just now; the borrow is short.
+        let saved = unsafe { &mut *graph.get() }.enter_owner(NONE);
+        Some(Entered {
+            previous,
+            previous_call,
+            owner: Some((graph, saved)),
+        })
     }
 }
 
@@ -323,15 +411,25 @@ impl fmt::Debug for Runtime {
 }
 
 /// While it lives, the graph it entered is the thread's
-/// ([`Runtime::enter`]).
+/// ([`Runtime::enter`], [`RuntimeHandle::enter_call`]).
 #[must_use = "the runtime is entered while the guard lives"]
 pub struct Entered {
     previous: *mut r::Graph<Rust>,
+    previous_call: bool,
+    /// A call's entry: the graph, kept while it is entered, and the owner
+    /// to put back.
+    owner: Option<(Rc<UnsafeCell<r::Graph<Rust>>>, r::SavedOwner)>,
 }
 
 impl Drop for Entered {
     fn drop(&mut self) {
+        if let Some((graph, saved)) = self.owner.take() {
+            // SAFETY: the graph is still the one entered; the borrow is
+            // short.
+            unsafe { &mut *graph.get() }.leave_owner(saved);
+        }
         CURRENT.with(|c| c.set(self.previous));
+        IN_CALL.with(|c| c.set(self.previous_call));
     }
 }
 
@@ -339,7 +437,18 @@ impl Runtime {
     /// Makes this runtime the thread's until the guard drops (entries nest).
     pub fn enter(&self) -> Entered {
         let previous = CURRENT.with(|c| c.replace(self.graph.get()));
-        Entered { previous }
+        let previous_call = IN_CALL.with(|c| c.replace(false));
+        Entered {
+            previous,
+            previous_call,
+            owner: None,
+        }
+    }
+
+    /// What a JS host enters this runtime with in synchronous calls from JS
+    /// ([`RuntimeHandle::enter_call`]).
+    pub fn handle(&self) -> RuntimeHandle {
+        RuntimeHandle(Rc::downgrade(&self.graph))
     }
 
     /// The panics of computations since the last call, with the owner each

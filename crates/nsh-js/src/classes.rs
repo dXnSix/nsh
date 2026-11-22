@@ -605,8 +605,15 @@ unsafe extern "C" fn dispose(
         );
         return qjs::JS_EXCEPTION;
     };
-    // The value's drop is the app's code: a panic in it throws.
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| instance.dispose())) {
+    // The value's drop is the app's code: a panic in it throws. It runs
+    // inside this call from JS, as a synchronous member does, so what it
+    // calls back (a callback it held) runs on the spot.
+    let depth = &classes(cx).depth;
+    depth.set(depth.get() + 1);
+    let disposed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| instance.dispose()));
+    let depth = &classes(cx).depth;
+    depth.set(depth.get() - 1);
+    match disposed {
         Ok(Ok(())) => UNDEFINED,
         Ok(Err(message)) => {
             let _ = js::type_error(cx, &message);
@@ -1367,6 +1374,23 @@ impl JsHost for CallHost<'_> {
         if crate::dom::push_op(self.cx, op).is_err() {
             let _ = js::take_exception(self.cx);
         }
+    }
+
+    fn has_owner(&self) -> bool {
+        crate::reactive::has_owner(self.cx)
+    }
+
+    fn new_signal(&self, value: JsRaw) -> Result<JsRaw, PropError> {
+        let signal = crate::reactive::new_signal(self.cx, from_raw(value));
+        // SAFETY: a live value, ours.
+        if unsafe { qjs::JS_IsException(signal) } {
+            return Err(self.threw());
+        }
+        Ok(to_raw(signal))
+    }
+
+    fn with_owner(&self, f: &mut dyn FnMut()) {
+        crate::ties::with_owner(self.cx, f);
     }
 
     fn on_cleanup(&self, f: Box<dyn FnOnce()>) -> Box<dyn FnOnce()> {

@@ -2511,6 +2511,8 @@ impl<M: TextEngine + 'static> Driver<M> {
         let text_engine = Rc::new(text_engine);
         let access = Arc::new(app_access(&config.app));
         let mut core = Core::new(text_engine.clone(), config.viewport);
+        #[cfg(any(feature = "js-core", all(feature = "browser", target_arch = "wasm32")))]
+        let rust_runtime = core.runtime_handle();
         // nsh.json's `application.quitMode`, else the default
         // `"platform"`: Windows and Linux quit when the last window
         // closes; macOS stays in the Dock. The app can change it at run
@@ -2780,6 +2782,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                         }),
                         host: Rc::new(host_bridge),
                         lazy_rows: config.content_culling,
+                        rust_runtime: rust_runtime.clone(),
                     }
                 };
                 #[cfg(not(any(

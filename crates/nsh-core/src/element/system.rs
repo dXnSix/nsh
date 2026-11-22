@@ -265,6 +265,52 @@ impl<'a> CallCx<'a> {
     pub fn on_cleanup(&self, f: impl FnOnce() + 'static) -> Cleanup {
         Cleanup(Some(self.host.on_cleanup(Box::new(f))))
     }
+
+    /// A new signal of the call's VM holding `value`, for the call to return
+    /// and Rust to write later ([`super::JsSignal::set`], on the engine
+    /// thread): JS reads it by calling it, tracked. Fails where the host
+    /// makes no signals, or `value` does not convert.
+    pub fn signal<T: super::JsValue + 'static>(
+        &self,
+        value: T,
+    ) -> Result<super::JsSignal<T>, super::PropError> {
+        super::JsSignal::new(self.host, value)
+    }
+
+    /// Whether a JS reactive owner owns the call: a component's body, an
+    /// effect, a root (not a timer's or an event handler's own code, nor a
+    /// module's top level).
+    pub fn has_owner(&self) -> bool {
+        self.host.has_owner()
+    }
+
+    /// Runs `f` in the engine's Rust reactive graph, under the Rust owner
+    /// tied to the JS owner of the call, as a Rust component's body runs
+    /// under its own: [`provide_context`](super::provide_context) provides
+    /// to what that JS owner makes from then on (the Rust components JS makes
+    /// under it, and the calls `with_owner` runs under the JS owners below
+    /// it); [`use_context`](super::use_context) finds what was provided
+    /// above it (by the tied owners above, and, in a Rust component's JS
+    /// children that it makes only while it places them, by that
+    /// component); [`cleanup`](super::cleanup) runs when the JS owner goes;
+    /// signals, memos and effects made in `f` are the owner's. The tied owner
+    /// is made by the first call under a JS owner that needs it, and goes
+    /// with that JS owner. Untracked; what `f` writes notifies at its end.
+    ///
+    /// Without a JS owner ([`Self::has_owner`]) `f` runs under no owner. Tasks
+    /// still start as in any synchronous call ([`Self::start`]); `spawn`
+    /// panics in `f`. A host without the engine's graph (a VM run without a
+    /// core) runs `f` as it is.
+    pub fn with_owner<R>(&self, f: impl FnOnce() -> R) -> R {
+        let mut f = Some(f);
+        let mut out = None;
+        self.host.with_owner(&mut || {
+            if let Some(f) = f.take() {
+                out = Some(f());
+            }
+        });
+        out.expect("the host runs the call's work")
+    }
 }
 
 /// A cleanup [`CallCx::on_cleanup`] registered. Dropping it keeps the
