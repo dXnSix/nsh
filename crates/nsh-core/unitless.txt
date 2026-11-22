@@ -6,6 +6,7 @@ animation::animator::AnimValues.transform                        # transform ope
 animation::animator::Animator::pan_values ->                     # a generic animated value (any prop: opacity, a color channel, a length)
 animation::animator::Animator::deadline ->                       # time
 animation::animator::Animator::deadline(now)                     # time
+animation::animator::Animator::at_loop_starts(now)               # time
 animation::animator::Animator::frame_rate ->                     # a frame rate (Hz)
 animation::animator::Animator::tick(now)                         # time
 animation::animator::Animator::tick_frame(now)                   # time
@@ -21,6 +22,7 @@ animation::graph::Graph::frame_rate ->                           # a frame rate 
 animation::graph::Graph::set(new)                                # a generic animated value (any prop: opacity, a color channel, a length)
 animation::graph::Graph::deadline ->                             # time
 animation::graph::Graph::deadline(now)                           # time
+animation::graph::Graph::at_loop_starts(now)                     # time
 animation::graph::Graph::tick(now)                               # time
 animation::graph::Graph::tick_frame(now)                         # time
 animation::graph::Graph::value ->                                # a generic animated value (any prop: opacity, a color channel, a length)
@@ -470,3 +472,5 @@ element::rows::RowAccessor::values_now ->                             # the app'
 
 style::TextStyle.line_height_em                                  # a line-height length in multiples of the element font size
 inspect::DevProp::Number.0                                       # a JS number as the app passed it to a component (dev tools)
+runtime::design::PictureAsk.scale                                # pixels per point, a ratio
+runtime::design::PictureOptions.scale                            # pixels per point, a ratio
