@@ -97,7 +97,7 @@ nsh run my-app/App.tsx --target web
 | `--device <DEVICE>` | | 要使用的 iOS 模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定。默认：已启动的模拟器，否则启动最新的 iPhone。配合 `--target android`：要使用的设备或模拟器，按序列号（`emulator-5554`，即 `adb devices` 列出的）指定。默认：`ANDROID_SERIAL` 指定的那台，否则第一台。使用 `tizen-web` 和 `tizen` 时：电视的 `sdb` 序列号（`192.168.1.5:26101`；`tizen` 默认用 `sdb devices` 列出的唯一一台）。 |
 | `--app <DIR>` | 入口所在目录 | 入口放在应用之外时（例如设计工具的入口）应用的目录：`nsh run ~/tool/Stage.tsx --app my-app`。应用的 `nsh.json`、crate、资源、翻译和 `.nsh/` 都取自这个目录，它的模块保留应用自己的入口给出的名称，会话同时监视它和入口。不给 `ENTRY` 时使用这个目录自己的入口。仅限 TSX 入口。 |
 | `--port <PORT>` | 此应用上次的端口，否则从 `8790` 起第一个空闲端口 | 开发服务器端口。等待此端口上的旧 NSH 开发会话清理完成后接管。 |
-| `--release` | | 压缩代码并去掉调试信息。release 包没有热模块替换：每次保存都会重新加载应用。 |
+| `--release` | | 压缩代码并去掉调试信息。release 包没有热模块替换：每次保存都会重新加载应用。带 Rust crate 的应用还会得到优化（`--release`）构建的开发宿主，其 crate 与 NSH 的 crate 按打包时的方式构建。由设计工具启动应用时（设置了 `NSH_DESIGN_SOCKET`，在 macOS、Linux 和 Windows 上），该宿主和描述 crate 的程序改为一起构建，使用更快的专用配置 `design`（不做 LTO 的 release、增量编译，产物位于 `target/design`）；打包仍使用完整的 release 构建。 |
 | `--limits [<LIMITS>]` | | 按嵌入在其他应用中的方式运行应用，使用宿主应用设置的限制：`memory` 和 `stack`（单位为 `KB`、`MB` 或 `GB`）、`load` 和 `call`（单位为 `ms` 或 `s`）以及 `nodes`，例如 `--limits memory=128MB,call=500ms`。没写的项保持嵌入时的默认值，只写 `--limits` 就全部使用默认值（[沙箱与能力](./sandbox-and-capabilities.md#限制)）。不带它时，应用像打包后的应用一样独立运行。仅 TSX 入口。 |
 | `--trace` | | 宿主把每次 commit 的耗时（JS、布局、挂载项）记录到终端。 |
 | `--fps` | | 性能监视器：帧率、每帧和每次 commit 的开销、CPU、GPU 和内存；macOS 上显示在应用上方（[macOS](./macos.md#性能监视器)）；macOS、Linux、Windows 和 iOS 上每秒输出一行日志，用 `-v` 显示。`tui` 在角落显示 FPS/idle、帧 p95、应用批次/绘制/刷新耗时、字节数和变化的 Cell 数，`C-h p` 切换显示。 |

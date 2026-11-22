@@ -13,6 +13,13 @@ path, or `tcp:<host>:<port>` (any platform, the only form on Windows). Usually f
 tool's own kept outside the app (`nsh run <tool's entry> --app <app>`), which imports the app's
 modules (`import.meta.glob`) and opens their windows (`Window.open`).
 
+A tool that starts an app with Rust crates of its own optimized (`nsh run --release` or `nsh dev
+--release` on macOS, Linux or Windows, with the socket set) waits for its builds, so they are quick
+ones: the describing program builds together with the development host, in one `cargo build` with
+the generated workspace's `design` profile (release without LTO, incremental) in `target/design`,
+instead of a debug `describe` and a `release` host built apart. What packages ship keeps `release`
+(`docs/dev/tooling.md`, the Rust apps' generated workspace).
+
 ## The connection
 
 `nsh_core::runtime::design` keeps it, the same on every platform. One JSON object a line both ways:
