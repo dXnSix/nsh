@@ -527,7 +527,11 @@ fn app_files(config: &AppConfig, name: &str, id: &str, built: &Built) -> AppFile
     AppFiles {
         bundle: (!built.rust_root).then(|| built.bytecode.clone()),
         capabilities: built.capabilities_json(),
-        app_json: crate::package::app_json(info, &[], config.window.as_ref()),
+        app_json: crate::package::app_json(
+            info,
+            &nsh_core::url_scheme::AppLinks::default(),
+            config.window.as_ref(),
+        ),
         assets: built
             .assets
             .iter()

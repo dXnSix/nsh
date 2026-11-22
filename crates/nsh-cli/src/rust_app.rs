@@ -6099,6 +6099,7 @@ mod tests {
             app_id: None,
             status_bar: None,
             url_schemes: Vec::new(),
+            links: None,
             window: None,
             application: None,
             capabilities: None,
@@ -6287,10 +6288,7 @@ mod tests {
                 .map(|(package, deps)| {
                     let crate_dir = dir.join(package);
                     write_crate(&crate_dir, package, "", deps);
-                    AppCrate {
-                        package: (*package).into(),
-                        dir: crate_dir,
-                    }
+                    AppCrate::new((*package).into(), crate_dir)
                 })
                 .collect();
             Nsh::of(&crates).map_err(|e| e.to_string())
@@ -7222,10 +7220,7 @@ panic = \"abort\"
     ) -> Result<Vec<nsh_core::element::description::SetDescription>, String> {
         let crates: Vec<AppCrate> = packages
             .iter()
-            .map(|p| AppCrate {
-                package: (*p).into(),
-                dir: PathBuf::from("/app").join(p),
-            })
+            .map(|p| AppCrate::new((*p).into(), PathBuf::from("/app").join(p)))
             .collect();
         let text = nsh_core::element::description::Description::of(sets).to_json();
         super::read_description(&text, &crates, "the Rust crates").map_err(|e| e.to_string())
@@ -7531,6 +7526,7 @@ panic = \"abort\"
                 app_id: None,
                 status_bar: None,
                 url_schemes: Vec::new(),
+                links: None,
                 window: None,
                 application: None,
                 capabilities: None,

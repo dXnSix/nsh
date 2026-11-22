@@ -116,6 +116,7 @@ fn targets(decls: &[Decl]) -> Vec<ClassTarget> {
             Decl::CurrentPart(slot, _) => ClassTarget::Part(format!("{}Color", part_name(slot))),
             Decl::Prop(prop) => ClassTarget::Prop(match prop {
                 PropDecl::NoWrap(_) => "noWrap",
+                PropDecl::Pretty => "pretty",
                 PropDecl::Caret(_) => "caretColor",
                 PropDecl::Space(false, _) => "spaceX",
                 PropDecl::Space(true, _) => "spaceY",
