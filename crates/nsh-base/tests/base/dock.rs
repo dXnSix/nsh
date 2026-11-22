@@ -1027,8 +1027,12 @@ fn a_dock_s_only_panel_dragged_out_leaves_it_closed_and_empty() {
     let mut app = start(with_files(), 1000.0);
     app.wait_for("Panel files").unwrap();
     // From files' tab (40, 12) into the middle of c's group (600 to 800).
-    app.drag("id:tab-files", point(px(660.0), px(288.0)), DragOptions::default())
-        .unwrap();
+    app.drag(
+        "id:tab-files",
+        point(px(660.0), px(288.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Layout h([*a b]:400 [c *files]) left [] closed 200")
         .unwrap();
     // Moved, not removed; the dock reported closed.
@@ -1046,8 +1050,12 @@ fn a_tab_dropped_at_an_edge_of_the_area_docks_it_there() {
     let mut app = start(two_groups(), 1000.0);
     // From c's tab (440, 12) into the band along the right edge (768 to
     // 800): the indicator covers what a right dock would take, 200 wide.
-    app.drag_and_hold("id:tab-c", point(px(350.0), px(288.0)), DragOptions::default())
-        .unwrap();
+    app.drag_and_hold(
+        "id:tab-c",
+        point(px(350.0), px(288.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Drop at Right").unwrap();
     wait_for_drop_at(&mut app, bounds(600.0, 0.0, 200.0, 600.0));
     app.drop_held().unwrap();
@@ -1057,8 +1065,12 @@ fn a_tab_dropped_at_an_edge_of_the_area_docks_it_there() {
     app.wait_for("Panel c").unwrap();
     // The bottom edge: a dock between the side docks that show (the right
     // one, 200), 200 tall.
-    app.drag_and_hold("id:tab-a", point(px(260.0), px(578.0)), DragOptions::default())
-        .unwrap();
+    app.drag_and_hold(
+        "id:tab-a",
+        point(px(260.0), px(578.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Drop at Bottom").unwrap();
     wait_for_drop_at(&mut app, bounds(0.0, 400.0, 600.0, 200.0));
     app.drop_held().unwrap();
@@ -1067,7 +1079,12 @@ fn a_tab_dropped_at_an_edge_of_the_area_docks_it_there() {
     // A dock with panels takes drops in its groups, not at its edge: a
     // (its tab at 40, 412) in the right band splits the right dock's group;
     // the bottom dock it leaves closes.
-    app.drag("id:tab-a", point(px(750.0), px(-112.0)), DragOptions::default()).unwrap();
+    app.drag(
+        "id:tab-a",
+        point(px(750.0), px(-112.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Layout h([*b]:400) right h([*c] [*a]) open 200 bottom [] closed 200")
         .unwrap();
 }
@@ -1080,13 +1097,21 @@ fn an_emptied_dock_opens_again_at_its_size_when_a_tab_docks_there() {
     let mut app = start(layout, 1000.0);
     app.wait_for("Panel files").unwrap();
     // Into the middle of c's group (660 to 800).
-    app.drag("id:tab-files", point(px(690.0), px(288.0)), DragOptions::default())
-        .unwrap();
+    app.drag(
+        "id:tab-files",
+        point(px(690.0), px(288.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Layout h([*a b]:400 [c *files]) left [] closed 260")
         .unwrap();
     // Tab a (40, 12) to the left edge: the dock's kept 260.
-    app.drag_and_hold("id:tab-a", point(px(-30.0), px(288.0)), DragOptions::default())
-        .unwrap();
+    app.drag_and_hold(
+        "id:tab-a",
+        point(px(-30.0), px(288.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Drop at Left").unwrap();
     wait_for_drop_at(&mut app, bounds(0.0, 0.0, 260.0, 600.0));
     app.drop_held().unwrap();
@@ -1109,8 +1134,12 @@ fn a_panel_kept_to_some_regions_is_dropped_and_moved_nowhere_else() {
     // As the app wrote it (no size: nothing reported yet).
     let before = "Layout h([*a b]:400 [*c]) left [*files] open 0";
     // c (its tab at 640, 12) at the right edge: no indicator, no drop.
-    app.drag_and_hold("id:tab-c", point(px(150.0), px(288.0)), DragOptions::default())
-        .unwrap();
+    app.drag_and_hold(
+        "id:tab-c",
+        point(px(150.0), px(288.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait(std::time::Duration::from_millis(100)).unwrap();
     assert!(
         !app.shows("Drop at Right"),
@@ -1118,8 +1147,12 @@ fn a_panel_kept_to_some_regions_is_dropped_and_moved_nowhere_else() {
     );
     app.drop_held().unwrap();
     // files into the middle of a's group (200 to 600), in the center.
-    app.drag_and_hold("id:tab-files", point(px(360.0), px(288.0)), DragOptions::default())
-        .unwrap();
+    app.drag_and_hold(
+        "id:tab-files",
+        point(px(360.0), px(288.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait(std::time::Duration::from_millis(100)).unwrap();
     assert!(!app.shows("Drop into"), "no indicator over the center");
     app.drop_held().unwrap();
@@ -1129,7 +1162,12 @@ fn a_panel_kept_to_some_regions_is_dropped_and_moved_nowhere_else() {
     app.wait(std::time::Duration::from_millis(100)).unwrap();
     assert!(app.shows(before), "unchanged: {:?}", app.screen().texts());
     // Where it may go, it goes: c into a's group.
-    app.drag("id:tab-c", point(px(-240.0), px(288.0)), DragOptions::default()).unwrap();
+    app.drag(
+        "id:tab-c",
+        point(px(-240.0), px(288.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Layout h([a b *c]:400) left [*files] open 200")
         .unwrap();
 }

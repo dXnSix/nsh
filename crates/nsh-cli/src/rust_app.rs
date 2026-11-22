@@ -1851,10 +1851,11 @@ fn nsh_dependencies(c: &AppCrate) -> anyhow::Result<Vec<serde_json::Value>> {
     if dependencies.is_empty() {
         // None declared: the crate may still take nsh through another crate
         // (a framework re-exporting `nsh-core`). Only a crate with
-        // dependencies can, and only resolving them tells.
+        // dependencies its own build uses can, and only resolving them
+        // tells.
         if package["dependencies"]
             .as_array()
-            .is_some_and(|deps| !deps.is_empty())
+            .is_some_and(|deps| deps.iter().any(|dep| dep["kind"].as_str() != Some("dev")))
         {
             let resolved = resolved_metadata(&manifest)?;
             dependencies.extend(nsh_through_dependency(&resolved, &c.package)?);
@@ -1958,6 +1959,13 @@ fn nsh_through_dependency(
                         let url = git.split(['?', '#']).next().context("Git repository URL")?;
                         dep["path"] = dir.into();
                         dep["git"] = url.into();
+                        // The locked revision, for [`check_checkout`].
+                        if let Some((_, rev)) = git.rsplit_once('#')
+                            && rev.len() == 40
+                            && rev.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        {
+                            dep["rev"] = rev.into();
+                        }
                     }
                 }
             }
@@ -6011,10 +6019,17 @@ mod tests {
                 "{crate_} = {{ git = \"https://github.com/dXnSix/wgpu\", branch = \"v30-tizen\" }}\n"
             ));
         }
-        let debug: String = ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"]
-            .iter()
-            .map(|p| format!("\n[profile.dev.package.{p}]\nopt-level = 3\n"))
-            .collect();
+        // As every generated workspace: what the app does not write is
+        // optimized, its own crate is not.
+        let mut debug =
+            "\n[profile.dev.package.\"*\"]\nopt-level = 3\ndebug = \"line-tables-only\"\n"
+                .to_owned();
+        debug.extend(
+            ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"]
+                .iter()
+                .map(|p| format!("\n[profile.dev.package.{p}]\nopt-level = 3\n")),
+        );
+        debug.push_str("\n[profile.dev.package.\"app-native\"]\nopt-level = 0\ndebug = true\n");
         assert_eq!(
             read("tizen/Cargo.toml"),
             format!(
@@ -6492,8 +6507,7 @@ mod tests {
             "",
             &format!("framework = {{ path = {framework:?} }}\n"),
         );
-        let through =
-            Nsh::resolve(&[AppCrate::new("through-app".into(), through)]).unwrap();
+        let through = Nsh::resolve(&[AppCrate::new("through-app".into(), through)]).unwrap();
         assert_eq!(through, nsh, "a framework's Git nsh is the app's");
         let mut app = app(&dir.join("app"), &[("git-app", native)], None);
         app.nsh = nsh;

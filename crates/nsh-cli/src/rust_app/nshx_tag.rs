@@ -55,11 +55,13 @@ fn at_tag(url: &str, tag: &str, workspace: &Path) -> anyhow::Result<Nsh> {
     fs::create_dir_all(dir.join("src")).with_context(|| format!("create {}", dir.display()))?;
     fs::write(dir.join("Cargo.toml"), probe_manifest(url, tag))?;
     fs::write(dir.join("src/lib.rs"), "")?;
-    // Resolved alone: the tag is this CLI's own (`NSHX_TAG`), so the
-    // revision check of [`Nsh::of`] has nothing to add.
+    // Resolved alone, then checked by version: the tag is this CLI's own
+    // (`NSHX_TAG`), whose commit a build need not be (the revision check of
+    // [`Nsh::of`]).
     let nsh = Nsh::resolve(&[AppCrate::new("nshx-tag".into(), dir)])
-    .with_context(|| format!("nsh's crates from {url} at {tag}"))?;
-    if !matches!(nsh, Nsh::Git { .. }) {
+        .with_context(|| format!("nsh's crates from {url} at {tag}"))?;
+    let at_version = matches!(&nsh, Nsh::Git { checkout, .. } if super::check_checkout(checkout, None, "unknown").is_ok());
+    if !at_version {
         bail!("{url} at {tag} has nsh's crates at another version than this CLI's ({VERSION})");
     }
     Ok(nsh)

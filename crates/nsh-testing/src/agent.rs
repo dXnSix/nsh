@@ -50,8 +50,8 @@ use nsh_dev::protocol::{
 mod forward;
 
 pub use self::forward::{Outgoing, Send as SendOutgoing};
-pub use crate::{remote::RemoteKey, screen::Pick};
 use crate::{DragOptions, MemoryStorage, screen::Screen, selector::Selector};
+pub use crate::{remote::RemoteKey, screen::Pick};
 
 /// How far a dragging finger moves in a display frame, as headless drags
 /// move it.
@@ -4428,7 +4428,12 @@ mod tests {
             fn press(&self, _: Point<Points>) {}
             fn long_press(&self, _: Point<Points>, _: Duration) {}
             fn scroll(&self, _: Point<Points>, _: Point<Points>) {}
-            fn drag(&self, _: Point<Points>, _: Point<Points>, _: DragOptions) -> Result<(), String> {
+            fn drag(
+                &self,
+                _: Point<Points>,
+                _: Point<Points>,
+                _: DragOptions,
+            ) -> Result<(), String> {
                 Ok(())
             }
             fn press_keys(&self, keys: &str) -> Result<(), String> {
