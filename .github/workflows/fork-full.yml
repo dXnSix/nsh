@@ -421,6 +421,14 @@ jobs:
         uses: ./.github/actions/cargo
         with:
           cache: windows
+      # Cargo retries oversized compiler commands with an argument file when
+      # it receives the Windows launch error directly from starting rustc.
+      - name: Use the toolchain compiler directly
+        shell: pwsh
+        run: |
+          $rustc = rustup which rustc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "RUSTC=$rustc" >> $env:GITHUB_ENV
       - name: Clippy
         run: >
           cargo clippy --all-targets
@@ -432,14 +440,6 @@ jobs:
       - name: Test
         shell: bash
         run: bash .github/fork/retry.sh cargo test -p nsh-platform-windows -p nsh-windows-host -p nsh-windows-app -p nsh-cli -p nsh-dev -p xtask
-      # Cargo retries oversized compiler commands with an argument file when
-      # it receives the Windows launch error directly from starting rustc.
-      - name: Use the toolchain compiler directly for examples
-        shell: pwsh
-        run: |
-          $rustc = rustup which rustc
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          "RUSTC=$rustc" >> $env:GITHUB_ENV
       # The examples' tests in Win32 windows, with the platform's input
       # (`nsh test --target windows`).
       - name: Run the examples' tests in Win32 windows
@@ -601,12 +601,12 @@ jobs:
         with:
           cache: rust-app
       - name: Clippy
-        run: cargo clippy -p gallery-native --all-targets --locked -- -D warnings
+        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/push --locked -- -D warnings
       - name: Check macOS without optional features
         if: runner.os == 'macOS'
         run: cargo clippy -p nsh-macos-app --locked --no-default-features --features js -- -D warnings
       - name: Test the crate
-        run: bash .github/fork/retry.sh cargo test -p gallery-native ${{ runner.os == 'macOS' && '-p nsh-platform-apple' || '' }} --locked
+        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/push ${{ runner.os == 'macOS' && '-p nsh-platform-apple' || '' }} --locked
 
   # Upstream's `rust-app.yml`, job `web`: a Rust app and a TSX app with a
   # Rust crate published for the web, and what they must not link.
