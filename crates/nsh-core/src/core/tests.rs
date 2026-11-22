@@ -11814,6 +11814,8 @@ fn chain(c: &mut Core<FakeEngine>, under: NodeId, ids: std::ops::Range<NodeId>) 
 #[test]
 fn a_view_counted_again_is_refused_once_it_grows_too_deep() {
     let max = MAX_TREE_DEPTH as u32;
+    // Chains measured in eighths of the quota.
+    let eighth = max / 8;
     let mut c = core();
     // View 2 holds 3, which holds a chain nearly as deep as the quota.
     for id in [2, 3] {
@@ -11825,34 +11827,37 @@ fn a_view_counted_again_is_refused_once_it_grows_too_deep() {
         before: None,
     })
     .unwrap();
-    chain(&mut c, 3, 1_000..1_000 + max - 100);
+    chain(&mut c, 3, 1_000..1_000 + max - eighth);
     // The chain leaves: 2 and 3 still reckon with it.
     c.apply(Op::Remove {
         parent: 3,
         child: 1_000,
     })
     .unwrap();
-    // 2 goes under a chain of 100, where what 2 reckons with does not fit:
-    // it is counted again, and fits.
-    chain(&mut c, ROOT_ID, 10_000..10_100);
+    // 2 goes under a chain of two eighths, where what 2 reckons with does
+    // not fit: it is counted again, and fits.
+    let under = 10_000 + 2 * eighth - 1;
+    chain(&mut c, ROOT_ID, 10_000..under + 1);
     c.apply(Op::Insert {
-        parent: 10_099,
+        parent: under,
         child: 2,
         before: None,
     })
     .unwrap();
-    // 3 grows a chain of 900 there, which fits.
-    chain(&mut c, 3, 20_000..20_900);
-    // 2, holding 901 levels, cannot go under a chain of 300.
+    // 3 grows a chain of half the quota there, which fits.
+    chain(&mut c, 3, 20_000..20_000 + 4 * eighth);
+    // 2, holding more than half the quota, cannot go under a chain of five
+    // eighths.
     c.apply(Op::Remove {
-        parent: 10_099,
+        parent: under,
         child: 2,
     })
     .unwrap();
-    chain(&mut c, ROOT_ID, 30_000..30_300);
+    let under = 30_000 + 5 * eighth - 1;
+    chain(&mut c, ROOT_ID, 30_000..under + 1);
     assert_eq!(
         c.apply(Op::Insert {
-            parent: 30_299,
+            parent: under,
             child: 2,
             before: None,
         }),
@@ -12017,11 +12022,12 @@ fn nest(
     Ok(())
 }
 
-/// Runs `f` on a thread with the engine thread's stack, which the depth
-/// quota is sized for (a test thread's is smaller).
+/// Runs `f` on a thread with three quarters of the engine thread's 8 MiB
+/// stack, the most the depth quota lets the tree take of it (a test
+/// thread's is smaller).
 fn on_engine_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
-        .stack_size(8 << 20)
+        .stack_size(6 << 20)
         .spawn(f)
         .unwrap()
         .join()
@@ -12035,10 +12041,22 @@ fn views_nest_to_the_depth_quota_and_no_deeper() {
 
 fn views_nest_to_the_depth_quota() {
     let max = MAX_TREE_DEPTH as u32;
-    for top_down in [true, false] {
+    // Flex views, and grid views, whose layout takes the most stack a level.
+    for (display, top_down) in [
+        (None, true),
+        (None, false),
+        (Some("grid"), true),
+        (Some("grid"), false),
+    ] {
         // As deep as the quota allows: laid out and mounted.
         let mut c = core();
         assert_eq!(nest(&mut c, ROOT_ID, max, top_down), Ok(()));
+        if let Some(display) = display {
+            for id in 10..10 + max {
+                c.apply(style_op(id, &[("display", StyleValue::Str(display))]))
+                    .unwrap();
+            }
+        }
         let batch = c.commit().expect("mounted");
         assert!(frame_of(&batch, 9 + max).is_some());
 

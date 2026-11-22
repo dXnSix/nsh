@@ -75,12 +75,12 @@ or the tray; an animation's `start` rejects its promise; a canvas call ignores i
 holds up to as many screens: `push` beyond that throws a `RangeError`. Children, submenus and styles nested more than
 64 levels deep throw a `TypeError`. A `<List>`'s `each` takes any number of rows.
 
-**Views nest up to 1024 levels deep, in every app.** Layout and mounting walk the tree in native code, level by level,
+**Views nest up to 160 levels deep, in every app.** Layout and mounting walk the tree in native code, level by level,
 where the interpreter's stack limit does not reach. An app that nests views deeper is stopped, as it is when it goes
 over a quota:
 
 ```text
-the app nested views more than 1024 deep and was stopped
+the app nested views more than 160 deep and was stopped
 ```
 
 > [!TIP]

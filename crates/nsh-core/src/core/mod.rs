@@ -1249,8 +1249,14 @@ fn take_queued_binds(binds: &mut Vec<ListBind>, list: NodeId) -> Vec<u32> {
 /// neither the node quota nor the interpreter's stack limit bounds: without
 /// this a chain of views overflows it and aborts the process. Far deeper
 /// than a UI nests, and shallow enough for the engine thread's 8 MiB stack
-/// in a debug build.
-pub const MAX_TREE_DEPTH: usize = 1024;
+/// in a debug build, where a level costs the most: a level of grid views
+/// takes about 34 KiB there (Taffy's grid algorithm, instantiated in this
+/// crate and so as unoptimized as it is), a level of flex views about
+/// 8 KiB. The deepest chain of grid views takes about two thirds of the
+/// stack, which leaves room for what runs below the commit and for frames
+/// that grow with the toolchain (`views_nest_to_the_depth_quota_and_no_deeper`
+/// nests them on three quarters of it).
+pub const MAX_TREE_DEPTH: usize = 160;
 
 /// An op referenced a node in an impossible way. This is a renderer bug;
 /// the op is skipped and the tree stays consistent.

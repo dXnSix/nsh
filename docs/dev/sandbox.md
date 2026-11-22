@@ -20,10 +20,12 @@ trusted: every limit and check is enforced in Rust, never in JS.
   outermost budget), and quotas for what the heap limit does not cover: changes at once (the op queue,
   `max_op_values`: ops are Rust memory), ops per canvas drawing, nodes in the core (`Core::set_max_nodes`; each may hold a native view) and dense
   node ids (an id far past the ids in use would grow the id table: `ApplyError::IdOutOfRange`). Views nest
-  `nsh_core::MAX_TREE_DEPTH` (1024) levels deep in every app, standalone ones too (`ApplyError::TooDeep`, checked in
+  `nsh_core::MAX_TREE_DEPTH` (160) levels deep in every app, standalone ones too (`ApplyError::TooDeep`, checked in
   `Core::insert` against the depth above the parent and the height kept on the child): layout, mounting and the tree's
   walks recurse once per level on the native stack, which no other limit bounds; sized for the engine thread's
-  8 MiB stack in a debug build. Arrays the runtime
+  8 MiB stack in a debug build, where a level of grid views takes about 34 KiB (Taffy's grid, instantiated in
+  `nsh-core` and unoptimized with it) and a level of flex views about 8 KiB: the deepest grid takes about two thirds
+  of it, and the core's test nests it on three quarters. Arrays the runtime
   reads natively, where the time budget cannot interrupt (children, nested arrays counted together; `<Each>`; menus,
   submenus counted together; a tray's title; `Animated.sequence` / `parallel` / `stagger`; `split`'s keys; a navigation
   stack's routes; a native component's `props` and `events`; a pan's `touches`; a canvas call's arguments, counted
