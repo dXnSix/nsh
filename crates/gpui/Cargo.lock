@@ -5580,6 +5580,7 @@ dependencies = [
  "nsh-theme",
  "nsh-updater",
  "ordered-float",
+ "percent-encoding",
  "resvg 0.48.1",
  "rust-i18n",
  "rustc-hash 2.1.3",
@@ -5810,6 +5811,7 @@ dependencies = [
  "tar",
  "thiserror 2.0.21",
  "zip",
+ "zstd",
 ]
 
 [[package]]
