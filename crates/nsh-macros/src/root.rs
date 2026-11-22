@@ -24,7 +24,27 @@ enum Root {
 }
 
 fn root() -> Root {
+    #[cfg(test)]
+    if REEXPORTED.with(std::cell::Cell::get) {
+        return Root::InScope;
+    }
     root_of(crate_name("nsh-core"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static REEXPORTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// In the macros' unit tests: runs `f` as the macros run in a crate that
+/// takes `nsh-core` through a framework's re-export (its manifest has no
+/// `nsh-core`), whatever this crate's own manifest says.
+#[cfg(test)]
+pub(crate) fn as_reexported<T>(f: impl FnOnce() -> T) -> T {
+    REEXPORTED.with(|on| on.set(true));
+    let out = f();
+    REEXPORTED.with(|on| on.set(false));
+    out
 }
 
 fn root_of(found: Result<FoundCrate, Error>) -> Root {
@@ -100,5 +120,57 @@ mod tests {
     fn without_a_manifest_the_code_names_a_dependency() {
         let found = root_of(Err(Error::CargoManifestDirNotSet));
         assert_eq!(found, Root::Dependency("nsh_core".into()));
+    }
+
+    /// Every path to `nsh-core` in the macros' code comes from this module.
+    /// A `::nsh_core` written out (a macro body merged from upstream as it
+    /// is) still compiles for crates that depend on `nsh-core`, and breaks
+    /// a crate that takes nsh through a re-export only when it uses that
+    /// macro. Doc comments and the test modules may write it.
+    #[test]
+    fn a_crate_without_nsh_core_reaches_it_from_every_macro() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let needle = concat!(":", ":nsh_core");
+        let mut written = Vec::new();
+        let mut files: Vec<_> = std::fs::read_dir(&src)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .collect();
+        files.sort();
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            let lines: Vec<&str> = text.lines().collect();
+            let mut in_tests = false;
+            for (n, line) in lines.iter().enumerate() {
+                if in_tests {
+                    in_tests = *line != "}";
+                    continue;
+                }
+                if *line == "#[cfg(test)]"
+                    && lines
+                        .get(n + 1)
+                        .is_some_and(|next| next.starts_with("mod "))
+                {
+                    in_tests = true;
+                    continue;
+                }
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                for (at, _) in line.match_indices(needle) {
+                    let before = &line[..at];
+                    if !(before.ends_with("root") || before.ends_with("super")) {
+                        let name = file.file_name().unwrap().to_string_lossy();
+                        written.push(format!("{name}:{}: {}", n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+        assert!(
+            written.is_empty(),
+            "write `#nsh_core` from crate::root::nsh_core() instead:\n{}",
+            written.join("\n")
+        );
     }
 }
