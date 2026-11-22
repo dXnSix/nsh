@@ -959,6 +959,27 @@ fn run(mut command: Command) -> anyhow::Result<()> {
         Command::Package(args) => Some(args.target) == package::PackageTarget::desktop(),
         _ => false,
     };
+    // A design tool's optimized run (`--release` with NSH_DESIGN_SOCKET on a
+    // desktop, `docs/dev/design-mode.md`) builds the describing program with
+    // the development host, in one quick profile: decided before either is
+    // built.
+    if let Command::Run {
+        release, target, ..
+    }
+    | Command::Dev {
+        release,
+        target,
+        server_only: false,
+        ..
+    } = &command
+        && rust_app::is_design_release_run(
+            *release,
+            target.platform(),
+            std::env::var_os(nsh_core::runtime::design::SOCKET).as_deref(),
+        )
+    {
+        rust_app::set_design_host(target.platform());
+    }
     // A Rust app's root reports what the package names and versions it.
     if let Command::Package(args) = &command {
         rust_app::set_package_identity(rust_app::PackageIdentity {
