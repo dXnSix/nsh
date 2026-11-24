@@ -76,6 +76,14 @@ impl Default for Live {
     }
 }
 
+/// What a view drew with before [`Live::stand_at_loop_start`], for
+/// [`Live::put_back`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shown {
+    opacity: f32,
+    extra: Extra,
+}
+
 /// What one [`Live::step`] did.
 #[non_exhaustive]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +169,59 @@ impl Live {
             && self.presence.is_none();
         let run = self.keyframes.as_ref().filter(|_| keyframes_alone)?;
         crate::style::frame_rate(run.animation.frame_rate)
+    }
+
+    /// True while its only animation left is a keyframe one repeating for
+    /// good (a spinner): what it draws changes on every frame, but nothing
+    /// it shows ends or comes due, so whoever waits for a view to settle
+    /// does not wait for it.
+    pub fn only_endless_keyframes(&self) -> bool {
+        self.frame.is_none()
+            && self.style.is_none()
+            && !self.color.running()
+            && self.presence.is_none()
+            && self
+                .keyframes
+                .as_ref()
+                .is_some_and(|run| run.animation.iterations.is_none())
+    }
+
+    /// Stands its keyframe animation, when it repeats for good, at the
+    /// start of a run (its first frame) for what is drawn until
+    /// [`Live::put_back`]: a design tool's picture, which shows a spinner
+    /// the same whenever it is taken. Appearing and disappearing stay as
+    /// they are. What it drew with before; `None`, with nothing changed,
+    /// when it runs no such animation.
+    pub fn stand_at_loop_start(&mut self) -> Option<Shown> {
+        let run = self
+            .keyframes
+            .as_ref()
+            .filter(|run| run.animation.iterations.is_none())?;
+        let (mut opacity, mut extra) = self
+            .presence
+            .as_ref()
+            .map_or((1.0, Extra::NONE), |p| (p.opacity(), p.extra()));
+        if let Some((o, e)) = keyframes_at(&run.animation, run.animation.delay) {
+            opacity *= o;
+            extra = Extra {
+                rotate: extra.rotate + e.rotate,
+                scale: extra.scale * e.scale,
+                shift_y: extra.shift_y + e.shift_y,
+            };
+        }
+        let shown = Shown {
+            opacity: self.opacity,
+            extra: self.extra,
+        };
+        self.opacity = opacity;
+        self.extra = extra;
+        Some(shown)
+    }
+
+    /// Draws again with what [`Live::stand_at_loop_start`] returned.
+    pub fn put_back(&mut self, shown: Shown) {
+        self.opacity = shown.opacity;
+        self.extra = shown.extra;
     }
 
     /// True while a frame callback steps it.
@@ -1503,6 +1564,58 @@ mod tests {
         assert_eq!(out[0].color, Color::rgba(0, 0, 0, 50));
         let inset = BoxShadow { inset: true, ..s };
         assert!(lerp_box_shadows(&[inset], &[s], 0.5).is_none());
+    }
+
+    /// An endless keyframe animation stands at its first frame for a
+    /// picture, and draws as it was once put back; a finite one does not.
+    #[test]
+    fn endless_keyframes_stand_at_their_first_frame() {
+        let anim = |keyframes, iterations| KeyframeAnimation {
+            keyframes,
+            duration: 1000.0,
+            delay: 0.0,
+            easing: [0.0, 0.0, 1.0, 1.0],
+            iterations,
+            frame_rate: None,
+        };
+        let mut frame = Bounds::default();
+        let mut style = Box::<ViewStyle>::default();
+        let mut live = Live {
+            keyframes: Some(KeyframeRun {
+                animation: anim(Keyframes::Spin, None),
+                start: None,
+            }),
+            ..Live::default()
+        };
+        assert!(live.only_endless_keyframes());
+        live.step(0.0, &mut frame, &mut style);
+        live.step(250.0, &mut frame, &mut style);
+        assert!(close(live.extra().unwrap().rotate.to_degrees(), 90.0));
+        let shown = live.stand_at_loop_start().expect("an endless spin");
+        assert!(live.extra().is_none(), "the spin's first frame");
+        live.put_back(shown);
+        assert!(close(live.extra().unwrap().rotate.to_degrees(), 90.0));
+        let mut pulse = Live {
+            keyframes: Some(KeyframeRun {
+                animation: anim(Keyframes::Pulse, None),
+                start: None,
+            }),
+            ..Live::default()
+        };
+        pulse.step(0.0, &mut frame, &mut style);
+        pulse.step(500.0, &mut frame, &mut style);
+        assert!(close(pulse.opacity(), 0.5));
+        pulse.stand_at_loop_start().unwrap();
+        assert!(close(pulse.opacity(), 1.0));
+        let mut once = Live {
+            keyframes: Some(KeyframeRun {
+                animation: anim(Keyframes::Ping, Some(1)),
+                start: None,
+            }),
+            ..Live::default()
+        };
+        assert!(!once.only_endless_keyframes());
+        assert!(once.stand_at_loop_start().is_none());
     }
 
     #[test]
