@@ -50,6 +50,7 @@ pub(crate) fn starter(
     browser: Option<&Path>,
     tv: bool,
     idiom: Option<crate::run::DevIdiom>,
+    release: bool,
 ) -> anyhow::Result<StartHost> {
     let exe = cdp::find(browser)?;
     // Built (in a checkout) or found once, before the first test.
@@ -65,7 +66,7 @@ pub(crate) fn starter(
         Size::new(Points(390.0), Points(844.0))
     };
     Ok(Arc::new(move |entry: &Path, options: &HostOptions| {
-        start(&exe, &host, entry, options, size, idiom).map(|h| Box::new(h) as Box<dyn Host>)
+        start(&exe, &host, entry, options, size, idiom, release).map(|h| Box::new(h) as Box<dyn Host>)
     }))
 }
 
@@ -114,8 +115,9 @@ fn start(
     options: &HostOptions,
     size: Size<Points>,
     idiom: Option<crate::run::DevIdiom>,
+    release: bool,
 ) -> Result<WebHost, String> {
-    let server = Arc::new(crate::test_host::serve(entry, options)?);
+    let server = Arc::new(crate::test_host::serve(entry, options, release)?);
     // The run's idiom, as `nsh run --target web --idiom` gives the page,
     // over the test's (`TestEnvironment::idiom`: `open`'s desktop
     // `platform`); without one the test's, else the one the page measures.

@@ -119,7 +119,6 @@ fn app_config(
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
@@ -572,6 +571,53 @@ fn unhandled_back_presses_go_back_natively_on((engine, rx): (Engine, Receiver<Mo
         1,
         "not handled: the platform goes back (a stack pops, or the app exits)"
     );
+}
+
+#[test]
+fn js_back_progress_listeners_follow_the_back_gesture() {
+    let (engine, rx) = start(BACK_PROGRESS);
+    let root_listens = |batches: &[MountBatch]| {
+        batches
+            .iter()
+            .flat_map(|b| &b.items)
+            .rev()
+            .find_map(|i| match i {
+                MountItem::Events {
+                    id: ROOT_ID,
+                    events,
+                } => Some(events.contains(EventKind::BackProgress)),
+                _ => None,
+            })
+    };
+    let first = until(&rx, |b| shows(b, "step none"));
+    assert_eq!(root_listens(&first), Some(true), "the root listens");
+    let control = engine.control();
+    let step = |phase, progress, edge| {
+        nsh_core::BackProgressEvent::new(phase, nsh_core::geometry::Percentage(progress), edge)
+            .payload()
+    };
+    use nsh_core::{BackPhase, PanEdge};
+    let mut batches = Vec::new();
+    for (phase, progress, shown) in [
+        (BackPhase::Start, 0.0, "step start 0 left"),
+        (BackPhase::Move, 0.5, "step move 0.5 left"),
+        (BackPhase::End, 0.5, "step end 0.5 left"),
+    ] {
+        control.dispatch_event(
+            ROOT_ID,
+            EventKind::BackProgress,
+            step(phase, progress, Some(PanEdge::Left)),
+        );
+        batches = until(&rx, |b| shows(b, shown));
+        assert!(batches.iter().any(|b| shows(b, shown)), "{shown}");
+    }
+    // The listener stopped at the end: the root no longer listens.
+    if root_listens(&batches).is_none() {
+        batches.extend(until(&rx, |b| {
+            root_listens(std::slice::from_ref(b)).is_some()
+        }));
+    }
+    assert_eq!(root_listens(&batches), Some(false));
 }
 
 #[test]
@@ -1958,6 +2004,68 @@ fn picked_files_past_the_apps_limit_reach_js_unread() {
     assert_eq!(asked.expect("a pick").max_size, Some(4));
 }
 
+const PASTE_LIMIT: &str = r#"import { mount, signal, Text, View } from "nsh";
+import { Input } from "nsh/base";
+
+const shown = signal("");
+
+mount(() => (
+  <View>
+    <Input
+      testID="field"
+      pasteMaxSize={4}
+      onPaste={(e) =>
+        shown.set(
+          `read ${e.files.map((f) => `${f.name}:${f.size}`).join(",")} ` +
+            `unread ${e.tooLarge.map((f) => `${f.name}:${f.type}:${f.size}`).join(",")}`,
+        )
+      }
+    />
+    <Text>{shown()}</Text>
+  </View>
+));
+"#;
+
+#[test]
+fn pasted_files_past_the_inputs_limit_reach_js_unread() {
+    let (engine, rx) = start(PASTE_LIMIT);
+    let control = engine.control();
+    let mut field = None;
+    let mut config = None;
+    until(&rx, |batch| {
+        for item in &batch.items {
+            if let MountItem::Input { id, config: c } = item {
+                field = Some(*id);
+                config = Some(c.clone());
+            }
+        }
+        field.is_some()
+    });
+    let field = field.expect("the field");
+    // The platform reads up to the limit before it reads a file.
+    assert_eq!(config.expect("its config").paste_max_size, Some(4));
+    let mut paste = nsh_core::PasteEvent::new("");
+    // Read, read but past the limit (a platform that could not tell its
+    // size first), and not read.
+    paste.files = vec![
+        nsh_core::PastedFile::new("a.txt", "text/plain", b"abcd".to_vec()),
+        nsh_core::PastedFile::new("b.txt", "text/plain", b"abcde".to_vec()),
+    ];
+    paste.too_large = vec![nsh_core::PastedFile::too_large(
+        "clip.mp4",
+        "video/mp4",
+        400_000_000,
+    )];
+    control.dispatch_event(
+        field,
+        EventKind::Paste,
+        EventPayload::Paste(Box::new(paste)),
+    );
+    let wanted = "read a.txt:4 unread clip.mp4:video/mp4:400000000,b.txt:text/plain:5";
+    let batches = until(&rx, |batch| shows(batch, wanted));
+    assert!(batches.iter().any(|b| shows(b, wanted)), "{wanted}");
+}
+
 const PICK: &str = r#"import { mount, signal, Text } from "nsh";
 import { Picker } from "nsh";
 
@@ -2304,6 +2412,18 @@ BackHandler.on("press", () => {
 });
 
 mount(() => <Text>{`presses ${presses()}`}</Text>);
+"#;
+
+const BACK_PROGRESS: &str = r#"import { mount, signal, Text } from "nsh";
+import { BackHandler } from "nsh/mobile";
+
+const step = signal("none");
+const stop = BackHandler.on("progress", (e) => {
+  step.set(`${e.phase} ${e.progress} ${e.edge ?? "-"}`);
+  if (e.phase === "end") stop();
+});
+
+mount(() => <Text>{`step ${step()}`}</Text>);
 "#;
 
 const FIELD: &str = r#"import { mount, signal, Text, View } from "nsh";
@@ -3969,10 +4089,15 @@ fn a_base_tab_reports_presses_and_its_list_holds_no_value() {
     let initial = std::slice::from_ref(&first);
 
     // The list: a tab list for screen readers, named by the app
-    // (`accessibilityLabel`) and laid out by it.
+    // (`accessibilityLabel`) and laid out by it; with no `orientation` it
+    // reports none, and both pairs of arrows move.
     let list = view_props(&first, sections).unwrap();
     assert_eq!(list.accessibility.role, AccessibilityRole::Tablist);
     assert_eq!(list.accessibility.label.as_deref(), Some("Sections"));
+    assert_eq!(
+        list.accessibility.orientation, None,
+        "a list with no orientation reports none"
+    );
 
     // The selected tab: selected for screen readers, its `selectedStyle`,
     // and the app's marker `group-selected:`.
@@ -4061,7 +4186,7 @@ function App() {
   );
   return (
     <View>
-      <Tabs class="flex-row">
+      <Tabs testID="sections" orientation="horizontal" class="flex-row">
         {tab("a")}
         {tab("b")}
         {tab("c", true)}
@@ -4112,7 +4237,21 @@ fn base_tabs_and_radio_groups_rove_the_keyboard_focus() {
             })
             .expect(test_id)
     };
-    let [a, b, c, d, x, y, z] = ["a", "b", "c", "d", "x", "y", "z"].map(|t| id(&batches, t));
+    let [sections, a, b, c, d, x, y, z] =
+        ["sections", "a", "b", "c", "d", "x", "y", "z"].map(|t| id(&batches, t));
+    let list = batches
+        .iter()
+        .flat_map(|b| b.items.iter())
+        .find_map(|i| match i {
+            MountItem::ViewProps { id, props } if *id == sections => Some(props.clone()),
+            _ => None,
+        })
+        .expect("the list's props");
+    assert_eq!(
+        list.accessibility.orientation,
+        Some(nsh_core::geometry::Axis::Horizontal),
+        "the app's orientation reaches the accessibility props"
+    );
     // The newest `focusable` of each view.
     let stops = |batches: &[MountBatch], views: &[u32]| -> Vec<u32> {
         views
@@ -4188,8 +4327,12 @@ fn base_tabs_and_radio_groups_rove_the_keyboard_focus() {
             .any(|i| matches!(i, MountItem::Keymap(_)))
     }));
     let keys = keymap(&batches).expect("the list's keys");
-    for keystroke in ["left", "right", "up", "down", "home", "end"] {
+    for keystroke in ["left", "right", "home", "end"] {
         assert!(bound(&keys, keystroke).is_some(), "{keystroke}");
+    }
+    // A horizontal list leaves Up and Down to the page.
+    for keystroke in ["up", "down"] {
+        assert!(bound(&keys, keystroke).is_none(), "{keystroke}");
     }
     // Right passes the disabled tab: d becomes the stop, gets the focus
     // and reports a press.
@@ -6934,6 +7077,48 @@ fn the_tab_bar_is_the_systems_component_on_ios_and_android() {
             "{os:?}"
         );
         assert_eq!(value("selectedIndex"), Some(serde_json::json!(0)), "{os:?}");
+    }
+}
+
+/// The bar's own view is what takes a press: its container passes one on.
+/// A bar out of sight (`hidden`, or hidden by a pushed page's
+/// `hidesBottomBarWhenPushed`) leaves the strip it had, and a control the
+/// app draws there hears the press.
+#[test]
+fn the_tab_bars_container_takes_no_press_of_its_own() {
+    use nsh_core::platform::Os;
+
+    for os in [Os::Ios, Os::Android] {
+        let (_engine, rx) = start_in(
+            TAB_BAR,
+            Environment {
+                os,
+                ..Environment::default()
+            },
+        );
+        let batches = until(&rx, |batch| batch.items.iter().any(is_tab_bar));
+        let container = batches
+            .iter()
+            .flat_map(|batch| &batch.items)
+            .find_map(|item| match item {
+                MountItem::Component { id, .. } if is_tab_bar(item) => Some(*id),
+                _ => None,
+            })
+            .expect("the system bar's container");
+        let props = batches
+            .iter()
+            .flat_map(|batch| &batch.items)
+            .filter_map(|item| match item {
+                MountItem::ViewProps { id, props } if *id == container => Some(props),
+                _ => None,
+            })
+            .next_back()
+            .expect("the container's box-none reaches the platform");
+        assert_eq!(
+            props.pointer_events,
+            nsh_core::PointerEvents::BoxNone,
+            "{os:?}"
+        );
     }
 }
 
@@ -12464,6 +12649,7 @@ const chosen = signal("none");
 const dark = signal(false);
 mount(() => <Window id="main"><View>
   <MenuButton accessibilityLabel="Account" title="me@example.com"
+    accessibilityHint={dark() ? undefined : "Choose an appearance"}
     items={[
       { id: "settings", label: "Settings", icon: "gearshape" },
       { id: "", label: "Appearance", inline: true, singleSelection: true, items: [
@@ -12521,6 +12707,10 @@ fn the_menu_button_gives_the_mobile_systems_their_menu_and_reports_the_choice() 
             component_prop(&initial, button, "accessibilityLabel"),
             Some(serde_json::json!("Account"))
         );
+        assert_eq!(
+            component_prop(&initial, button, "accessibilityHint"),
+            Some(serde_json::json!("Choose an appearance"))
+        );
         engine.control().dispatch_event(
             button,
             EventKind::NativeEvent,
@@ -12533,6 +12723,10 @@ fn the_menu_button_gives_the_mobile_systems_their_menu_and_reports_the_choice() 
         assert_eq!(
             component_prop(&updates, button, "items"),
             Some(appearance(true))
+        );
+        assert_eq!(
+            component_prop(&updates, button, "accessibilityHint"),
+            Some(serde_json::Value::Null)
         );
     }
 }

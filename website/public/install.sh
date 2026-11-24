@@ -32,6 +32,25 @@ if [ -t 2 ] && [ "${TERM:-dumb}" != dumb ]; then
   tty=1
 fi
 
+# Ctrl-C must stop the install. A non-interactive shell starts background
+# commands with SIGINT ignored, so the step running under the spinner is
+# stopped here, then the temporary directory goes and the script exits.
+pid=
+work=
+cleanup() {
+  [ -z "$work" ] || rm -rf "$work"
+}
+interrupted() {
+  trap '' INT TERM
+  [ -z "$pid" ] || kill "$pid" 2> /dev/null || true
+  [ -z "$tty" ] || printf '\r\033[K' >&2
+  cleanup
+  exit "$1"
+}
+trap cleanup EXIT
+trap 'interrupted 130' INT
+trap 'interrupted 143' TERM
+
 # step LABEL COMMAND...: run COMMAND with a spinner, then mark it done.
 step() {
   label="$1"
@@ -52,13 +71,21 @@ step() {
     esac
     printf '\r\033[K\033[36m%s\033[0m %s' "$frame" "$label" >&2
     if [ -n "${download_file:-}" ] && [ -f "$download_file" ]; then
-      size=$(wc -c < "$download_file" | awk '{printf "%.1f", $1 / 1048576}')
-      printf '  \033[2m%s MB\033[0m' "$size" >&2
+      wc -c < "$download_file" | awk -v total="${download_total:-0}" '{
+        mb = $1 / 1048576
+        if (total > 0) {
+          pct = int($1 * 100 / total); if (pct > 100) pct = 100
+          printf "  \033[2m%.1f / %.1f MB\033[0m  %d%%", mb, total / 1048576, pct
+        } else {
+          printf "  \033[2m%.1f MB\033[0m", mb
+        }
+      }' >&2
     fi
     sleep 0.1
   done
   status=0
   wait "$pid" || status=$?
+  pid=
   printf '\r\033[K' >&2
   [ "$status" -eq 0 ] || return "$status"
   printf '\033[32m✓\033[0m %s\n' "$label" >&2
@@ -150,11 +177,14 @@ else
 fi
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT INT TERM
 
 echo "Installing NSH $version for $platform"
 if [ -n "$tty" ]; then
   download_file="$work/$asset"
+  # The total size comes from Content-Length after redirects; without it the
+  # spinner falls back to the downloaded size only.
+  download_total=$(curl -fsSIL "$url" 2> /dev/null | tr -d '\r' |
+    awk 'tolower($1) == "content-length:" { n = $2 } END { print n + 0 }') || download_total=0
   step "Downloading $asset" curl -fsSL "$url" -o "$download_file" || fail "could not download $url"
   download_file=
 else
@@ -163,15 +193,15 @@ else
 fi
 curl -fsSL "$url.sha256" -o "$work/$asset.sha256" || fail "could not download $url.sha256"
 
-verify() {
+verify() (
   cd "$work"
   if command -v shasum > /dev/null 2>&1; then
     shasum -a 256 -c "$asset.sha256" > /dev/null
   else
     sha256sum -c "$asset.sha256" > /dev/null
   fi
-}
-(step "Verifying checksum" verify) || fail "the checksum of $asset does not match"
+)
+step "Verifying checksum" verify || fail "the checksum of $asset does not match"
 
 step "Extracting $asset" tar -xzf "$work/$asset" -C "$work" || fail "could not extract $asset"
 [ -x "$work/nsh/bin/nsh" ] || fail "$asset holds no nsh/bin/nsh"

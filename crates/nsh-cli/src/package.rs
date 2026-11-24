@@ -35,10 +35,12 @@ pub(crate) enum PackageTarget {
     IosSimulator,
     /// Android: a signed `.apk`.
     Android,
-    /// Linux (GTK): a directory with the runner, the bundle and a `.desktop`
-    /// file, and the same as a `.tar.gz`.
+    /// Linux (GTK): a directory with the runner, the bundle, a `.desktop`
+    /// file and AppStream metainfo, and the same as a `.tar.gz`; with
+    /// `--format appimage` also an AppImage, with `--format flatpak` a
+    /// Flatpak manifest (and bundle, with `flatpak-builder`).
     Linux,
-    /// macOS (AppKit): an ad hoc signed `.app`.
+    /// macOS (AppKit): a signed `.app` (ad hoc without `--sign`).
     Macos,
     /// Windows: a directory with the runner as `<name>.exe` (the app's
     /// icon embedded) and the bundle, and the same as a `.zip`.
@@ -63,14 +65,39 @@ pub(crate) enum PackageTarget {
 
 impl PackageTarget {
     /// The platform [`crate::module_meta`] reads the app's dependency
-    /// graph for: iOS and Android, where crates declare package entries.
-    fn module_meta_triple(self) -> Option<(&'static str, crate::module_meta::Platform)> {
+    /// graph for, and the Rust targets it reads it for: iOS, macOS and
+    /// Android, where crates declare package entries. A macOS package is
+    /// read for each architecture it is built for (`arch`; `None`: this
+    /// Mac's), so a crate only another architecture links counts.
+    fn module_meta_triples(
+        self,
+        arch: Option<Arch>,
+    ) -> Option<(&'static [&'static str], crate::module_meta::Platform)> {
         use crate::module_meta::Platform;
         match self {
-            PackageTarget::Ios => Some(("aarch64-apple-ios", Platform::Ios)),
-            PackageTarget::IosSimulator => Some(("aarch64-apple-ios-sim", Platform::Ios)),
-            PackageTarget::Android => Some(("aarch64-linux-android", Platform::Android)),
+            PackageTarget::Ios => Some((&["aarch64-apple-ios"], Platform::Ios)),
+            PackageTarget::IosSimulator => Some((&["aarch64-apple-ios-sim"], Platform::Ios)),
+            PackageTarget::Macos => Some((
+                arch.unwrap_or_else(Arch::host).macos_triples(),
+                Platform::Macos,
+            )),
+            PackageTarget::Android => Some((&["aarch64-linux-android"], Platform::Android)),
             _ => None,
+        }
+    }
+
+    /// The target a crate's files are scoped to
+    /// (`Registry::assets_for`); `None` for the removed GPUI packages.
+    pub(crate) fn asset_target(self) -> Option<nsh_core::platform::Os> {
+        use nsh_core::platform::Os;
+        match self {
+            PackageTarget::Ios | PackageTarget::IosSimulator => Some(Os::Ios),
+            PackageTarget::Android => Some(Os::Android),
+            PackageTarget::Linux => Some(Os::Linux),
+            PackageTarget::Macos => Some(Os::MacOs),
+            PackageTarget::Windows => Some(Os::Windows),
+            PackageTarget::Web => Some(Os::Web),
+            PackageTarget::Gpui => None,
         }
     }
 
@@ -108,6 +135,15 @@ const MACOS_ARM64: &str = "aarch64-apple-darwin";
 const MACOS_X86_64: &str = "x86_64-apple-darwin";
 
 impl Arch {
+    /// This machine's processor.
+    fn host() -> Self {
+        if cfg!(target_arch = "aarch64") {
+            Arch::Arm64
+        } else {
+            Arch::X86_64
+        }
+    }
+
     /// The Rust targets of its builds, one per architecture.
     fn macos_triples(self) -> &'static [&'static str] {
         match self {
@@ -120,11 +156,7 @@ impl Arch {
 
 /// The Rust target of macOS on this machine's processor.
 fn host_macos_triple() -> &'static str {
-    if cfg!(target_arch = "aarch64") {
-        MACOS_ARM64
-    } else {
-        MACOS_X86_64
-    }
+    Arch::host().macos_triples()[0]
 }
 
 /// What cargo builds the runner for `triple` with: nothing for this
@@ -188,7 +220,8 @@ pub(crate) struct AppConfig {
     #[serde(default, rename = "tailwind")]
     _tailwind: Option<serde_json::Value>,
     /// Read and checked by the bundler; packages read only what the
-    /// system must be told ahead (`speech`'s usage descriptions).
+    /// system must be told ahead (`webview.media`'s usage descriptions,
+    /// `notifications`).
     #[serde(default)]
     pub(crate) capabilities: Option<serde_json::Value>,
     /// `"light"` / `"dark"` / `"system"`: the app's appearance (checked by
@@ -205,6 +238,13 @@ pub(crate) struct AppConfig {
     /// The languages whose data the app ships (checked by the bundler).
     #[serde(default)]
     locales: Option<serde_json::Value>,
+    /// The named time zones whose rules the app ships (checked by the
+    /// bundler).
+    #[serde(default, rename = "timeZones")]
+    _time_zones: Option<serde_json::Value>,
+    /// The store listing, read by `nsh publish <store>` (`store.rs`).
+    #[serde(default)]
+    pub(crate) store: Option<serde_json::Value>,
     /// The locales the app ships (`locales`, else its translations'
     /// languages: `nsh_i18n::app_locales`), which Apple packages declare
     /// (`CFBundleLocalizations`) so that system UI shows in them.
@@ -213,6 +253,11 @@ pub(crate) struct AppConfig {
     /// Read and checked by the bundler.
     #[serde(default, rename = "resolve")]
     _resolve: Option<serde_json::Value>,
+    /// The entry module, relative to `nsh.json` (`"app/App.tsx"`; `App.tsx`
+    /// beside it by default): read by `entry::resolve`, checked by
+    /// `nsh_bundler::app_dir::config_entry`.
+    #[serde(default, rename = "entry")]
+    _entry: Option<String>,
     /// The app's Rust crate: its builds are the app's own (`rust_app.rs`).
     #[serde(default, rename = "rust")]
     _rust: Option<serde_json::Value>,
@@ -233,6 +278,9 @@ pub(crate) struct AppConfig {
     /// How `nsh run` and `nsh dev` run the app.
     #[serde(default)]
     pub(crate) dev: DevConfig,
+    /// What the development watcher skips.
+    #[serde(default)]
+    pub(crate) watch: WatchConfig,
     /// URL schemes that open the app (`"myapp"`: `myapp://...`), which
     /// packages register with the system; the app hears them through
     /// `UrlScheme.on("open", ...)`. [`read_config`] checks them and lowers
@@ -263,6 +311,12 @@ pub(crate) struct AppConfig {
     /// release runners (macOS, Windows, Linux) read it; [`read_config`]
     /// drops a value they would refuse.
     pub(crate) data_dir: Option<String>,
+    /// The directory of the packaged app's log files (`"logDir":
+    /// "${homeDir}/.myapp/logs/ui"`), in place of `logs` in its data
+    /// directory. Spelled and checked like [`Self::data_dir`]; written into
+    /// `app.json` for the desktop release runners, and [`read_config`] drops
+    /// a value they would refuse.
+    pub(crate) log_dir: Option<String>,
     /// Gives the app's address (`UrlScheme.setUrl`) to the system on iOS
     /// and macOS (`"handoff": true`), so Handoff continues it on the user's
     /// other devices. iOS and macOS
@@ -301,6 +355,14 @@ pub(crate) struct AppConfig {
     /// What Android packages set in their manifest.
     #[serde(default)]
     pub(crate) android: AndroidConfig,
+    /// What Linux packages set (`"linux"`): the Flatpak manifest's runtime
+    /// and permissions.
+    #[serde(default)]
+    pub(crate) linux: crate::linux_store::LinuxConfig,
+    /// The identity of Windows' MSIX packages (`msix.rs`) and the app's
+    /// Microsoft Store id (`nsh publish windows`).
+    #[serde(default)]
+    pub(crate) windows: crate::msix::WindowsConfig,
     /// What Tizen packages (Samsung TVs) set in their manifest: the Tizen
     /// web app's `config.xml` (`tizen_web.rs`), the TPK's
     /// `tizen-manifest.xml` (`tizen.rs`).
@@ -338,6 +400,45 @@ pub(crate) struct TizenConfig {
     pub(crate) smart_hub_preview: Option<String>,
 }
 
+/// The file name of a desktop package's executable: the app's name
+/// without what file names and `Exec=` lines trip on.
+pub(crate) fn executable_name(name: &str) -> String {
+    let executable: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if executable.is_empty() {
+        "App".to_owned()
+    } else {
+        executable
+    }
+}
+
+/// The directory of the app's `nsh.json`.
+pub(crate) fn config_dir(entry: &Path) -> PathBuf {
+    nsh_bundler::app_dir::config_dir_of(entry)
+}
+
+/// The app's Linux `.desktop` entry, with its store categories.
+pub(crate) fn linux_desktop_entry(
+    config: &AppConfig,
+    store: &crate::linux_store::StoreConfig,
+    name: &str,
+    id: &str,
+    executable: &str,
+    icon: bool,
+) -> String {
+    desktop_entry(
+        name,
+        id,
+        executable,
+        icon,
+        &config.schemes,
+        &file_mime_types(&config.file_types()),
+    )
+    .replace(
+        "Categories=Utility;",
+        &crate::linux_store::desktop_categories(store),
+    )
+}
+
 /// `nsh.json` `"android"`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -353,26 +454,36 @@ pub(crate) struct AndroidConfig {
     /// TLS. Off by default, as Android has it from API 28 on.
     #[serde(default)]
     pub(crate) uses_cleartext_traffic: bool,
-    /// Dex files of the Java code the app ships (only the app's own
-    /// `nsh.json` lists them; an extension's are listed there too), relative
-    /// to `nsh.json`: packaged after the runtime's `classes.dex` as
-    /// `classes2.dex`, `classes3.dex`, ..., so the app's class loader finds
-    /// their classes as it finds NSH's.
+    /// Java libraries the app ships (`"libraries"`: jar, AAR and dex files,
+    /// relative to `nsh.json`), before the ones its crates list
+    /// ([`crate::module_meta`]): packaged after the runtime's
+    /// `classes.dex`, so the app's class loader finds their classes as it
+    /// finds NSH's. An AAR listed here is the version of its library the
+    /// package takes, whichever its crates list.
     #[serde(default)]
-    pub(crate) dex: Vec<PathBuf>,
+    pub(crate) libraries: Vec<crate::android::Library>,
+    /// The values of the placeholders (`${name}`) the libraries' manifests
+    /// and the crates' manifest entries use: a service's key, for one.
+    /// Only the app sets them; `${applicationId}` is its package.
+    #[serde(default)]
+    pub(crate) manifest_placeholders: std::collections::BTreeMap<String, String>,
     /// Permissions the manifest declares besides the ones NSH declares
     /// itself (`<uses-permission>`): a bare name (`ACCESS_NETWORK_STATE`)
     /// is Android's, `android.permission.<name>`; a dotted one is written
     /// as it is. Declaring a runtime permission does not grant it.
     #[serde(default)]
     pub(crate) permissions: Vec<String>,
-    /// Elements of the manifest's `<queries>` the app's crates declare
-    /// ([`crate::module_meta`]); not an `nsh.json` key.
-    #[serde(skip)]
+    /// Elements of the manifest's `<queries>`: `<intent>`, `<package>` and
+    /// `<provider>`, one balanced element each. The app's crates add theirs
+    /// after the app's ([`crate::module_meta`]).
+    #[serde(default)]
     pub(crate) queries: Vec<String>,
-    /// Elements of the manifest's `<application>` the app's crates declare
-    /// ([`crate::module_meta`]); not an `nsh.json` key.
-    #[serde(skip)]
+    /// Elements of the manifest's `<application>`: `<service>`,
+    /// `<receiver>`, `<provider>`, `<activity>` and `<meta-data>`, one
+    /// balanced element each; `${applicationId}` in them is the app's
+    /// package. The app's crates add theirs after the app's
+    /// ([`crate::module_meta`]).
+    #[serde(default)]
     pub(crate) application: Vec<String>,
     /// What the app's window shows from the tap on its icon until its first
     /// frame, the same keys as `ios.launchScreen`: the window's background
@@ -469,18 +580,19 @@ pub(crate) struct DevConfig {
     pub(crate) idiom: Option<crate::run::DevIdiom>,
 }
 
-impl AppConfig {
-    /// Whether the app may recognize speech: it declares no capabilities
-    /// (it gets them all) or grants `speech`.
-    fn speech(&self) -> bool {
-        match &self.capabilities {
-            None => true,
-            Some(capabilities) => {
-                capabilities.get("speech") == Some(&serde_json::Value::Bool(true))
-            }
-        }
-    }
+/// `nsh.json` `"watch"`: what `nsh run` and `nsh dev` leave out of the
+/// watcher ([`crate::dev`], [`crate::rust_app`]).
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct WatchConfig {
+    /// Directories whose file events the watcher skips: paths relative to
+    /// `nsh.json` (`"vendor"`, `"third/jpeg-turbo"`), absolute ones as they
+    /// are. One inside the watch (the app's directory, a crate's) that
+    /// holds generated code or another checkout is the usual one.
+    #[serde(default)]
+    pub(crate) ignore: Vec<String>,
+}
 
+impl AppConfig {
     /// Whether the app may show notifications: it declares no capabilities
     /// (it gets them all) or grants `notifications`.
     pub(crate) fn notifications(&self) -> bool {
@@ -558,6 +670,9 @@ impl AppConfig {
         if let Some(dir) = &self.data_dir {
             info["dataDir"] = dir.as_str().into();
         }
+        if let Some(dir) = &self.log_dir {
+            info["logDir"] = dir.as_str().into();
+        }
     }
 
     /// The checked file types as JSON, for `app.json`; `None` without any.
@@ -576,17 +691,13 @@ impl AppConfig {
             .is_some_and(|m| m.iter().any(|k| k.as_str() == Some(kind)))
     }
 
-    /// Adds what the system shows when the app first asks for the
-    /// microphone, the camera and speech recognition, which it requires
-    /// (it ends an app that asks without them): for speech recognition and
-    /// web pages' media capture (`webview.media`). The app's `infoPlist`
-    /// may word them its own way.
+    /// Adds what the system shows when the app's web pages first ask for
+    /// the microphone or the camera (`webview.media`), which it requires
+    /// (it ends an app that asks without them). The app's `infoPlist` may
+    /// word them its own way. Native modules that use them (`nsh-extra`'s
+    /// `speech`) declare theirs in their crate's metadata
+    /// ([`crate::module_meta`]).
     fn usage_descriptions(&self, info: &mut plist::Dictionary) {
-        if self.speech() {
-            for (key, text) in USAGE_DESCRIPTIONS {
-                info.insert(key.into(), plist::Value::String(text.to_owned()));
-            }
-        }
         for (kind, key, text) in WEB_MEDIA_USAGE_DESCRIPTIONS {
             if self.web_media(kind) && !info.contains_key(key) {
                 info.insert(key.into(), plist::Value::String(text.to_owned()));
@@ -607,18 +718,6 @@ impl AppConfig {
         }
     }
 }
-
-/// The usage descriptions of an app that recognizes speech (`Speech`).
-pub(crate) const USAGE_DESCRIPTIONS: [(&str, &str); 2] = [
-    (
-        "NSMicrophoneUsageDescription",
-        "The app listens to the microphone while you dictate.",
-    ),
-    (
-        "NSSpeechRecognitionUsageDescription",
-        "The app turns what you say into text.",
-    ),
-];
 
 /// The usage descriptions of an app whose web pages capture media
 /// (`webview.media`), by kind.
@@ -821,7 +920,7 @@ pub(crate) struct PackageOptions<'a> {
     pub(crate) target: PackageTarget,
     pub(crate) out: &'a Path,
     pub(crate) config: AppConfig,
-    /// Code signing identity (device builds).
+    /// Code signing identity (iOS device builds and macOS packages).
     pub(crate) sign: Option<&'a str>,
     /// Provisioning profiles (device builds): the app's, and one for each of
     /// its app extensions (`ios.extensions`), found by bundle identifier.
@@ -966,14 +1065,13 @@ impl AppConfig {
     }
 }
 
-/// Fails when the app's `nsh.json` (beside `entry`, or in `--app`'s
-/// directory) asks for NSH versions (`"nsh": ">=0.5"`) this CLI is not one
-/// of, with one message that names both, before a build fails on what the
-/// other version lacks.
+/// Fails when the app's `nsh.json` (of `entry`: beside it, or the one
+/// above that names it; or in `--app`'s directory) asks for NSH versions
+/// (`"nsh": ">=0.5"`) this CLI is not one of, with one message that names
+/// both, before a build fails on what the other version lacks.
 pub(crate) fn check_nsh_version(entry: &Path) -> anyhow::Result<()> {
-    let dir = &crate::entry::app_dir(entry);
-    let path = dir.join("nsh.json");
-    let Ok(text) = fs::read_to_string(&path) else {
+    let path = crate::entry::app_dir(entry).join("nsh.json");
+    let Ok(text) = nsh_bundler::app_dir::read(&path) else {
         return Ok(());
     };
     // A file that does not read is reported by the command itself.
@@ -1007,12 +1105,14 @@ fn nsh_version_error(required: &serde_json::Value, version: &str) -> Option<Stri
     (!req.matches(&this)).then(|| format!("this app requires nsh {text}; this is nsh {version}"))
 }
 
-/// Reads the app's `nsh.json` (next to `entry`, or in `--app`'s
-/// directory), if any; relative paths become absolute.
+/// Reads the app's `nsh.json` (of `entry`: beside it, or the one above
+/// that names it, `"entry"`, `nsh_bundler::app_dir::config_dir_of`; or in
+/// `--app`'s directory), if any; relative paths become absolute, from its
+/// directory.
 pub(crate) fn read_config(entry: &Path) -> anyhow::Result<AppConfig> {
     let dir = &crate::entry::app_dir(entry);
     let path = dir.join("nsh.json");
-    let Ok(text) = fs::read_to_string(&path) else {
+    let Ok(text) = nsh_bundler::app_dir::read(&path) else {
         return Ok(AppConfig {
             localizations: app_localizations(dir, None),
             ..AppConfig::default()
@@ -1020,6 +1120,11 @@ pub(crate) fn read_config(entry: &Path) -> anyhow::Result<AppConfig> {
     };
     let (mut config, mut ignored) =
         parse_config(&text).with_context(|| format!("invalid {}", path.display()))?;
+    crate::module_meta::keep_app_android_elements(
+        &mut config.android.queries,
+        &mut config.android.application,
+        &mut ignored,
+    );
     if let Some(value) = &config.tui.points_per_cell
         && let Err(e) = crate::run::parse_points_per_cell(value)
     {
@@ -1068,13 +1173,27 @@ pub(crate) fn read_config(entry: &Path) -> anyhow::Result<AppConfig> {
         ));
         config.data_dir = None;
     }
-    config.android.dex = std::mem::take(&mut config.android.dex)
-        .into_iter()
-        .map(|dex| dir.join(dex))
-        .collect();
+    if let Some(dir) = &config.log_dir
+        && nsh_engine::resolve_data_dir(dir).is_none()
+    {
+        ignored.push(format!(
+            "logDir: `{dir}` is neither an absolute path nor `${{homeDir}}/...` (no `..`, no other `${{...}}`)"
+        ));
+        config.log_dir = None;
+    }
+    for library in &mut config.android.libraries {
+        library.path = dir.join(&library.path);
+    }
     config.ios.extensions = crate::app_extensions::read(
         std::mem::take(&mut config.ios.extensions),
         dir,
+        ApplePlatform::Ios,
+        &mut ignored,
+    );
+    config.macos.extensions = crate::app_extensions::read(
+        std::mem::take(&mut config.macos.extensions),
+        dir,
+        ApplePlatform::Macos,
         &mut ignored,
     );
     config.icon = match config.icon {
@@ -1320,8 +1439,8 @@ pub(crate) fn web_host_module(entry: &Path, host: &Path) -> anyhow::Result<PathB
     Ok(module)
 }
 
-/// The app's display name and id: from the config, else the entry's
-/// directory name and `com.example.<name>`.
+/// The app's display name and id: from the config, else the name of its
+/// directory (`nsh.json`'s, else the entry's) and `com.example.<name>`.
 pub(crate) fn name_and_id(entry: &Path, config: &AppConfig) -> (String, String) {
     let name = config.name.clone().unwrap_or_else(|| {
         crate::entry::app_dir(entry)
@@ -1446,6 +1565,12 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
     if !options.tizen_archs.is_empty() && options.target != PackageTarget::Tizen {
         bail!("--arch only applies to --target macos and tizen");
     }
+    if options.target == PackageTarget::Windows
+        && options.sign.is_some()
+        && options.format != crate::android::Format::Msix
+    {
+        bail!("--sign signs the MSIX package on Windows: add --format msix");
+    }
     if options.arch.is_some() && options.target != PackageTarget::Macos {
         bail!("--arch only applies to --target macos and tizen");
     }
@@ -1460,9 +1585,22 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
             bail!("--device is where --run installs the app: add --run");
         }
     }
-    if options.format != crate::android::Format::Apk {
+    if options.format == crate::android::Format::Msix {
+        if options.target != PackageTarget::Windows {
+            bail!("--format msix only applies to --target windows");
+        }
+    } else if options.format.is_linux() {
+        if options.target != PackageTarget::Linux {
+            bail!("--format appimage and flatpak only apply to --target linux");
+        }
+        if options.run {
+            bail!(
+                "--run launches the packaged directory: drop --format, or open the package itself"
+            );
+        }
+    } else if options.format != crate::android::Format::Apk {
         if options.target != PackageTarget::Android {
-            bail!("--format only applies to --target android");
+            bail!("--format aab only applies to --target android");
         }
         if options.run {
             bail!(
@@ -1473,14 +1611,16 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
     let entry = dunce::canonicalize(options.entry)?;
     // What the app's crates and nshm declare for the package (an
     // `Info.plist` key, a manifest entry), under what `nsh.json` sets.
-    if let Some((triple, platform)) = options.target.module_meta_triple()
+    if let Some((triples, platform)) = options.target.module_meta_triples(options.arch)
         && let Some(app) = crate::rust_app::current()
     {
-        crate::module_meta::ModuleMeta::of_workspace(
-            &app.workspace().join("Cargo.toml"),
-            Some(triple),
-        )?
-        .apply(&mut options.config, platform)?;
+        crate::module_meta::ModuleMeta::of_workspace(&app.workspace().join("Cargo.toml"), triples)?
+            .apply(&mut options.config, platform)?;
+        match platform {
+            crate::module_meta::Platform::Ios => options.config.ios.check(ApplePlatform::Ios)?,
+            crate::module_meta::Platform::Macos => options.config.macos.check()?,
+            crate::module_meta::Platform::Android => {}
+        }
     }
     let config = &options.config;
     let (name, id) = release_name_and_id(&entry, config)?;
@@ -1504,12 +1644,7 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
             "nsh.json links: Linux and Windows open web links in the browser, so the links are left out",
         );
     }
-    let executable: String = name.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    let executable = if executable.is_empty() {
-        "App".to_owned()
-    } else {
-        executable
-    };
+    let executable = executable_name(&name);
 
     // Web apps load what `import()` brings in when it is used; native
     // packages are one bundle. A Rust app has none: its runner mounts its
@@ -1653,7 +1788,7 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
             config.window.as_ref(),
         ),
     )?;
-    for asset in &built.assets {
+    for asset in built.assets_for(options.target.asset_target()) {
         let dest = resources.join("assets").join(&asset.path);
         if let Some(dir) = dest.parent() {
             fs::create_dir_all(dir)?;
@@ -1694,6 +1829,7 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
         &app,
         &info,
         options.target == PackageTarget::IosSimulator,
+        None,
     )?;
     let localized = config.ios.localized_info(ApplePlatform::Ios, &info)?;
     crate::apple::write_localized_info(&app, &localized)?;
@@ -1873,6 +2009,7 @@ fn package_android(
                 if let Some(application) = &config.application {
                     info["application"] = application.clone();
                 }
+                config.add_file_types_to_app_json(&mut info);
                 info
             },
             &config.app_links(),
@@ -1880,7 +2017,7 @@ fn package_android(
         )
         .into_bytes(),
     ));
-    for asset in &built.assets {
+    for asset in built.assets_for(options.target.asset_target()) {
         let bytes = fs::read(&asset.source).with_context(|| format!("read {}", asset.path))?;
         assets.push((format!("nsh/assets/{}", asset.path), bytes));
     }
@@ -1903,15 +2040,10 @@ fn package_android(
         .join(format!("{name}.{}", options.format.extension()));
     let version = config.version.as_deref().unwrap_or("1.0.0");
     // `android/res/` next to `nsh.json`: the app's own resources.
-    let res = Some(
-        options
-            .entry
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("android")
-            .join("res"),
-    )
-    .filter(|dir| dir.is_dir());
+    let config_dir = nsh_bundler::app_dir::config_dir_of(options.entry);
+    let app_dir = config_dir.as_path();
+    let res = Some(app_dir.join("android").join("res")).filter(|dir| dir.is_dir());
+    let library_cache = app_dir.join(".nsh/android/libraries");
     let step = ui::Step::start(format!("packaging {}", ui::path(&apk_path)));
     android::build(
         &sdk,
@@ -1927,11 +2059,14 @@ fn package_android(
             notifications: config.notifications(),
             microphone: config.web_media("microphone"),
             camera: config.web_media("camera"),
-            dex: &config.android.dex,
+            libraries: &config.android.libraries,
+            library_cache: &library_cache,
+            manifest_placeholders: Some(&config.android.manifest_placeholders),
             permissions: &permissions,
             queries: &config.android.queries,
             application: &config.android.application,
             schemes: &config.schemes,
+            share_mime_types: &file_mime_types(&config.file_types()),
             links: config.app_links().web(),
             rust: built.rust_root,
             dark: config.appearance.as_deref() == Some("dark"),
@@ -1955,10 +2090,13 @@ fn package_android(
     ));
     if let Some(serial) = serial {
         let step = ui::Step::start(format!("installing {id} on {serial}"));
-        android::adb(
+        android::install(
             &sdk,
             &serial,
-            &["install", "-r", &apk_path.to_string_lossy()],
+            &apk_path,
+            id,
+            &["-r"],
+            android::AppData::Kept,
         )?;
         android::adb(
             &sdk,
@@ -2009,7 +2147,7 @@ fn package_linux(
     if let Some(json) = built.capabilities_json() {
         fs::write(resources.join("capabilities.json"), json)?;
     }
-    for asset in &built.assets {
+    for asset in built.assets_for(options.target.asset_target()) {
         let dest = resources.join("assets").join(&asset.path);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
@@ -2020,21 +2158,25 @@ fn package_linux(
     let mut info = desktop_app_json(config, name, id, version);
     info["schemes"] = serde_json::json!(config.schemes);
     fs::write(resources.join("app.json"), info.to_string())?;
+    let store = crate::linux_store::StoreConfig::read(options.entry)?;
     let icon = config.icon(PackageTarget::Linux);
     if let Some(icon) = icon {
-        fs::copy(icon, dir.join(format!("{id}.png")))
-            .with_context(|| format!("copy {}", icon.display()))?;
+        crate::linux_store::write_icon(icon, &dir.join(format!("{id}.png")))?;
     }
     fs::write(
         dir.join(format!("{id}.desktop")),
-        desktop_entry(
-            name,
-            id,
-            executable,
-            icon.is_some(),
-            &config.schemes,
-            &file_mime_types(&config.file_types()),
-        ),
+        linux_desktop_entry(config, &store, name, id, executable, icon.is_some()),
+    )?;
+    let store_app = crate::linux_store::LinuxApp {
+        name,
+        id,
+        executable,
+        version,
+        store: &store,
+    };
+    fs::write(
+        dir.join(format!("{id}.metainfo.xml")),
+        crate::linux_store::metainfo(&store_app),
     )?;
     let archive = options.out.join(format!("{name}.tar.gz"));
     let _ = fs::remove_file(&archive);
@@ -2065,6 +2207,30 @@ fn package_linux(
         ui::path(&dir),
         ui::path(&archive)
     ));
+    match options.format {
+        crate::android::Format::Appimage => {
+            let step = ui::Step::start(format!("making the AppImage of {name}"));
+            let image = crate::linux_store::appimage(&dir, options.out, &store_app)?;
+            step.done(format!("packaged {}", ui::path(&image)));
+        }
+        crate::android::Format::Flatpak => {
+            let step = ui::Step::start(format!("making the Flatpak of {name}"));
+            match crate::linux_store::flatpak(
+                &archive,
+                options.out,
+                &store_app,
+                &config.linux.flatpak,
+                icon.is_some(),
+            )? {
+                Some(bundle) => step.done(format!("packaged {}", ui::path(&bundle))),
+                None => step.done(format!(
+                    "wrote {}",
+                    ui::path(&options.out.join("flatpak").join(format!("{id}.yml")))
+                )),
+            }
+        }
+        _ => {}
+    }
     if options.run {
         let exe = dir.join(executable);
         Command::new(&exe)
@@ -2143,8 +2309,10 @@ fn android_sounds(config: &AppConfig, built: &crate::build::Built) -> Vec<(Strin
 /// `Contents/MacOS/<executable>`, the bundle and assets in
 /// `Contents/Resources/nsh/` (where the runner looks), `nsh/app.json` (the
 /// window's title and the app's appearance, which the window opens in),
-/// the icon as `AppIcon.icns`; signed ad hoc (Apple silicon runs no
-/// unsigned code; distribute it signed with a Developer ID instead).
+/// the icon as `AppIcon.icns`, and any `macos.extensions` in
+/// `Contents/PlugIns/`; signed ad hoc by default (Apple silicon runs no
+/// unsigned code) or with `--sign` (Hardened Runtime and secure timestamp),
+/// then verified with `codesign --verify --deep --strict`.
 fn package_macos(
     options: &PackageOptions<'_>,
     config: &AppConfig,
@@ -2176,7 +2344,7 @@ fn package_macos(
     if let Some(json) = built.capabilities_json() {
         fs::write(nsh.join("capabilities.json"), json)?;
     }
-    for asset in &built.assets {
+    for asset in built.assets_for(options.target.asset_target()) {
         let dest = nsh.join("assets").join(&asset.path);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
@@ -2216,35 +2384,40 @@ fn package_macos(
     document_types(&mut plist, &config.file_types());
     let localized = config.macos.localized_info(&plist)?;
     crate::apple::write_localized_info(&resources, &localized)?;
+    let extensions = crate::app_extensions::embed_macos(&config.macos.extensions, &app, &plist)?;
     plist::Value::Dictionary(plist)
         .to_file_xml(contents.join("Info.plist"))
         .context("write Info.plist")?;
     let mut entitlements = config.macos.entitlements()?;
     config.web_media_entitlements(&mut entitlements);
+    let identity = options.sign.unwrap_or("-");
     for key in entitlements.keys() {
         if crate::apple::needs_profile(key) {
-            ui::warn(format!(
-                "macOS launches an app signed with `{key}` (nsh.json macos.entitlements) only under a provisioning profile that grants it: \
-                 sign {} again with your Developer ID and such a profile before running it",
-                ui::path(&app)
-            ));
+            if identity == "-" {
+                ui::warn(format!(
+                    "macOS launches an app signed with `{key}` (nsh.json macos.entitlements) only under a provisioning profile that grants it: \
+                     sign {} again with your Developer ID and such a profile before running it",
+                    ui::path(&app)
+                ));
+            } else {
+                ui::warn(format!(
+                    "macOS launches an app signed with `{key}` (nsh.json macos.entitlements) only under a provisioning profile that grants it: \
+                     embed such a profile in {} as Contents/embedded.provisionprofile and sign it again before running it",
+                    ui::path(&app)
+                ));
+            }
         }
     }
-    let mut codesign = Command::new("codesign");
-    codesign.args(["--force", "--sign", "-", "--timestamp=none"]);
+    // The app's signature seals its extensions': sign them inside-out first.
+    crate::app_extensions::sign_macos(&extensions, identity, options.out)?;
+    let mut entitlements_path = None;
     if !entitlements.is_empty() {
         let path = options.out.join(format!("{executable}.entitlements"));
         plist::Value::Dictionary(entitlements).to_file_xml(&path)?;
-        codesign.arg("--entitlements").arg(path);
+        entitlements_path = Some(path);
     }
-    let output = codesign.arg(&app).output().context("run codesign")?;
-    if !output.status.success() {
-        bail!(
-            "codesign failed for {}: {}",
-            app.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
+    codesign_macos(&app, identity, entitlements_path.as_deref())?;
+    codesign_verify(&app)?;
     crate::updater::archive_macos_app(
         config,
         name,
@@ -2487,7 +2660,8 @@ fn macos_info_plist(
     Ok(d)
 }
 
-/// The MIME types of `types`, each once, for a Linux desktop entry.
+/// The MIME types of `types`, each once, for a Linux desktop entry and
+/// Android's share sheet (a type with only extensions has none).
 pub(crate) fn file_mime_types(types: &[nsh_core::file_type::FileType]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for mime in types.iter().flat_map(|t| &t.mime_types) {
@@ -2920,6 +3094,72 @@ pub(crate) fn codesign(
     Ok(())
 }
 
+/// The arguments passed to `codesign` for a macOS bundle or nested binary.
+/// Certificate-signed builds enable Hardened Runtime (`--options runtime`)
+/// and a secure timestamp (`--timestamp`), as notarization and Developer ID
+/// distribution require; ad-hoc builds (`"-"`) disable timestamping.
+pub(crate) fn codesign_macos_args(
+    bundle: &Path,
+    identity: &str,
+    entitlements: Option<&Path>,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["--force".into(), "--sign".into(), identity.into()];
+    if identity == "-" {
+        args.push("--timestamp=none".into());
+    } else {
+        args.push("--options".into());
+        args.push("runtime".into());
+        args.push("--timestamp".into());
+    }
+    if let Some(e) = entitlements {
+        args.push("--entitlements".into());
+        args.push(e.as_os_str().to_os_string());
+    }
+    args.push(bundle.as_os_str().to_os_string());
+    args
+}
+
+/// Signs a macOS bundle or nested code item with `identity` (enabling
+/// Hardened Runtime and secure timestamping when signed with a certificate).
+pub(crate) fn codesign_macos(
+    bundle: &Path,
+    identity: &str,
+    entitlements: Option<&Path>,
+) -> anyhow::Result<()> {
+    let output = Command::new("codesign")
+        .args(codesign_macos_args(bundle, identity, entitlements))
+        .stdout(Stdio::null())
+        .output()
+        .context("run codesign")?;
+    if !output.status.success() {
+        bail!(
+            "codesign failed for {}: {}",
+            bundle.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Verifies a signed macOS app bundle and all nested extensions/code with
+/// `codesign --verify --deep --strict`.
+pub(crate) fn codesign_verify(app: &Path) -> anyhow::Result<()> {
+    let output = Command::new("codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(app)
+        .stdout(Stdio::null())
+        .output()
+        .context("run codesign --verify")?;
+    if !output.status.success() {
+        bail!(
+            "codesign verification failed for {}: {}",
+            app.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 /// `Payload/<App>.app` zipped, keeping permissions and symlinks.
 fn make_ipa(app: &Path, ipa: &Path) -> anyhow::Result<()> {
     let staging = ipa.with_extension("payload");
@@ -2953,6 +3193,23 @@ fn make_ipa(app: &Path, ipa: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `watch.ignore` reads as the watcher's skip list; without it there
+    /// is nothing to skip.
+    #[test]
+    fn watch_ignore_is_read_from_nsh_json() {
+        let (config, ignored) = parse_config(
+            r#"{
+                "watch": { "ignore": ["vendor", "third/jpeg-turbo"] }
+            }"#,
+        )
+        .unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert_eq!(config.watch.ignore, ["vendor", "third/jpeg-turbo"]);
+        let (config, ignored) = parse_config("{}").unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert!(config.watch.ignore.is_empty());
+    }
 
     /// Without `ios.launchScreen` the launch screen is the system's
     /// background; with it `UILaunchScreen` names the catalog's color and
@@ -3318,6 +3575,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `android.queries` and `android.application` are the app's to write
+    /// too; a value of another form is left out with a warning, as any
+    /// `nsh.json` value is.
+    #[test]
+    fn the_app_writes_android_queries_and_components() {
+        let (config, ignored) = parse_config(
+            r#"{ "android": {
+                "queries": ["<package android:name=\"com.singular.sdk\"/>"],
+                "application": ["<service android:name=\"${applicationId}.Sync\" android:exported=\"false\"/>"]
+            } }"#,
+        )
+        .unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+        assert_eq!(
+            config.android.queries,
+            [r#"<package android:name="com.singular.sdk"/>"#]
+        );
+        assert_eq!(config.android.application.len(), 1);
+        let (config, ignored) =
+            parse_config(r#"{ "android": { "queries": "<package android:name=\"a\"/>" } }"#)
+                .unwrap();
+        assert!(config.android.queries.is_empty());
+        assert!(
+            ignored.len() == 1 && ignored[0].starts_with("android.queries"),
+            "{ignored:?}"
+        );
+        // Read from the app: an entry that is not one element of those
+        // allowed is left out, never an error, and the rest is kept.
+        let dir = std::env::temp_dir().join(format!(
+            "nsh-cli-android-elements-config-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "android": {
+                "queries": ["<service android:name=\"a.B\"/>", "<package android:name=\"com.example.wallet\"/>"],
+                "application": ["<receiver android:name=\"a.Boot\" android:exported=\"false\"/></application><application>"]
+            } }"#,
+        )
+        .unwrap();
+        let config = read_config(&dir.join("App.tsx")).unwrap();
+        assert_eq!(
+            config.android.queries,
+            [r#"<package android:name="com.example.wallet"/>"#]
+        );
+        assert!(config.android.application.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn android_cleartext_traffic_is_off_unless_asked_for() {
         let cleartext = |json: serde_json::Value| {
@@ -3336,22 +3643,42 @@ mod tests {
     }
 
     #[test]
-    fn android_dex_files_are_relative_to_nsh_json() {
-        let dir =
-            std::env::temp_dir().join(format!("nsh-cli-android-dex-config-{}", std::process::id()));
+    fn android_libraries_are_relative_to_nsh_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "nsh-cli-android-libraries-config-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("nsh.json"),
-            r#"{ "android": { "dex": ["java/out/classes.dex"] } }"#,
+            r#"{ "android": { "libraries": ["android/libs/sdk.jar", "java/out/classes.dex"] } }"#,
         )
         .unwrap();
         let config = read_config(&dir.join("App.tsx")).unwrap();
-        assert_eq!(config.android.dex, [dir.join("java/out/classes.dex")]);
+        let libraries: Vec<(PathBuf, &str)> = config
+            .android
+            .libraries
+            .iter()
+            .map(|l| (l.path.clone(), l.listed.as_str()))
+            .collect();
+        assert_eq!(
+            libraries,
+            [
+                (
+                    dir.join("android/libs/sdk.jar"),
+                    "nsh.json `android.libraries`"
+                ),
+                (
+                    dir.join("java/out/classes.dex"),
+                    "nsh.json `android.libraries`"
+                ),
+            ]
+        );
         assert!(
             serde_json::from_value::<AppConfig>(serde_json::json!({}))
                 .unwrap()
                 .android
-                .dex
+                .libraries
                 .is_empty()
         );
         std::fs::remove_dir_all(&dir).unwrap();
@@ -3382,11 +3709,12 @@ mod tests {
             Some(dir.join("ios/sim/Widget.appex").as_path())
         );
         assert_eq!(extensions[1].simulator_path, None);
-        let (entitlements, section) = crate::apple::extension_entitlements(&extensions[0]).unwrap();
+        let (entitlements, section) =
+            crate::apple::extension_entitlements(&extensions[0], ApplePlatform::Ios).unwrap();
         assert_eq!(section, "ios.extensions[0].entitlements");
         assert!(entitlements.contains_key("com.apple.security.application-groups"));
         assert!(
-            crate::apple::extension_entitlements(&extensions[1])
+            crate::apple::extension_entitlements(&extensions[1], ApplePlatform::Ios)
                 .unwrap()
                 .0
                 .is_empty()
@@ -3421,6 +3749,133 @@ mod tests {
             "{error}"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn macos_extensions_are_relative_to_nsh_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "nsh-cli-macos-extensions-config-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "macos": { "extensions": [
+                { "path": "macos/Widgets.appex", "simulatorPath": "macos/sim/Widgets.appex",
+                  "entitlements": {
+                    "com.apple.security.app-sandbox": true,
+                    "com.apple.security.application-groups": ["TEAM123456.com.example.widgets"]
+                  } },
+                { "path": "macos/Share.appex" }
+            ] } }"#,
+        )
+        .unwrap();
+        let config = read_config(&dir.join("App.tsx")).unwrap();
+        let extensions = &config.macos.extensions;
+        assert_eq!(extensions.len(), 2);
+        assert_eq!(extensions[0].path, dir.join("macos/Widgets.appex"));
+        assert_eq!(extensions[0].simulator_path, None);
+        let (entitlements, section) =
+            crate::apple::extension_entitlements(&extensions[0], ApplePlatform::Macos).unwrap();
+        assert_eq!(section, "macos.extensions[0].entitlements");
+        assert!(entitlements.contains_key("com.apple.security.app-sandbox"));
+        assert!(entitlements.contains_key("com.apple.security.application-groups"));
+        assert!(
+            crate::apple::extension_entitlements(&extensions[1], ApplePlatform::Macos)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+
+        // An extension's identity is NSH's to sign, as the app's is.
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "macos": { "extensions": [
+                { "path": "Widgets.appex", "entitlements": { "application-identifier": "T.x" } }
+            ] } }"#,
+        )
+        .unwrap();
+        let error = read_config(&dir.join("App.tsx")).unwrap_err().to_string();
+        assert!(
+            error.contains("macos.extensions[0].entitlements: `application-identifier`"),
+            "{error}"
+        );
+
+        // An entry left out keeps the next one's index as the app wrote it.
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "macos": { "extensions": [
+                { "simulatorPath": "sim/A.appex" },
+                { "path": "B.appex", "entitlements": { "application-identifier": "T.x" } }
+            ] } }"#,
+        )
+        .unwrap();
+        let error = read_config(&dir.join("App.tsx")).unwrap_err().to_string();
+        assert!(
+            error.contains("macos.extensions[1].entitlements: `application-identifier`"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn codesign_macos_args_enables_hardened_runtime_for_certificates() {
+        let app = Path::new("/tmp/Pulse.app");
+        let ent = Path::new("/tmp/Pulse.entitlements");
+        let to_strings = |args: Vec<OsString>| -> Vec<String> {
+            args.into_iter()
+                .map(|s| s.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            to_strings(codesign_macos_args(app, "-", None)),
+            [
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                "/tmp/Pulse.app"
+            ]
+        );
+        assert_eq!(
+            to_strings(codesign_macos_args(app, "-", Some(ent))),
+            [
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                "--entitlements",
+                "/tmp/Pulse.entitlements",
+                "/tmp/Pulse.app",
+            ]
+        );
+        let id = "Developer ID Application: Example (TEAM123456)";
+        assert_eq!(
+            to_strings(codesign_macos_args(app, id, None)),
+            [
+                "--force",
+                "--sign",
+                id,
+                "--options",
+                "runtime",
+                "--timestamp",
+                "/tmp/Pulse.app",
+            ]
+        );
+        assert_eq!(
+            to_strings(codesign_macos_args(app, id, Some(ent))),
+            [
+                "--force",
+                "--sign",
+                id,
+                "--options",
+                "runtime",
+                "--timestamp",
+                "--entitlements",
+                "/tmp/Pulse.entitlements",
+                "/tmp/Pulse.app",
+            ]
+        );
     }
 
     #[test]
@@ -3464,23 +3919,23 @@ mod tests {
     }
 
     #[test]
-    fn apps_that_may_recognize_speech_explain_it() {
-        let usage = |capabilities: Option<serde_json::Value>| {
+    fn the_speech_capability_adds_no_usage_description() {
+        // Recognizing speech is `nsh-extra`'s `speech`, whose crate
+        // declares its usage descriptions: the capability alone (or no
+        // declaration) adds none.
+        for capabilities in [None, Some(serde_json::json!({ "speech": true }))] {
             let config = AppConfig {
                 capabilities,
                 ..AppConfig::default()
             };
-            let info = macos_info_plist("A", "com.a", "a", &config, false).unwrap();
-            let ios = info_plist("A", "com.a", "a", &config, "iphoneos").unwrap();
-            assert_eq!(
-                info.contains_key("NSMicrophoneUsageDescription"),
-                ios.contains_key("NSSpeechRecognitionUsageDescription")
-            );
-            info.contains_key("NSSpeechRecognitionUsageDescription")
-        };
-        assert!(usage(None));
-        assert!(usage(Some(serde_json::json!({ "speech": true }))));
-        assert!(!usage(Some(serde_json::json!({ "picker": true }))));
+            for info in [
+                macos_info_plist("A", "com.a", "a", &config, false).unwrap(),
+                info_plist("A", "com.a", "a", &config, "iphoneos").unwrap(),
+            ] {
+                assert!(!info.contains_key("NSSpeechRecognitionUsageDescription"));
+                assert!(!info.contains_key("NSMicrophoneUsageDescription"));
+            }
+        }
     }
 
     #[test]
@@ -3846,6 +4301,41 @@ mod tests {
             .unwrap();
             let config = read_config(&entry).unwrap();
             assert_eq!(config.data_dir.is_some(), kept, "{value}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_apps_log_dir_goes_into_app_json() {
+        let config: AppConfig =
+            serde_json::from_str(r#"{ "logDir": "${homeDir}/.myapp/logs/ui" }"#).unwrap();
+        let info = desktop_app_json(&config, "A", "com.a", "1.0.0");
+        assert_eq!(
+            info["logDir"],
+            serde_json::json!("${homeDir}/.myapp/logs/ui")
+        );
+        let info = desktop_app_json(&AppConfig::default(), "A", "com.a", "1.0.0");
+        assert!(info.get("logDir").is_none());
+    }
+
+    #[test]
+    fn a_log_dir_the_runner_would_refuse_is_dropped() {
+        let dir = std::env::temp_dir().join(format!("nsh-log-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let entry = dir.join("App.tsx");
+        for (value, kept) in [
+            ("${homeDir}/.myapp/logs", true),
+            ("logs", false),
+            ("${homeDir}/../elsewhere", false),
+            ("${appId}/logs", false),
+        ] {
+            std::fs::write(
+                dir.join("nsh.json"),
+                serde_json::json!({ "logDir": value }).to_string(),
+            )
+            .unwrap();
+            let config = read_config(&entry).unwrap();
+            assert_eq!(config.log_dir.is_some(), kept, "{value}");
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -4475,5 +4965,114 @@ mod tests {
             ]
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What crates declare is read for the Rust targets a package is built
+    /// for: each architecture of a macOS one.
+    #[test]
+    fn crates_are_read_for_every_target_a_package_builds() {
+        use crate::module_meta::Platform;
+        let read = |target: PackageTarget, arch| target.module_meta_triples(arch);
+        assert_eq!(
+            read(PackageTarget::Macos, Some(Arch::Universal)),
+            Some((&[MACOS_ARM64, MACOS_X86_64][..], Platform::Macos))
+        );
+        assert_eq!(
+            read(PackageTarget::Macos, Some(Arch::X86_64)),
+            Some((&[MACOS_X86_64][..], Platform::Macos))
+        );
+        assert_eq!(
+            read(PackageTarget::Macos, None),
+            Some((&[host_macos_triple()][..], Platform::Macos))
+        );
+        assert_eq!(
+            read(PackageTarget::Ios, None),
+            Some((&["aarch64-apple-ios"][..], Platform::Ios))
+        );
+        assert_eq!(read(PackageTarget::Windows, None), None);
+    }
+
+    /// A crate's macOS translation reaches the package's `InfoPlist.strings`
+    /// for the app's languages.
+    #[test]
+    fn crates_macos_translations_reach_the_package() {
+        use crate::module_meta::{ModuleMeta, Platform};
+        let mut meta = ModuleMeta::default();
+        meta.macos_info.insert(
+            "NSBluetoothAlwaysUsageDescription".into(),
+            serde_json::json!("Connects to peripherals."),
+        );
+        meta.macos_strings.insert(
+            "zh-Hans".into(),
+            serde_json::json!({ "NSBluetoothAlwaysUsageDescription": "连接外设。" }),
+        );
+        let mut config = AppConfig {
+            localizations: vec!["zh-Hans".into()],
+            ..Default::default()
+        };
+        meta.apply(&mut config, Platform::Macos).unwrap();
+        config.macos.check().unwrap();
+        let info = macos_info_plist("Demo", "com.example.demo", "Demo", &config, false).unwrap();
+        let localized = config.macos.localized_info(&info).unwrap();
+        assert!(
+            localized["zh-Hans"]
+                .contains("\"NSBluetoothAlwaysUsageDescription\" = \"连接外设。\";"),
+            "{localized:?}"
+        );
+    }
+
+    #[test]
+    fn macos_package_merges_and_checks_module_metadata() {
+        assert_eq!(
+            PackageTarget::Macos.module_meta_triples(None),
+            Some((
+                &[host_macos_triple()][..],
+                crate::module_meta::Platform::Macos
+            ))
+        );
+        let mut config = AppConfig::default();
+        let mut meta = crate::module_meta::ModuleMeta::default();
+        meta.macos_info.insert(
+            "NSBluetoothAlwaysUsageDescription".into(),
+            serde_json::json!("Connects to peripherals."),
+        );
+        meta.macos_info
+            .insert("LSMinimumSystemVersion".into(), serde_json::json!("15.0"));
+        meta.macos_entitlements.insert(
+            "com.apple.security.network.client".into(),
+            serde_json::json!(true),
+        );
+        meta.apply(&mut config, crate::module_meta::Platform::Macos)
+            .unwrap();
+        config.macos.check().unwrap();
+        let info = macos_info_plist("Demo", "com.example.demo", "Demo", &config, false).unwrap();
+        assert_eq!(
+            info["NSBluetoothAlwaysUsageDescription"],
+            plist::Value::String("Connects to peripherals.".into())
+        );
+        assert_eq!(
+            info["LSMinimumSystemVersion"],
+            plist::Value::String("15.0".into())
+        );
+        let entitlements = config.macos.entitlements().unwrap();
+        assert_eq!(
+            entitlements["com.apple.security.network.client"],
+            plist::Value::Boolean(true)
+        );
+
+        // An invalid merged minimum macOS version is caught by `config.macos.check()`.
+        let mut bad_config = AppConfig::default();
+        let mut bad_meta = crate::module_meta::ModuleMeta::default();
+        bad_meta
+            .macos_info
+            .insert("LSMinimumSystemVersion".into(), serde_json::json!("13.0"));
+        bad_meta
+            .apply(&mut bad_config, crate::module_meta::Platform::Macos)
+            .unwrap();
+        let error = bad_config.macos.check().unwrap_err().to_string();
+        assert!(
+            error.contains("macos.infoPlist.LSMinimumSystemVersion: \"13.0\" is below"),
+            "{error}"
+        );
     }
 }

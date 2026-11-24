@@ -45,6 +45,8 @@
 //!   follows the embedding app's, which is the application;
 //! - the wake count (`wakeCount()`): one more on every
 //!   `NSWorkspaceDidWakeNotification`, for every surface;
+//! - the network (`network()`): the system's path monitor
+//!   (`nsh_platform_apple::network`), live;
 //! - the pixel ratio: the window's backing scale factor;
 //! - the window's bounds, mode and display ([`crate::window_state`]), and
 //!   the displays, sent again when they change;
@@ -254,6 +256,14 @@ fn install(mtm: MainThreadMarker) {
                 Some(&queue),
                 &block,
             ),
+            // The route to the network changed (`network()`): posted by
+            // the shared path monitor on the main thread.
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(&nsh_platform_apple::network::changed_name()),
+                None,
+                Some(&queue),
+                &block,
+            ),
         ]
     };
     // The time zone: Foundation caches the system's until it is reset.
@@ -409,7 +419,8 @@ fn update(surface: &Surface) {
     env.reduce_motion = workspace.accessibilityDisplayShouldReduceMotion();
     env.screen_reader = workspace.isVoiceOverEnabled();
     env.rtl = preferred_language_rtl();
-    env.pixel_ratio = pixel_ratio(surface);
+    env.pixel_ratio =
+        crate::window::primary(surface).map_or_else(|| pixel_ratio(surface), |(_, scale)| scale);
     env.os = Os::MacOs;
     env.os_version = os_version();
     env.idiom = Idiom::Desktop;
@@ -417,6 +428,7 @@ fn update(surface: &Surface) {
     env.keyboard_height = px(0.0);
     env.lifecycle = lifecycle(surface.mtm, surface.testing());
     env.window_state = crate::window_state::read(surface);
+    env.network = nsh_platform_apple::network::network(surface.mtm);
     surface.set_environment(env);
 }
 
@@ -711,7 +723,6 @@ pub(crate) fn command(surface: &Rc<Surface>, id: NodeId, command: &Command) {
             *scale,
             *format,
         ),
-        Command::Speech(command) => surface.control(|c| crate::speech::command(c, command)),
         Command::Audio(command) => surface.control(|c| {
             let base = surface.asset_base.borrow().clone();
             crate::audio::command(&surface.audio, c, command, base.as_ref())

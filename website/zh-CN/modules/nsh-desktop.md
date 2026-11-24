@@ -8,17 +8,6 @@ order: 12.5
 
 `nsh/desktop` 包含只有桌面才有的东西：应用的窗口和它们的标题栏、显示器、应用菜单和右键菜单、托盘和全局快捷键。它在 macOS、Windows 和 Linux 上可用。Rust 代码在 `nsh_core::element::desktop` 中有同样的功能：应用自己的窗口（`window()`）、组件所在的窗口（`current_window()`，一个 `WindowRef`）、显示器（`displays`）、`quit`、`restart`、登录时打开（`launch_at_login`、`set_launch_at_login`）、应用菜单和右键菜单（`set_application_menu`、`popup_menu`，由 `MenuItem` 组成）、托盘（`set_tray`）和全局快捷键（`register_global_shortcut`），并用 `.window_drag(true)` 标记可拖动的视图；TSX 导入 `nsh/desktop`。这个模块在所有平台上都可以导入，因此同一个 bundle 可以在所有平台运行：在 iOS 和 Android 上它的函数什么也不做，`isAvailable` 告诉你当前是否有它的窗口和菜单。声明了能力的应用需要 `"application": true` 才能使用应用菜单、托盘、全局快捷键、`quit` 和退出请求、`restart`、退出模式和登录时打开（[能力](../docs/sandbox-and-capabilities.md#application)），否则它们什么也不做。右键菜单和应用打开的窗口（由 `windows` 授权）不需要 `application`。
 
-```rust tabs
-use nsh_core::{
-    desktop::{MenuRole, TitleBarOptions, TitleBarStyle, WindowAttributes, WindowKind, WindowMode},
-    element::desktop::{
-        MenuItem, current_window, displays, popup_menu, quit, set_application_menu, title_bar,
-        window,
-    },
-    prelude::*,
-};
-```
-
 ```tsx tabs
 import {
   Application,
@@ -32,6 +21,17 @@ import {
   windows,
   windowState,
 } from "nsh/desktop";
+```
+
+```rust tabs
+use nsh_core::{
+    desktop::{MenuRole, TitleBarOptions, TitleBarStyle, WindowAttributes, WindowKind, WindowMode},
+    element::desktop::{
+        MenuItem, current_window, displays, popup_menu, quit, set_application_menu, title_bar,
+        window,
+    },
+    prelude::*,
+};
 ```
 
 在 AppKit 和 Win32 后端中，NSH 创建的菜单及未指定标签的角色菜单项会跟随 `nsh/i18n` 选择的语言，运行时切换语言也会更新。内置菜单翻译支持英语、日语、简体中文和繁体中文，其他语言回退为英语；菜单项显式指定的 `label` 始终优先。
@@ -83,20 +83,6 @@ interface WindowProps extends WindowOptions {
 
 它的 props 就是它的[选项](#选项)和[属性](#属性)；属性是响应式的，`title={`${doc().name} – Editor`}` 会跟随 signal。
 
-```rust tabs
-#[component]
-fn Inspector(open: Signal<bool>) -> impl IntoElement {
-    window()
-        .id("inspector")
-        .kind(WindowKind::Panel)
-        .title("Inspector")
-        .default_size(size(px(320.0), px(560.0)))
-        .open(open)
-        .on_open_change(move |e| open.set(e.open))
-        .content(inspector_panel)
-}
-```
-
 ```tsx tabs
 import { signal, Text, View } from "nsh";
 import { Button } from "nsh/base";
@@ -122,6 +108,20 @@ function Toolbar() {
       </Window>
     </View>
   );
+}
+```
+
+```rust tabs
+#[component]
+fn Inspector(open: Signal<bool>) -> impl IntoElement {
+    window()
+        .id("inspector")
+        .kind(WindowKind::Panel)
+        .title("Inspector")
+        .default_size(size(px(320.0), px(560.0)))
+        .open(open)
+        .on_open_change(move |e| open.set(e.open))
+        .content(inspector_panel)
 }
 ```
 
@@ -467,6 +467,19 @@ Web 上原样可用。listener 立即调用 `quit()` 时，页面直接离开，
 工作在页面还在时继续运行。浏览器保留在前进 / 后退缓存中的页面，它的应用继续运行，用户回来时应用接着运行。不论 `isAvailable`
 怎么说都是这样；声明了能力的应用为此列出 `"application": true`。
 
+```tsx tabs
+import { Application } from "nsh/desktop";
+
+function Editor() {
+  Application.on("quitRequest", () => (dirty() ? askToSave() : Application.quit()));
+  // 不论应用怎样退出都会运行；它不能让应用继续运行。
+  Application.on("quit", async () => {
+    await saveSession();
+  });
+  return <EditorView />;
+}
+```
+
 ```rust tabs
 use nsh_core::{
     element::desktop::{on_app_quit, on_quit_request, quit},
@@ -489,19 +502,6 @@ fn Editor() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { Application } from "nsh/desktop";
-
-function Editor() {
-  Application.on("quitRequest", () => (dirty() ? askToSave() : Application.quit()));
-  // 不论应用怎样退出都会运行；它不能让应用继续运行。
-  Application.on("quit", async () => {
-    await saveSession();
-  });
-  return <EditorView />;
-}
-```
-
 `Application.on("quit", listener)`（Rust：`on_app_quit`）是应用的清理，与 GPUI 的 `on_app_quit` 相同：不论应用怎样停止
 （它的「退出」项、`quit()`、最后一个窗口关闭、Dock 的「退出」、用户注销时系统结束它、宿主应用移除它的视图、Web 页面离开）都会运行，
 并且不能让应用继续运行。listener 返回的 promise 会被等待，所有 listener 合计最多 200 毫秒，这期间平台也在等应用；
@@ -512,7 +512,7 @@ function Editor() {
 打开文档的应用（播放器、编辑器）在 nsh.json 的 `fileTypes` 中列出文件类型。`nsh package` 把它们声明给系统，应用就会出现在
 「打开方式」中，并打开用户双击或拖到图标上的文件。文件以绝对路径送到 `Application.on("openFiles")`，包括启动应用的文件。
 应用 [scheme](nsh.md#urlscheme) 的链接与之分开，仍由 `UrlScheme.on("open")` 送达。`Application` 从 `nsh/desktop` 导入，
-`openFiles` 在 iOS 上同样送达。
+`openFiles` 在 iOS 和 Android 上同样送达。
 
 ```json
 {
@@ -534,7 +534,7 @@ Application.on("openFiles", ({ paths }) => {
 | --- | --- |
 | `name` | 系统对这种文件的称呼（`"Video"`），必填。 |
 | `extensions` | 扩展名，不带点（`["mp4", "mov"]`）。 |
-| `mimeTypes` | MIME 类型（`["video/mp4"]`）：Linux 按它们列出应用。 |
+| `mimeTypes` | MIME 类型（`["video/mp4"]`）：Linux 按它们列出应用，Android 按它们把应用列入分享面板（可用 `image/*` 这样的通配）。 |
 | `contentTypes` | 统一类型标识符（`["public.movie"]`）：iOS 按它们列出应用。 |
 | `role` | `"viewer"`（默认）或 `"editor"`。 |
 
@@ -548,7 +548,11 @@ Application.on("openFiles", ({ paths }) => {
 | iOS、Mac Catalyst | `Info.plist` 中的 `CFBundleDocumentTypes`（按 `contentTypes`）；系统把文件的副本交给应用 |
 | Windows | 应用每次启动时写在 `HKEY_CURRENT_USER\\Software\\Classes` 下：每种类型一个 ProgID，列在各扩展名的 `OpenWithProgids` 中。带文件的第二次启动把文件交给正在运行的应用 |
 | Linux | 桌面条目的 `MimeType`，`Exec … %U`；应用只运行一份，第二次启动把文件交给正在运行的应用 |
-| Android、Web | 不声明；它们的包不包含 `fileTypes` |
+| Android | 分享面板：为 `mimeTypes` 声明 `SEND` 与 `SEND_MULTIPLE` intent filter；只有 `extensions` 的类型不会列出。`AppActivity` 把每个分享来的流复制到应用缓存，再把副本的路径交给应用 |
+| Web | 不声明；它的包不包含 `fileTypes` |
+
+Android 上，当某个类型给出 `mimeTypes` 时，应用会收到其他应用分享给它的文件：只接收这些类型的 `content://` 流，最多 16 个文件、
+每个 256 MiB（每次分享共 512 MiB）。应用已在运行时，分享会交给现有的 Activity（`singleTask`）。路径指向临时副本，Android 可能清理这些缓存；NSH 收到新分享时也会清理超过一周的副本。
 
 开启 [`singleInstance`](#单实例) 时，第二次启动还会以原样的参数报告 `secondInstance`。
 
@@ -637,6 +641,33 @@ Windows 登录项能容纳的长度（260 个字符）时为 `ENAMETOOLONG`，�
 
 隐藏标题栏（`titleBar: { style: "hidden" }`）后，应用绘制自己的标题栏，并指定哪些部分可以拖动窗口：Rust 用 `.window_drag(true)`，TSX 用 `desktop={{ windowDrag: true }}`。第一个窗口的 `titleBar` 写在 nsh.json 的 [`window`](#应用宿主与第一个窗口) 中，第一帧就会带上它；每个 `<Window>` 也把它作为 prop 接受。
 
+```tsx tabs
+import { Text, View } from "nsh";
+import { Input } from "nsh/base";
+import { currentWindow } from "nsh/desktop";
+
+function TitleBar() {
+  const win = currentWindow();
+  win.set({ titleBar: { style: "hidden", height: 40 } }); // 40 点高的标题栏
+  return (
+    <View
+      desktop={{ windowDrag: true }}
+      style={{
+        height: win.titleBar().height || 40,
+        paddingLeft: win.titleBar().left + 8, // macOS 的红绿灯
+        paddingRight: win.titleBar().right + 8, // Windows 的标题栏按钮、GTK 的窗口按钮
+        flexDirection: "row",
+        alignItems: "center",
+      }}
+    >
+      <Text>My App</Text>
+      <View style={{ flex: 1 }} />
+      <Input placeholder="搜索" style={{ width: 180 }} />
+    </View>
+  );
+}
+```
+
 ```rust tabs
 use nsh_core::{
     desktop::{TitleBarOptions, TitleBarStyle, WindowAttributes},
@@ -666,33 +697,6 @@ fn TitleBar() -> impl IntoElement {
         .child(text("My App"))
         .child(view().flex_1())
         .child(input().placeholder("搜索").w(px(180.0)))
-}
-```
-
-```tsx tabs
-import { Text, View } from "nsh";
-import { Input } from "nsh/base";
-import { currentWindow } from "nsh/desktop";
-
-function TitleBar() {
-  const win = currentWindow();
-  win.set({ titleBar: { style: "hidden", height: 40 } }); // 40 点高的标题栏
-  return (
-    <View
-      desktop={{ windowDrag: true }}
-      style={{
-        height: win.titleBar().height || 40,
-        paddingLeft: win.titleBar().left + 8, // macOS 的红绿灯
-        paddingRight: win.titleBar().right + 8, // Windows 的标题栏按钮、GTK 的窗口按钮
-        flexDirection: "row",
-        alignItems: "center",
-      }}
-    >
-      <Text>My App</Text>
-      <View style={{ flex: 1 }} />
-      <Input placeholder="搜索" style={{ width: 180 }} />
-    </View>
-  );
 }
 ```
 
@@ -784,6 +788,24 @@ const notch = () => displays().flatMap((d) => d.cutouts)[0] ?? null;
 
 `placement` 是按用户离开时的样子打开窗口所要保存的值：最大化或全屏的窗口带着它还原时的外框。`<Window restoreBounds>` 按窗口 id 保存并恢复它。要恢复整个窗口集合的应用自己保存每个窗口的 `placement`，并在打开窗口时调用 `setPlacement`；Rust 窗口组件和 TSX 组件可以共用同一条记录，因为 `WindowPlacement` 的 serde 形式就是 TSX 保存的那个对象。要在窗口内部读取它：在组件里用 `currentWindow()`，而不是在模块顶层用 `Window.get`（那时场景还没打开）。
 
+```tsx tabs
+import { effect, Storage } from "nsh";
+import { currentWindow } from "nsh/desktop";
+
+function Restore() {
+  const main = currentWindow();
+  Storage.getItem("window").then((saved) => {
+    if (saved) main.setPlacement(JSON.parse(saved)); // 按当前的显示器夹好
+  });
+  effect(() => {
+    const state = main.state();
+    if (state) Storage.setItem("window", JSON.stringify(state.placement));
+  });
+  return <></>;
+}
+// <Window id="main"><Restore />…</Window>
+```
+
 ```rust tabs
 #[component]
 fn App() -> impl IntoElement {
@@ -801,24 +823,6 @@ fn App() -> impl IntoElement {
     });
     view() // ...
 }
-```
-
-```tsx tabs
-import { effect, Storage } from "nsh";
-import { currentWindow } from "nsh/desktop";
-
-function Restore() {
-  const main = currentWindow();
-  Storage.getItem("window").then((saved) => {
-    if (saved) main.setPlacement(JSON.parse(saved)); // 按当前的显示器夹好
-  });
-  effect(() => {
-    const state = main.state();
-    if (state) Storage.setItem("window", JSON.stringify(state.placement));
-  });
-  return <></>;
-}
-// <Window id="main"><Restore />…</Window>
 ```
 
 桌面平台报告窗口状态和显示器。在 iOS、Android、Web 和终端应用中，`windowState()` 为 `null`，`displays()` 为空。
@@ -912,6 +916,44 @@ Role：
 
 在 GPUI 后端上，拥有键盘焦点的原生组件先看到每个按键。它自己处理的按键不会到达快捷键表或菜单。它放过的按键按输入框获得焦点时的规则进入 `keymap` 的快捷键，然后再到菜单。
 
+```tsx tabs
+import { effect, signal } from "nsh";
+import { platform } from "nsh";
+import { Menu } from "nsh/desktop";
+
+const mac = platform.os === "macos";
+const wrap = signal(true);
+
+effect(() => {
+  Menu.setApplicationMenu([
+    mac && {
+      label: "My App",
+      submenu: [{ role: "about" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { type: "separator" }, { role: "quit" }],
+    },
+    {
+      label: "File",
+      submenu: [
+        { label: "New", shortcut: "mod+n", onSelect: () => createDocument() },
+        { label: "Open…", shortcut: "mod+o", onSelect: () => openDocument() },
+        !mac && { type: "separator" },
+        !mac && { role: "quit", label: "Exit" },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }],
+    },
+    {
+      label: "View",
+      submenu: [
+        { label: "Word Wrap", checked: wrap(), onSelect: () => wrap.update((w) => !w) },
+        { role: "toggleFullScreen" },
+      ],
+    },
+  ]);
+});
+```
+
 ```rust tabs
 use nsh_core::{
     desktop::MenuRole,
@@ -965,56 +1007,7 @@ fn AppMenu() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { effect, signal } from "nsh";
-import { platform } from "nsh";
-import { Menu } from "nsh/desktop";
-
-const mac = platform.os === "macos";
-const wrap = signal(true);
-
-effect(() => {
-  Menu.setApplicationMenu([
-    mac && {
-      label: "My App",
-      submenu: [{ role: "about" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { type: "separator" }, { role: "quit" }],
-    },
-    {
-      label: "File",
-      submenu: [
-        { label: "New", shortcut: "mod+n", onSelect: () => createDocument() },
-        { label: "Open…", shortcut: "mod+o", onSelect: () => openDocument() },
-        !mac && { type: "separator" },
-        !mac && { role: "quit", label: "Exit" },
-      ],
-    },
-    {
-      label: "Edit",
-      submenu: [{ role: "undo" }, { role: "redo" }, { type: "separator" }, { role: "cut" }, { role: "copy" }, { role: "paste" }],
-    },
-    {
-      label: "View",
-      submenu: [
-        { label: "Word Wrap", checked: wrap(), onSelect: () => wrap.update((w) => !w) },
-        { role: "toggleFullScreen" },
-      ],
-    },
-  ]);
-});
-```
-
 在按钮按下时弹出右键菜单：
-
-```rust tabs
-text("更多").on_press(|| {
-    let _ = popup_menu(vec![
-        MenuItem::new("重命名").on_select(rename),
-        MenuItem::new("复制一份").on_select(duplicate),
-        MenuItem::separator(),
-        MenuItem::new("删除").on_select(remove),
-    ]);
-})
-```
 
 ```tsx tabs
 <View
@@ -1029,6 +1022,17 @@ text("更多").on_press(|| {
 >
   <Text>更多</Text>
 </View>
+```
+
+```rust tabs
+text("更多").on_press(|| {
+    let _ = popup_menu(vec![
+        MenuItem::new("重命名").on_select(rename),
+        MenuItem::new("复制一份").on_select(duplicate),
+        MenuItem::separator(),
+        MenuItem::new("删除").on_select(remove),
+    ]);
+})
 ```
 
 > [!NOTE]
@@ -1075,15 +1079,6 @@ Tray.set({
 
 标题让 macOS 菜单栏里图标旁边一直显示一段文字，比如价格，涨跌幅用应用主题里的颜色。文字段的颜色在调用 `set` 时就固定下来；要让托盘跟随主题的 `colorMode`，就在读取该主题颜色的 `effect` 中设置托盘：
 
-```rust tabs
-use nsh_core::desktop::TrayTitleRun;
-
-set_tray(tray().icon(icon).title([
-    TrayTitleRun::new("AAPL 228.00 "),
-    TrayTitleRun::new("+1.33%").color(color(tokens().color("up").unwrap())),
-]));
-```
-
 ```tsx tabs
 import { token } from "nsh";
 
@@ -1091,6 +1086,15 @@ Tray.set({
   icon,
   title: [{ text: "AAPL 228.00 " }, { text: "+1.33%", color: token("up") }],
 });
+```
+
+```rust tabs
+use nsh_core::desktop::TrayTitleRun;
+
+set_tray(tray().icon(icon).title([
+    TrayTitleRun::new("AAPL 228.00 "),
+    TrayTitleRun::new("+1.33%").color(color(tokens().color("up").unwrap())),
+]));
 ```
 
 ### 在图标旁打开窗口

@@ -7,9 +7,9 @@ group: start
 
 # Installation
 
-Everything NSH does goes through one command, `nsh`. It builds apps written in Rust or TSX, runs them on every platform, serves TSX to development hosts with hot updates, and packages installable apps. You can use it from a prebuilt distribution or build it from a checkout of the repository.
+Everything NSH does goes through one command, `nsh`. It builds apps written in TSX or Rust, runs them on every platform, serves TSX to development hosts with hot updates, and packages installable apps. You can use it from a prebuilt distribution or build it from a checkout of the repository.
 
-Apps written in Rust also need a Rust toolchain ([below](#for-apps-written-in-rust)); TSX apps need `nsh` alone. On top of that, each platform needs its own tools:
+TSX apps need `nsh` alone. Apps with Rust in them (their own crates in `ext/`, a Rust nshm, or an app written in Rust) also need a Rust toolchain ([below](#for-apps-written-in-rust)). On top of that, each platform needs its own tools:
 
 | Platform | Develop and package on | Needs |
 |---|---|---|
@@ -20,7 +20,7 @@ Apps written in Rust also need a Rust toolchain ([below](#for-apps-written-in-ru
 | Linux | Linux | GTK 4.14+ (and its development packages to build the runtime) |
 | [GPUI](./gpui.md) (embedding in GPUI apps) | macOS, Windows or Linux | A GPU (Metal, DirectX or Vulkan); on Linux, Wayland or X11 |
 
-The AppKit host is the default on macOS. Mac Catalyst (`--target catalyst`) needs Xcode like iOS. Details are under [Platform tools](#platform-tools).
+The AppKit host is the default on macOS. Mac Catalyst (`--target catalyst`), a development tool for Catalyst-specific work, needs Xcode like iOS. Details are under [Platform tools](#platform-tools).
 
 ## Installing a release
 
@@ -91,7 +91,7 @@ A component always comes from the same build as the CLI. `nsh update` adds the i
 
 ## For apps written in Rust
 
-Install Rust through [rustup](https://rustup.rs). `nsh` builds a Rust app's runner for each target with Cargo, from your crate and NSH's crates on crates.io at the CLI's version, so add the Rust targets of the platforms you run on. For the iOS simulator, iOS devices and Mac Catalyst:
+Install Rust through [rustup](https://rustup.rs) when the app has Rust in it: a crate of its own in `ext/`, a Rust nshm, or a whole app in Rust. `nsh` builds the app's runner for each target with Cargo, from those crates and NSH's crates on crates.io at the CLI's version, so add the Rust targets of the platforms you run on. For the iOS simulator, iOS devices and Mac Catalyst:
 
 ```sh
 rustup target add aarch64-apple-ios-sim aarch64-apple-ios aarch64-apple-ios-macabi
@@ -254,7 +254,6 @@ Building the Android runtime from a checkout (`cargo xtask android`) additionall
 | Command | macOS | Linux | Windows |
 |---|---|---|---|
 | `nsh init`, `nsh build`, `nsh test`, `nsh dev`, `nsh check` | Yes | Yes | Yes |
-| `nsh run --target catalyst` (Mac Catalyst) | Yes | No | No |
 | `nsh run --target macos`, `nsh package --target macos` | Yes | No | No |
 | `nsh run --target linux` (the default on Linux), `nsh package --target linux` | No | Yes | No |
 | `nsh run --target windows` (the default on Windows), `nsh package --target windows` | No | No | Yes |
@@ -263,6 +262,7 @@ Building the Android runtime from a checkout (`cargo xtask android`) additionall
 | `nsh run --target android`, `nsh package --target android` | Yes | Yes, from a checkout | Yes, with the Android runtime |
 | `nsh run --target tizen`, `nsh package --target tizen` | Yes, with the Tizen SDK | Yes, with the Tizen SDK | Yes, with the Tizen SDK |
 | `nsh keygen`, `certify`, `publish`, `verify`, `revoke` | Yes | Yes | Yes |
+| `nsh run --target catalyst` (Mac Catalyst) | Yes | No | No |
 
 On Linux, build the CLI and the Android runtime from a checkout (`cargo build -p nsh-cli` and `cargo xtask android --dev`); the NDK's Linux toolchain is used automatically. On Windows the NDK's Windows toolchain is used the same way, and `cargo xtask dist` includes the Android runtime when it finds the Android SDK.
 

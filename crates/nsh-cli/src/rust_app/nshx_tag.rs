@@ -32,7 +32,9 @@ pub(super) fn runner_nsh(nsh: Nsh, workspace: &Path) -> anyhow::Result<Nsh> {
 
 fn choose(nsh: Nsh, tag: Option<&str>, url: &str, workspace: &Path) -> anyhow::Result<Nsh> {
     match (nsh, tag) {
-        (Nsh::Registry, Some(tag)) => at_tag(url, tag, workspace),
+        // A tagged nshx CLI builds from its tag, never from crates.io or
+        // upstream's nightly revision (which names no fork commit).
+        (Nsh::Registry | Nsh::Nightly(_), Some(tag)) => at_tag(url, tag, workspace),
         (nsh, _) => Ok(nsh),
     }
 }

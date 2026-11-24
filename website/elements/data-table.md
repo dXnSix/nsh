@@ -17,24 +17,6 @@ labels, and a cell or a title can be drawn by the app.
 colors, borders and selection feedback through `classes` and `styles`. Rust makes one with
 `nsh_base::data_table()`, TSX with `<DataTable>` from `nsh/base`.
 
-```rust tabs
-use nsh_base::{DataTableColumn, data_table};
-use nsh_core::prelude::*;
-
-fn column(key: &str, title: &str) -> DataTableColumn {
-    let mut column = DataTableColumn::default();
-    column.key = key.into();
-    column.title = Some(title.into());
-    column
-}
-
-fn table() -> impl IntoElement {
-    data_table()
-        .columns(vec![column("name", "Name"), column("city", "City")])
-        .flex_1()
-}
-```
-
 ```tsx tabs
 import { mount } from "nsh";
 import { DataTable, type DataTableColumn } from "nsh/base";
@@ -61,6 +43,24 @@ mount(() => (
     <App />
   </Window>
 ));
+```
+
+```rust tabs
+use nsh_base::{DataTableColumn, data_table};
+use nsh_core::prelude::*;
+
+fn column(key: &str, title: &str) -> DataTableColumn {
+    let mut column = DataTableColumn::default();
+    column.key = key.into();
+    column.title = Some(title.into());
+    column
+}
+
+fn table() -> impl IntoElement {
+    data_table()
+        .columns(vec![column("name", "Name"), column("city", "City")])
+        .flex_1()
+}
 ```
 
 The table fills the box the app gives it (`flex-1`, a height) and scrolls inside: vertically through the rows and
@@ -215,6 +215,7 @@ selection, and Escape gives the keyboard back. Its columns' resize handles take 
 | Tab, Shift+Tab | Move to the next or the previous column. |
 | Page Up, Page Down | Move by a page of rows. |
 | Home, End | Move to the first or the last. |
+| Enter, Return | Activates the focused row (`onRowActivate({ row })`), unless an input or a control inside the table takes the key. |
 | Escape | Clears the selection, then gives the keyboard back. |
 | Copy shortcut | Puts the selection's text on the clipboard (`copy()`). |
 
@@ -450,6 +451,7 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `onRowPress` | `.on_row_press(\|event: &DataTablePress\| ..)` | A row or cell was pressed: `{ row, column?, clicks, shift, control, alt, platform }`. |
 | `onColumnPress` | `.on_column_press(\|event: &DataTableColumnPress\| ..)` | A title was pressed: `{ column, clicks, shift, control, alt, platform }`. |
 | `onDoublePress` | `.on_double_press(\|target: &DataTableTarget\| ..)` | A row, cell or title was pressed twice: `{ target }`, a `{ row?, column? }`. |
+| `onRowActivate` | `.on_row_activate(\|row: &u32\| ..)` | The focused row was activated (Enter / Return): `{ row }`, the number `onRowPress` reports. |
 | `onContextMenu` | `.on_context_menu(\|event: &DataTableContextMenu\| ..)` | A context menu was asked for: `{ row?, column?, x, y }`, the point in the root view. |
 | `onSortChange` | `.on_sort_change(\|sort: &Option<DataTableSort>\| ..)` | A sort button was pressed: `{ sort }`, the next sort `{ key, direction }` or `null`. |
 | `onColumnResize` | `.on_column_resize(\|key: &SharedString, width: &Points\| ..)` | A column was resized (`{ key, width }`), at every step of a drag and once more when a fit sets it. |

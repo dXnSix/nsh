@@ -1,6 +1,6 @@
 ---
 title: iOS
-description: 在 iOS 上用 UIKit 视图运行 Rust 和 TSX 编写的 NSH 应用（模拟器或真机），打包成 .app 和 .ipa，并通过 AppView 或 NativeShell.xcframework 的 NshAppView 嵌入现有 iOS 应用。
+description: 在 iOS 上用 UIKit 视图运行 TSX 和 Rust 编写的 NSH 应用（模拟器或真机），打包成 .app 和 .ipa，并通过 AppView 或 NativeShell.xcframework 的 NshAppView 嵌入现有 iOS 应用。
 order: 11
 group: platforms
 ---
@@ -29,8 +29,8 @@ nsh run App.tsx --target ios                          # TSX 应用
 
 `nsh` 会使用已启动的模拟器，或者启动最新的 iPhone。对 Rust 应用，它用你的 crate 构建应用自己的 runner 并安装，在终端显示日志；
 修改 crate 的 Rust 代码会重新构建并重启应用。对 TSX 应用，它安装开发宿主，并在你保存时更新应用，日志显示在终端中。`--device`
-按名称或 UDID 选择模拟器。想要不用模拟器、更快的开发循环，在 Mac 上运行 `nsh run --target catalyst`，会在一个 iPhone 尺寸的
-[Mac Catalyst](./getting-started.md#mac-catalyst) 窗口中打开同一个 UIKit 后端。
+按名称或 UDID 选择模拟器。查看应用在 iPhone 上的效果请用模拟器；[Mac Catalyst](./getting-started.md#mac-catalyst)
+（`--target catalyst`）用于 Catalyst 特有的工作。
 
 ## 来自其他代码的通知
 
@@ -532,6 +532,7 @@ try app.loadBundle(at: bundledURL)
 
 ## 另请参阅
 
+- [发布到 App Store](./publish.md#publish-to-the-app-store)
 - [用 Rust 开发](./rust.md)
 - [嵌入 Android 应用](./android.md)
 - [原生组件](./native-components.md)
