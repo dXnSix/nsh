@@ -315,9 +315,19 @@ impl<'a> DrawCx<'a> {
 
     /// A composed item (`item`, `size` points with `radii`, at `m`) is
     /// drawn here: records where it goes, and what follows goes into the
-    /// next layer.
-    fn compose(&mut self, item: &Rc<dyn Hosted>, m: Mat4, size: (f32, f32), radii: [f32; 4]) {
-        let Some(at) = self.placement(m, size, radii) else {
+    /// next layer. `clips`: its view clips its content. One that does not
+    /// may show its visual's content anywhere its clipping ancestors leave
+    /// visible, whatever its own box: it is placed while they leave
+    /// anything ([`DrawCx::placement_within`]).
+    fn compose(
+        &mut self,
+        item: &Rc<dyn Hosted>,
+        m: Mat4,
+        size: (f32, f32),
+        radii: [f32; 4],
+        clips: bool,
+    ) {
+        let Some(at) = self.placement_within(m, size, radii, clips) else {
             return;
         };
         self.composed.push(Composed {
@@ -332,6 +342,20 @@ impl<'a> DrawCx<'a> {
     /// Where something of `size` points with `radii`, at `m`, goes in the
     /// window (pixels), or `None` when it is empty or clipped away.
     fn placement(&self, m: Mat4, size: (f32, f32), radii: [f32; 4]) -> Option<Placement> {
+        self.placement_within(m, size, radii, true)
+    }
+
+    /// [`DrawCx::placement`], where `own_box` says whether what is placed
+    /// shows only within its own box: when it does not (a composed item
+    /// whose view does not clip its content), it is placed while the clips
+    /// around it leave anything visible, wherever its box is.
+    fn placement_within(
+        &self,
+        m: Mat4,
+        size: (f32, f32),
+        radii: [f32; 4],
+        own_box: bool,
+    ) -> Option<Placement> {
         let s = self.scale;
         let t = m.to_3x2();
         // The page's pixels are the view's points times the scale: the
@@ -358,15 +382,19 @@ impl<'a> DrawCx<'a> {
             &matrix,
             &rect_f(0.0, 0.0, size_px.0 as f32, size_px.1 as f32),
         );
-        if size_px.0 <= 0
-            || size_px.1 <= 0
-            || crate::compose::is_empty(&crate::compose::intersect(bounds, clip))
-        {
+        let shown = if own_box {
+            size_px.0 > 0
+                && size_px.1 > 0
+                && !crate::compose::is_empty(&crate::compose::intersect(bounds, clip))
+        } else {
+            !crate::compose::is_empty(&clip)
+        };
+        if !shown {
             return None;
         }
         Some(Placement {
             matrix,
-            size: size_px,
+            size: (size_px.0.max(0), size_px.1.max(0)),
             clip,
             radii: radii.map(|r| r * s),
             alpha: self.alpha,
@@ -1044,11 +1072,21 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4, pai
             .translate(r.origin.x.0, r.origin.y.0)
             .then(&world);
         if native.item.composed() {
-            let radii = {
+            let (radii, clips) = {
                 let s = view.state();
-                if s.clips() { s.radii() } else { [0.0; 4] }
+                if s.clips() {
+                    (s.radii(), true)
+                } else {
+                    ([0.0; 4], false)
+                }
             };
-            cx.compose(&native.item, m, (r.size.width.0, r.size.height.0), radii);
+            cx.compose(
+                &native.item,
+                m,
+                (r.size.width.0, r.size.height.0),
+                radii,
+                clips,
+            );
             continue;
         }
         cx.realize();
@@ -1768,6 +1806,11 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
     if size.0 == 0 || size.1 == 0 {
         return false;
     }
+    // What it presents is at most the device's largest texture: a window
+    // can be larger (a design tool's, laid out at its content's size), and
+    // a swap chain that large cannot be made. What lies beyond is not
+    // shown; a design tool's pictures are drawn apart ([`picture`]).
+    let size = gfx::presentable(&gfx, size);
     if swap.as_ref().is_some_and(|s| s.stale()) {
         *swap = None;
     }
@@ -2044,6 +2087,129 @@ pub(crate) fn snapshot(
             bottom: px.1,
         },
     )
+}
+
+/// Draws `root` (the root view of a window of the app's own) for a design
+/// tool's picture ([`crate::picture`]): its content from `origin` (points
+/// from its top left), `size` pixels at `scale` pixels a point, over
+/// transparent pixels (alpha 0 where nothing is drawn: no window background
+/// and no caption buttons), as RGBA rows, premultiplied, top row first, no
+/// padding. It is drawn in tiles no larger than the device's largest
+/// bitmap, so a picture may be larger than any one texture. Composed items
+/// (web views, components' own visuals) are not in it: the system
+/// composes them.
+#[cfg(feature = "dev")]
+pub(crate) fn picture(
+    surface: &Rc<Surface>,
+    root: &NshView,
+    scale: f32,
+    origin: (f32, f32),
+    size: (u32, u32),
+) -> windows::core::Result<Vec<u8>> {
+    let gfx = gfx::get()?;
+    let largest = gfx::largest_texture(&gfx);
+    let (pw, ph) = size;
+    let mut out = vec![0u8; pw as usize * ph as usize * 4];
+    let mut readback = Readback::default();
+    let mut ty = 0;
+    while ty < ph {
+        let th = (ph - ty).min(largest);
+        let mut tx = 0;
+        while tx < pw {
+            let tw = (pw - tx).min(largest);
+            let target = readback.target(&gfx.dc, (tw, th), scale)?;
+            let at = (origin.0 + tx as f32 / scale, origin.1 + ty as f32 / scale);
+            draw_picture_tile(
+                surface,
+                &gfx,
+                &target,
+                scale,
+                root,
+                at,
+                (tw as f32 / scale, th as f32 / scale),
+            )?;
+            let pixels = readback.read(
+                &gfx.dc,
+                &target,
+                D2D_RECT_U {
+                    left: 0,
+                    top: 0,
+                    right: tw,
+                    bottom: th,
+                },
+            )?;
+            let row_bytes = tw as usize * 4;
+            for row in 0..th as usize {
+                let from = &pixels.data[row * row_bytes..(row + 1) * row_bytes];
+                let start = ((ty as usize + row) * pw as usize + tx as usize) * 4;
+                let into = &mut out[start..start + row_bytes];
+                for (to, bgra) in into
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(from.as_chunks::<4>().0)
+                {
+                    *to = [bgra[2], bgra[1], bgra[0], bgra[3]];
+                }
+            }
+            tx += tw;
+        }
+        ty += th;
+    }
+    Ok(out)
+}
+
+/// One tile of [`picture`]: `root`'s content from `at` (points), `size`
+/// points of it, into `target`.
+#[cfg(feature = "dev")]
+fn draw_picture_tile(
+    surface: &Rc<Surface>,
+    gfx: &Gfx,
+    target: &ID2D1Bitmap1,
+    scale: f32,
+    root: &NshView,
+    at: (f32, f32),
+    size: (f32, f32),
+) -> windows::core::Result<()> {
+    // The decoration bitmaps this pass draws with are the last evicted if
+    // the cache overflows meanwhile ([`crate::decor::begin_frame`]).
+    let _frame = crate::decor::begin_frame();
+    let dc = &gfx.dc;
+    // SAFETY: COM calls on the live context and target; `EndDraw` always
+    // follows `BeginDraw`.
+    unsafe {
+        dc.SetTarget(target);
+        dc.SetDpi(96.0 * scale, 96.0 * scale);
+        dc.BeginDraw();
+        dc.SetTransform(&Matrix3x2::identity());
+        dc.Clear(Some(&color_f(Color::TRANSPARENT)));
+    }
+    match DrawCx::new(gfx, scale, crate::system::dark(surface), surface.now()) {
+        Ok(mut cx) => {
+            // Nothing is placed or recorded: the window shows what it shows.
+            cx.offscreen = true;
+            // What is out of the tile is left out, as out of a window.
+            cx.window = Some(rect_f(0.0, 0.0, size.0, size.1));
+            draw_view(
+                &mut cx,
+                root,
+                Mat4::new().translate(-at.0, -at.1),
+                Mat4::new(),
+            );
+        }
+        Err(err) => {
+            // SAFETY: closes the `BeginDraw` above.
+            let _ = unsafe { dc.EndDraw(None, None) };
+            return Err(err);
+        }
+    }
+    // SAFETY: closes the `BeginDraw` above; the target is unset so that
+    // the swap chains can be resized later.
+    let result = unsafe { dc.EndDraw(None, None) };
+    crate::shader::signal_drawn(gfx);
+    // SAFETY: as above.
+    unsafe { dc.SetTarget(None) };
+    result
 }
 
 #[cfg(test)]

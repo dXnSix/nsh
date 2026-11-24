@@ -191,6 +191,19 @@ fn create_d3d(driver: D3D_DRIVER_TYPE) -> Result<ID3D11Device> {
     device.ok_or_else(|| windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL))
 }
 
+/// `size` (pixels) cut to what a swap chain of `gfx`'s device can be: at
+/// most its largest texture a side (16,384 pixels on most devices).
+pub(crate) fn presentable(gfx: &Gfx, size: (u32, u32)) -> (u32, u32) {
+    let largest = largest_texture(gfx);
+    (size.0.min(largest), size.1.min(largest))
+}
+
+/// The largest texture, a side in pixels, `gfx`'s device makes.
+pub(crate) fn largest_texture(gfx: &Gfx) -> u32 {
+    // SAFETY: a query of the live context.
+    unsafe { gfx.dc.GetMaximumBitmapSize() }.max(1)
+}
+
 /// DirectWrite's shared factory (free-threaded: any thread may use it).
 pub(crate) fn dwrite() -> IDWriteFactory2 {
     thread_local! {

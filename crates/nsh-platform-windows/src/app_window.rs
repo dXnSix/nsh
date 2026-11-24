@@ -141,6 +141,15 @@ pub(crate) fn hwnd_of(surface: &Surface, id: NodeId) -> Option<HWND> {
     get(surface, id).map(|w| w.hwnd)
 }
 
+/// The size in pixels of what native window `hwnd` of the app's own
+/// presents (its swap chain), once it drew a frame.
+#[cfg(feature = "dev")]
+pub(crate) fn presented_size(surface: &Surface, hwnd: HWND) -> Option<(u32, u32)> {
+    let windows = surface.windows.borrow();
+    let window = windows.iter().find(|w| w.hwnd == hwnd)?;
+    window.swap.borrow().as_ref().map(|s| s.size)
+}
+
 /// The app window with the keyboard focus, for test steps that act on the
 /// focused window (the host is not one).
 pub(crate) fn focused_hwnd(surface: &Surface) -> Option<HWND> {
@@ -331,10 +340,11 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
     } else {
         None
     };
-    // A design tool names the app's windows by their ids.
+    // A design tool names the app's windows by their ids; they are kept
+    // out of sight from before they first show.
     #[cfg(feature = "dev")]
     if crate::design::active() {
-        crate::design::name_window(&options.id, id);
+        crate::design::name_window(&options.id, id, hwnd);
     }
     let window = Rc::new(AppWindow {
         id,

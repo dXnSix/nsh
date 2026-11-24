@@ -783,7 +783,10 @@ fn run_on_this_thread(source: AppSource, options: AppOptions) -> std::process::E
     crate::linking::attach(view.surface());
     install_shortcuts(&view);
     view.place_main_window(&launch, kept);
-    // The host never shows: the app opens the windows it declares.
+    // The host never shows: the app opens the windows it declares. In a
+    // design tool the main window never shows either ([`crate::design`]).
+    #[cfg(feature = "dev")]
+    let held = held || crate::design::active();
     if !held && launch.visible_at_launch() {
         view.show();
     }
@@ -846,6 +849,12 @@ fn content_size(hwnd: HWND) -> Option<Size<nsh_core::Points>> {
 /// The standalone app's window shortcuts: F11 toggles full screen, as in
 /// Windows' own apps (Alt+F4, which closes the window, is the system's).
 fn install_shortcuts(view: &AppView) {
+    // In a design tool the host's window never shows, and every key is the
+    // app's: F11 is the app's to take ([`crate::design`]).
+    #[cfg(feature = "dev")]
+    if crate::design::active() {
+        return;
+    }
     const VK_F11: u16 = 0x7A;
     let hwnd = view.hwnd();
     view.surface()
