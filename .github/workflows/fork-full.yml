@@ -601,12 +601,12 @@ jobs:
         with:
           cache: rust-app
       - name: Clippy
-        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/push --locked -- -D warnings
+        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/speech --locked -- -D warnings
       - name: Check macOS without optional features
         if: runner.os == 'macOS'
         run: cargo clippy -p nsh-macos-app --locked --no-default-features --features js -- -D warnings
       - name: Test the crate
-        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/push ${{ runner.os == 'macOS' && '-p nsh-platform-apple' || '' }} --locked
+        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/speech ${{ runner.os == 'macOS' && '-p nsh-platform-apple' || '' }} --locked
 
   # Upstream's `rust-app.yml`, job `web`: a Rust app and a TSX app with a
   # Rust crate published for the web, and what they must not link.
@@ -631,6 +631,10 @@ jobs:
         uses: ./.github/actions/cargo
         with:
           cache: rust-app-web
+      # nsh-extra's web code (the browser's Web Speech API), which no other
+      # job compiles: the native jobs build it empty.
+      - name: Clippy nsh-extra for the web
+        run: cargo clippy -p nsh-extra --target wasm32-unknown-unknown --features nsh-extra/location,nsh-extra/speech --locked -- -D warnings
       - name: Build the command line
         run: cargo build -p nsh-cli --locked
       - name: Publish the Rust gallery for the web
