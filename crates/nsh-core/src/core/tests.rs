@@ -9562,7 +9562,7 @@ fn inputs_report_their_focus_to_the_views_around_them() {
 
 #[test]
 fn host_foreground_is_inherited_without_resizing_the_viewport() {
-    use crate::{element::AdaptiveColor, platform::Appearance};
+    use crate::platform::Appearance;
 
     let mut c = core();
     view_with_classes(&mut c, 2, "w-full h-full");
@@ -9589,15 +9589,25 @@ fn host_foreground_is_inherited_without_resizing_the_viewport() {
             ],
         );
     }
-    let tokens = tokens_with(&[("foreground", AdaptiveColor::rgb(0x111111, 0xeeeeee))]);
+    // The app's theme declares `foreground`; the host's patch gives it its own.
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: ROOT_ID,
+            prop: Prop::UiTheme(theme_text(&crate::element::tokens::sample()).into()),
+        }],
+    );
+    let host = || {
+        use crate::element::{Patch, PatchValues};
+        Some(Patch::new().value("foreground", crate::Hsla::from(crate::color::rgb(0x111111))))
+    };
     let mut colors = [None; 2];
     for (host, appearance, inherited) in [
-        (Some(tokens.clone()), Appearance::Light, Color(0x1111_11ff)),
+        (host(), Appearance::Light, Color(0x1111_11ff)),
         (None, Appearance::Light, Color(0x0000_00ff)),
-        (Some(tokens.clone()), Appearance::Light, Color(0x1111_11ff)),
-        (Some(tokens), Appearance::Dark, Color(0xeeee_eeff)),
+        (host(), Appearance::Light, Color(0x1111_11ff)),
     ] {
-        c.set_host_tokens(host);
+        c.set_host_patch(host);
         c.set_appearance(appearance);
         let batch = c.commit().unwrap();
         for item in &batch.items {

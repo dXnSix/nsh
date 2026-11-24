@@ -42,8 +42,8 @@ mod url_scheme;
 mod websocket;
 mod webview;
 
-pub use tizen::{TizenHost, TizenServices, TvProduct};
 pub use fs::grant_user_files;
+pub use tizen::{TizenHost, TizenServices, TvProduct};
 pub use updater::{
     PackageVersion, UpdatePrompt, UpdatePromptOptions, UpdaterHost, UpdaterSink, prompt_for_update,
     set_update_presenter,

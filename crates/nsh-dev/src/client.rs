@@ -219,8 +219,8 @@ impl DevClient {
                     MaybeTlsStream::Plain(stream),
                     Some(socket_config()),
                 )
-                    .ok()
-                    .map(|(socket, _)| socket)
+                .ok()
+                .map(|(socket, _)| socket)
             },
             on_event,
         )

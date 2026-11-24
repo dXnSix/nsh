@@ -961,7 +961,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let entry = dir.join("App.tsx");
         std::fs::write(&entry, "export default function App() { return null; }\n").unwrap();
-        let session = super::DevSession::start(&entry, on_network(0), false, None).unwrap();
+        let session = super::DevSession::start(&entry, on_network(0), false, None, None).unwrap();
         let expected = format!("ws://127.0.0.1:{}{}", session.port(), super::WS_PATH);
         assert_eq!(session.loopback_url(), expected);
         std::fs::remove_dir_all(&dir).unwrap();

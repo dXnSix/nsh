@@ -1127,6 +1127,7 @@ mod tests {
         Color,
         element::{AdaptiveColor, Tokens},
     };
+
     use super::{alert_tint, alert_tint_color};
 
     /// The tokens of theme document `json`, under its modifiers' defaults,

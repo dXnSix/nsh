@@ -96,7 +96,9 @@ impl PackageTarget {
             PackageTarget::Linux => Some(Os::Linux),
             PackageTarget::Macos => Some(Os::MacOs),
             PackageTarget::Windows => Some(Os::Windows),
-            PackageTarget::Web => Some(Os::Web),
+            // A Tizen web app runs the browser runtime, which reports the web.
+            PackageTarget::Web | PackageTarget::TizenWeb => Some(Os::Web),
+            PackageTarget::Tizen => Some(Os::Tizen),
             PackageTarget::Gpui => None,
         }
     }

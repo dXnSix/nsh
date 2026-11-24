@@ -613,7 +613,6 @@ fn start(code: String, map: Option<String>) -> (Engine, Receiver<MountBatch>, Re
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,

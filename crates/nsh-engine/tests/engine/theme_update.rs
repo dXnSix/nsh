@@ -200,7 +200,6 @@ fn a_rust_app_updates_and_resets_its_tokens() {
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,

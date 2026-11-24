@@ -1287,14 +1287,10 @@ fn collect_tab_stops(view: &NshView, out: &mut Vec<Retained<objc2_app_kit::NSVie
         return;
     }
     if view.kind() == ViewKind::Input {
-        // A disabled or unfocusable input is no stop (`held_stop`).
-        let stop = {
-            let state = view.state();
-            state.props.focusable != Some(false) && !state.props.accessibility.state.disabled
-        };
-        if stop
-            && let Some(field) = crate::text_input::key_view(view)
+        // A disabled or unfocusable input is no stop.
+        if let Some(field) = crate::text_input::key_view(view)
             && field.canBecomeKeyView()
+            && crate::text_input::held_stop(&field)
             && view.seen_by_keys()
         {
             out.push(field);

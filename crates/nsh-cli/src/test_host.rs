@@ -474,6 +474,7 @@ mod tests {
                 display,
                 foreground,
                 None,
+                false,
             )
             .err();
             assert_eq!(err.map(|e| e.to_string()).as_deref(), Some(message));
@@ -487,6 +488,7 @@ mod tests {
             None,
             false,
             None,
+            false,
         )
         .err();
         assert_eq!(
@@ -501,7 +503,18 @@ mod tests {
     fn foreground_is_for_the_hosts_that_run_in_the_background() {
         for target in [Target::Tui, Target::Web, Target::Ios, Target::Android] {
             assert!(!runs_in_background(target), "{target:?}");
-            let err = starter(target, None, Path::new("."), false, None, None, true, None, false).err();
+            let err = starter(
+                target,
+                None,
+                Path::new("."),
+                false,
+                None,
+                None,
+                true,
+                None,
+                false,
+            )
+            .err();
             assert_eq!(
                 err.map(|e| e.to_string()).as_deref(),
                 Some(FOREGROUND_TARGETS),

@@ -974,7 +974,7 @@ pub(crate) fn editable(view: &NshView) -> bool {
 /// by the props of the input holding it: a disabled input, or one with
 /// `focusable: false`, is not (as [`nsh_core::ViewProps::focus_stop`]
 /// decides for views). A hosted view is a stop as AppKit says.
-fn held_stop(view: &NSView) -> bool {
+pub(crate) fn held_stop(view: &NSView) -> bool {
     let mut at = crate::view::superview(view);
     while let Some(ns) = at {
         // An input's pad, lifted to a host above transformed views
