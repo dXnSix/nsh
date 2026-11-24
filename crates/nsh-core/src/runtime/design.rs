@@ -5,7 +5,8 @@
 //! platform's design host calls [`connect`] at start; this module keeps the
 //! connection, one JSON object a line both ways:
 //!
-//! - `{"hello":{}}` once connected; then for each window of the app's own
+//! - `{"hello":{}}` once connected (`{"hello":{"token":…}}` when the tool
+//!   gave the run a token, [`TOKEN`]); then for each window of the app's own
 //!   (`Window.open`, named by its `id`) a `{"surface":{"id":…,"width":…,
 //!   "height":…, <handle>}}` line whenever it changes, where the handle is
 //!   what the tool draws the window with, the platform's
@@ -57,6 +58,12 @@ use crate::{
 
 /// The variable naming where the tool listens.
 pub const SOCKET: &str = "NSH_DESIGN_SOCKET";
+
+/// The variable holding the token the tool made for this run: when it is
+/// set and not empty, the hello carries it (`{"hello":{"token":…}}`), so a
+/// tool listening on a TCP port (any process of the machine can connect to
+/// one) knows the connection is the app it started. It is never logged.
+pub const TOKEN: &str = "NSH_DESIGN_TOKEN";
 
 /// The tool's messages that are a window's input, which the platform
 /// delivers: `{"pointer":{"id","kind":"down|drag|up|move","x","y"}}` (points
@@ -123,7 +130,7 @@ pub fn connect(endpoint: String, hooks: DesignHooks) -> bool {
                 }
             };
             log::info!(target: "nsh::design", "connected to the design tool");
-            send_line(&serde_json::json!({ "hello": {} }));
+            send_line(&hello(token().as_deref()));
             for line in reader.lines() {
                 let Ok(line) = line else { break };
                 match serde_json::from_str::<JsonValue>(&line) {
@@ -139,6 +146,21 @@ pub fn connect(endpoint: String, hooks: DesignHooks) -> bool {
             (hooks.closed)();
         })
         .is_ok()
+}
+
+/// The token the tool gave for this run ([`TOKEN`]), if any: never logged.
+fn token() -> Option<String> {
+    std::env::var(TOKEN).ok().filter(|t| !t.is_empty())
+}
+
+/// The first line to the tool: `{"hello":{}}`, with the run's `token` when
+/// the tool gave one (`{"hello":{"token":…}}`), so that a tool listening on
+/// a TCP port takes only the app it started.
+fn hello(token: Option<&str>) -> JsonValue {
+    match token {
+        Some(token) => serde_json::json!({ "hello": { "token": token } }),
+        None => serde_json::json!({ "hello": {} }),
+    }
 }
 
 /// A connection to `endpoint`: its reading and writing halves.
@@ -1499,5 +1521,16 @@ mod tests {
         drop(tool);
         closed.recv_timeout(Duration::from_secs(5)).unwrap();
         let _ = std::fs::remove_file(path);
+    }
+
+    /// The hello carries the run's token when the tool gave one, and is as
+    /// it always was without one.
+    #[test]
+    fn hello_carries_the_token() {
+        assert_eq!(hello(None), json!({ "hello": {} }));
+        assert_eq!(
+            hello(Some("a-token")),
+            json!({ "hello": { "token": "a-token" } })
+        );
     }
 }
