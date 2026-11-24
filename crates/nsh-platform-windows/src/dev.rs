@@ -105,6 +105,44 @@ pub fn init_logging() {
     }
 }
 
+/// What a test of design mode (`nsh/design`, `docs/dev/design-mode.md`)
+/// stands in for the system, and what it reads of the windows. Not an API
+/// for apps.
+#[doc(hidden)]
+pub mod design {
+    use windows::Win32::Foundation::{HWND, RECT};
+
+    /// Stands `dpi` in for every window's display DPI (96 at 100 %; `None`:
+    /// the system's again), as a display at that scale would size windows,
+    /// their swap chains and their drawing. Called before the app starts.
+    pub fn stand_in_dpi(dpi: Option<u32>) {
+        crate::window::stand_in_dpi(dpi);
+    }
+
+    /// Stands `rect` in for the virtual screen (the union of the displays'
+    /// rectangles; `None`: the system's again), as a change of the displays
+    /// would make it: the windows kept out of sight are placed for it when
+    /// `WM_DISPLAYCHANGE` comes. On the UI thread.
+    pub fn stand_in_screen(rect: Option<RECT>) {
+        crate::design::stand_in_screen(rect);
+    }
+
+    /// The size in pixels of what window `hwnd` of the app's own presents
+    /// (its swap chain), once it drew a frame. On the UI thread.
+    pub fn presented_size(hwnd: HWND) -> Option<(u32, u32)> {
+        crate::surface::Surface::all()
+            .iter()
+            .find_map(|surface| crate::app_window::presented_size(surface, hwnd))
+    }
+
+    /// The largest texture, a side in pixels, the UI thread's device makes.
+    pub fn largest_texture() -> Option<u32> {
+        crate::gfx::get()
+            .ok()
+            .map(|gfx| crate::gfx::largest_texture(&gfx))
+    }
+}
+
 thread_local! {
     /// The dev sessions of this thread, by key.
     static SESSIONS: RefCell<FxHashMap<u64, Rc<RefCell<DevUi>>>> = RefCell::default();
@@ -289,6 +327,11 @@ fn session(key: u64) -> Option<Rc<RefCell<DevUi>>> {
 /// Ctrl+R (as on Linux, Cmd+R on macOS) and F5 (Windows' own) load the
 /// latest build again, wherever the window's focus is.
 fn install_reload_key(surface: &crate::surface::Surface, key: u64) {
+    // In a design tool every key is the app's, and the tool reloads it
+    // ([`crate::design`]).
+    if crate::design::active() {
+        return;
+    }
     const VK_R: u16 = 0x52;
     const VK_F5: u16 = 0x74;
     surface.shortcuts.borrow_mut().push(Box::new(move |event| {

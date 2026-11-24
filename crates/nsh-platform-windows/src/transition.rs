@@ -89,7 +89,24 @@ fn animate(surface: &Rc<Surface>, view: &NshView, f: impl FnOnce(&mut Live)) {
         live.set_ticking(true);
         drop(s);
         let view = view.clone();
-        surface.on_frame(move |surface, now| tick(surface, &view, now * 1000.0));
+        // Whether only keyframes repeating forever are left: a design
+        // tool's window settles beside them, as `nsh test`'s steps do not
+        // wait for them (they never end).
+        let mut looping = false;
+        surface.on_frame(move |surface, now| {
+            let next = tick(surface, &view, now * 1000.0);
+            let cosmetic = !matches!(next, Next::Done)
+                && view
+                    .state()
+                    .live
+                    .as_ref()
+                    .is_some_and(|l| l.only_endless_keyframes());
+            if cosmetic != looping {
+                looping = cosmetic;
+                surface.cosmetic_frame(looping);
+            }
+            next
+        });
     }
 }
 

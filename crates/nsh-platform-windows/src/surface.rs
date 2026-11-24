@@ -237,6 +237,15 @@ pub(crate) struct Surface {
     /// The model of a test session's app (`nsh test --target windows`).
     #[cfg(feature = "dev")]
     test_model: RefCell<Option<std::sync::Arc<nsh_testing::agent::Model>>>,
+    /// How many batches it applied: what a design tool's window settles
+    /// on ([`Surface::applied`]).
+    #[cfg(feature = "dev")]
+    applied: Cell<u64>,
+    /// How many of the frame clients have only cosmetic work left: a view's
+    /// keyframes repeating for good (a spinner), which never end
+    /// ([`Surface::cosmetic_frame`]).
+    #[cfg(feature = "dev")]
+    cosmetic_frames: Cell<usize>,
     /// The time of the current (last) frame (seconds since the surface was
     /// made).
     now: Cell<f64>,
@@ -338,6 +347,10 @@ impl Surface {
             keeper: Cell::new(None),
             #[cfg(feature = "dev")]
             test_model: RefCell::default(),
+            #[cfg(feature = "dev")]
+            applied: Cell::new(0),
+            #[cfg(feature = "dev")]
+            cosmetic_frames: Cell::new(0),
             now: Cell::new(0.0),
             epoch: std::time::Instant::now(),
             on_error: RefCell::new(None),
@@ -561,6 +574,8 @@ impl Surface {
         self.js_frame.set(false);
         self.resize_late.set(false);
         self.frame_clients.borrow_mut().clear();
+        #[cfg(feature = "dev")]
+        self.cosmetic_frames.set(0);
         crate::app_window::close_all(self);
         self.invalidate();
     }
@@ -946,6 +961,8 @@ impl Surface {
         match message {
             Message::Batch(batch) => {
                 self.apply(&batch);
+                #[cfg(feature = "dev")]
+                self.applied.set(self.applied.get() + 1);
                 return true;
             }
             Message::Error(message) => {
@@ -1051,10 +1068,26 @@ impl Surface {
 
     /// Whether a native animation runs: the graph's (not one looping
     /// forever, which no test step waits for), or the platform's own
-    /// (transitions, scroll glides).
+    /// (transitions, scroll glides; not a view's keyframes repeating
+    /// forever, [`Surface::cosmetic_frame`]).
     #[cfg(feature = "dev")]
     pub(crate) fn animating(&self) -> bool {
-        self.anim.borrow().finishing() || !self.frame_clients.borrow().is_empty()
+        self.anim.borrow().finishing()
+            || self.frame_clients.borrow().len() > self.cosmetic_frames.get()
+    }
+
+    /// A frame client's work left became cosmetic (`on`: a view's keyframes
+    /// repeating forever, a spinner, which never end) or no longer is; a
+    /// client that was ends with `on` false.
+    pub(crate) fn cosmetic_frame(&self, on: bool) {
+        #[cfg(feature = "dev")]
+        {
+            let n = self.cosmetic_frames.get();
+            self.cosmetic_frames
+                .set(if on { n + 1 } else { n.saturating_sub(1) });
+        }
+        #[cfg(not(feature = "dev"))]
+        let _ = on;
     }
 
     /// Keeps the model `nsh test --target` steps see of the app
@@ -1063,6 +1096,13 @@ impl Surface {
     #[cfg(feature = "dev")]
     pub(crate) fn set_test_model(&self, model: Option<std::sync::Arc<nsh_testing::agent::Model>>) {
         *self.test_model.borrow_mut() = model;
+    }
+
+    /// How many batches it applied so far: a design tool's window is
+    /// settled once this stops changing ([`crate::design`]).
+    #[cfg(feature = "dev")]
+    pub(crate) fn applied(&self) -> u64 {
+        self.applied.get()
     }
 
     fn wants_frames(&self) -> bool {

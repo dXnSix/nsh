@@ -27,6 +27,14 @@ impl DerefMut for UiAnimation {
 }
 
 impl UiAnimation {
+    /// A copy whose animations that loop with no end stand at the start of
+    /// the run they are in at `now` ([`Animator::at_loop_starts`]): what a
+    /// design tool's picture shows of them ([`crate::picture`]).
+    #[cfg(feature = "dev")]
+    pub(crate) fn at_loop_starts(&self, now: f64) -> UiAnimation {
+        UiAnimation(self.0.at_loop_starts(now))
+    }
+
     /// A scroll view moved: feeds its scroll value.
     pub(crate) fn scrolled(&mut self, id: u32, x: f32, y: f32) -> bool {
         self.0.scrolled(id, Point::new(Points(x), Points(y)))

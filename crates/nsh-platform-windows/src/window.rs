@@ -832,9 +832,35 @@ pub(crate) fn set_icon(hwnd: HWND, path: Option<&std::path::Path>) {
 
 /// The window's DPI (96 at 100%).
 pub(crate) fn dpi(hwnd: HWND) -> u32 {
+    #[cfg(feature = "dev")]
+    if let Some(dpi) = stood_in_dpi() {
+        return dpi;
+    }
     // SAFETY: plain call; 0 for an invalid window.
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi == 0 { 96 } else { dpi }
+}
+
+/// The DPI a test stands in for every window's ([`stand_in_dpi`]): 0 for
+/// none.
+#[cfg(feature = "dev")]
+static STOOD_IN_DPI: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Stands `dpi` in for every window's display DPI ([`dpi`]; `None`: the
+/// system's again): what sizes windows, their swap chains and their
+/// drawing, as a display at that scale would. A test's, before the app
+/// starts ([`crate::dev`]).
+#[cfg(feature = "dev")]
+pub(crate) fn stand_in_dpi(dpi: Option<u32>) {
+    STOOD_IN_DPI.store(dpi.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "dev")]
+fn stood_in_dpi() -> Option<u32> {
+    match STOOD_IN_DPI.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        dpi => Some(dpi),
+    }
 }
 
 /// Tells the surface the window's client size and scale.
@@ -1284,6 +1310,11 @@ fn handle(
 ) -> Option<LRESULT> {
     if surface.testing() && users_pointer(msg) {
         return None;
+    }
+    // In a design tool the app's windows stay out of sight.
+    #[cfg(feature = "dev")]
+    if let Some(result) = crate::design::window_message(hwnd, data.top_level, msg, wparam, lparam) {
+        return Some(result);
     }
     // A captured key down, as the thread's hook left it: its characters
     // were never made. Report it and run the key logic as for any other

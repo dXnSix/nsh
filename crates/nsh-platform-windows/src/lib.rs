@@ -57,6 +57,8 @@ mod native;
 mod navigation;
 mod notifications;
 mod picker;
+#[cfg(feature = "dev")]
+mod picture;
 mod presence;
 mod render;
 mod richedit;

@@ -4293,6 +4293,7 @@ dependencies = [
  "image",
  "log",
  "nsh-base",
+ "nsh-bundler",
  "nsh-core",
  "nsh-dev",
  "nsh-engine",

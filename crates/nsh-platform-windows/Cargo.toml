@@ -85,3 +85,14 @@ ttf-parser.workspace = true
 crossbeam-channel.workspace = true
 nsh-dev = { workspace = true, features = ["client"], optional = true }
 nsh-testing = { workspace = true, features = ["agent"], optional = true }
+
+# Bundles the test app of `design_windows` in process.
+[target.'cfg(windows)'.dev-dependencies]
+nsh-bundler = { workspace = true, features = ["bundle"] }
+
+# A design tool's view of an app on Windows (feature `dev`): the app runs in
+# a process of its own, started by the test, which plays the tool.
+[[test]]
+name = "design_windows"
+harness = false
+required-features = ["dev"]

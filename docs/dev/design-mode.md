@@ -13,6 +13,12 @@ path, or `tcp:<host>:<port>` (any platform, the only form on Windows). Usually f
 tool's own kept outside the app (`nsh run <tool's entry> --app <app>`), which imports the app's
 modules (`import.meta.glob`) and opens their windows (`Window.open`).
 
+On Windows the tool listens on the loopback address (`tcp:127.0.0.1:<port>`), where any process of
+the machine could connect, so it also makes a token for the run and gives it in `NSH_DESIGN_TOKEN`:
+the app's hello carries it (`{"hello":{"token":"…"}}`), and the tool takes the connection only after
+a hello with its token. The token is never logged, at any level. Without the variable (or with it
+empty) the hello is `{"hello":{}}`, as on every platform before.
+
 A tool that starts an app with Rust crates of its own optimized (`nsh run --release` or `nsh dev
 --release` on macOS, Linux or Windows, with the socket set) waits for its builds, so they are quick
 ones: the describing program builds together with the development host, in one `cargo build` with
@@ -26,7 +32,7 @@ instead of a debug `describe` and a `release` host built apart. What packages sh
 
 | From | Message | What |
 |---|---|---|
-| host | `{"hello":{}}` | Once connected. |
+| host | `{"hello":{}}` | Once connected; `{"hello":{"token":…}}` when the tool gave the run a token (`NSH_DESIGN_TOKEN`). |
 | host | `{"surface":{"id","width","height", <handle>}}` | A window of the app's own (named by `Window.open`'s `id`), whenever it is new or its handle or size changed. The handle is what the tool draws it with: `"context"`, its layer's `CAContext` id, on macOS (`CALayerHost`); `"hwnd"` on Windows (a DWM thumbnail); `"xid"` under X11 (Composite). |
 | host | `{"surface":{"id","gone":true}}` | The window closed. |
 | tool | `{"pointer":{"id","kind":"down\|drag\|up\|move","x","y"}}` | Input, delivered by the platform to window `id`, in points from its content's top left. |
@@ -51,11 +57,40 @@ app's own windows for `report`, which tells the tool what changed:
   window that ignores the mouse), through a run-loop source in the common modes so that a control's
   own mouse loop still gets the drags and the release. `NSH_DESIGN_ALPHA` shows the windows.
 - **Windows**: the handle is the window's `HWND` (`"hwnd"`), which a tool draws with a DWM thumbnail
-  (`DwmRegisterThumbnail`). The main window stays hidden; the app's own windows are moved off every
-  display and out of the taskbar and switcher (tool windows that never activate), where DWM still
-  composes them. Input goes through `crate::input` in the window's root (`app_window::enter`), as the
-  test agent's does; the connection's thread hands it over with `UiThread::invoke`. When the tool
-  closes the connection the host exits.
+  (`DwmRegisterThumbnail`) or DirectComposition. The tool's endpoint is `tcp:127.0.0.1:<port>` and the
+  run's token comes in `NSH_DESIGN_TOKEN` (above). The windows are kept out of sight by the window
+  procedure (`design::window_message`), never by a timer, so no frame of one reaches a display at any
+  moment:
+  - the main window never shows (`SW_HIDE`: its `WM_WINDOWPOSCHANGING` drops `SWP_SHOWWINDOW`, and the
+    host does not show it at launch);
+  - a window of the app's own gets the tool-window and no-activate styles before it first shows (kept
+    through `WM_STYLECHANGING`): no taskbar button, no place in the window switcher, and the foreground
+    window does not change when one opens (the host runs as a background app, `run_in_background`);
+  - every `WM_WINDOWPOSCHANGING` of one, the one that changes its size included, sets its position so
+    that its whole rectangle lies beside the virtual screen (the union of all displays' rectangles), by a
+    margin: left of it, else right of it, below it or above it, the first place whose origin stays within
+    -32,768 to 32,767 (`design::out_of_sight`), the range Windows keeps a window's origin in. A window may
+    be far larger than the displays (16,384 points at 300 % are 49,152 pixels; at 200 % 32,768, which no
+    longer fits left of a display left of the main one), and its origin cut to -32,768 would bring it
+    back onto them. `WM_DISPLAYCHANGE` places them all again. DWM still composes them, so their thumbnails stay
+    live and their frames keep coming. The 50 ms tick only reports the windows to the tool;
+  - a window lays out at its content's size up to the natural-size limit (16,384 points a side) at any
+    display scale (`WM_GETMINMAXINFO` neither raises it to the system's smallest window nor cuts it to
+    the displays' size), while what it presents, its swap chain or composition swap chain, is cut to the
+    device's largest texture (`gfx::presentable`): its pictures are drawn apart (below), by `rect` where
+    a picture would be larger, never read from the swap chain;
+  - the host's own window shortcuts (F11's full screen, the dev session's reload on F5 and Ctrl+R) are
+    not installed: every key the tool sends is the app's.
+
+  Input goes through `crate::input` in the window's root (`app_window::enter`), as the test agent's
+  does; the connection's thread hands it over with `UiThread::invoke`. A `key` is the key event a real
+  press gives (`input::key`, with its modifiers and `repeat`, down and up), then, going down, the text
+  `TranslateMessage` would make of it where nothing took the key and neither Control nor Alt is held
+  (`text_input::char_input`): letters, digits and every printable ASCII punctuation character by the US
+  layout's virtual keys (Shift's characters by the key that types them), Space, Enter, Tab, Backspace,
+  Delete, Escape, the arrows, Home, End, PageUp, PageDown and F1 to F12; any other value of one
+  character (any Unicode) arrives as that character, with no virtual key; any other name is logged at
+  debug level and dropped. When the tool closes the connection the host exits.
 - **Linux**: under X11 the handle is the window's X11 id (`"xid"`), which a tool draws with the
   Composite extension; Wayland lets no other process draw a window, so nothing is reported there
   (logged once). The main window stays hidden; the app's own windows are moved off every display
@@ -65,8 +100,8 @@ app's own windows for `report`, which tells the tool what changed:
   and Backspace into the focused widget (`crate::synth`).
 
 Pictures (`design.settled`, `design.picture`, below) are a platform's to draw
-(`nsh_core::runtime::design::PictureHooks`, given with `set_picture_hooks` after `connect`); macOS draws them,
-and the other platforms answer `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`:
+(`nsh_core::runtime::design::PictureHooks`, given with `set_picture_hooks` after `connect`); macOS and Windows
+draw them, and the other platforms answer `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`:
 
 - **Settling** follows the core's rule (`Settling`): quiet for 50 ms since the question (no batch applied, no
   animation that ends by itself running, no batch waiting for a frame; an animation that loops with no end does
@@ -82,6 +117,25 @@ and the other platforms answer `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`:
   picture changes in the layers is put back in the same Core Animation transaction, so the window shows nothing
   of it. The tests compare it with the window server's picture of the window (`synth::composited_image`): at most
   2 % of the pixels differ by more than 8 of 255 (`tests/design_pictures.rs`, `tests/design_picture_shadows.rs`).
+- **Windows** settles on a count of the batches its surface applied (`Surface::applied`; batches are applied as
+  they arrive, none waits for a frame) and on whether an animation that ends by itself or a platform motion runs
+  (`Surface::animating`: the graph's animations that end, and the frame clients but those with only a view's
+  keyframes repeating forever left, `Surface::cosmetic_frame`, as macOS's `cosmetic_frames`), looked at every 5 ms
+  on the UI thread. It draws in process (`crate::picture`): once what
+  the engine sent before the question is applied and a frame has followed, the window's root view is drawn with
+  Direct2D's offscreen path (`render::picture`, the snapshot's drawing with a region and the window's root) at the
+  scale and the part asked for, over transparent pixels (alpha 0 where nothing is drawn: no window background and
+  no caption buttons), read back as premultiplied BGRA and written as RGBA rows. The outer box shadows are drawn
+  as the window draws them; an animation that loops with no end stands at the start of the run it is in
+  (`Animator::at_loop_starts`), and so does a view's keyframe `animation` repeating forever (`spin`, `ping`,
+  `pulse`, `bounce`: `transition::Live::stand_at_loop_start`); the views show their animated values again once it
+  is drawn. A picture
+  larger than the device's largest bitmap is drawn in tiles. **The one rule that differs:** a picture on Windows
+  leaves out composed components, a web view's page and a native component's own visual
+  (`NativeComponent::composed`): the system composes them, and the offscreen drawing has none of them. Every
+  other rule of the contract holds as on macOS, the codes included (a drawing Direct2D fails is
+  `ERR_NSH_DESIGN_NO_WINDOW`, as a window macOS cannot draw is). Tests: `cargo test -p nsh-platform-windows
+  --features dev --test design_windows` (below).
 
 ## `nsh/design`
 
@@ -284,4 +338,26 @@ Tests: `cargo test -p nsh-engine --features inspect --test engine design_picture
 stand-in platform that settles on the batches and the animation graph and writes the file: the settle rule, the
 overrides laid out before the tree, the tree and modules, `rect`, a loop at its first frame, the codes, outside
 design mode, the hot update's notice); on macOS `cargo test -p nsh-platform-macos --features dev --test
-design_pictures` and `--test design_picture_shadows` (above).
+design_pictures` and `--test design_picture_shadows` (above); on Windows `cargo test -p nsh-platform-windows
+--features dev --test design_windows`, which plays the tool over TCP against an app it starts in design mode with
+real Win32 windows: the hello with and without a token (the app at NSH's most verbose log level, its log without
+the token), pictures at scale 1 and 2, a `rect`, a `hide`, settling after a timer's batch, during a 300 ms
+animation and a 300 ms style transition and given up at 1 s, an endless loop drawn twice alike at its first frame,
+a view's endless keyframes (`animate-pulse`) settling at once and drawn twice alike at their first frame, an outer
+shadow, each code;
+every place a window's size change left it in checked in its message (`WH_CALLWNDPROCRET`), the windows' styles,
+the hidden main window, the foreground window as a window opens, `WM_DISPLAYCHANGE`, a 16,384 x 1,000-point
+window at a stood-in 150 % and 300 % that lies beside the displays, presents at most the largest texture and gives
+a `rect` picture, the 150 % one placed right of the displays once a display stood in left of the origin; every
+printable
+ASCII key and a non-ASCII character typed into a field, Control and Alt chords typing nothing, each named key at a
+key-logging view and an unlisted one dropped; and a composed component placed whatever its own box.
+
+### Composed components on Windows
+
+Windows' renderer places a composed component (`NativeComponent::composed`: a component with a visual of its own)
+while its clipping ancestors leave a non-empty clip, whatever its own box, unless its view clips its own content
+(`DrawCx::placement_within`): its `Placement` keeps the matrix and that clip. A component whose visual draws past
+its box (a canvas layer of a 1x1 view at a world's origin, which a pan takes out of the pane) therefore stays in
+the window's tree; one whose view clips (`overflow: hidden`, rounded corners) is placed only while its box meets
+the clip.
