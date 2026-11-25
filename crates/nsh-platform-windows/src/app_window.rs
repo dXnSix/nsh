@@ -623,7 +623,7 @@ fn paint(surface: &Rc<Surface>, window: &AppWindow) {
             hwnd: window.hwnd,
             base: window.composition.as_deref(),
             composition: web.as_deref(),
-            swap: &mut window.swap.borrow_mut(),
+            swap: &window.swap,
             target_scale: &window.target_scale,
             size: window.pixels.get(),
             scale: window.scale.get(),

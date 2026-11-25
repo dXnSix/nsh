@@ -1285,7 +1285,6 @@ pub(crate) fn items_placed(
     drawn: Vec<(Rc<dyn Hosted>, RECT)>,
     redrawn: Option<&[RECT]>,
 ) {
-    let mut placed = placed.borrow_mut();
     let mut next: Vec<(Rc<dyn Hosted>, RECT)> = Vec::with_capacity(drawn.len());
     for (item, rect) in drawn {
         // A partial frame draws its areas one by one.
@@ -1293,22 +1292,32 @@ pub(crate) fn items_placed(
             next.push((item, rect));
         }
     }
-    for (old, rect) in placed.iter() {
-        if next.iter().any(|(item, _)| Rc::ptr_eq(item, old)) {
-            continue;
+    let mut gone: Vec<Rc<dyn Hosted>> = Vec::new();
+    // Release the borrow before notifying or dropping hosted controls: releasing
+    // a COM control (such as RichEdit) can pump Win32 messages reentrantly.
+    let prev = {
+        let mut slot = placed.borrow_mut();
+        for (old, rect) in slot.iter() {
+            if next.iter().any(|(item, _)| Rc::ptr_eq(item, old)) {
+                continue;
+            }
+            let untouched =
+                redrawn.is_some_and(|areas| !areas.iter().any(|a| crate::render::overlap(a, rect)));
+            if untouched {
+                next.push((old.clone(), *rect));
+            } else {
+                gone.push(old.clone());
+            }
         }
-        let untouched =
-            redrawn.is_some_and(|areas| !areas.iter().any(|a| crate::render::overlap(a, rect)));
-        if untouched {
-            next.push((old.clone(), *rect));
-        } else {
-            old.placed(None);
-        }
+        std::mem::replace(&mut *slot, next.clone())
+    };
+    for old in gone {
+        old.placed(None);
     }
     for (item, rect) in &next {
         item.placed(Some(*rect));
     }
-    *placed = next;
+    drop(prev);
 }
 
 /// The composed items a window's frame drew (`last`: what its last frame

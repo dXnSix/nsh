@@ -1445,7 +1445,11 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
     if size.0 == 0 || size.1 == 0 {
         return false;
     }
-    let mut swap = surface.swap.borrow_mut();
+    let Ok(mut swap) = surface.swap.try_borrow_mut() else {
+        // Reentrant paint (for example COM STA pumping while releasing a
+        // hosted control): schedule another paint once the outer frame ends.
+        return true;
+    };
     if swap.as_ref().is_some_and(|s| s.stale()) {
         *swap = None;
     }
@@ -1773,7 +1777,7 @@ pub(crate) struct WindowFrame<'a> {
     /// its own swap chain).
     pub(crate) composition: Option<&'a Composition>,
     /// Its swap chain, and the scale of the chain's target.
-    pub(crate) swap: &'a mut Option<gfx::SwapChain>,
+    pub(crate) swap: &'a RefCell<Option<gfx::SwapChain>>,
     pub(crate) target_scale: &'a std::cell::Cell<f32>,
     /// Its client area in pixels, and its pixels per point.
     pub(crate) size: (u32, u32),
@@ -1811,6 +1815,11 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
     // a swap chain that large cannot be made. What lies beyond is not
     // shown; a design tool's pictures are drawn apart ([`picture`]).
     let size = gfx::presentable(&gfx, size);
+    let Ok(mut swap) = swap.try_borrow_mut() else {
+        // Reentrant paint (for example COM STA pumping while releasing a
+        // hosted control): schedule another paint once the outer frame ends.
+        return true;
+    };
     if swap.as_ref().is_some_and(|s| s.stale()) {
         *swap = None;
     }
@@ -1869,15 +1878,18 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
             {
                 log::warn!("present failed: {err}");
                 *swap = None;
+                drop(swap);
                 device_lost(surface);
                 return false;
             }
             if let Err(err) = chain.present(None) {
                 log::warn!("present failed: {err}");
                 *swap = None;
+                drop(swap);
                 device_lost(surface);
                 return false;
             }
+            drop(swap);
             crate::surface::items_placed(placed, drawn.items, None);
             crate::surface::composed_placed(composed, composition, drawn.composed, &drawn.layers);
             if let Some(base) = base {
@@ -1886,6 +1898,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
         }
         Err(err) if err.code() == D2DERR_RECREATE_TARGET => {
             *swap = None;
+            drop(swap);
             device_lost(surface);
         }
         Err(err) => log::error!("drawing a window failed: {err}"),
