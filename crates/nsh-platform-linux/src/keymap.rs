@@ -31,7 +31,6 @@ use gtk4::{self as gtk, glib, prelude::*};
 use nsh_core::{
     EventKind, EventPayload, NodeId, PayloadValue, ROOT_ID,
     keymap::{Key, KeyBinding, Keymap, Keystroke},
-    platform::Os,
 };
 
 use crate::{surface::Surface, view::NshView};
@@ -111,7 +110,7 @@ pub(crate) fn set(surface: &Rc<Surface>, keymap: Arc<Keymap>) {
 fn skipped(binding: &nsh_core::keymap::KeyBinding) -> bool {
     #[cfg(feature = "dev")]
     {
-        !crate::design::active() && binding.keystroke.reloads(Os::Linux)
+        !crate::design::active() && binding.keystroke.reloads(nsh_core::platform::Os::Linux)
     }
     #[cfg(not(feature = "dev"))]
     {
