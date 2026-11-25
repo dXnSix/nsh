@@ -247,10 +247,14 @@ mod macos {
         view.subviews().iter().find_map(|c| find(&c, id))
     }
 
-    /// What clients read of the text in `view`: its value.
+    /// What clients read of the text in `view`: its value. The text is its
+    /// first accessibility child, which for a plain text drawn as a layer
+    /// (a leaf, in no view hierarchy) is not among its subviews.
     fn value(view: &NSView) -> Option<String> {
-        view.subviews()
+        view.accessibilityChildren()?
             .firstObject()?
+            .downcast::<NSView>()
+            .ok()?
             .accessibilityValue()
             .and_then(|o: Retained<AnyObject>| o.downcast::<NSString>().ok())
             .map(|s| s.to_string())
@@ -310,6 +314,9 @@ mod macos {
             mtm,
             AppOptions {
                 size: (400, 300),
+                // The test embeds the view as a host app does: a JS root
+                // mounts in it, not in an implicit window of its own.
+                inline_root: true,
                 ..AppOptions::default()
             },
         )

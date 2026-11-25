@@ -222,6 +222,11 @@ pub struct AppOptions {
     /// [`run_app`]'s view only: a view embedded in another app has no login
     /// item. The release runner sets it, except under `nsh run`.
     pub login_item: bool,
+    /// Mounts a plain JS root in the view instead of opening an implicit
+    /// desktop window. The host still controls its own window; explicit
+    /// windows, the platform environment and Rust roots are unchanged.
+    /// False by default; [`run_app`]'s view ignores it.
+    pub inline_root: bool,
     /// The embedding app's channel with the apps the view runs
     /// (`nsh/host`): their launch parameters, events to them and handlers of
     /// their calls and posts ([`AppView::host`]). One for every app the view
@@ -276,6 +281,7 @@ impl Default for AppOptions {
             storage: None,
             notifications: false,
             login_item: false,
+            inline_root: false,
             host: nsh_engine::HostChannel::default(),
             transparent: false,
             handoff: false,
@@ -477,7 +483,7 @@ impl AppView {
             cache: options.cache.clone(),
             storage: options.storage.clone(),
             clock: Default::default(),
-            context: Default::default(),
+            context: self.context(&options),
             pinned: Default::default(),
             clipboard: None,
             host: options.host.clone(),
@@ -499,6 +505,20 @@ impl AppView {
         self.surface.native.set_app(&config.app);
         crate::native::warm_web_later(&self.surface);
         self.surface.start(config);
+    }
+
+    /// The engine context of the apps it runs: a plain JS root mounts in
+    /// the view, not in an implicit desktop window, when it is embedded with
+    /// [`AppOptions::inline_root`].
+    fn context(&self, options: &AppOptions) -> nsh_engine::EngineContext {
+        let context = nsh_engine::EngineContext::default();
+        #[cfg(feature = "js")]
+        if options.inline_root && !self.surface.standalone.get() {
+            return nsh_engine::with_inline_root(context);
+        }
+        #[cfg(not(feature = "js"))]
+        let _ = options;
+        context
     }
 
     /// Where `asset:/` URIs resolve from now on.
