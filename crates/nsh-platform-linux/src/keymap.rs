@@ -106,9 +106,18 @@ pub(crate) fn set(surface: &Rc<Surface>, keymap: Arc<Keymap>) {
     }
 }
 
-/// The dev host's Ctrl+R reloads, whatever the app binds.
+/// The dev host's Ctrl+R reloads, whatever the app binds (except in design
+/// mode, where the dev host does not install its reload key).
 fn skipped(binding: &nsh_core::keymap::KeyBinding) -> bool {
-    cfg!(feature = "dev") && binding.keystroke.reloads(Os::Linux)
+    #[cfg(feature = "dev")]
+    {
+        !crate::design::active() && binding.keystroke.reloads(Os::Linux)
+    }
+    #[cfg(not(feature = "dev"))]
+    {
+        let _ = binding;
+        false
+    }
 }
 
 /// Gives the root view of a window (`root`) the app's shortcuts: a window

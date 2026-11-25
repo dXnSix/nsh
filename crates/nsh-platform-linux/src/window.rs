@@ -555,7 +555,7 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
     // A design tool names the app's windows by their ids.
     #[cfg(feature = "dev")]
     if crate::design::active() {
-        crate::design::name_window(&open.options.id, id);
+        crate::design::name_window(&open.options.id, id, &window);
     }
     let main = main_window(surface);
     if let Some(app) = main.as_ref().and_then(|w| w.application()) {
@@ -934,7 +934,11 @@ fn set_attributes(surface: &Rc<Surface>, id: NodeId, diff: &WindowAttributes) {
     }) else {
         return log::debug!("window: no window for {id}");
     };
-    if let Some(title) = &diff.title {
+    #[cfg(feature = "dev")]
+    let design_mode = crate::design::active();
+    #[cfg(not(feature = "dev"))]
+    let design_mode = false;
+    if !design_mode && let Some(title) = &diff.title {
         // The app's name until it gives one.
         let main_title = main_window(surface).and_then(|w| w.title());
         match main_title {
@@ -945,7 +949,12 @@ fn set_attributes(surface: &Rc<Surface>, id: NodeId, diff: &WindowAttributes) {
     if let Some(view) = &view {
         apply(surface, &window, view.upcast_ref(), &full, diff);
     }
-    if diff.title_bar.is_some()
+    if design_mode {
+        // Keep design windows undecorated and shadowless so the Wayland
+        // toplevel's pixels match the window's content size.
+        window.set_decorated(false);
+        window.add_css_class("nsh-no-shadow");
+    } else if diff.title_bar.is_some()
         || diff.frame.is_some()
         || diff.minimizable.is_some()
         || diff.maximizable.is_some()

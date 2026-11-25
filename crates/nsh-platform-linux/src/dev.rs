@@ -426,6 +426,9 @@ fn reload_latest(ui: &Rc<RefCell<DevUi>>) {
 /// shortcut, which the window handles wherever its focus is, and which
 /// matches the key of the layout's Latin group under other layouts.
 fn install_reload_key(view: &AppView, key: u64) {
+    if crate::design::active() {
+        return;
+    }
     let action = gtk::CallbackAction::new(move |_, _| match session(key) {
         Some(ui) => {
             reload_latest(&ui);
@@ -512,6 +515,10 @@ fn app_came(ui: &RefCell<DevUi>, view: &AppView, app: &App) {
     if !std::mem::take(&mut ui.borrow_mut().held) {
         return;
     }
+    if crate::design::active() {
+        crate::window::launch_hidden(view.surface());
+        return;
+    }
     if app
         .main_window()
         .is_some_and(nsh_core::desktop::MainWindowOptions::visible_at_launch)
@@ -549,7 +556,7 @@ fn show_error(ui: &Rc<RefCell<DevUi>>, title: &str, message: &str, prose: bool) 
     // launch whose startup failed: a tray app before its icon came), shows
     // the error, so it is seen.
     let held = std::mem::take(&mut ui.borrow_mut().held);
-    if held || !shown(&view) {
+    if !crate::design::active() && (held || !shown(&view)) {
         present(&view);
     }
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);

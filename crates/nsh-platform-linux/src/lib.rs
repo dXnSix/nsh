@@ -47,6 +47,8 @@ mod mount;
 mod native;
 mod navigation;
 mod notifications;
+#[cfg(feature = "dev")]
+mod picture;
 mod scroll;
 mod selectable_view;
 mod session;
