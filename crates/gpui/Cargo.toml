@@ -52,8 +52,8 @@ nsh-platform-gpui = { version = "0.7.0", path = "nsh-platform-gpui", default-fea
 # `rev` and takes it from there, so dXn.GpuiTizen is published before an NSH
 # release with a crate that depends on it. TV builds take gpui-fast and wgpu
 # from their forks (`[patch.crates-io]` below).
-dxn_gpui_tizen = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "8de11018db4896c9fed2e8d737d64c170fbf43cb" }
-dxn_gpui_tizen_sys = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "8de11018db4896c9fed2e8d737d64c170fbf43cb" }
+dxn_gpui_tizen = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "7ac6b53a596e6c535cc6ad7af9d103d2ed1f3745" }
+dxn_gpui_tizen_sys = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "7ac6b53a596e6c535cc6ad7af9d103d2ed1f3745" }
 # Freeing the C strings the Tizen APIs return.
 libc = "0.2"
 
@@ -145,11 +145,12 @@ opt-level = 3
 opt-level = 3
 
 # The renderer changes dXn.GpuiTizen builds on, until gpui-fast and wgpu release
-# them: all nine `gpui-fast-*` crates from the gpui-fast fork's `tizen-release`
+# them: all ten `gpui-fast-*` crates from the gpui-fast fork's `tizen-release`
 # and the wgpu stack from the wgpu fork's `v30-tizen`, the same set as
 # dXn.GpuiTizen's own `Cargo.toml` (`docs/dev/tizen.md`). Dropped, with the
 # git dependencies above, once both are published.
 [patch.crates-io]
+gpui-fast-scheduler = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
 gpui-fast-macros = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
 gpui-fast = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
 gpui-fast-apple = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }

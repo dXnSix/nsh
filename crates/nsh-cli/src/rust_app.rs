@@ -2098,12 +2098,13 @@ pub(crate) const OWN_NSHM: &[&str] = &["nsh-extra"];
 /// nsh's crates an app's crate may depend on ([`Nsh::of`]; built against a
 /// checkout, `[patch.crates-io]` sends them to it).
 /// The forks TV builds take (dXn.GpuiTizen's `[patch.crates-io]` set,
-/// `docs/dev/tizen.md`): gpui-fast's nine crates from its `tizen-release`
+/// `docs/dev/tizen.md`): gpui-fast's ten crates from its `tizen-release`
 /// branch, and the wgpu crates from wgpu's `v30-tizen`. `wgpu-hal` carries
 /// the TV changes; it takes `naga`, `naga-types` and `wgpu-types` from its
 /// own repository, so they and the crates built on them come from there
 /// too, one copy of each in the graph.
 pub(crate) const TIZEN_PATCHES: &[(&str, &str, &str)] = &[
+    ("gpui-fast-scheduler", GPUI_FAST_FORK, "tizen-release"),
     ("gpui-fast-macros", GPUI_FAST_FORK, "tizen-release"),
     ("gpui-fast", GPUI_FAST_FORK, "tizen-release"),
     ("gpui-fast-apple", GPUI_FAST_FORK, "tizen-release"),
