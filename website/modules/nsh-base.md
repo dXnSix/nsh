@@ -26,16 +26,6 @@ styles, [Tailwind](../docs/tailwind.md) classes and your theme, Rust components 
 or a component library the community builds on `nsh/base`. Every host serves `nsh/base`; Rust apps use the same API
 from the `nsh-base` crate (`nsh_base::{button, dialog, …}`).
 
-```rust tabs
-use nsh_base::{
-    MarkdownExtension, MarkdownOptions, accordion, accordion_header, accordion_item, accordion_panel, accordion_trigger,
-    alert_dialog, button, carousel, carousel_content, carousel_item, carousel_next,
-    carousel_pagination, carousel_pagination_item, carousel_previous, checkbox, color_area, color_field, color_picker,
-    color_slider, color_swatch, dialog, diff_view, dock_area, editor, focus_group, hover_card, link,
-    calendar, combobox, command, date_picker, emoji_picker, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, split_view, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
-};
-```
-
 ```tsx tabs
 import {
   Accordion,
@@ -246,6 +236,16 @@ import type {
 } from "nsh/base";
 ```
 
+```rust tabs
+use nsh_base::{
+    MarkdownExtension, MarkdownOptions, accordion, accordion_header, accordion_item, accordion_panel, accordion_trigger,
+    alert_dialog, button, carousel, carousel_content, carousel_item, carousel_next,
+    carousel_pagination, carousel_pagination_item, carousel_previous, checkbox, color_area, color_field, color_picker,
+    color_slider, color_swatch, dialog, diff_view, dock_area, editor, hover_card, link,
+    calendar, combobox, command, date_picker, emoji_picker, focus_group, h_resizable, nav_page, nav_stack, radio, radio_group, resizable_panel, select, split_view, switch, tab, tabs, text_view, theme, time_field, toast, toast_stack, toggle, toggle_group, toolbar, toolbar_group, toolbar_separator, tree, v_resizable,
+};
+```
+
 This page is the module's index: each component has an element page with its examples, props and platform notes. For
 walkthroughs, see the [Navigation guide](../docs/navigation.md) and [Forms and keyboard](../docs/forms-and-keyboard.md).
 
@@ -409,7 +409,9 @@ activation, the disabled state and the tab role and selected state for screen re
 screen readers announce and holds no value: the app tells each tab whether it is selected (`selected`), hears
 presses (`onPress`) and shows the selected section's content itself. The app's label is the tab's children, whose
 `group-selected:` classes follow it. The list's indicator (`indicatorClass`, `indicatorStyle`), an underline or a
-pill the app styles, sits on the selected tab and springs to the next one natively. See [Tabs](../elements/tabs.md).
+pill the app styles, sits on the selected tab and springs to the next one natively. Its `orientation` picks the arrow
+keys that move between the tabs (Left and Right when horizontal, Up and Down when vertical; both pairs without it).
+See [Tabs](../elements/tabs.md).
 
 ### Carousel
 
@@ -476,7 +478,8 @@ A date, or with `range` a range of dates, picked from months of days, with no lo
 value is an ISO date (`"2026-10-28"`) or `[start, end]` the app owns (`value`, `onChange`) or leaves to the calendar
 (`defaultValue`); `disabledMatcher` keeps days from being picked, and the days take the keyboard as one stop of Tab.
 The app styles the parts and draws the items (`renderItem`, given what an item is; its states are its classes, a
-range's days `selected:` with `data-range-start:`, `data-range-middle:` and `data-range-end:`). See
+range's days `selected:` with `data-range-start:`, `data-range-middle:` and `data-range-end:`, and while its end is
+chosen `data-range-preview-*:` up to the day under the mouse or the keyboard). See
 [Calendar](../elements/calendar.md).
 
 ### TimeField
@@ -704,6 +707,18 @@ The status bar belongs to what is on screen, as in UIKit, where each view contro
 `NavPage` or a `Dialog` declares the status bar it wants with `statusBar`, and the app declares its default in
 `nsh.json`.
 
+```tsx tabs
+import { NavPage } from "nsh/base";
+
+function PhotoViewer() {
+  return (
+    <NavPage headerVisible={false} statusBar={{ foreground: "light", hidden: true, animated: true }}>
+      …
+    </NavPage>
+  );
+}
+```
+
 ```rust tabs
 use nsh_base::nav_page;
 use nsh_core::prelude::*;
@@ -715,18 +730,6 @@ fn photo_viewer() -> Screen {
             .hidden(true)
             .animated(true),
     )
-}
-```
-
-```tsx tabs
-import { NavPage } from "nsh/base";
-
-function PhotoViewer() {
-  return (
-    <NavPage headerVisible={false} statusBar={{ foreground: "light", hidden: true, animated: true }}>
-      …
-    </NavPage>
-  );
 }
 ```
 
@@ -748,6 +751,13 @@ The page or dialog shown **most recently** decides, **field by field**: a page p
 below it, and an open dialog is over the pages. A field it leaves out comes from the one below it, and in the end
 from the app's default. When the page is popped or the dialog closes, the one below it applies again.
 
+```tsx tabs
+<NavPage title="Inbox" statusBar={{ foreground: "dark" }}>…</NavPage>
+
+// Pushed over it: hidden, with the inbox's dark content when it shows again.
+<NavPage title="Photo" statusBar={{ hidden: true }}>…</NavPage>
+```
+
 ```rust tabs
 nav_page()
     .title("Inbox")
@@ -757,13 +767,6 @@ nav_page()
 nav_page()
     .title("Photo")
     .status_bar(StatusBarSetting::default().hidden(true));
-```
-
-```tsx tabs
-<NavPage title="Inbox" statusBar={{ foreground: "dark" }}>…</NavPage>
-
-// Pushed over it: hidden, with the inbox's dark content when it shows again.
-<NavPage title="Photo" statusBar={{ hidden: true }}>…</NavPage>
 ```
 
 ### The app's default

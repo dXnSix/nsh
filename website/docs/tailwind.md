@@ -10,6 +10,12 @@ demo: guide-tailwind
 
 NSH's styles follow Tailwind CSS 4. In Rust, Tailwind's utilities are typed style methods with the same names and values (`.p_4()` is `p-4`, `.rounded_2xl()` is `rounded-2xl`, `ZINC.shade(900)` is `zinc-900`); in TSX, every element accepts the classes themselves in `class`, resolved natively against Tailwind 4's default theme. Each example below shows the typed methods first and the classes second:
 
+```tsx tabs
+<View class="flex-row items-center gap-3 rounded-2xl bg-white p-4 shadow-lg active:scale-[0.98] dark:bg-zinc-800">
+  <Text class="text-base font-semibold text-zinc-900 dark:text-white">Tailwind on native views</Text>
+</View>
+```
+
 ```rust tabs
 use nsh_core::element::palette::ZINC;
 
@@ -30,17 +36,18 @@ view()
     )
 ```
 
-```tsx tabs
-<View class="flex-row items-center gap-3 rounded-2xl bg-white p-4 shadow-lg active:scale-[0.98] dark:bg-zinc-800">
-  <Text class="text-base font-semibold text-zinc-900 dark:text-white">Tailwind on native views</Text>
-</View>
-```
-
 Typed methods lower into the same style rules the classes compile to, with no string to parse. For classes, no CSS is generated and nothing runs in JavaScript: the string is passed to the core, which parses each distinct class string once (and caches it), turns it into style rules, and applies them. Variants that depend on state (pressed, dark mode, window width) are re-applied by the core when that state changes, and pressed and focused states are tracked natively, so `active:` feedback (`.active(..)` in Rust) has no round trip to your code.
 
 Classes and the [`style` prop](./styling.md) produce the same native styles and can be combined; this page covers what is specific to classes and their typed equivalents. The [Tailwind reference](../modules/tailwind-reference.md) lists every supported utility.
 
 ## class and classList
+
+```tsx tabs
+<View
+  class="rounded-lg px-4 py-2 transition-colors"
+  classList={{ "bg-indigo-600": selected(), "bg-zinc-200": !selected(), "opacity-50": busy() }}
+/>
+```
 
 ```rust tabs
 view()
@@ -50,13 +57,6 @@ view()
     .transition_colors()
     .bg(move || if selected.get() { INDIGO.shade(600) } else { ZINC.shade(200) })
     .style_when(busy, |s| s.opacity(0.5))
-```
-
-```tsx tabs
-<View
-  class="rounded-lg px-4 py-2 transition-colors"
-  classList={{ "bg-indigo-600": selected(), "bg-zinc-200": !selected(), "opacity-50": busy() }}
-/>
 ```
 
 - **`class`** is a string of classes. It can be dynamic: ``class={`h-6 rounded bg-${color()}-500`}`` works, because classes are resolved at run time.
@@ -107,6 +107,13 @@ Rust components (`nsh/base`'s and those of an app's own crate) accept `class` an
 
 Variants combine: `dark:active:bg-zinc-700`, `md:landscape:flex-row`. In Rust, an `AdaptiveColor` in an `.active(..)` style is `dark:active:`.
 
+```tsx tabs
+<View class="group flex-row items-center gap-3 rounded-xl bg-white p-3 active:bg-zinc-50">
+  <Text class="flex-1 text-zinc-900">Settings</Text>
+  <Text class="text-zinc-300 transition-transform group-active:translate-x-1">›</Text>
+</View>
+```
+
 ```rust tabs
 view()
     .group()
@@ -126,14 +133,13 @@ view()
     )
 ```
 
+`disabled` on any element (`.disabled(..)` in Rust) applies `disabled:` classes (`.disabled_style(..)`) and removes its press handlers. While disabled, the element skips its own `hover:`, `active:`, `focus:`, `focus-visible:` and `focus-within:` classes. Value classes such as `checked:` still follow the control’s value.
+
 ```tsx tabs
-<View class="group flex-row items-center gap-3 rounded-xl bg-white p-3 active:bg-zinc-50">
-  <Text class="flex-1 text-zinc-900">Settings</Text>
-  <Text class="text-zinc-300 transition-transform group-active:translate-x-1">›</Text>
+<View disabled={saving()} onPress={save} class="rounded-lg bg-emerald-500 px-4 py-2 active:bg-emerald-600 disabled:opacity-40">
+  <Text class="font-medium text-white">Save</Text>
 </View>
 ```
-
-`disabled` on any element (`.disabled(..)` in Rust) applies `disabled:` classes (`.disabled_style(..)`) and removes its press handlers. While disabled, the element skips its own `hover:`, `active:`, `focus:`, `focus-visible:` and `focus-within:` classes. Value classes such as `checked:` still follow the control’s value.
 
 ```rust tabs
 view()
@@ -146,12 +152,6 @@ view()
     .active(|s| s.bg(EMERALD.shade(600)))
     .disabled_style(|s| s.opacity(0.4))
     .child(text("Save").font_weight(FontWeight::MEDIUM).text_color(white()))
-```
-
-```tsx tabs
-<View disabled={saving()} onPress={save} class="rounded-lg bg-emerald-500 px-4 py-2 active:bg-emerald-600 disabled:opacity-40">
-  <Text class="font-medium text-white">Save</Text>
-</View>
 ```
 
 Breakpoints compare against the window (the surface NSH renders into), not the device: in an iPad split view or a resizable window, they follow the window's width, as `window()` does.
@@ -218,6 +218,16 @@ The Tailwind theme shapes your classes. Typed methods keep Tailwind's default sc
 
 The app's theme (`"theme"` in `nsh.json`, a [theme document](./rust.md#theme)) holds its design tokens: shadcn/ui's colors (`background`, `foreground`, `primary`, `muted-foreground`, `border`, `ring`, `chart-1`, `sidebar`, ...), its `radius`, its fonts `font-sans` and `font-mono`, and any token the app adds. Classes read them as Tailwind 4 reads the variables of a CSS `@theme`, Rust components read them with `theme()` from `nsh_base`, and TSX reads them with `token()` from `nsh`, so a TSX screen and the Rust components follow the same theme:
 
+```tsx tabs
+<View class="rounded-(--radius) border border-border bg-card p-4">
+  <Text class="text-card-foreground">Balance</Text>
+  <Text class="text-muted-foreground">Updated just now</Text>
+  <View class="rounded-(--radius) bg-primary px-4 py-2 active:bg-primary/90">
+    <Text class="text-primary-foreground">Continue</Text>
+  </View>
+</View>
+```
+
 ```rust tabs
 use nsh_base::theme;
 
@@ -240,16 +250,6 @@ view()
     )
 ```
 
-```tsx tabs
-<View class="rounded-(--radius) border border-border bg-card p-4">
-  <Text class="text-card-foreground">Balance</Text>
-  <Text class="text-muted-foreground">Updated just now</Text>
-  <View class="rounded-(--radius) bg-primary px-4 py-2 active:bg-primary/90">
-    <Text class="text-primary-foreground">Continue</Text>
-  </View>
-</View>
-```
-
 A class reads a **role**: the token the theme maps that name onto (`"roles": { "popover": "overlay" }`), else the token of that name. So `bg-primary` is the token `primary`, or the one the theme maps `primary` onto, and a component shared between apps writes `bg-popover rounded-card` once for every design system. In Rust, shadcn's tokens are fields of `theme()` (`primary`, `muted_foreground`, `radius`, `font_mono`), and every token is `tokens().color("up")`, `tokens().number("radius-card")` or `tokens().font("font-display")`, or a typed key's `get()`, which follows that token alone ([Theme documents and typed keys](./rust.md#theme-documents-and-typed-keys)).
 
 | Class | Reads the role | Of kind | Example |
@@ -266,7 +266,7 @@ A class reads a **role**: the token the theme maps that name onto (`"roles": { "
 | `ease-<n>` | `ease-<n>` | `easing` | `ease-snappy` |
 | `shadow-<n>` | `shadow-<n>` | `shadow` | `shadow-raised` |
 | `bg-<n>` | `background-image-<n>` | `gradient` | `bg-hero` |
-| `(--name)`, Tailwind 4's variable shorthand, and `(color:--name)`, `(length:--name)`, `(number:--name)`, `(family-name:--name)`, `(image:--name)` | `name` | any, typed by the hint where a utility takes several | `bg-(--popover)`, `rounded-(--radius)`, `text-(length:--text-title)`, `font-(family-name:--font-mono)`, `bg-(image:--background-image-hero)` |
+| `(--name)`, Tailwind 4's variable shorthand, and `(color:--name)`, `(length:--name)`, `(number:--name)`, `(family-name:--name)`, `(image:--name)` | `name` | any, typed by the hint where a utility takes several; a number is a length in points, and a factor to `scale`, `scale-x` and `scale-y` | `bg-(--popover)`, `rounded-(--radius)`, `text-(length:--text-title)`, `ring-(length:--ring-width)`, `active:scale-(--press-scale)`, `font-(family-name:--font-mono)`, `bg-(image:--background-image-hero)` |
 
 - **Two ways to the same result.** `rounded-card` draws `corner-card` when the theme declares `corner-card` and maps
   `"radius-card": "corner-card"`, and the same when the theme declares a token `radius-card` and maps nothing. A
@@ -301,6 +301,7 @@ A class reads a **role**: the token the theme maps that name onto (`"roles": { "
   theme's modifiers are: a theme shows its dark values when the `dark` context of its light/dark modifier is picked.
 - **The theme can change while the app runs.** When an app embedded in a native app is given that app's theme, and whenever the theme changes, the classes reading it, the Rust bindings reading `theme()` and the TSX code reading `token()` are updated, the classes and bindings natively. A host that only adds its brand gives theme overrides, a patch of the values and roles its brand changes ([iOS](./ios.md#theme-overrides), [Android](./android.md#theme-overrides), `AppView::set_theme_overrides` on the desktops). A new value resolves again the classes that read it, and a patch that only maps a role onto another token the classes that read that role.
 - **The app can set another theme.** [`setTheme(theme)`](../modules/nsh.md#settheme) from `nsh` makes another theme document the app's in place of its `"theme"`, while it runs, on every platform and in `nsh test`; `setTheme(null)` gives the app's own back, and `token()` reads the new tokens in the frame after the call's turn. A Rust app calls `set_theme(Some(document))`. Build it from the app's own theme so every role the classes read keeps a token.
+- **Runtime density and zoom.** Tailwind's named scales (`h-9`, `text-sm`, `gap-2`) and the bundle's `rem` are fixed when the app is built. To let users scale controls or text while the app runs, give the sizes that should follow as number tokens in the app's `"theme"` (`"control-h": "36px"`, `"text-body": "14px"`, `"icon": "16px"`), name them in the components' classes (`h-(--control-h)`, `text-(length:--text-body)`, `size-(--icon)`), and change them with `setTheme`: every class naming them is resolved again at once.
 - **Checked like other classes.** A name that is no role of the default theme or of the app's `"theme"` is an unknown class when building (`unknown class 'bg-chart-up'`). To use a token only the embedding app or a theme set while the app runs provides, give it a value in the app's `"theme"` too: that value shows when the app runs on its own.
 
 Classes reading the theme are resolved once per change of what they read, like any other class: drawing them costs what a palette color does. A class the theme serves no role of is told by one lookup when it is first parsed.

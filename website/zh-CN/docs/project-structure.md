@@ -1,30 +1,13 @@
 ---
 title: 项目结构
-description: 用 Rust 或 TSX 编写的 NSH 应用包含的文件、nsh.json 的每个键、.nsh/types 中的 TypeScript 配置、资源，以及模块和包的导入方式。
+description: 用 TSX 或 Rust 编写的 NSH 应用包含的文件、nsh.json 的每个键、.nsh/types 中的 TypeScript 配置、资源，以及模块和包的导入方式。
 order: 5
 group: start
 ---
 
 # 项目结构
 
-一个 NSH 应用就是一个目录，包含一个 `nsh.json` 和它的代码：一个 Rust crate（由 `nsh.json` 指定其根组件），或一个 TSX 入口模块，或两者都有。其他一切（更多模块、图片、字体、JSON 文件）都从这里找到：crate 的模块和它的 `assets/` 目录，或者 TSX 入口导入的文件，因此不需要维护文件清单。
-
-用 Rust 编写的应用是一个 Cargo 项目：
-
-```text
-my-app/
-├── nsh.json           name, id, version, icon, the crate ("rust") and its root component ("root"), theme
-├── Cargo.toml         the crate: nsh-core, nsh-base and your dependencies
-├── src/
-│   ├── lib.rs         the root component and the crate's UI set (#[native_module])
-│   ├── main.rs        cargo run: the root on this machine's desktop backend
-│   └── screens/       your own modules (any layout you like)
-├── assets/            files the crate ships: asset!("logo@2x.png"), fonts
-├── locales/           translations, rust-i18n's files: t!("hello") (I18n)
-├── .gitignore         .nsh/ and target/
-├── .nsh/              generated: the runners' sources, test entries, build output (.nsh/out)
-└── target/            Cargo's build directory
-```
+一个 NSH 应用就是一个目录，包含一个 `nsh.json` 和它的代码：一个 TSX 入口模块（有 Rust 时，再加上 `ext/` 里的 Rust crate），或一个由 `nsh.json` 指定根组件的 Rust crate。其他一切（更多模块、图片、字体、JSON 文件）都从这里找到：TSX 入口导入的文件，或者 crate 的模块和它的 `assets/` 目录，因此不需要维护文件清单。
 
 TSX 应用是一个入口及它导入的模块：
 
@@ -45,13 +28,61 @@ my-app/
 └── .nsh/              generated: type declarations, development host builds, test entries, build output (.nsh/out)
 ```
 
+完全用 Rust 编写的应用是一个 Cargo 项目：
+
+```text
+my-app/
+├── nsh.json           name, id, version, icon, the crate ("rust") and its root component ("root"), theme
+├── Cargo.toml         the crate: nsh-core, nsh-base and your dependencies
+├── src/
+│   ├── lib.rs         the root component and the crate's UI set (#[native_module])
+│   ├── main.rs        cargo run: the root on this machine's desktop backend
+│   └── screens/       your own modules (any layout you like)
+├── assets/            files the crate ships: asset!("logo@2x.png"), fonts
+├── locales/           translations, rust-i18n's files: t!("hello") (I18n)
+├── .gitignore         .nsh/ and target/
+├── .nsh/              generated: the runners' sources, test entries, build output (.nsh/out)
+└── target/            Cargo's build directory
+```
+
 TSX 应用通过 `ext/` 里自己的 nshm crate 用 Rust 扩展自己，在 `"dependencies"` 中按路径列出（[应用自己的 Rust：ext/](./nshm.md#应用自己的-rustext)）；`src/` 放 TSX，`ext/` 放 Rust。Rust 应用也可以在 `"rust"` 中列出它的 crate，再加一个导入它们的 TSX 入口（[用 Rust 开发](./rust.md#用-tsx-扩展-rust-应用)）。
 
-每个命令都以应用目录或它的入口作为参数（`nsh run my-app`、`nsh run my-app/App.tsx`）。`nsh.json` 和入口所在的目录就是应用的根目录：`nsh.json` 从这里读取，资源路径相对于它，`.nsh/` 也写在这里。在 Rust 应用中（`nsh.json` 带 `"root"`），目录运行根组件；指定 TSX 入口则运行该入口。
+每个命令都以应用目录或它的入口作为参数（`nsh run my-app`、`nsh run my-app/App.tsx`）。`nsh.json` 所在的目录就是应用的根目录：`nsh.json` 从这里读取，它写的路径和资源路径都相对于它，`.nsh/` 也写在这里。入口默认是它旁边的 `App.tsx`，`nsh.json` 也可以用 `"entry"` 指定别的入口。在 Rust 应用中（`nsh.json` 带 `"root"`），目录运行根组件；指定 TSX 入口则运行该入口。
+
+### 放在更大项目里的应用
+
+同时包含其他代码（服务端、网站）的项目，可以把 `nsh.json` 放在项目根目录，与 `package.json` 或 `Cargo.toml` 同级，应用代码放在单独的目录里，由 `"entry"` 指定：
+
+```text
+my-project/
+├── nsh.json           { "name": "…", "entry": "app/App.tsx", "theme": "app/theme.json", … }
+├── package.json       服务端的
+├── server/
+└── app/
+    ├── App.tsx        入口
+    ├── App.test.tsx   它的测试
+    ├── tsconfig.json  应用模块的 TypeScript 设置
+    └── theme.json
+```
+
+这样 `nsh run`、`nsh test` 等命令在项目根目录执行，和在应用目录执行一样：根目录就是应用的根目录（`.nsh/`、`locales/` 以及 `nsh.json` 写的 `theme`、`icon`、`web.host` 等路径都相对于它）；`nsh test` 只在入口所在目录（`app/`）里找测试文件，不会扫到服务端的测试；`nsh check` 和 `.nsh/types` 跟随入口目录的 `tsconfig.json`。
 
 ## 根组件
 
-Rust 应用的根是它的 crate 中的一个组件，`nsh.json` 的 `"root"` 用它在 crate 中的路径指定（`App`、`shell::Gallery`）。TSX 入口是一个普通模块，最后渲染根组件：
+TSX 入口是一个普通模块，最后渲染根组件。Rust 应用的根是它的 crate 中的一个组件，`nsh.json` 的 `"root"` 用它在 crate 中的路径指定（`App`、`shell::Gallery`）：
+
+```tsx tabs
+// App.tsx
+import { mount } from "nsh";
+import { Window } from "nsh/desktop";
+import { Home } from "./components/Home";
+
+function App() {
+  return <Home />;
+}
+
+mount(() => <Window id="main"><App /></Window>);
+```
 
 ```rust tabs
 // src/lib.rs; nsh.json: { "rust": ".", "root": "App" }
@@ -72,20 +103,7 @@ pub fn App() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-// App.tsx
-import { mount } from "nsh";
-import { Window } from "nsh/desktop";
-import { Home } from "./components/Home";
-
-function App() {
-  return <Home />;
-}
-
-mount(() => <Window id="main"><App /></Window>);
-```
-
-`nsh run` 和 `nsh package` 在所有平台上挂载 Rust 根组件，不带 QuickJS。在 TSX 中，`mount(component, props?)` 把组件渲染为应用根，并返回一个用于移除它的函数；应用只调用它一次。在桌面平台上，应用根用 `<Window>` 声明自己的窗口（声明窗口的应用也要声明第一个；裸 root 渲染在隐式首窗口中）；其他平台上 `<Window>` 在唯一界面中显示它的内容。入口顶层的代码在 bundle 加载时、第一帧之前运行。
+在 TSX 中，`mount(component, props?)` 把组件渲染为应用根，并返回一个用于移除它的函数；应用只调用它一次。在桌面平台上，应用根用 `<Window>` 声明自己的窗口（声明窗口的应用也要声明第一个；裸 root 渲染在隐式首窗口中）；其他平台上 `<Window>` 在唯一界面中显示它的内容。入口顶层的代码在 bundle 加载时、第一帧之前运行。`nsh run` 和 `nsh package` 在所有平台上挂载 Rust 根组件，不带 QuickJS。
 
 ## nsh.json
 
@@ -124,7 +142,8 @@ mount(() => <Window id="main"><App /></Window>);
 
 | 键 | 类型 | 使用者 | 说明 |
 |---|---|---|---|
-| `name` | string | `package` | 应用图标下显示的名称。默认：入口所在目录的名称。 |
+| `name` | string | `package` | 应用图标下显示的名称。默认：`nsh.json` 所在目录的名称。 |
+| `entry` | string | 每个命令 | TSX 入口模块，路径相对于 `nsh.json` 且在它的目录之内，例如 `"app/App.tsx"`（[放在更大项目里的应用](#放在更大项目里的应用)）。默认：`nsh.json` 旁边的 `App.tsx`。命令行上指定的入口（`nsh run app/Other.tsx`）优先。 |
 | `id` | string | `package`, `publish`, `Storage` | Bundle identifier / application id，反向 DNS 形式，例如 `com.yourcompany.app`；`package` 和 `publish` 必须提供。没有时 `nsh run` 使用 `com.example.<name>`。 |
 | `version` | string | `package`, `publish` | 用户可见的版本号，例如 `1.2.0`（`CFBundleShortVersionString`，Android 的 `versionName`）。 |
 | `build` | number | `package`, `publish` | 构建号（`CFBundleVersion`，Android 的 `versionCode`）。签名包要求它在每次发布时递增。 |
@@ -132,15 +151,17 @@ mount(() => <Window id="main"><App /></Window>);
 | `minRuntime` | string | `publish` | 能运行该签名包的最低 NSH 运行时版本，例如 `0.2.0`。默认：CLI 的版本（[签名包](./signed-packages.md#哪些运行时能运行包)）。 |
 | `schemes` | string[] | `package`、`run` | 打开应用的 URL scheme，例如 `["myapp"]` 对应 `myapp://…` 链接，由 [`UrlScheme`](../modules/nsh.md#urlscheme) 接收。只含小写字母、数字、`+`、`-` 和 `.`；不能是系统或浏览器占用的（`https`、`file` 等）。 |
 | `links` | object[] | `package`、`run` | 打开应用的 Web 链接（Universal Links、App Links）：`[{ "host": "example.com", "paths": ["/orders/*"] }]`，`host` 是域名，或用 `*.` 加域名表示子域名；`paths` 是完整路径或以 `*` 结尾的路径开头（省略：所有路径）。它们的 `https` 链接和 scheme 的链接一样由 [`UrlScheme`](../modules/nsh.md#web-链接) 接收。iOS 包在 Associated Domains entitlement 中声明主机，Android 包为每个链接写一个经过验证的 intent filter。 |
-| `fileTypes` | object[] | `package`、`run` | 应用打开的文件类型，`[{ "name": "Video", "extensions": ["mp4"], "mimeTypes": ["video/mp4"] }]`，由包声明给系统；文件送到 [`Application.on("openFiles")`](../modules/nsh-desktop.md#打开文件)。 |
+| `fileTypes` | object[] | `package`、`run` | 应用打开的文件类型，`[{ "name": "Video", "extensions": ["mp4"], "mimeTypes": ["video/mp4"] }]`，由包声明给系统（Android 经由 `mimeTypes`，进入分享面板）；文件送到 [`Application.on("openFiles")`](../modules/nsh-desktop.md#打开文件)。 |
 | `handoff` | boolean | `package` | `true`：在 iOS 和 macOS 上，应用用 [`UrlScheme.setUrl`](../modules/nsh.md#handoff) 设置的地址交给系统，Handoff 可以在用户的其他设备上接着打开它；打包时在 `NSUserActivityTypes` 中声明它的活动类型 `<id>.url`。 |
 | `singleInstance` | boolean | `package` | `true`：应用在 Windows 和 Linux 上只运行一份；第二次启动把参数和工作目录交给正在运行的应用后退出（[单实例](../modules/nsh-desktop.md#单实例)）。 |
+| `logDir` | string | `package` | 打包后的桌面应用（macOS、Windows、Linux）写日志文件（`app.log`、`app.1.log` 等）的目录，`log_file()` 和 `process.logFile` 也指向这里。写法与 `dataDir` 相同：绝对路径或 `"${homeDir}/.myapp/logs/ui"`（不能包含 `..` 或其他 `${...}`），其他值会给出警告并被忽略。不设置时，日志在数据目录（`dataDir`，或系统应用数据目录下以应用 id 命名的目录）的 `logs` 中；设置 `logDir` 后不会创建这个 `logs` 目录。iOS、Android、Web 和嵌入的应用没有日志文件，会忽略它。 |
 | `dataDir` | string | `package` | 应用在桌面（macOS、Windows、Linux）上的数据目录：存储（`nsh/storage`）、日志、`process.dataDir` 以及 `${dataDir}` 中的文件都在这里。取值为绝对路径或 `"${homeDir}/.myapp"`（不能包含 `..` 或其他 `${...}`），其他值会给出警告并被忽略。不设置时为系统应用数据目录下以应用 id 命名的目录：macOS 为 `~/Library/Application Support/<id>`，Windows 为 `%APPDATA%\<id>`，Linux 为 `$XDG_DATA_HOME/<id>`（`~/.local/share/<id>`）。在这里设置的目录不随应用 id 改变。缓存和下载的更新各有自己的位置；iOS、Android、Web 和嵌入的应用使用平台的目录。 |
 | `features` | string[] | `package` | 打包时 release runner 始终保留的原生功能（应用带 Rust crate，或本机装有 `cargo` 且打包目标是本机系统时，在本地构建 runner），如 `["plot"]`：只有 Rust 代码或动态 import 才用到的功能写在这里。其余功能中，bundle 用不到的（`shader`、`editor`、`plot` 等）`package` 会去掉，并输出原因。 |
 | `icon` | string \| object | `package`、`run` | 一张正方形 PNG，最好是 1024×1024，路径相对于 `nsh.json`；也可按平台分别提供（`{ "macos": "…", "windows": "…" }`，[打包](./packaging.md#图标)）。Android 的可以是自适应图标（`{ "foreground": "…", "background": "…", "monochrome": "…" }`，[打包](./packaging.md#图标)）。 |
 | `tailwind` | object | 每次构建 | 扩展 `class` 字符串所依据的 Tailwind 主题（[Tailwind](./tailwind.md)）。 |
 | `appearance` | string | 每次构建、`package` | `"light"`、`"dark"` 或 `"system"`（默认值）：始终为浅色或深色的应用在这里说明。`colorScheme()`、`dark:` 类和平台的控件从启动时就跟随它；应用随它选择主题的 `colorMode` 修饰器时，主题的令牌值才跟随（[设备与环境](./device-and-environment.md#深色模式)）。 |
 | `locales` | string[] | 每次构建 | 应用除英语外格式化数字和日期所用的语言（`["de", "zh-CN"]`），bundle 会携带它们的数据。默认：`locales/` 中翻译所包含的语言（[I18n](./i18n.md#数字和日期)）。 |
+| `timeZones` | string[] | 每次构建 | 除设备时区、`UTC` 和偏移量外，`Intl` 还能使用的时区名（`["America/New_York"]`），bundle 会携带它们的规则。默认：无（[时区](./i18n.md#时区)）。 |
 | `theme` | string 或 object | 每次构建 | 应用的主题文档：它的 token、改变 token 的 modifier（包括浅色和深色）以及组件读取的角色（映射到它的 token 上）。token 类名、`token()`、`role()` 和 Rust 组件都用它绘制。它整体替换 UI 集合的主题和默认主题。值为相对于 `nsh.json` 的路径，或直接内联的文档（[用 Rust 开发](./rust.md#主题)、[主题 token](./tailwind.md#主题-token)）。旧格式的主题，或不是 JSON 对象的值，不会被打包：构建会给出警告，应用改用 UI 集合的主题绘制。 |
 | `themeOverrides` | string 或 object | 每次构建 | 叠加在当前主题文档（应用的 `theme`，否则为 UI 集合的）之上的值和角色映射：`{ "values": { "<token>": <值> }, "roles": { "<角色>": "<token>" } }`。值为相对于 `nsh.json` 的路径，或直接内联。它不会新增 token；`updateTheme()` 和 Rust 的 `update_tokens` 叠加在它之后。 |
 | `statusBar` | object | 每次构建、`package` | 所有页面和对话框之下的状态栏默认值（iOS 和 Android）：`{ "foreground": "auto" \| "light" \| "dark", "hidden": boolean }`，两个字段都可省略。打包的 iOS 应用从启动屏起就使用它（[状态栏](../modules/nsh-base.md#status-bar)）。 |
@@ -153,11 +174,12 @@ mount(() => <Window id="main"><App /></Window>);
 | `dev` | object | `run`、`dev`、`test` | 开发会话的设置。`dev.idiom`：`"tv"` 让应用在 GPUI 宿主和 Web 开发页面上（`nsh test --target gpui` 和 `web` 也是如此）像在电视上一样运行，以便在桌面上构建和测试 10 英尺布局和焦点；或 `"desktop"`。`--idiom` 覆盖它，其他宿主和 headless 测试会忽略它并给出警告（[电视](./platform-specific.md#在桌面上构建电视布局)）。 |
 | `web` | object | `package` | Web 包给页面添加的内容。`web.host`：一个 JS 模块，路径相对于 `nsh.json`，导出 `createHost(player)`，应答应用的 [`host`](../modules/nsh.md#host) 调用；`web.connect`：该模块自己的请求访问的主机，写法同 `capabilities.network.hosts` 的模式，页面的 Content-Security-Policy 允许它们（[Web](./web.md#宿主的函数)）；`web.base`：站点所在的路径（`"/apps/counter/"`），即页面的 `<base href>`，使页面在应用自己的路径上也能加载（[Web](./web.md#部署)）；`web.history`：压入的页面和打开的对话框是否作为浏览器历史记录（默认在应用占据整个页面时是，在 iframe 里不是）。 |
 | `updater` | object | `package` | 打包后的应用从哪里获取更新：`{ "github": "owner/repo" }` 或 `{ "url": "https://…/latest.json", "publicKey": "…" }`，配 `github` 时 `publicKey` 可选；[OTA 更新](./ota-updates.md)另需 `"packages": { "roots": [...] }`（[应用更新](./app-updates.md)、[nsh/updater](../modules/nsh-updater.md#nshjson)）。 |
-| `ios` | object | `package` | iOS 包添加的内容：`infoPlist` 是应用 `Info.plist` 的键，`infoPlistStrings` 是这些键在其他语言下的文字，按语言给出（`{ "zh-Hans": { "NSCameraUsageDescription": "…" } }`），`nsh run` 的模拟器宿主也会带上（[其他语言的 Info.plist 文字](./packaging.md#其他语言的-infoplist-文字)），`entitlements` 在真机构建时对照描述文件检查，`launchScreen` 是应用启动时系统显示的颜色和图（[启动画面](./packaging.md#启动画面)），`extensions` 是应用自己构建的应用扩展（`.appex`），由打包放进包里并签名（[应用扩展](./packaging.md#应用扩展)），`privacyManifest` 是应用的 `PrivacyInfo.xcprivacy` 的内容（[隐私清单](./packaging.md#隐私清单)）。NSH 自己的键会被拒绝（[打包](./packaging.md#infoplist-键与-entitlements)）；`infoPlist` 的 `MinimumOSVersion` 提高应用所需的 iOS 版本（[最低系统版本](./packaging.md#最低系统版本)）。 |
-| `android` | object | `package` | Android 包的设置：`targetSdk`，应用的目标 API 级别，也是编译所用的级别（默认 35）（[打包](./packaging.md#目标-api-级别)）；`usesCleartextTraffic`，是否允许普通的 `http://` 请求（默认 `false`）（[打包](./packaging.md#明文-http)）；`permissions`，除 NSH 自身声明的权限外 manifest 还要声明的权限（默认无）（[打包](./packaging.md#权限)）；`launchScreen`，应用启动时窗口的颜色和启动屏的图，键同 `ios.launchScreen`（[启动画面](./packaging.md#启动画面)）；`dex`，应用自己的 Java 代码的 dex 文件，路径相对于 `nsh.json`（默认无）（[打包](./packaging.md#java-代码)）。 |
-| `macos` | object | `package`、`run`、`test` | macOS 包添加的内容：`infoPlist`、`infoPlistStrings` 和 `entitlements`，与 `ios` 的相同（[打包](./packaging.md#infoplist-键与-entitlements)），`infoPlist` 的 `LSMinimumSystemVersion` 提高应用所需的 macOS 版本（[最低系统版本](./packaging.md#最低系统版本)）；以及 `activationPolicy`，即无论 NSH 以哪种方式启动应用，它如何参与系统界面：`"regular"`（默认），有 Dock 图标和菜单栏；或 `"accessory"`，即菜单栏应用（[macOS](./macos.md#菜单栏应用)）。 |
+| `ios` | object | `package` | iOS 包添加的内容：`infoPlist` 是应用 `Info.plist` 的键，`infoPlistStrings` 是这些键在其他语言下的文字，按语言给出（`{ "zh-Hans": { "NSCameraUsageDescription": "…" } }`），`nsh run` 的模拟器宿主也会带上（[其他语言的 Info.plist 文字](./packaging.md#其他语言的-infoplist-文字)），`entitlements` 在真机构建时对照描述文件检查，`launchScreen` 是应用启动时系统显示的颜色和图（[启动画面](./packaging.md#启动画面)），`extensions` 是应用自己构建的应用扩展（`.appex`），由打包放进包里并签名（[应用扩展](./packaging.md#应用扩展)），`privacyManifest` 是应用在 `PrivacyInfo.xcprivacy` 里补充的内容，打包时会和 NSH 自己的条目合并（[隐私清单](./packaging.md#隐私清单)）。NSH 自己的键会被拒绝（[打包](./packaging.md#infoplist-键与-entitlements)）；`infoPlist` 的 `MinimumOSVersion` 提高应用所需的 iOS 版本（[最低系统版本](./packaging.md#最低系统版本)）。 |
+| `android` | object | `package` | Android 包的设置：`targetSdk`，应用的目标 API 级别，也是编译所用的级别（默认 35）（[打包](./packaging.md#目标-api-级别)）；`usesCleartextTraffic`，是否允许普通的 `http://` 请求（默认 `false`）（[打包](./packaging.md#明文-http)）；`permissions`，除 NSH 自身声明的权限外 manifest 还要声明的权限（默认无）（[打包](./packaging.md#权限)）；`launchScreen`，应用启动时窗口的颜色和启动屏的图，键同 `ios.launchScreen`（[启动画面](./packaging.md#启动画面)）；`libraries`，应用随包附带的 Java 库的 jar、Android 库（`.aar`）和 dex 文件，路径相对于 `nsh.json`，排在应用的 crate 列出的库之前（默认无）（[打包](./packaging.md#java-代码)）；`manifestPlaceholders`，库的 manifest 以及应用和 crate 的 manifest 条目里 `${name}` 占位符的值，只有应用能设置（默认无）（[打包](./packaging.md#java-代码)）；`queries` 和 `application`，除 NSH 自己的之外 manifest 的 `<queries>` 和 `<application>` 还要声明的元素（默认无）（[打包](./packaging.md#组件与-queries)）。 |
+| `macos` | object | `package`、`run`、`test` | macOS 包添加的内容：`infoPlist`、`infoPlistStrings` 和 `entitlements`，与 `ios` 的相同（[打包](./packaging.md#infoplist-键与-entitlements)），`infoPlist` 的 `LSMinimumSystemVersion` 提高应用所需的 macOS 版本（[最低系统版本](./packaging.md#最低系统版本)）；`extensions` 是应用自己构建的应用扩展（`.appex`），由打包放进 `Contents/PlugIns/` 并签名（[macOS 应用扩展](./packaging.md#macos-应用扩展)）；以及 `activationPolicy`，即无论 NSH 以哪种方式启动应用，它如何参与系统界面：`"regular"`（默认），有 Dock 图标和菜单栏；或 `"accessory"`，即菜单栏应用（[macOS](./macos.md#菜单栏应用)）。 |
 | `tizen` | object | `package`、`run`、`test` | 三星电视的包（`--target tizen` 和 `tizen-web`）设置的内容：`package`（恰好 10 个字母和数字）、`appId`（`<package>.<name>`）、`version`（`x.y.z`）、`apiVersion`（所需的 Tizen 版本，`8.0`）、`privileges` 和 `signing`（`tz` 签名所用的证书配置，`nsh run` 和 `nsh test --target tizen` 也用它为开发包签名）和 `smartHubPreview`（Tizen Web 应用的 Smart Hub 预览：`"service"` 或公共预览的 URL），都有默认值（[Tizen](./tizen.md#nshjson)、[Web](./web.md#三星电视)）。 |
 | `root` | string | `run`, `package` | Rust 应用的根组件，即它在 `rust` crate（列表时为第一个）中的路径（`App`、`shell::Gallery`）：对应用目录执行 `nsh run` 和 `nsh package` 时，在所有平台上直接挂载它，不使用 QuickJS；`nsh run App.tsx` 仍然运行 TSX 入口（[用 Rust 开发](./rust.md)）。 |
+| `watch` | object | `run`、`dev` | 开发监视器跳过的内容：`"ignore"` 是一个目录列表，其中的文件变化不会触发重建或重启——相对 `nsh.json` 的路径（`"vendor"`、`"third/jpeg-turbo"`）或绝对路径，用于应用目录内放置的生成代码和其他 checkout（监视器本就跳过 `.nsh`、`node_modules` 和嵌套的 Git checkout）。 |
 
 `nsh package` 和 `nsh publish` 的参数（`--name`、`--id`、`--app-version`、`--build`、`--icon`、`--min-runtime`）会覆盖文件中的值（[CLI](./cli.md)）。
 
@@ -319,6 +341,15 @@ declare module "node-polyfill";
 
 图片和字体随应用一起发布。Rust crate 在编译时用 `asset!` 读取它的 `assets/` 目录中的每个文件，并在它的 `#[native_module]` 函数中用 `registry.assets(assets!())` 把它们全部发布；TSX 像模块一样导入它们，打包器会记录每个被导入的文件（以及图片的像素密度变体）。`nsh build` 把它们复制到 `.nsh/out/assets/`，`nsh package` 把它们放进应用，开发期间则提供给应用。
 
+```tsx tabs
+import { Image, Text } from "nsh";
+import logo from "./assets/logo@2x.png";   // { url: "asset:/assets/logo@2x.png", size: { width: 64, height: 64 } }
+import Inter from "./assets/Inter.ttf";     // "Inter"
+
+<Image src={logo} />
+<Text style={{ fontFamily: Inter }}>Hello</Text>
+```
+
 ```rust tabs
 use nsh_core::element::{FontAsset, ImageAsset, asset};
 
@@ -327,15 +358,6 @@ const INTER: FontAsset = asset!("Inter.ttf");        // its uri, and its family:
 
 image(LOGO)
 text("Hello").font_family(INTER.family)
-```
-
-```tsx tabs
-import { Image, Text } from "nsh";
-import logo from "./assets/logo@2x.png";   // { url: "asset:/assets/logo@2x.png", size: { width: 64, height: 64 } }
-import Inter from "./assets/Inter.ttf";     // "Inter"
-
-<Image src={logo} />
-<Text style={{ fontFamily: Inter }}>Hello</Text>
 ```
 
 | 扩展名 | 导入得到 |

@@ -5471,6 +5471,13 @@
 			lifecycle: "active",
 			shaders: true,
 			wakeCount: 0,
+			network: {
+				online: true,
+				kind: "unknown",
+				expensive: false,
+				constrained: false,
+				cellularData: "unknown"
+			},
 			horizontalSizeClass: "compact",
 			verticalSizeClass: "compact",
 			localeSettings: {
@@ -5583,6 +5590,7 @@
 			platform,
 			shadersAvailable: () => fields.shaders(),
 			wakeCount: () => fields.wakeCount(),
+			network: () => fields.network(),
 			fpsEnabled: () => false,
 			perfStats: () => null
 		};

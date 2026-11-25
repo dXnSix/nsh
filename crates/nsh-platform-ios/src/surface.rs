@@ -492,6 +492,9 @@ impl RootView {
             locale: current_locale(),
             locale_settings: locale_settings(),
             lifecycle: self.ivars().lifecycle.get(),
+            // The system's path monitor and `CTCellularData`, the
+            // process's (`observe_network`).
+            network: nsh_platform_apple::network::network(self.mtm()),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
             file_requests: true,
@@ -512,8 +515,6 @@ impl RootView {
                 && !objc2_foundation::NSProcessInfo::processInfo().isiOSAppOnMac(),
             // `ASWebAuthenticationSession` (`crate::auth_session`).
             auth_session: true,
-            // The Speech framework fed by the microphone.
-            speech: true,
             // The notification center.
             notifications: true,
             // AVAudioEngine and AVPlayer.
@@ -562,6 +563,29 @@ impl RootView {
         let observer = unsafe {
             center.addObserverForName_object_queue_usingBlock(
                 Some(NSSystemTimeZoneDidChangeNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            )
+        };
+        this.ivars().observers.borrow_mut().push(observer);
+    }
+
+    /// The environment follows the route to the network and whether the
+    /// user lets the app use cellular data (`network()`): the shared
+    /// monitor posts its change once for the process, each surface reports
+    /// it.
+    fn observe_network(this: &Retained<Self>) {
+        let center = NSNotificationCenter::defaultCenter();
+        let weak = Weak::from_retained(this);
+        let block = RcBlock::new(move |_: NonNull<NSNotification>| {
+            let Some(view) = weak.load() else { return };
+            view.publish_environment();
+        });
+        // SAFETY: as in `observe_time_zone`.
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(&nsh_platform_apple::network::changed_name()),
                 None,
                 Some(&NSOperationQueue::mainQueue()),
                 &block,
@@ -901,7 +925,6 @@ impl RootView {
             clipboard: None,
             host: self.ivars().options.host.clone(),
             picker: None,
-            speech: None,
             audio: None,
             windows: None,
             login_item: None,
@@ -1142,6 +1165,7 @@ impl Surface {
         RootView::observe_lifecycle(&view);
         RootView::observe_time_zone(&view);
         RootView::observe_locale(&view);
+        RootView::observe_network(&view);
         Ok(Surface { view })
     }
 
@@ -1411,7 +1435,7 @@ fn lifecycle(mtm: MainThreadMarker) -> Lifecycle {
 
 /// The iOS version (`UIDevice.systemVersion`, the iOS version Catalyst
 /// apps run as), read once.
-fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
+pub(crate) fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
     static VERSION: std::sync::OnceLock<(u16, u16)> = std::sync::OnceLock::new();
     *VERSION.get_or_init(|| {
         let version = UIDevice::currentDevice(mtm).systemVersion().to_string();

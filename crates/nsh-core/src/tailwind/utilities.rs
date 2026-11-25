@@ -902,6 +902,12 @@ fn fraction(v: &str) -> Option<f32> {
     (b > 0.0).then(|| a / b)
 }
 
+/// A ring's width or offset in brackets, with or without its hint
+/// (`[3px]`, `[length:3px]`).
+fn ring_length(theme: &Theme, value: &str) -> Option<f32> {
+    class_length(theme, arbitrary_hinted(value, "length").unwrap_or(value))
+}
+
 fn class_length(theme: &Theme, value: &str) -> Option<f32> {
     let value = value.trim();
     if css::number(value).is_some_and(|n| n != 0.0) {
@@ -1245,9 +1251,11 @@ fn opacity_factor(v: &str) -> Option<f32> {
     }
 }
 
+/// A scale factor: a percentage step (`scale-95`) or arbitrary, with or
+/// without the `number:` hint (`[0.97]`, `[number:0.97]`).
 fn scale_factor(v: &str) -> Option<f32> {
-    if v.starts_with('[') {
-        percent_factor(v)
+    if let Some(a) = arbitrary(v) {
+        css::amount(arbitrary_hinted(&a, "number").unwrap_or(&a))
     } else {
         int(v).map(|n| n / 100.0)
     }
@@ -2504,7 +2512,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         Some(outline_width(arbitrary_points(t, v)?))
     }),
     ("inset-ring", |t, v, _| {
-        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| ring_length(t, &a))) {
             return part(Part::InsetRing(n));
         }
         if let Some(a) = current(v) {
@@ -2513,7 +2521,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         part(Part::InsetRingColor(color(t, v)?))
     }),
     ("ring-offset", |t, v, _| {
-        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| ring_length(t, &a))) {
             return part(Part::RingOffset(n));
         }
         if let Some(a) = current(v) {
@@ -2522,7 +2530,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         part(Part::RingOffsetColor(color(t, v)?))
     }),
     ("ring", |t, v, _| {
-        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| ring_length(t, &a))) {
             return part(Part::Ring(n));
         }
         if let Some(a) = current(v) {

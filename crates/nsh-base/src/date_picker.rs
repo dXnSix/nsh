@@ -463,8 +463,9 @@ pub struct DatePickerProps {
     pub row_style: Prop<Style>,
     /// The classes of each item of the calendar (`selected:`, `disabled:`,
     /// `focus-visible:` and the days' `data-range-start:`, `data-range-end:`,
-    /// `data-range-middle:`, `data-today:`, `data-outside:` as
-    /// `Calendar`'s).
+    /// `data-range-middle:`, `data-range-preview-start:`,
+    /// `data-range-preview-end:`, `data-range-preview-middle:`,
+    /// `data-today:`, `data-outside:` as `Calendar`'s).
     pub item_class: Prop<Option<SharedString>>,
     /// The style of each item, its text styles too.
     #[prop(default)]
@@ -731,6 +732,8 @@ pub fn DatePicker(props: DatePickerProps, cx: Scope<DatePickerEvent>) -> impl In
         render_item: props.render_item,
     };
     let field_config = FieldConfig {
+        min: Prop::bind(|| None),
+        max: Prop::bind(|| None),
         precision: Prop::bind(move || props.time_precision.get().unwrap_or_default()),
         hour_cycle: props.hour_cycle,
         disabled: props.disabled,

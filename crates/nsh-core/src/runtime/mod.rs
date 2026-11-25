@@ -2,7 +2,7 @@
 //! `nsh/mobile`'s `AppSettings`,
 //! `nsh/accessibility`'s commands, `nsh/device`'s `openUrl`, `nsh`'s
 //! `Image` and `WebView` functions, all of `nsh/clipboard`, `nsh/picker`, `nsh`'s `Share`,
-//! `Speech`, `UrlScheme`, `setFpsEnabled` and `nsh/storage`,
+//! `UrlScheme`, `setFpsEnabled` and `nsh/storage`,
 //! `nsh/desktop`'s `Application`, `nsh/tizen` (Samsung TVs), the
 //! surface-independent `os` metadata,
 //! `net`'s sockets, `websocket`'s connections, `fs/promises`' files and
@@ -35,7 +35,6 @@ mod os;
 mod picker;
 mod process;
 mod share;
-mod speech;
 mod storage;
 mod tizen;
 mod updater;
@@ -43,6 +42,7 @@ mod url_scheme;
 mod websocket;
 mod webview;
 
+pub use fs::grant_user_files;
 pub use tizen::{TizenHost, TizenServices, TvProduct};
 pub use updater::{
     PackageVersion, UpdatePrompt, UpdatePromptOptions, UpdaterHost, UpdaterSink, prompt_for_update,
@@ -73,7 +73,6 @@ pub fn registries() -> &'static [Registry] {
             .module::<clipboard::Clipboard>()
             .module::<picker::Picker>()
             .module::<share::Share>()
-            .module::<speech::Speech>()
             .class::<audio::Sound>()
             .class::<audio::AudioPlayer>()
             .module::<notifications::Notifications>()

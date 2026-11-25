@@ -7,9 +7,9 @@ group: start
 
 # 安装
 
-NSH 的所有操作都通过一个命令 `nsh` 完成：构建用 Rust 或 TSX 编写的应用、在每个平台上运行它们、以热更新的方式把 TSX 提供给开发宿主，以及打包可安装的应用。你可以使用预构建发行包，也可以从仓库源码构建。
+NSH 的所有操作都通过一个命令 `nsh` 完成：构建用 TSX 或 Rust 编写的应用、在每个平台上运行它们、以热更新的方式把 TSX 提供给开发宿主，以及打包可安装的应用。你可以使用预构建发行包，也可以从仓库源码构建。
 
-用 Rust 编写的应用还需要 Rust 工具链（[见下文](#用-rust-编写的应用)）；TSX 应用只需要 `nsh`。除此之外，每个平台还需要自己的工具：
+TSX 应用只需要 `nsh`。包含 Rust 的应用（`ext/` 里自己的 crate、Rust nshm，或用 Rust 编写的应用）还需要 Rust 工具链（[见下文](#用-rust-编写的应用)）。除此之外，每个平台还需要自己的工具：
 
 | 平台 | 在哪里开发和打包 | 需要 |
 |---|---|---|
@@ -20,7 +20,7 @@ NSH 的所有操作都通过一个命令 `nsh` 完成：构建用 Rust 或 TSX �
 | Linux | Linux | GTK 4.14+（构建运行时还需要它的开发包） |
 | [GPUI](./gpui.md)（嵌入 GPUI 应用） | macOS、Windows 或 Linux | GPU（Metal、DirectX 或 Vulkan）；Linux 上需要 Wayland 或 X11 |
 
-macOS 上的默认目标为 AppKit。Mac Catalyst（`--target catalyst`）和 iOS 一样需要 Xcode。详见[平台工具](#平台工具)。
+macOS 上的默认目标为 AppKit。Mac Catalyst（`--target catalyst`）是用于 Catalyst 特有工作的开发工具，和 iOS 一样需要 Xcode。详见[平台工具](#平台工具)。
 
 ## 安装发布版本
 
@@ -91,7 +91,7 @@ nsh component remove gpui
 
 ## 用 Rust 编写的应用
 
-通过 [rustup](https://rustup.rs) 安装 Rust。`nsh` 用 Cargo 为每个目标构建 Rust 应用的运行器，使用你的 crate 以及 crates.io 上与 CLI 同版本的 NSH crate，所以请添加你要运行的平台对应的 Rust 目标。iOS 模拟器、真机和 Mac Catalyst：
+应用包含 Rust 时——`ext/` 里自己的 crate、Rust nshm，或完全用 Rust 编写的应用——通过 [rustup](https://rustup.rs) 安装 Rust。`nsh` 用 Cargo 为每个目标构建应用的运行器，使用这些 crate 以及 crates.io 上与 CLI 同版本的 NSH crate，所以请添加你要运行的平台对应的 Rust 目标。iOS 模拟器、真机和 Mac Catalyst：
 
 ```sh
 rustup target add aarch64-apple-ios-sim aarch64-apple-ios aarch64-apple-ios-macabi
@@ -255,7 +255,6 @@ sdkmanager "platforms;android-35" "build-tools;35.0.1" "platform-tools"
 | 命令 | macOS | Linux | Windows |
 |---|---|---|---|
 | `nsh init`, `nsh build`, `nsh test`, `nsh dev`, `nsh check` | 可以 | 可以 | 可以 |
-| `nsh run --target catalyst`（Mac Catalyst） | 可以 | 不可以 | 不可以 |
 | `nsh run --target macos`, `nsh package --target macos` | 可以 | 不可以 | 不可以 |
 | `nsh run --target linux`（Linux 上的默认目标）, `nsh package --target linux` | 不可以 | 可以 | 不可以 |
 | `nsh run --target windows`（Windows 上的默认目标）, `nsh package --target windows` | 不可以 | 不可以 | 可以 |
@@ -264,6 +263,7 @@ sdkmanager "platforms;android-35" "build-tools;35.0.1" "platform-tools"
 | `nsh run --target android`, `nsh package --target android` | 可以 | 可以，需从源码构建 | 可以，需有 Android 运行时 |
 | `nsh run --target tizen`, `nsh package --target tizen` | 可以，需要 Tizen SDK | 可以，需要 Tizen SDK | 可以，需要 Tizen SDK |
 | `nsh keygen`, `certify`, `publish`, `verify`, `revoke` | 可以 | 可以 | 可以 |
+| `nsh run --target catalyst`（Mac Catalyst） | 可以 | 不可以 | 不可以 |
 
 在 Linux 上，请从源码构建 CLI 和 Android 运行时（`cargo build -p nsh-cli` 与 `cargo xtask android --dev`）；会自动使用 NDK 的 Linux 工具链。在 Windows 上同样会使用 NDK 的 Windows 工具链，`cargo xtask dist` 找到 Android SDK 时会包含 Android 运行时。
 

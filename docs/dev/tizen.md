@@ -127,7 +127,7 @@ HTTP at the reverse-mapped port. Logs go to the dev server while connected and t
 ## Building
 
 dXn.GpuiTizen is a git dependency of the GPUI workspace, pinned by `rev` (`crates/gpui/Cargo.toml`), until it is on
-crates.io. Its TV builds take gpui-fast and wgpu from their forks: the workspace's `[patch.crates-io]` takes all nine
+crates.io. Its TV builds take gpui-fast and wgpu from their forks: the workspace's `[patch.crates-io]` takes all ten
 `gpui-fast-*` crates from `dXnSix/gpui-fast` at `tizen-release` and the wgpu stack from `dXnSix/wgpu` at `v30-tizen`,
 the same set as dXn.GpuiTizen's own; the committed `crates/gpui/Cargo.lock` pins the commits. While changing the
 forks themselves, dXn.GpuiTizen's `cargo xtask gpui-fast-release --verify` writes a local Cargo config
@@ -259,7 +259,7 @@ As Android's library, an app with `"rust"` crates gets its own `libnsh.so` (`rus
 crates whose one export is its own `nsh_tizen_main` (`nsh::set_ui_sets` with `nsh/base` and their sets, then
 `nsh::main`, or `nsh::run_rust(argc, argv, app_root)` for a Rust app's root), and whose root manifest carries the
 forks' `[patch.crates-io]` lines (git: the
-nine `gpui-fast-*` crates from dXnSix/gpui-fast `tizen-release`, the wgpu crates from dXnSix/wgpu `v30-tizen`, the same
+ten `gpui-fast-*` crates from dXnSix/gpui-fast `tizen-release`, the wgpu crates from dXnSix/wgpu `v30-tizen`, the same
 set as the GPUI workspace's and dXn.GpuiTizen's; `rust_app::TIZEN_PATCHES`). It is built for the requested architectures with
 the component's target specs (`runtime/tizen/targets`), not dXn.GpuiTizen's checkout: `tizen::cross_command` runs
 the nightly the specs name (`targets/toolchain`) with `-Zbuild-std=std,panic_abort -Zjson-target-spec`, clang for C

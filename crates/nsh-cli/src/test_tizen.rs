@@ -96,7 +96,7 @@ impl Drop for DeviceHost {
 /// Builds `entry`, serves it in a test session and starts the runtime on it.
 fn start(sdb: &Arc<Sdb>, entry: &Path, options: &HostOptions) -> Result<DeviceHost, String> {
     let turn = Turn::take();
-    let server = crate::test_host::serve(entry, options)?;
+    let server = crate::test_host::serve(entry, options, false)?;
     let port = server.local_addr().port();
     let mut host = DeviceHost {
         server,

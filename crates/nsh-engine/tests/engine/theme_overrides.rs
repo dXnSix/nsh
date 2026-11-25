@@ -70,7 +70,6 @@ fn start(name: &str, overrides: Option<&str>) -> (Engine, Receiver<MountBatch>) 
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         cache: Default::default(),
         windows: None,
