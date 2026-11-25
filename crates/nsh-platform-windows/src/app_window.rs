@@ -328,12 +328,14 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         attrs
     };
     let owner = open.parent.and_then(|parent| window_hwnd(surface, parent));
-    let mut composed =
-        resolved.transparent || resolved.backdrop != Backdrop::None || resolved.click_through;
     #[cfg(feature = "dev")]
-    if crate::design::active() {
-        composed = true;
-    }
+    let design_composed = crate::design::active();
+    #[cfg(not(feature = "dev"))]
+    let design_composed = false;
+    let composed = resolved.transparent
+        || resolved.backdrop != Backdrop::None
+        || resolved.click_through
+        || design_composed;
     let hwnd = match crate::window::create_app_window(
         surface,
         id,
