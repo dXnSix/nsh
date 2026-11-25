@@ -963,10 +963,10 @@ browsers' touches into what phones report:
   preferred stop) and with `trap` keeps the arrows; while the scroll view along the arrow's axis around the focus
   can scroll on and the stop is outside it, it scrolls by a key's step instead (`keyScroll`) and the page tells
   `nsh_focus_past` (`EngineControl::focus_past`): a list scrolls to its next row by index and the core's
-  `Command::Focus` (`op_cmd` `focus`) focuses that row's first stop once it is mounted. `autoFocus`: after a batch
-  that brought a view with it (`op_vp`), or a new focus scope once the app has such views (`focusAfterBatch`),
-  `nsh_focus_auto` (`focus::auto`, `focus::auto_focus`) picks the first stop of the scope with it that has not had its
-  chance (`autoSeen`, forgotten once the view is removed), and the page focuses it as an arrow does. A focused field
+  `Command::Focus` (`op_cmd` `focus`) focuses that row's first stop once it is mounted. `autoFocus`: a view with it (`op_vp`) joins
+  the inputs with it in `autoFocusing`, and `focusAppeared` takes it at the end of the batch that puts it in the page
+  (`viewAppeared`): in the focus scope that shows, its first stop (itself, when it is one) takes the focus as an arrow
+  gives it, once; one behind a modal or with no stop yet waits for a later batch. A focused field
   keeps its arrows (`keyDown` returns before them), and so does a component that binds them in its keymap (`Tabs`, `RadioGroup`, a list's: the shortcuts come first); `focus:`,
   `onFocus` / `onBlur` follow as for Tab, and Return presses the stop. `src/focus.rs` depends on nothing of the
   browser: `cargo test -p nsh-platform-web --test text focus_moves` tests its decisions on the host (what a TV adds:

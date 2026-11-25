@@ -282,18 +282,6 @@ pub(crate) fn decide(json: &str) -> Option<Arrow> {
     }
 }
 
-/// The stop that takes the focus as it appears (`autoFocus`,
-/// [`focus::auto_focus`]): the first of the focus scope's stops with
-/// `auto` that is not in the request's `seen` (the stops given their
-/// chance already). `json` is [`decide`]'s description, without `key`,
-/// with `seen`.
-pub(crate) fn auto(json: &str) -> Option<NodeId> {
-    let request: Value = serde_json::from_str(json).ok()?;
-    let page = Page::read(&request, None);
-    let seen: Vec<NodeId> = list(&request, "seen").iter().filter_map(id).collect();
-    focus::auto_focus(&page.stops, |id| seen.contains(&id)).map(|i| page.stops[i].candidate.id)
-}
-
 /// Writes the focus props of a view that the arrows read into the page's
 /// props JSON (`op_vp`), each only when set: `autoFocus`, `preferredFocus`,
 /// `nextFocus` (`{"up": node, ...}`) and `focusGroup` (`{"trap": bool,

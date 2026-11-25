@@ -1,8 +1,8 @@
 //! What a TV adds to the arrows on the web (`focus::decide` over
-//! `focus::directional`, `focus::auto`, `focus::write_props`): the
+//! `focus::directional`, `focus::write_props`): the
 //! preferred stop with nothing focused, `nextFocus*` routes, focus groups
 //! entered at their destinations and trapping the arrows, a scroll view
-//! that scrolls on before the focus leaves it, `autoFocus`, and the props
+//! that scrolls on before the focus leaves it, and the props
 //! the page gets for them.
 
 use nsh_core::{
@@ -12,7 +12,7 @@ use nsh_core::{
 use serde_json::{Value, json};
 
 use super::{page, stop};
-use crate::focus::{Arrow, auto, decide, write_props};
+use crate::focus::{Arrow, decide, write_props};
 
 /// What `key` does from `focused` among `stops`, with `extra` (groups,
 /// scroll views, views) on the root's page.
@@ -216,37 +216,6 @@ fn a_scroll_view_that_can_scroll_on_keeps_the_focus() {
         arrow("down", Some(8), &stops, json!({})),
         Some(Arrow::Focus(10))
     );
-}
-
-#[test]
-fn auto_focus_is_the_first_stop_not_seen_in_the_scope() {
-    let mut stops = row();
-    stops[1]["auto"] = json!(true);
-    stops[2]["auto"] = json!(true);
-    // In a modal that shows: the page's are out of scope.
-    let in_modal = with(
-        stop(32, [10.0, 200.0, 80.0, 40.0]),
-        json!({ "scope": 30, "layer": 31, "auto": true }),
-    );
-    let request = |stops: &[Value], modals: Value, seen: Value| {
-        json!({ "focused": null, "modals": modals, "stops": stops, "seen": seen,
-                "layers": [[1, [{ "id": 2, "frame": [0, 0, 800, 600], "presses": false }]],
-                           [30, [{ "id": 31, "frame": [0, 0, 800, 600], "presses": false }]]] })
-        .to_string()
-    };
-    assert_eq!(auto(&request(&stops, json!([]), json!([]))), Some(6));
-    assert_eq!(auto(&request(&stops, json!([]), json!([6]))), Some(8));
-    assert_eq!(auto(&request(&stops, json!([]), json!([6, 8]))), None);
-    stops.push(in_modal);
-    assert_eq!(
-        auto(&request(&stops, json!([[30, true]]), json!([]))),
-        Some(32)
-    );
-    assert_eq!(
-        auto(&request(&stops, json!([[30, false]]), json!([6]))),
-        Some(8)
-    );
-    assert_eq!(auto("not json"), None);
 }
 
 #[test]
