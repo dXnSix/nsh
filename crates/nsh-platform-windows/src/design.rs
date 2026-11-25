@@ -1,8 +1,10 @@
 //! Design mode on Windows (dev hosts): the platform's part of `nsh/design`
 //! (`nsh_core::runtime::design`, which keeps the connection to the tool
 //! and its protocol, `docs/dev/design-mode.md`). A tool draws the app's
-//! windows in its own (DWM thumbnails, DirectComposition), so each window's
-//! surface handle is its `HWND` (`"hwnd"`). The tool listens on the
+//! windows in its own (DirectComposition or DWM thumbnails), so each window's
+//! `surface` line carries its `HWND` (`"hwnd"`) and, once its swap chain is
+//! made, its shared DirectComposition surface handle (`"surface"`) and owning
+//! process id (`"pid"`). The tool listens on the
 //! loopback address (`NSH_DESIGN_SOCKET=tcp:127.0.0.1:<port>`) and gives
 //! the run a token the hello carries (`NSH_DESIGN_TOKEN`).
 //!
@@ -356,11 +358,13 @@ pub(crate) fn window_message(
 }
 
 /// Tells the tool what the app's windows show: those visible, with their
-/// handles and content sizes.
+/// handles (including their shared DirectComposition surface handle and
+/// owning process id once their swap chain exists) and content sizes.
 fn tick() {
-    let mut shown = Vec::new();
+    let mut shown: Vec<(DesignWindow, Vec<(&'static str, u64)>)> = Vec::new();
     let named: Vec<(String, NodeId)> =
         NAMED.with_borrow(|named| named.iter().map(|(k, v)| (k.clone(), *v)).collect());
+    let pid = u64::from(std::process::id());
     for surface in Surface::all() {
         for (id, root) in &named {
             let Some(hwnd) = crate::app_window::hwnd_of(&surface, *root) else {
@@ -374,14 +378,21 @@ fn tick() {
             // SAFETY: plain call.
             let _ = unsafe { GetClientRect(hwnd, &mut rect) };
             let s = scale(hwnd);
-            shown.push(DesignWindow {
-                id: id.clone(),
-                handle: ("hwnd", hwnd.0 as isize as u64),
-                size: nsh_core::geometry::size(
-                    nsh_core::geometry::Points((f64::from(rect.right - rect.left) / s) as f32),
-                    nsh_core::geometry::Points((f64::from(rect.bottom - rect.top) / s) as f32),
-                ),
-            });
+            let extra = match crate::app_window::shared_surface_of(&surface, *root) {
+                Some(h) => vec![("surface", h.0 as usize as u64), ("pid", pid)],
+                None => Vec::new(),
+            };
+            shown.push((
+                DesignWindow {
+                    id: id.clone(),
+                    handle: ("hwnd", hwnd.0 as isize as u64),
+                    size: nsh_core::geometry::size(
+                        nsh_core::geometry::Points((f64::from(rect.right - rect.left) / s) as f32),
+                        nsh_core::geometry::Points((f64::from(rect.bottom - rect.top) / s) as f32),
+                    ),
+                },
+                extra,
+            ));
         }
     }
     // Windows that went: forgotten.
@@ -397,7 +408,11 @@ fn tick() {
         // SAFETY: a plain query; a handle that is no window answers false.
         kept.retain(|&h| unsafe { IsWindow(Some(HWND(h as *mut _))) }.as_bool())
     });
-    core::report(&shown);
+    let entries: Vec<(&DesignWindow, &[(&'static str, u64)])> = shown
+        .iter()
+        .map(|(w, extra)| (w, extra.as_slice()))
+        .collect();
+    core::report_extra(&entries);
 }
 
 fn input(message: &Value) {

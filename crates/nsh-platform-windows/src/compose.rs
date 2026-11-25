@@ -348,6 +348,29 @@ impl Composition {
         }
     }
 
+    /// Shows the shared DirectComposition surface `handle` at the bottom of
+    /// the tree (design mode), so the window's own composition and a design
+    /// tool duplicating `handle` both draw the same swap chain.
+    #[cfg(feature = "dev")]
+    pub(crate) fn set_base_handle(&self, handle: windows::Win32::Foundation::HANDLE) -> Result<()> {
+        let mut base = self.base.borrow_mut();
+        // SAFETY: plain calls on the live device, tree and shared handle.
+        unsafe {
+            let surface = self.device.CreateSurfaceFromHandle(handle)?;
+            let visual = match &*base {
+                Some(v) => v.clone(),
+                None => {
+                    let v = self.device.CreateVisual()?;
+                    self.root.AddVisual(&v, true, None)?;
+                    *base = Some(v.clone());
+                    v
+                }
+            };
+            visual.SetContent(&surface)?;
+            self.device.Commit()
+        }
+    }
+
     /// A swap chain is shown at the bottom ([`Composition::set_base`]).
     #[cfg(test)]
     pub(crate) fn has_base(&self) -> bool {
@@ -487,6 +510,62 @@ pub(crate) fn composition_swap_chain(
     };
     // SAFETY: a valid description on the live device.
     unsafe { factory.CreateSwapChainForComposition(&gfx.d3d, &desc, None) }
+}
+
+/// A premultiplied composition swap chain bound to a new cross-process
+/// DirectComposition surface handle (design mode), so a design tool can
+/// duplicate the handle and compose the window's frames directly.
+#[cfg(feature = "dev")]
+pub(crate) fn shared_composition_swap_chain(
+    gfx: &Gfx,
+    size: (u32, u32),
+    flags: DXGI_SWAP_CHAIN_FLAG,
+) -> Result<(IDXGISwapChain1, windows::Win32::Foundation::HANDLE)> {
+    use windows::Win32::{
+        Foundation::CloseHandle,
+        Graphics::{
+            DirectComposition::{
+                COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE, DCompositionCreateSurfaceHandle,
+            },
+            Dxgi::IDXGIFactoryMedia,
+        },
+    };
+    let access = (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as u32;
+    // SAFETY: creates a new composition surface handle owned by this process.
+    let handle = unsafe { DCompositionCreateSurfaceHandle(access, None)? };
+    let desc = DXGI_SWAP_CHAIN_DESC1 {
+        Width: size.0,
+        Height: size.1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        Stereo: false.into(),
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        BufferCount: 2,
+        Scaling: DXGI_SCALING_STRETCH,
+        SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+        AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+        Flags: flags.0 as u32,
+    };
+    let created = (|| -> Result<IDXGISwapChain1> {
+        // SAFETY: plain factory creation and cast to IDXGIFactoryMedia.
+        let factory: IDXGIFactory2 = unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))? };
+        let media: IDXGIFactoryMedia = factory.cast()?;
+        // SAFETY: valid device, shared surface handle and description.
+        unsafe {
+            media.CreateSwapChainForCompositionSurfaceHandle(&gfx.d3d, Some(handle), &desc, None)
+        }
+    })();
+    match created {
+        Ok(swap) => Ok((swap, handle)),
+        Err(err) => {
+            // SAFETY: handle was created above and not returned.
+            let _ = unsafe { CloseHandle(handle) };
+            Err(err)
+        }
+    }
 }
 
 /// A web view's visuals: an outer one with its ancestors' clip (window

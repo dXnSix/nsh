@@ -33,7 +33,7 @@ instead of a debug `describe` and a `release` host built apart. What packages sh
 | From | Message | What |
 |---|---|---|
 | host | `{"hello":{}}` | Once connected; `{"hello":{"token":…}}` when the tool gave the run a token (`NSH_DESIGN_TOKEN`). |
-| host | `{"surface":{"id","width","height", <handle>}}` | A window of the app's own (named by `Window.open`'s `id`), whenever it is new or its handle or size changed. The handle is what the tool draws it with: `"context"`, its layer's `CAContext` id, on macOS (`CALayerHost`); `"hwnd"` on Windows (a DWM thumbnail); `"xid"` under X11 (Composite). |
+| host | `{"surface":{"id","width","height", <handle>}}` | A window of the app's own (named by `Window.open`'s `id`), whenever it is new or its handle or size changed. The handle is what the tool draws it with: `"context"`, its layer's `CAContext` id, on macOS (`CALayerHost`); `"hwnd"` on Windows, together with its shared DirectComposition surface handle `"surface"` and owning process id `"pid"` once its swap chain is made; `"xid"` under X11 (Composite). |
 | host | `{"surface":{"id","gone":true}}` | The window closed. |
 | tool | `{"pointer":{"id","kind":"down\|drag\|up\|move","x","y"}}` | Input, delivered by the platform to window `id`, in points from its content's top left. |
 | tool | `{"wheel":{"id","x","y","dx","dy"}}`, `{"key":{"id","down","key",…}}`, `{"resize":{"id","width","height"}}` | The same; a key as the DOM names it. |
@@ -56,9 +56,16 @@ app's own windows for `report`, which tells the tool what changed:
   no App Nap. Input is given to the view under the point straight (AppKit drops events routed to a
   window that ignores the mouse), through a run-loop source in the common modes so that a control's
   own mouse loop still gets the drags and the release. `NSH_DESIGN_ALPHA` shows the windows.
-- **Windows**: the handle is the window's `HWND` (`"hwnd"`), which a tool draws with a DWM thumbnail
-  (`DwmRegisterThumbnail`) or DirectComposition. The tool's endpoint is `tcp:127.0.0.1:<port>` and the
-  run's token comes in `NSH_DESIGN_TOKEN` (above). The windows are kept out of sight by the window
+- **Windows**: the handle is the window's `HWND` (`"hwnd"`), and every window of the app's own in design
+  mode uses a composed swap chain backed by a cross-process DirectComposition surface handle
+  (`DCompositionCreateSurfaceHandle` + `IDXGIFactoryMedia::CreateSwapChainForCompositionSurfaceHandle`),
+  whose numeric handle (`"surface"`) and owning process id (`"pid"`) are reported on the `surface` line
+  once the swap chain is made (and again if recreated after device loss). A design tool duplicates
+  `"surface"` from `"pid"` (`OpenProcess(PROCESS_DUP_HANDLE)` + `DuplicateHandle`) and binds it directly
+  into its own DirectComposition tree (`IDCompositionDesktopDevice::CreateSurfaceFromHandle`), preserving
+  premultiplied alpha with zero frame copies, or falls back to a DWM thumbnail on `"hwnd"`. The tool's
+  endpoint is `tcp:127.0.0.1:<port>` and the run's token comes in `NSH_DESIGN_TOKEN` (above). The windows
+  are kept out of sight by the window
   procedure (`design::window_message`), never by a timer, so no frame of one reaches a display at any
   moment:
   - the main window never shows (`SW_HIDE`: its `WM_WINDOWPOSCHANGING` drops `SWP_SHOWWINDOW`, and the
@@ -351,7 +358,9 @@ window at a stood-in 150 % and 300 % that lies beside the displays, presents at 
 a `rect` picture, the 150 % one placed right of the displays once a display stood in left of the origin; every
 printable
 ASCII key and a non-ASCII character typed into a field, Control and Alt chords typing nothing, each named key at a
-key-logging view and an unlisted one dropped; and a composed component placed whatever its own box.
+key-logging view and an unlisted one dropped; a composed component placed whatever its own box; and a design
+window's shared DirectComposition surface handle (`surface`, `pid`) duplicated into the tool's process and
+opened with `IDCompositionDesktopDevice::CreateSurfaceFromHandle`.
 
 ### Composed components on Windows
 
