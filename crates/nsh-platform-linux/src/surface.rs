@@ -185,6 +185,9 @@ pub(crate) struct Surface {
     /// The model of a test session's app (`nsh test --target linux`).
     #[cfg(feature = "dev")]
     test_model: RefCell<Option<Arc<nsh_testing::agent::Model>>>,
+    /// Batches applied so far, for design mode's `settled` ([`crate::picture`]).
+    #[cfg(feature = "dev")]
+    applied: Cell<u64>,
     /// The GPU device shader views render with, opened when the first
     /// shader is mounted (`None` inside: there is none).
     shader_renderer: std::cell::OnceCell<Option<Rc<nsh_engine::shader::Renderer>>>,
@@ -294,6 +297,8 @@ impl Surface {
             on_hot_update_failed: RefCell::new(None),
             #[cfg(feature = "dev")]
             test_model: RefCell::default(),
+            #[cfg(feature = "dev")]
+            applied: Cell::new(0),
             shader_renderer: std::cell::OnceCell::new(),
             audio: Default::default(),
             asset_base: RefCell::new(None),
@@ -391,8 +396,15 @@ impl Surface {
         SURFACES.with(|s| s.borrow().get(&key).and_then(Weak::upgrade))
     }
 
+    /// How many batches the surface has applied so far (`design.settled`).
+    #[cfg(feature = "dev")]
+    pub(crate) fn applied(&self) -> u64 {
+        self.applied.get()
+    }
+
     /// Whether a native animation runs: the graph's (not one looping
-    /// forever, which no test step waits for), or a navigation transition.
+    /// forever, which no test step waits for), a navigation transition, or a
+    /// finite platform animation / style transition (`Next::At`).
     #[cfg(feature = "dev")]
     pub(crate) fn animating(&self) -> bool {
         self.anim.borrow().finishing()
@@ -400,6 +412,10 @@ impl Surface {
                 .nav
                 .try_borrow()
                 .map_or(true, |nav| nav.transitioning())
+            || self
+                .frame_callbacks
+                .try_borrow()
+                .map_or(true, |cbs| cbs.iter().any(|(_, at)| at.is_some()))
     }
 
     /// Keeps the model `nsh test --target` steps see of the app
@@ -574,7 +590,7 @@ impl Surface {
     }
 
     /// Applies what the engine sent.
-    fn drain(self: &Rc<Self>) {
+    pub(crate) fn drain(self: &Rc<Self>) {
         let started = self
             .fps
             .borrow()
@@ -648,8 +664,11 @@ impl Surface {
         // Windows whose first frame this was show.
         crate::window::batch_applied(self);
         #[cfg(feature = "dev")]
-        if let Some(model) = &*self.test_model.borrow() {
-            model.apply(batch);
+        {
+            self.applied.set(self.applied.get().wrapping_add(1));
+            if let Some(model) = &*self.test_model.borrow() {
+                model.apply(batch);
+            }
         }
     }
 
@@ -690,7 +709,7 @@ impl Surface {
     /// Now on the frame clock's clock (seconds): GDK's frame times are
     /// GLib's monotonic time. Never before the last frame, whose time the
     /// clock may have set a little ahead.
-    fn now(&self) -> f64 {
+    pub(crate) fn now(&self) -> f64 {
         monotonic().max(self.last_frame.get())
     }
 

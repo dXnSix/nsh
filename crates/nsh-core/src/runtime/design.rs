@@ -11,7 +11,7 @@
 //!   "height":…, <handle>}}` line whenever it changes, where the handle is
 //!   what the tool draws the window with, the platform's
 //!   ([`DesignWindow::handle`]: `"context"`, the Core Animation context, on
-//!   macOS; `"hwnd"` on Windows; `"xid"`, the X11 window, on Linux), and
+//!   macOS; `"hwnd"` on Windows; `"wayland"`, the window's number, on Linux), and
 //!   `{"surface":{"id":…,"gone":true}}` when it closed ([`report`]).
 //! - The tool's `pointer`, `wheel`, `key` and `resize` messages are the
 //!   platform's input, delivered to that window ([`INPUT`]); every other
@@ -226,7 +226,7 @@ pub struct DesignWindow {
     /// Its `id` (`Window.open`).
     pub id: String,
     /// What the tool draws it with: `("context", <CAContext id>)` on macOS,
-    /// `("hwnd", <HWND>)` on Windows, `("xid", <X11 window>)` on Linux.
+    /// `("hwnd", <HWND>)` on Windows, `("wayland", <window number>)` on Linux.
     pub handle: (&'static str, u64),
     /// Its content's size.
     pub size: crate::geometry::Size<crate::geometry::Points>,

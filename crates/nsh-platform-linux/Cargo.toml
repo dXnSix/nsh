@@ -93,6 +93,16 @@ nsh-testing = { workspace = true, features = ["agent"], optional = true }
 # decisions use.
 webkit6 = { workspace = true, optional = true, features = ["v2_42"] }
 
-# The menu style tests read theme documents.
+# The menu style tests read theme documents; `design_wayland` bundles its test
+# app in process and runs a minimal Smithay Wayland compositor.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 nsh-theme.workspace = true
+nsh-bundler = { workspace = true, features = ["bundle"] }
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
+
+# A design tool's view of an app on Linux under Wayland (feature `dev`): the
+# app runs in a process of its own against a minimal Smithay compositor.
+[[test]]
+name = "design_wayland"
+harness = false
+required-features = ["dev"]

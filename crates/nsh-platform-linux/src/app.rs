@@ -784,10 +784,15 @@ pub fn run_app(source: AppSource, mut options: AppOptions) -> glib::ExitCode {
             view.open_url(&url);
         }
         // A development host's window waits for its app, which brings the
-        // window's options ([`crate::dev`]).
+        // window's options ([`crate::dev`]); a design host never shows its
+        // main window.
         let held = app_of.is_err();
+        #[cfg(feature = "dev")]
+        let design = crate::design::active();
+        #[cfg(not(feature = "dev"))]
+        let design = false;
         // The host never shows: the app opens the windows it declares.
-        let present = !held && launch.visible_at_launch();
+        let present = !held && !design && launch.visible_at_launch();
         if !held && !present {
             crate::window::launch_hidden(&view.surface);
         }
