@@ -104,6 +104,12 @@ pub(crate) struct AppWindow {
     /// The cropped/scaled live viewport actually presented in the swap chain.
     #[cfg(feature = "dev")]
     presented_viewport: Cell<Option<nsh_core::runtime::design::DesignViewport>>,
+    /// Recently replaced design-mode swap chains kept alive briefly so a
+    /// design tool can swap to the new shared handle + viewport transform in
+    /// one atomic DirectComposition commit without seeing the old surface go
+    /// blank or change size mid-frame.
+    #[cfg(feature = "dev")]
+    retired_swaps: RefCell<std::collections::VecDeque<(crate::gfx::SwapChain, std::time::Instant)>>,
     /// A `WM_PAINT` is asked for.
     invalid: Cell<bool>,
     /// It was sized and placed as the app opened it ([`place`]): until
@@ -195,6 +201,35 @@ pub(crate) fn presented_viewport_of(
     id: NodeId,
 ) -> Option<nsh_core::runtime::design::DesignViewport> {
     get(surface, id).and_then(|w| w.presented_viewport.get())
+}
+
+/// How long a replaced design-mode swap chain is kept alive so the design tool
+/// finishes committing the new shared surface handle before the old buffers go.
+#[cfg(feature = "dev")]
+const RETIRED_SWAP_TTL: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Maximum retired design-mode swap chains kept per window during rapid zooms.
+#[cfg(feature = "dev")]
+const MAX_RETIRED_SWAPS: usize = 4;
+
+/// Releases expired retired design-mode swap chains on `surface`'s windows.
+#[cfg(feature = "dev")]
+pub(crate) fn gc_retired_swaps(surface: &Surface) {
+    let now = std::time::Instant::now();
+    let Ok(windows) = surface.windows.try_borrow() else {
+        return;
+    };
+    for window in windows.iter() {
+        let Ok(mut retired) = window.retired_swaps.try_borrow_mut() else {
+            continue;
+        };
+        while retired
+            .front()
+            .is_some_and(|(_, at)| now.duration_since(*at) >= RETIRED_SWAP_TTL)
+        {
+            retired.pop_front();
+        }
+    }
 }
 
 /// The app window with the keyboard focus, for test steps that act on the
@@ -417,6 +452,8 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         viewport: Cell::new(None),
         #[cfg(feature = "dev")]
         presented_viewport: Cell::new(None),
+        #[cfg(feature = "dev")]
+        retired_swaps: RefCell::new(std::collections::VecDeque::new()),
         invalid: Cell::new(false),
         positioned: Cell::new(false),
         reported: Cell::new(None),
@@ -658,19 +695,46 @@ fn paint(surface: &Rc<Surface>, window: &AppWindow) {
         Some(vp) => {
             let pw = (vp.width * vp.scale).round().max(1.0) as u32;
             let ph = (vp.height * vp.scale).round().max(1.0) as u32;
-            ((pw, ph), vp.scale as f32, (vp.x as f32, vp.y as f32), Some(vp))
+            (
+                (pw, ph),
+                vp.scale as f32,
+                (vp.x as f32, vp.y as f32),
+                Some(nsh_core::runtime::design::DesignViewport {
+                    x: vp.x,
+                    y: vp.y,
+                    width: f64::from(pw) / vp.scale,
+                    height: f64::from(ph) / vp.scale,
+                    scale: vp.scale,
+                }),
+            )
         }
         None => (window.pixels.get(), window.scale.get(), (0.0, 0.0), None),
     };
     #[cfg(not(feature = "dev"))]
     let (size, scale, origin) = (window.pixels.get(), window.scale.get(), (0.0, 0.0));
+    // When a design window's live viewport changes (cropped slice or scale),
+    // retire the old swap chain instead of resizing it in place: DWM would
+    // otherwise composite the newly resized buffers with the design tool's old
+    // transform for 1-2 frames before the TCP surface message arrives.
     #[cfg(feature = "dev")]
-    let had_shared = window
+    if crate::design::active() && wanted_viewport != window.presented_viewport.get() {
+        if let Ok(mut swap) = window.swap.try_borrow_mut()
+            && swap.as_ref().is_some_and(|s| s.shared_handle().is_some())
+            && let Some(old) = swap.take()
+            && let Ok(mut retired) = window.retired_swaps.try_borrow_mut()
+        {
+            while retired.len() >= MAX_RETIRED_SWAPS {
+                retired.pop_front();
+            }
+            retired.push_back((old, std::time::Instant::now()));
+        }
+    }
+    #[cfg(feature = "dev")]
+    let prev_shared = window
         .swap
         .borrow()
         .as_ref()
-        .and_then(|s| s.shared_handle())
-        .is_some();
+        .and_then(|s| s.shared_handle());
     // Deferred: the swap chain posts `WM_NSH_PAINT` when it has room, so
     // `invalid` stays set (no second `WM_PAINT` meanwhile).
     match crate::render::window_frame(
@@ -703,14 +767,13 @@ fn paint(surface: &Rc<Surface>, window: &AppWindow) {
                     scale: vp.scale,
                 });
                 let vp_changed = window.presented_viewport.replace(actual) != actual;
-                let got_shared = !had_shared
-                    && window
-                        .swap
-                        .borrow()
-                        .as_ref()
-                        .and_then(|s| s.shared_handle())
-                        .is_some();
-                if (vp_changed || got_shared) && crate::design::active() {
+                let now_shared = window
+                    .swap
+                    .borrow()
+                    .as_ref()
+                    .and_then(|s| s.shared_handle());
+                let shared_changed = now_shared != prev_shared && now_shared.is_some();
+                if (vp_changed || shared_changed) && crate::design::active() {
                     crate::design::report_now();
                 }
             }
@@ -1137,6 +1200,8 @@ mod tests {
             viewport: Cell::new(None),
             #[cfg(feature = "dev")]
             presented_viewport: Cell::new(None),
+            #[cfg(feature = "dev")]
+            retired_swaps: RefCell::new(std::collections::VecDeque::new()),
             invalid: Cell::new(false),
             positioned: Cell::new(true),
             reported: Cell::new(None),

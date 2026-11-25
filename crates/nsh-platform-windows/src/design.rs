@@ -377,6 +377,7 @@ fn tick() {
         NAMED.with_borrow(|named| named.iter().map(|(k, v)| (k.clone(), *v)).collect());
     let pid = u64::from(std::process::id());
     for surface in Surface::all() {
+        crate::app_window::gc_retired_swaps(&surface);
         for (id, root) in &named {
             let Some(hwnd) = crate::app_window::hwnd_of(&surface, *root) else {
                 continue;
