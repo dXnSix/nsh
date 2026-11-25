@@ -18,7 +18,7 @@ default = ["js", "shader", "editor", "emoji-picker", "highlight", "math", "plot"
 # Rust app and links no QuickJS.
 js = ["nsh-engine/js-core"]
 # Development support: dev server client, log forwarding, error overlay.
-dev = ["js", "shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "zlib", "crypto", "websocket", "updater", "dep:nsh-dev", "dep:nsh-testing", "svg", "net", "webview", "media", "nsh-engine/inspect"]
+dev = ["js", "shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "zlib", "crypto", "websocket", "updater", "dep:nsh-dev", "dep:nsh-testing", "svg", "net", "webview", "media", "nsh-engine/inspect", "windows/Win32_Security"]
 # Web views with WebView2 (webview2-com). Without it a web view fails at
 # once, as on a platform that shows none.
 webview = ["dep:webview2-com"]

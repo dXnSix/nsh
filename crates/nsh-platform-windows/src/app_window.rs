@@ -150,6 +150,18 @@ pub(crate) fn presented_size(surface: &Surface, hwnd: HWND) -> Option<(u32, u32)
     window.swap.borrow().as_ref().map(|s| s.size)
 }
 
+/// The shared DirectComposition surface handle of the window showing dialog
+/// root `id`, once its swap chain is made (design mode).
+#[cfg(feature = "dev")]
+pub(crate) fn shared_surface_of(
+    surface: &Surface,
+    id: NodeId,
+) -> Option<windows::Win32::Foundation::HANDLE> {
+    let window = get(surface, id)?;
+    let swap = window.swap.borrow();
+    swap.as_ref().and_then(|s| s.shared_handle())
+}
+
 /// The app window with the keyboard focus, for test steps that act on the
 /// focused window (the host is not one).
 pub(crate) fn focused_hwnd(surface: &Surface) -> Option<HWND> {
@@ -316,8 +328,12 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         attrs
     };
     let owner = open.parent.and_then(|parent| window_hwnd(surface, parent));
-    let composed =
+    let mut composed =
         resolved.transparent || resolved.backdrop != Backdrop::None || resolved.click_through;
+    #[cfg(feature = "dev")]
+    if crate::design::active() {
+        composed = true;
+    }
     let hwnd = match crate::window::create_app_window(
         surface,
         id,

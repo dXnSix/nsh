@@ -229,31 +229,53 @@ pub struct DesignWindow {
     pub size: crate::geometry::Size<crate::geometry::Points>,
 }
 
-static TOLD: Mutex<Option<HashMap<String, DesignWindow>>> = Mutex::new(None);
+type ToldEntry = (DesignWindow, Vec<(&'static str, u64)>);
+
+static TOLD: Mutex<Option<HashMap<String, ToldEntry>>> = Mutex::new(None);
+
+fn surface_line(window: &DesignWindow, extra: &[(&'static str, u64)]) -> JsonValue {
+    let mut surface = serde_json::json!({
+        "id": window.id,
+        "width": f64::from(window.size.width.0),
+        "height": f64::from(window.size.height.0),
+    });
+    surface[window.handle.0] = window.handle.1.into();
+    for &(key, value) in extra {
+        surface[key] = value.into();
+    }
+    serde_json::json!({ "surface": surface })
+}
 
 /// The app's windows now (shown, with a handle the tool can draw): tells
 /// the tool of those new or changed since the last call, and of those gone.
 /// The platform calls it on a timer.
 pub fn report(windows: &[DesignWindow]) {
+    let entries: Vec<(&DesignWindow, &[(&'static str, u64)])> =
+        windows.iter().map(|w| (w, &[][..])).collect();
+    report_extra(&entries);
+}
+
+/// Like [`report`], with extra numeric fields added to each window's
+/// `surface` line (such as a shared composition surface handle and owning
+/// process id on Windows). A change in any extra field reports the window
+/// again.
+pub fn report_extra(windows: &[(&DesignWindow, &[(&'static str, u64)])]) {
     let mut lines = Vec::new();
     {
         let mut told = TOLD.lock().unwrap_or_else(|e| e.into_inner());
         let told = told.get_or_insert_with(HashMap::new);
-        for window in windows {
-            if told.get(&window.id) != Some(window) {
-                told.insert(window.id.clone(), window.clone());
-                let mut surface = serde_json::json!({
-                    "id": window.id,
-                    "width": f64::from(window.size.width.0),
-                    "height": f64::from(window.size.height.0),
-                });
-                surface[window.handle.0] = window.handle.1.into();
-                lines.push(serde_json::json!({ "surface": surface }));
+        for &(window, extra) in windows {
+            let changed = told
+                .get(&window.id)
+                .is_none_or(|(prev, prev_extra)| prev != window || prev_extra.as_slice() != extra);
+            if changed {
+                told.insert(window.id.clone(), (window.clone(), extra.to_vec()));
+                lines.push(surface_line(window, extra));
             }
         }
         let gone: Vec<String> = told
             .keys()
-            .filter(|id| !windows.iter().any(|w| &w.id == *id))
+            .filter(|id| !windows.iter().any(|(w, _)| &w.id == *id))
             .cloned()
             .collect();
         for id in gone {
@@ -1531,6 +1553,33 @@ mod tests {
         assert_eq!(
             hello(Some("a-token")),
             json!({ "hello": { "token": "a-token" } })
+        );
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn surface_line_includes_extra_fields() {
+        let window = DesignWindow {
+            id: "a".into(),
+            handle: ("hwnd", 0x1234),
+            size: crate::geometry::size(
+                crate::geometry::Points(393.0),
+                crate::geometry::Points(852.0),
+            ),
+        };
+        assert_eq!(
+            surface_line(&window, &[]),
+            json!({ "surface": { "id": "a", "hwnd": 0x1234, "width": 393.0, "height": 852.0 } })
+        );
+        assert_eq!(
+            surface_line(&window, &[("surface", 0x99), ("pid", 4242)]),
+            json!({ "surface": { "id": "a", "hwnd": 0x1234, "width": 393.0, "height": 852.0, "surface": 0x99, "pid": 4242 } })
         );
     }
 }

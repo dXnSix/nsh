@@ -290,8 +290,21 @@ pub(crate) struct SwapChain {
     shown: bool,
     /// A transparent window's: composed, premultiplied alpha.
     premultiplied: bool,
+    /// Shared DirectComposition surface handle in design mode, closed on drop.
+    #[cfg(feature = "dev")]
+    shared: Option<HANDLE>,
     /// Frame pacing: one frame in flight per swap chain.
     latency: Latency,
+}
+
+#[cfg(feature = "dev")]
+impl Drop for SwapChain {
+    fn drop(&mut self) {
+        if let Some(handle) = self.shared.take() {
+            // SAFETY: handle was created for this swap chain and is owned here.
+            let _ = unsafe { CloseHandle(handle) };
+        }
+    }
 }
 
 /// What a callback of the thread pool shares with the window's thread.
@@ -460,9 +473,27 @@ impl SwapChain {
     ) -> Result<SwapChain> {
         if let Some(composition) = composition {
             let size = (size.0.max(1), size.1.max(1));
+            #[cfg(feature = "dev")]
+            if crate::design::active() {
+                let (swap, handle) =
+                    crate::compose::shared_composition_swap_chain(gfx, size, SWAP_CHAIN_FLAGS)?;
+                if let Err(err) = composition.set_base_handle(handle) {
+                    // SAFETY: handle was created here and is not owned by a SwapChain yet.
+                    let _ = unsafe { CloseHandle(handle) };
+                    return Err(err);
+                }
+                return SwapChain::made(swap, hwnd, size, true, Some(handle));
+            }
             let swap = crate::compose::composition_swap_chain(gfx, size, SWAP_CHAIN_FLAGS)?;
             composition.set_base(&swap)?;
-            return SwapChain::made(swap, hwnd, size, true);
+            return SwapChain::made(
+                swap,
+                hwnd,
+                size,
+                true,
+                #[cfg(feature = "dev")]
+                None,
+            );
         }
         // SAFETY: plain factory creation.
         let factory: IDXGIFactory2 = unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_FLAGS(0))? };
@@ -490,7 +521,14 @@ impl SwapChain {
         };
         // SAFETY: `hwnd` is a live window of this thread; `desc` is valid.
         let swap = unsafe { factory.CreateSwapChainForHwnd(&gfx.d3d, hwnd, &desc, None, None)? };
-        SwapChain::made(swap, hwnd, size, false)
+        SwapChain::made(
+            swap,
+            hwnd,
+            size,
+            false,
+            #[cfg(feature = "dev")]
+            None,
+        )
     }
 
     fn made(
@@ -498,13 +536,24 @@ impl SwapChain {
         hwnd: HWND,
         size: (u32, u32),
         premultiplied: bool,
+        #[cfg(feature = "dev")] shared: Option<HANDLE>,
     ) -> Result<SwapChain> {
         // One frame in flight, as a window always had, so input is drawn by
         // the next vblank. Set on this swap chain, not the device, and waited
         // for without blocking ([`SwapChain::ready`]): with the waitable
         // flag `Present` no longer waits for the queue to drain, so a chain
         // not gated would queue frames up to the device's limit.
-        let latency = Latency::new(&swap, hwnd)?;
+        let latency = match Latency::new(&swap, hwnd) {
+            Ok(latency) => latency,
+            Err(err) => {
+                #[cfg(feature = "dev")]
+                if let Some(handle) = shared {
+                    // SAFETY: handle is ours and no SwapChain was constructed to close it.
+                    let _ = unsafe { CloseHandle(handle) };
+                }
+                return Err(err);
+            }
+        };
         Ok(SwapChain {
             swap,
             target: None,
@@ -513,8 +562,17 @@ impl SwapChain {
             last: None,
             shown: false,
             premultiplied,
+            #[cfg(feature = "dev")]
+            shared,
             latency,
         })
+    }
+
+    /// The shared DirectComposition surface handle of this swap chain (design
+    /// mode), if any.
+    #[cfg(feature = "dev")]
+    pub(crate) fn shared_handle(&self) -> Option<HANDLE> {
+        self.shared
     }
 
     /// A transparent window's (composed, premultiplied alpha).

@@ -32,6 +32,9 @@
 //!   dropped.
 //! - `composed`: a composed component whose box a transform takes out of its
 //!   clip stays placed; one whose view clips its content does not.
+//! - `shared-surface`: a design window reports its shared DirectComposition
+//!   surface handle (`surface`, `pid`) alongside `hwnd`, and the tool can
+//!   duplicate it across processes and open it with `CreateSurfaceFromHandle`.
 //!
 //! Without libtest's harness: arguments pick cases (none runs all), each
 //! prints `design_windows: <case>: ok`, and the last line says how many ran.
@@ -561,8 +564,14 @@ mod tool {
     };
 
     use nsh_platform_windows::windows::Win32::{
-        Foundation::{HWND, LPARAM, RECT, WPARAM},
-        Graphics::Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect},
+        Foundation::{
+            CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, HWND, LPARAM, RECT, WPARAM,
+        },
+        Graphics::{
+            DirectComposition::{DCompositionCreateDevice2, IDCompositionDesktopDevice},
+            Gdi::{MONITOR_DEFAULTTONULL, MonitorFromRect},
+        },
+        System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_DUP_HANDLE},
         UI::WindowsAndMessaging::{
             EnumWindows, GWL_EXSTYLE, GetClassNameW, GetClientRect, GetForegroundWindow,
             GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
@@ -1026,17 +1035,25 @@ mod tool {
         let pid = app.child.id();
         let mut hidden_host = false;
         for hwnd in windows_of(pid) {
+            let class = class_of(hwnd);
+            // Windows 11 injects system text-input indicator overlay windows
+            // into processes with text fields; ignore them so only app windows count.
+            if matches!(
+                class.as_str(),
+                "UAC_InputIndicatorOverlayWnd" | "UAC Input Indicator"
+            ) {
+                continue;
+            }
             // SAFETY: a plain query.
             if unsafe { IsWindowVisible(hwnd) }.as_bool() {
                 assert!(
                     app.surfaces
                         .values()
                         .any(|s| s["hwnd"].as_u64() == Some(hwnd.0 as u64)),
-                    "a window of the app's shows that is not one of its own ({})",
-                    class_of(hwnd)
+                    "a window of the app's shows that is not one of its own ({class})"
                 );
                 assert!(on_no_display(hwnd), "{:?} on a display", window_rect(hwnd));
-            } else if class_of(hwnd) == "NshWindow" {
+            } else if class == "NshWindow" {
                 hidden_host = true;
             }
         }
@@ -1279,6 +1296,55 @@ mod tool {
         );
     }
 
+    /// A design window reports a shared DirectComposition surface handle and
+    /// its owning process id alongside `hwnd`; the tool duplicates the handle
+    /// and binds it on its own DirectComposition device without error.
+    fn shared_surface(app: &mut App) {
+        let until = Instant::now() + ANSWER;
+        let surface = loop {
+            let s = app.surface("box");
+            if s["surface"].as_u64().is_some() && s["pid"].as_u64().is_some() {
+                break s;
+            }
+            assert!(
+                app.take(until).is_some(),
+                "no shared surface handle reported for box: {s}"
+            );
+        };
+        assert!(
+            surface["hwnd"].as_u64().is_some(),
+            "missing hwnd: {surface}"
+        );
+        let raw_handle = surface["surface"].as_u64().unwrap();
+        let pid = surface["pid"].as_u64().unwrap() as u32;
+        assert_ne!(raw_handle, 0, "zero surface handle: {surface}");
+        assert_eq!(pid, app.child.id(), "pid mismatch: {surface}");
+        // SAFETY: duplicates the child process's surface handle into this
+        // process, opens it on a local DirectComposition device, then closes
+        // both handles.
+        unsafe {
+            let remote = OpenProcess(PROCESS_DUP_HANDLE, false, pid)
+                .expect("OpenProcess(PROCESS_DUP_HANDLE)");
+            let mut local = HANDLE::default();
+            let dup = DuplicateHandle(
+                remote,
+                HANDLE(raw_handle as usize as *mut _),
+                GetCurrentProcess(),
+                &mut local,
+                0,
+                false,
+                DUPLICATE_SAME_ACCESS,
+            );
+            let _ = CloseHandle(remote);
+            dup.expect("DuplicateHandle for shared surface");
+            let device: IDCompositionDesktopDevice =
+                DCompositionCreateDevice2(None).expect("DCompositionCreateDevice2");
+            let opened = device.CreateSurfaceFromHandle(local);
+            let _ = CloseHandle(local);
+            opened.expect("IDCompositionDesktopDevice::CreateSurfaceFromHandle");
+        }
+    }
+
     /// Whether `rect` lies wholly out of `screen`.
     fn outside(rect: &RECT, screen: &RECT) -> bool {
         rect.right <= screen.left
@@ -1394,7 +1460,7 @@ mod tool {
             RandomState::new().hash_one(std::process::id())
         });
         let mut ran = 0;
-        let cases: [Case; 13] = [
+        let cases: [Case; 14] = [
             ("pictures", pictures),
             ("settle", settle),
             ("loops", loops),
@@ -1405,6 +1471,7 @@ mod tool {
             ("foreground", foreground),
             ("display-change", display_change),
             ("composed", composed),
+            ("shared-surface", shared_surface),
             ("keys-typed", keys_typed),
             ("keys-control", keys_control),
             ("keys-named", keys_named),
