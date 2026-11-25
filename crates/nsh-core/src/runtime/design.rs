@@ -70,8 +70,11 @@ pub const TOKEN: &str = "NSH_DESIGN_TOKEN";
 /// from the window's content's top left), `{"wheel":{"id","x","y","dx",
 /// "dy"}}` (content moves up for a positive `dy`), `{"key":{"id","down",
 /// "key","shift","control","alt","meta","repeat"}}` (a key as the DOM names
-/// it) and `{"resize":{"id","width","height"}}`.
-pub const INPUT: [&str; 4] = ["pointer", "wheel", "key", "resize"];
+/// it), `{"resize":{"id","width","height"}}` and
+/// `{"viewport":{"id","x","y","width","height","scale"}}` (a cropped,
+/// high-DPI live slice in content points, or `{"viewport":{"id"}}` to reset
+/// to the full window at display backing scale).
+pub const INPUT: [&str; 5] = ["pointer", "wheel", "key", "resize", "viewport"];
 
 /// What the platform does for the connection.
 pub struct DesignHooks {
@@ -229,11 +232,37 @@ pub struct DesignWindow {
     pub size: crate::geometry::Size<crate::geometry::Points>,
 }
 
-type ToldEntry = (DesignWindow, Vec<(&'static str, u64)>);
+/// A cropped, scaled live view of a design window's content: what the
+/// window's live surface actually presents when zoomed in past its
+/// display's backing scale (in content points from the top left, at
+/// `scale` pixels a point).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DesignViewport {
+    /// Left edge of the presented slice in content points.
+    pub x: f64,
+    /// Top edge of the presented slice in content points.
+    pub y: f64,
+    /// Width of the presented slice in content points.
+    pub width: f64,
+    /// Height of the presented slice in content points.
+    pub height: f64,
+    /// Pixels per point the slice is rasterized at.
+    pub scale: f64,
+}
+
+type ToldEntry = (
+    DesignWindow,
+    Vec<(&'static str, u64)>,
+    Option<DesignViewport>,
+);
 
 static TOLD: Mutex<Option<HashMap<String, ToldEntry>>> = Mutex::new(None);
 
-fn surface_line(window: &DesignWindow, extra: &[(&'static str, u64)]) -> JsonValue {
+fn surface_line(
+    window: &DesignWindow,
+    extra: &[(&'static str, u64)],
+    viewport: Option<DesignViewport>,
+) -> JsonValue {
     let mut surface = serde_json::json!({
         "id": window.id,
         "width": f64::from(window.size.width.0),
@@ -242,6 +271,15 @@ fn surface_line(window: &DesignWindow, extra: &[(&'static str, u64)]) -> JsonVal
     surface[window.handle.0] = window.handle.1.into();
     for &(key, value) in extra {
         surface[key] = value.into();
+    }
+    if let Some(vp) = viewport {
+        surface["viewport"] = serde_json::json!({
+            "x": vp.x,
+            "y": vp.y,
+            "width": vp.width,
+            "height": vp.height,
+            "scale": vp.scale,
+        });
     }
     serde_json::json!({ "surface": surface })
 }
@@ -260,22 +298,39 @@ pub fn report(windows: &[DesignWindow]) {
 /// process id on Windows). A change in any extra field reports the window
 /// again.
 pub fn report_extra(windows: &[(&DesignWindow, &[(&'static str, u64)])]) {
+    let entries: Vec<(&DesignWindow, &[(&'static str, u64)], Option<DesignViewport>)> =
+        windows.iter().map(|&(w, extra)| (w, extra, None)).collect();
+    report_with_viewport(&entries);
+}
+
+/// Like [`report_extra`], also carrying the optional cropped/scaled live
+/// [`DesignViewport`] each window's surface currently presents.
+pub fn report_with_viewport(
+    windows: &[(&DesignWindow, &[(&'static str, u64)], Option<DesignViewport>)],
+) {
     let mut lines = Vec::new();
     {
         let mut told = TOLD.lock().unwrap_or_else(|e| e.into_inner());
         let told = told.get_or_insert_with(HashMap::new);
-        for &(window, extra) in windows {
-            let changed = told
-                .get(&window.id)
-                .is_none_or(|(prev, prev_extra)| prev != window || prev_extra.as_slice() != extra);
+        for &(window, extra, viewport) in windows {
+            let changed = told.get(&window.id).is_none_or(
+                |(prev, prev_extra, prev_viewport)| {
+                    prev != window
+                        || prev_extra.as_slice() != extra
+                        || *prev_viewport != viewport
+                },
+            );
             if changed {
-                told.insert(window.id.clone(), (window.clone(), extra.to_vec()));
-                lines.push(surface_line(window, extra));
+                told.insert(
+                    window.id.clone(),
+                    (window.clone(), extra.to_vec(), viewport),
+                );
+                lines.push(surface_line(window, extra, viewport));
             }
         }
         let gone: Vec<String> = told
             .keys()
-            .filter(|id| !windows.iter().any(|(w, _)| &w.id == *id))
+            .filter(|id| !windows.iter().any(|(w, _, _)| &w.id == *id))
             .cloned()
             .collect();
         for id in gone {
@@ -1574,12 +1629,43 @@ mod format_tests {
             ),
         };
         assert_eq!(
-            surface_line(&window, &[]),
+            surface_line(&window, &[], None),
             json!({ "surface": { "id": "a", "hwnd": 0x1234, "width": 393.0, "height": 852.0 } })
         );
         assert_eq!(
-            surface_line(&window, &[("surface", 0x99), ("pid", 4242)]),
+            surface_line(&window, &[("surface", 0x99), ("pid", 4242)], None),
             json!({ "surface": { "id": "a", "hwnd": 0x1234, "width": 393.0, "height": 852.0, "surface": 0x99, "pid": 4242 } })
         );
+        assert_eq!(
+            surface_line(
+                &window,
+                &[("surface", 0x99), ("pid", 4242)],
+                Some(DesignViewport {
+                    x: 100.0,
+                    y: 200.0,
+                    width: 250.0,
+                    height: 150.0,
+                    scale: 4.0,
+                }),
+            ),
+            json!({
+                "surface": {
+                    "id": "a",
+                    "hwnd": 0x1234,
+                    "width": 393.0,
+                    "height": 852.0,
+                    "surface": 0x99,
+                    "pid": 4242,
+                    "viewport": {
+                        "x": 100.0,
+                        "y": 200.0,
+                        "width": 250.0,
+                        "height": 150.0,
+                        "scale": 4.0,
+                    }
+                }
+            })
+        );
+        assert!(is_input(&json!({ "viewport": { "id": "mounted", "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0, "scale": 4.0 } })));
     }
 }

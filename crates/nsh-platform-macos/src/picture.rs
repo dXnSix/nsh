@@ -111,12 +111,14 @@ pub(crate) fn draw(
         crate::shader::display_tree(&layer);
     }
     let shadows = Shadows::stand_in(&layer, scale);
+    let high_scale = HighScale::stand_in(content, &layer, rect, height, flipped, scale);
     let hidden = content
         .window()
         .map(|w| crate::shader::hide_masked(&w))
         .unwrap_or_default();
     render(&layer, &mut pixels, (pw, ph), scale, flipped, rect, height);
     hidden.iter().for_each(|c| c.setHidden(false));
+    high_scale.put_back();
     shadows.put_back();
     // The animations' values now, as the window shows them.
     if let Some(s) = surface {
@@ -201,6 +203,56 @@ pub(crate) fn rgba(image: &CGImage) -> Raw {
         width: pw as u32,
         height: ph as u32,
         pixels,
+    }
+}
+
+/// Content/overlay layers temporarily redrawn at `scale` when capturing above
+/// the window's backing scale (discarding lower-res prerendered text
+/// `IOSurface`s for the duration of `renderInContext:`), then restored inside
+/// the same Core Animation transaction.
+struct HighScale(Vec<crate::view::SavedContentScale>);
+
+impl HighScale {
+    fn stand_in(
+        content: &NSView,
+        root_layer: &CALayer,
+        rect: CGRect,
+        height: CGFloat,
+        flipped: bool,
+        scale: f64,
+    ) -> Self {
+        let backing = content
+            .window()
+            .map_or(1.0, |w| w.backingScaleFactor())
+            .max(1.0);
+        if scale <= backing + 1e-3 {
+            return Self(Vec::new());
+        }
+        let root_rect = if flipped {
+            rect
+        } else {
+            CGRect::new(
+                CGPoint::new(rect.origin.x, height - rect.origin.y - rect.size.height),
+                rect.size,
+            )
+        };
+        let mut saved = Vec::new();
+        if let Some(view) = crate::view::NshView::from_ns(content) {
+            view.prepare_picture_scale(root_layer, root_rect, scale, &mut saved);
+        } else {
+            for sub in content.subviews().iter() {
+                if let Some(view) = crate::view::NshView::from_ns(&sub) {
+                    view.prepare_picture_scale(root_layer, root_rect, scale, &mut saved);
+                }
+            }
+        }
+        Self(saved)
+    }
+
+    fn put_back(self) {
+        for entry in self.0 {
+            entry.restore();
+        }
     }
 }
 

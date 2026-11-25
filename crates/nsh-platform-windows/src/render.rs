@@ -1764,6 +1764,16 @@ struct Drawn {
     backdrops: Vec<Placement>,
 }
 
+/// What [`window_frame`] did.
+pub(crate) enum WindowFrameOutcome {
+    /// Presented a frame into a swap chain of `(width, height)` pixels.
+    Presented((u32, u32)),
+    /// The swap chain had no room yet: wait for `WM_NSH_PAINT`.
+    Deferred,
+    /// Nothing was presented (zero size or error).
+    Failed,
+}
+
 /// A window of the app's own as its frame draws it
 /// ([`crate::app_window`]).
 pub(crate) struct WindowFrame<'a> {
@@ -1779,9 +1789,13 @@ pub(crate) struct WindowFrame<'a> {
     /// Its swap chain, and the scale of the chain's target.
     pub(crate) swap: &'a RefCell<Option<gfx::SwapChain>>,
     pub(crate) target_scale: &'a std::cell::Cell<f32>,
-    /// Its client area in pixels, and its pixels per point.
+    /// Its client area (or cropped live viewport) in pixels, and its pixels
+    /// per point.
     pub(crate) size: (u32, u32),
     pub(crate) scale: f32,
+    /// Top-left of the rendered slice in content points (`(0.0, 0.0)` for a
+    /// full window).
+    pub(crate) origin: (f32, f32),
     /// The hosted items and the composed items its last frame drew.
     pub(crate) placed: &'a RefCell<Vec<(Rc<dyn Hosted>, RECT)>>,
     pub(crate) composed: &'a RefCell<Vec<Rc<dyn Hosted>>>,
@@ -1790,10 +1804,7 @@ pub(crate) struct WindowFrame<'a> {
 /// Draws a window of the app's own whole, then presents it: its web
 /// views between the layers of its composition, its hosted items' own
 /// windows placed where their views were drawn.
-///
-/// Returns true when the frame is deferred, as the main window's
-/// ([`frame`]).
-pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> bool {
+pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> WindowFrameOutcome {
     let WindowFrame {
         root,
         hwnd,
@@ -1803,12 +1814,15 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
         target_scale,
         size,
         scale,
+        origin,
         placed,
         composed,
     } = frame;
-    let Ok(gfx) = gfx::get() else { return false };
+    let Ok(gfx) = gfx::get() else {
+        return WindowFrameOutcome::Failed;
+    };
     if size.0 == 0 || size.1 == 0 {
-        return false;
+        return WindowFrameOutcome::Failed;
     }
     // What it presents is at most the device's largest texture: a window
     // can be larger (a design tool's, laid out at its content's size), and
@@ -1818,7 +1832,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
     let Ok(mut swap) = swap.try_borrow_mut() else {
         // Reentrant paint (for example COM STA pumping while releasing a
         // hosted control): schedule another paint once the outer frame ends.
-        return true;
+        return WindowFrameOutcome::Deferred;
     };
     if swap.as_ref().is_some_and(|s| s.stale()) {
         *swap = None;
@@ -1828,18 +1842,18 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
             Ok(s) => *swap = Some(s),
             Err(err) => {
                 log::error!("cannot create a window's swap chain: {err}");
-                return false;
+                return WindowFrameOutcome::Failed;
             }
         }
     }
     let Some(chain) = swap.as_mut() else {
-        return false;
+        return WindowFrameOutcome::Failed;
     };
     let resized = chain.size != (size.0.max(1), size.1.max(1));
     if let Err(err) = chain.resize(&gfx, size) {
         log::error!("cannot resize a window's swap chain: {err}");
         *swap = None;
-        return false;
+        return WindowFrameOutcome::Failed;
     }
     // As the main window's ([`frame`]): resized, it draws once its frame in
     // flight is shown; otherwise it waits until its swap chain has room.
@@ -1849,7 +1863,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
         chain.ready()
     };
     if !ready {
-        return true;
+        return WindowFrameOutcome::Deferred;
     }
     if (target_scale.replace(scale) - scale).abs() > f32::EPSILON {
         chain.drop_target();
@@ -1858,11 +1872,12 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
         Ok(t) => t,
         Err(err) => {
             log::error!("cannot get a window's back buffer: {err}");
-            return false;
+            return WindowFrameOutcome::Failed;
         }
     };
-    let window = Some((root, size));
-    match draw_into(
+    let presented_size = chain.size;
+    let window = Some((root, presented_size));
+    match draw_into_at(
         surface,
         &gfx,
         &target,
@@ -1871,6 +1886,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
         composition,
         None,
         window,
+        origin,
     ) {
         Ok(drawn) => {
             if let Some(c) = composition
@@ -1880,14 +1896,14 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
                 *swap = None;
                 drop(swap);
                 device_lost(surface);
-                return false;
+                return WindowFrameOutcome::Failed;
             }
             if let Err(err) = chain.present(None) {
                 log::warn!("present failed: {err}");
                 *swap = None;
                 drop(swap);
                 device_lost(surface);
-                return false;
+                return WindowFrameOutcome::Failed;
             }
             drop(swap);
             crate::surface::items_placed(placed, drawn.items, None);
@@ -1895,15 +1911,19 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> boo
             if let Some(base) = base {
                 base.backdrops_placed(&drawn.backdrops);
             }
+            WindowFrameOutcome::Presented(presented_size)
         }
         Err(err) if err.code() == D2DERR_RECREATE_TARGET => {
             *swap = None;
             drop(swap);
             device_lost(surface);
+            WindowFrameOutcome::Failed
         }
-        Err(err) => log::error!("drawing a window failed: {err}"),
+        Err(err) => {
+            log::error!("drawing a window failed: {err}");
+            WindowFrameOutcome::Failed
+        }
     }
-    false
 }
 
 /// Draws the tree into `target` (its DPI set for `scale`), and into the
@@ -1918,6 +1938,33 @@ fn draw_into(
     composition: Option<&Composition>,
     areas: Option<&[D2D_RECT_F]>,
     window: Option<(&NshView, (u32, u32))>,
+) -> windows::core::Result<Drawn> {
+    draw_into_at(
+        surface,
+        gfx,
+        target,
+        scale,
+        offscreen,
+        composition,
+        areas,
+        window,
+        (0.0, 0.0),
+    )
+}
+
+/// Like [`draw_into`], translating the tree by `-origin` (points) when
+/// drawing a cropped live viewport of a design window.
+#[allow(clippy::too_many_arguments)]
+fn draw_into_at(
+    surface: &Rc<Surface>,
+    gfx: &Gfx,
+    target: &ID2D1Bitmap1,
+    scale: f32,
+    offscreen: bool,
+    composition: Option<&Composition>,
+    areas: Option<&[D2D_RECT_F]>,
+    window: Option<(&NshView, (u32, u32))>,
+    origin: (f32, f32),
 ) -> windows::core::Result<Drawn> {
     // The decoration bitmaps this pass draws with are the last evicted if
     // the cache overflows mid-frame ([`crate::decor::begin_frame`]).
@@ -1964,7 +2011,11 @@ fn draw_into(
     if !offscreen && background.a <= 0.0 && crate::backdrop::supported() {
         cx.backdrops = Some(Vec::new());
     }
+    let cropped = origin.0 != 0.0 || origin.1 != 0.0;
     let (w, h) = match window {
+        Some(_) if cropped || scale > 0.0 && pixels.0 > 0 && pixels.1 > 0 => {
+            (pixels.0 as f32 / scale, pixels.1 as f32 / scale)
+        }
         Some(root) => {
             let size = root.state().frame.size;
             (size.width.0, size.height.0)
@@ -1980,12 +2031,19 @@ fn draw_into(
         error: None,
     });
     let root = window.unwrap_or(&surface.root).clone();
+    let start = if cropped {
+        Mat4::new().translate(-origin.0, -origin.1)
+    } else {
+        Mat4::new()
+    };
     match areas {
         None => {
-            draw_view(&mut cx, &root, Mat4::new(), Mat4::new());
+            draw_view(&mut cx, &root, start, Mat4::new());
             // The caption buttons, last: in the topmost layer, above web
-            // views.
-            crate::chrome::draw(surface, hwnd, dc, scale, w);
+            // views (skipped for a cropped live design slice).
+            if !cropped {
+                crate::chrome::draw(surface, hwnd, dc, scale, w);
+            }
         }
         // A partial frame: each area cleared and drawn again, the rest of
         // the back buffer kept.

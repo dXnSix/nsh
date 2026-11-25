@@ -97,6 +97,13 @@ pub(crate) struct AppWindow {
     /// Its client area in pixels, and its scale.
     pixels: Cell<(u32, u32)>,
     scale: Cell<f32>,
+    /// Design mode's requested cropped/scaled live viewport (`None`: full
+    /// window at its display's backing scale).
+    #[cfg(feature = "dev")]
+    viewport: Cell<Option<nsh_core::runtime::design::DesignViewport>>,
+    /// The cropped/scaled live viewport actually presented in the swap chain.
+    #[cfg(feature = "dev")]
+    presented_viewport: Cell<Option<nsh_core::runtime::design::DesignViewport>>,
     /// A `WM_PAINT` is asked for.
     invalid: Cell<bool>,
     /// It was sized and placed as the app opened it ([`place`]): until
@@ -160,6 +167,34 @@ pub(crate) fn shared_surface_of(
     let window = get(surface, id)?;
     let swap = window.swap.borrow();
     swap.as_ref().and_then(|s| s.shared_handle())
+}
+
+/// Sets design mode's cropped/scaled live viewport for the window showing
+/// dialog root `id` (`None`: full window at its display's backing scale).
+/// Layout is untouched; only the swap chain's presented slice and density
+/// change.
+#[cfg(feature = "dev")]
+pub(crate) fn set_design_viewport(
+    surface: &Surface,
+    id: NodeId,
+    viewport: Option<nsh_core::runtime::design::DesignViewport>,
+) {
+    let Some(window) = get(surface, id) else {
+        return;
+    };
+    if window.viewport.replace(viewport) != viewport {
+        invalidate(&window);
+    }
+}
+
+/// The cropped/scaled live viewport currently presented in the swap chain of
+/// the window showing dialog root `id` (design mode).
+#[cfg(feature = "dev")]
+pub(crate) fn presented_viewport_of(
+    surface: &Surface,
+    id: NodeId,
+) -> Option<nsh_core::runtime::design::DesignViewport> {
+    get(surface, id).and_then(|w| w.presented_viewport.get())
 }
 
 /// The app window with the keyboard focus, for test steps that act on the
@@ -378,6 +413,10 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         target_scale: Cell::new(0.0),
         pixels: Cell::new((0, 0)),
         scale: Cell::new(1.0),
+        #[cfg(feature = "dev")]
+        viewport: Cell::new(None),
+        #[cfg(feature = "dev")]
+        presented_viewport: Cell::new(None),
         invalid: Cell::new(false),
         positioned: Cell::new(false),
         reported: Cell::new(None),
@@ -614,9 +653,27 @@ fn resized(surface: &Surface, window: &AppWindow) {
 fn paint(surface: &Rc<Surface>, window: &AppWindow) {
     window.invalid.set(false);
     let web = window.web.borrow().upgrade();
+    #[cfg(feature = "dev")]
+    let (size, scale, origin, wanted_viewport) = match window.viewport.get() {
+        Some(vp) => {
+            let pw = (vp.width * vp.scale).round().max(1.0) as u32;
+            let ph = (vp.height * vp.scale).round().max(1.0) as u32;
+            ((pw, ph), vp.scale as f32, (vp.x as f32, vp.y as f32), Some(vp))
+        }
+        None => (window.pixels.get(), window.scale.get(), (0.0, 0.0), None),
+    };
+    #[cfg(not(feature = "dev"))]
+    let (size, scale, origin) = (window.pixels.get(), window.scale.get(), (0.0, 0.0));
+    #[cfg(feature = "dev")]
+    let had_shared = window
+        .swap
+        .borrow()
+        .as_ref()
+        .and_then(|s| s.shared_handle())
+        .is_some();
     // Deferred: the swap chain posts `WM_NSH_PAINT` when it has room, so
     // `invalid` stays set (no second `WM_PAINT` meanwhile).
-    let deferred = crate::render::window_frame(
+    match crate::render::window_frame(
         surface,
         crate::render::WindowFrame {
             root: &window.view,
@@ -625,14 +682,42 @@ fn paint(surface: &Rc<Surface>, window: &AppWindow) {
             composition: web.as_deref(),
             swap: &window.swap,
             target_scale: &window.target_scale,
-            size: window.pixels.get(),
-            scale: window.scale.get(),
+            size,
+            scale,
+            origin,
             placed: &window.placed,
             composed: &window.composed,
         },
-    );
-    if deferred {
-        window.invalid.set(true);
+    ) {
+        crate::render::WindowFrameOutcome::Deferred => {
+            window.invalid.set(true);
+        }
+        crate::render::WindowFrameOutcome::Presented(presented_px) => {
+            #[cfg(feature = "dev")]
+            {
+                let actual = wanted_viewport.map(|vp| nsh_core::runtime::design::DesignViewport {
+                    x: vp.x,
+                    y: vp.y,
+                    width: f64::from(presented_px.0) / vp.scale,
+                    height: f64::from(presented_px.1) / vp.scale,
+                    scale: vp.scale,
+                });
+                let vp_changed = window.presented_viewport.replace(actual) != actual;
+                let got_shared = !had_shared
+                    && window
+                        .swap
+                        .borrow()
+                        .as_ref()
+                        .and_then(|s| s.shared_handle())
+                        .is_some();
+                if (vp_changed || got_shared) && crate::design::active() {
+                    crate::design::report_now();
+                }
+            }
+            #[cfg(not(feature = "dev"))]
+            let _ = presented_px;
+        }
+        crate::render::WindowFrameOutcome::Failed => {}
     }
 }
 
@@ -1048,6 +1133,10 @@ mod tests {
             target_scale: Cell::new(0.0),
             pixels: Cell::new((0, 0)),
             scale: Cell::new(1.0),
+            #[cfg(feature = "dev")]
+            viewport: Cell::new(None),
+            #[cfg(feature = "dev")]
+            presented_viewport: Cell::new(None),
             invalid: Cell::new(false),
             positioned: Cell::new(true),
             reported: Cell::new(None),

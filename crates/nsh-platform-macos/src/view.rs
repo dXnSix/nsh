@@ -364,6 +364,149 @@ fn raster_zoom(scale: f64) -> f64 {
     STEP.powf((scale.ln() / STEP.ln()).ceil())
 }
 
+/// Saved state of a content or overlay layer whose `contentsScale` was
+/// temporarily raised for a high-scale `nsh/design` picture capture
+/// ([`NshView::prepare_picture_scale`]).
+pub(crate) struct SavedContentScale {
+    view: NshView,
+    layer: Retained<CALayer>,
+    old_scale: CGFloat,
+    old_contents: Option<Retained<AnyObject>>,
+    was_rastered: bool,
+    is_content: bool,
+}
+
+impl SavedContentScale {
+    /// Restores the layer's original scale, rastered flag, and contents inside
+    /// the same `CATransaction`, leaving the live window untouched.
+    pub(crate) fn restore(self) {
+        self.layer.setContentsScale(self.old_scale);
+        if self.is_content {
+            self.view.ivars().rastered.set(self.was_rastered);
+        }
+        // SAFETY: `old_contents` is the `CALayer.contents` object read before
+        // capture (or `None`).
+        unsafe { self.layer.setContents(self.old_contents.as_deref()) };
+        if self.old_contents.is_none() {
+            self.layer.setNeedsDisplay();
+        }
+    }
+}
+
+/// Whether rectangles `a` and `b` overlap (more than an edge).
+fn rects_overlap(a: CGRect, b: CGRect) -> bool {
+    a.origin.x < b.origin.x + b.size.width
+        && b.origin.x < a.origin.x + a.size.width
+        && a.origin.y < b.origin.y + b.size.height
+        && b.origin.y < a.origin.y + a.size.height
+}
+
+impl NshView {
+    /// Temporarily raises `contentsScale` and redraws content/overlay layers
+    /// intersecting `root_rect` (in `root_layer`'s coordinates) to `scale` for
+    /// a high-scale picture capture (`scale > backing_scale`), discarding any
+    /// lower-resolution prerendered text `IOSurface` so CoreText/CoreGraphics
+    /// renders vector-sharp into the capture.
+    pub(crate) fn prepare_picture_scale(
+        &self,
+        root_layer: &CALayer,
+        root_rect: CGRect,
+        scale: CGFloat,
+        saved: &mut Vec<SavedContentScale>,
+    ) {
+        if self.ns().isHidden() {
+            return;
+        }
+        for (i, surface) in [&self.ivars().content, &self.ivars().overlay]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some((layer, _)) = &*surface.borrow() {
+                let in_root = layer.convertRect_toLayer(layer.bounds(), Some(root_layer));
+                if !rects_overlap(in_root, root_rect) {
+                    continue;
+                }
+                let desired = content_density(scale, 1.0, layer.bounds().size);
+                let old_scale = layer.contentsScale();
+                let was_rastered = i == 0 && self.ivars().rastered.get();
+                if desired > old_scale + 1e-3 || (was_rastered && desired > old_scale) {
+                    // SAFETY: `CALayer.contents` getter on the main thread.
+                    let old_contents = unsafe { layer.contents() };
+                    saved.push(SavedContentScale {
+                        view: self.clone(),
+                        layer: layer.clone(),
+                        old_scale,
+                        old_contents,
+                        was_rastered,
+                        is_content: i == 0,
+                    });
+                    if i == 0 {
+                        self.clear_canvas_painted();
+                        self.ivars().rastered.set(false);
+                    }
+                    layer.setContentsScale(desired);
+                    // SAFETY: clearing `contents` discards any lower-res
+                    // prerendered `IOSurface` so `displayIfNeeded` invokes the
+                    // delegate's vector `drawLayer:inContext:` at `desired`.
+                    unsafe { layer.setContents(None) };
+                    layer.setNeedsDisplay();
+                    layer.displayIfNeeded();
+                }
+            }
+        }
+        for child in self.child_views() {
+            child.prepare_picture_scale(root_layer, root_rect, scale, saved);
+        }
+    }
+
+    /// Sharpens content/overlay layers intersecting `viewport` (in
+    /// `root_layer`'s coordinates) to `scale` for a zoomed live design window,
+    /// returning all other layers to their normal density. When `viewport` is
+    /// `None`, restores every layer in the subtree to normal density.
+    pub(crate) fn apply_design_viewport(
+        &self,
+        root_layer: &CALayer,
+        viewport: Option<(CGRect, CGFloat)>,
+    ) {
+        let backing = self.backing_scale();
+        for (i, surface) in [&self.ivars().content, &self.ivars().overlay]
+            .into_iter()
+            .enumerate()
+        {
+            if let Some((layer, _)) = &*surface.borrow() {
+                let normal = self.content_scale(layer.bounds().size);
+                let desired = match viewport {
+                    Some((vp_rect, vp_scale)) if vp_scale > backing => {
+                        let in_root = layer.convertRect_toLayer(layer.bounds(), Some(root_layer));
+                        if rects_overlap(in_root, vp_rect) {
+                            content_density(vp_scale, 1.0, layer.bounds().size).max(normal)
+                        } else {
+                            normal
+                        }
+                    }
+                    _ => normal,
+                };
+                if (layer.contentsScale() - desired).abs() > 1e-3 {
+                    if i == 0 {
+                        self.clear_canvas_painted();
+                        if self.ivars().rastered.replace(false) {
+                            // SAFETY: clearing prerendered `backing`-scale
+                            // `IOSurface` so Core Animation redraws via
+                            // `drawLayer:inContext:` at `desired`.
+                            unsafe { layer.setContents(None) };
+                        }
+                    }
+                    layer.setContentsScale(desired);
+                    layer.setNeedsDisplay();
+                }
+            }
+        }
+        for child in self.child_views() {
+            child.apply_design_viewport(root_layer, viewport);
+        }
+    }
+}
+
 /// The density a content layer of `size` draws at for `zoom` times the
 /// window's backing `scale`: at most 4096 pixels a side, and never below
 /// the backing scale. Every content and overlay layer gets its density

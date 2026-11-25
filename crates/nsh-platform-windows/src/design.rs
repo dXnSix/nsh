@@ -357,11 +357,22 @@ pub(crate) fn window_message(
     }
 }
 
+/// Tells the tool at once when a window's shared surface or presented
+/// viewport changed, without waiting for the 50 ms poll timer.
+pub(crate) fn report_now() {
+    tick();
+}
+
 /// Tells the tool what the app's windows show: those visible, with their
 /// handles (including their shared DirectComposition surface handle and
-/// owning process id once their swap chain exists) and content sizes.
+/// owning process id once their swap chain exists), content sizes, and any
+/// cropped/scaled live viewport currently presented.
 fn tick() {
-    let mut shown: Vec<(DesignWindow, Vec<(&'static str, u64)>)> = Vec::new();
+    let mut shown: Vec<(
+        DesignWindow,
+        Vec<(&'static str, u64)>,
+        Option<core::DesignViewport>,
+    )> = Vec::new();
     let named: Vec<(String, NodeId)> =
         NAMED.with_borrow(|named| named.iter().map(|(k, v)| (k.clone(), *v)).collect());
     let pid = u64::from(std::process::id());
@@ -382,6 +393,7 @@ fn tick() {
                 Some(h) => vec![("surface", h.0 as usize as u64), ("pid", pid)],
                 None => Vec::new(),
             };
+            let viewport = crate::app_window::presented_viewport_of(&surface, *root);
             shown.push((
                 DesignWindow {
                     id: id.clone(),
@@ -392,6 +404,7 @@ fn tick() {
                     ),
                 },
                 extra,
+                viewport,
             ));
         }
     }
@@ -408,11 +421,15 @@ fn tick() {
         // SAFETY: a plain query; a handle that is no window answers false.
         kept.retain(|&h| unsafe { IsWindow(Some(HWND(h as *mut _))) }.as_bool())
     });
-    let entries: Vec<(&DesignWindow, &[(&'static str, u64)])> = shown
+    let entries: Vec<(
+        &DesignWindow,
+        &[(&'static str, u64)],
+        Option<core::DesignViewport>,
+    )> = shown
         .iter()
-        .map(|(w, extra)| (w, extra.as_slice()))
+        .map(|(w, extra, vp)| (w, extra.as_slice(), *vp))
         .collect();
-    core::report_extra(&entries);
+    core::report_with_viewport(&entries);
 }
 
 fn input(message: &Value) {
@@ -452,12 +469,45 @@ fn input(message: &Value) {
             },
         ),
         "key" => key(&surface, body),
+        "viewport" => {
+            let viewport = parse_viewport(body);
+            crate::app_window::set_design_viewport(&surface, root, viewport);
+        }
         _ => {
             if let Some(hwnd) = crate::app_window::hwnd_of(&surface, root) {
                 resize(hwnd, n("width").max(1.0), n("height").max(1.0));
             }
         }
     }
+}
+
+/// Parses a `viewport` body: `Some` when `scale`, `width` and `height` are
+/// positive finite numbers (`x`, `y` default to 0), `None` to reset to the
+/// full window at display backing scale.
+fn parse_viewport(body: &Value) -> Option<core::DesignViewport> {
+    let scale = body["scale"].as_f64()?;
+    let width = body["width"].as_f64()?;
+    let height = body["height"].as_f64()?;
+    let x = body["x"].as_f64().unwrap_or(0.0);
+    let y = body["y"].as_f64().unwrap_or(0.0);
+    if !(scale.is_finite()
+        && scale > 0.0
+        && width.is_finite()
+        && width > 0.0
+        && height.is_finite()
+        && height > 0.0
+        && x.is_finite()
+        && y.is_finite())
+    {
+        return None;
+    }
+    Some(core::DesignViewport {
+        x: x.max(0.0),
+        y: y.max(0.0),
+        width,
+        height,
+        scale: scale.clamp(0.01, 16.0),
+    })
 }
 
 /// Resizes `hwnd` so that its client area is `w` x `h` points.

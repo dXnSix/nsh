@@ -435,7 +435,7 @@ extern "C" fn deliver(_: *mut c_void) {
 }
 
 fn input(mtm: MainThreadMarker, message: &Value) {
-    let Some((kind, body)) = ["pointer", "wheel", "key", "resize"]
+    let Some((kind, body)) = core::INPUT
         .into_iter()
         .find_map(|kind| message.get(kind).map(|body| (kind, body)))
     else {
@@ -457,6 +457,7 @@ fn input(mtm: MainThreadMarker, message: &Value) {
         ),
         "wheel" => wheel(mtm, &content, frame, n("x"), n("y"), n("dx"), n("dy")),
         "key" => key(&window, body),
+        "viewport" => viewport(&content, frame, body),
         _ => {
             // The window's size is the content's: it lays out at it.
             let width = body["width"].as_f64().unwrap_or(frame.size.width).max(1.0);
@@ -466,6 +467,56 @@ fn input(mtm: MainThreadMarker, message: &Value) {
                 .max(1.0);
             if (width, height) != (frame.size.width, frame.size.height) {
                 window.setContentSize(NSSize::new(width, height));
+            }
+        }
+    }
+}
+
+/// Sharpens visible content/overlay layers inside a zoomed live design window's
+/// viewport slice (`scale` pixels a point) without resizing or cropping the
+/// hosted `NSWindow`, or restores normal backing density when cleared.
+fn viewport(content: &NSView, frame: NSRect, body: &Value) {
+    let Some(root_layer) = content.layer() else {
+        return;
+    };
+    let parsed = (|| {
+        let scale = body["scale"].as_f64()?;
+        let width = body["width"].as_f64()?;
+        let height = body["height"].as_f64()?;
+        let x = body["x"].as_f64().unwrap_or(0.0);
+        let y = body["y"].as_f64().unwrap_or(0.0);
+        if !(scale.is_finite()
+            && scale > 0.0
+            && width.is_finite()
+            && width > 0.0
+            && height.is_finite()
+            && height > 0.0
+            && x.is_finite()
+            && y.is_finite())
+        {
+            return None;
+        }
+        let x = x.max(0.0);
+        let y = y.max(0.0);
+        let rect = if content.isFlipped() {
+            objc2_core_foundation::CGRect::new(
+                objc2_core_foundation::CGPoint::new(x, y),
+                objc2_core_foundation::CGSize::new(width, height),
+            )
+        } else {
+            objc2_core_foundation::CGRect::new(
+                objc2_core_foundation::CGPoint::new(x, frame.size.height - y - height),
+                objc2_core_foundation::CGSize::new(width, height),
+            )
+        };
+        Some((rect, scale.clamp(0.01, 16.0)))
+    })();
+    if let Some(view) = crate::view::NshView::from_ns(content) {
+        view.apply_design_viewport(&root_layer, parsed);
+    } else {
+        for sub in content.subviews().iter() {
+            if let Some(view) = crate::view::NshView::from_ns(&sub) {
+                view.apply_design_viewport(&root_layer, parsed);
             }
         }
     }

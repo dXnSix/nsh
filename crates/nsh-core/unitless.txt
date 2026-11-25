@@ -474,3 +474,8 @@ style::TextStyle.line_height_em                                  # a line-height
 inspect::DevProp::Number.0                                       # a JS number as the app passed it to a component (dev tools)
 runtime::design::PictureAsk.scale                                # pixels per point, a ratio
 runtime::design::PictureOptions.scale                            # pixels per point, a ratio
+runtime::design::DesignViewport.x                                # wire JSON viewport origin x (points)
+runtime::design::DesignViewport.y                                # wire JSON viewport origin y (points)
+runtime::design::DesignViewport.width                            # wire JSON viewport width (points)
+runtime::design::DesignViewport.height                           # wire JSON viewport height (points)
+runtime::design::DesignViewport.scale                            # pixels per point, a ratio
