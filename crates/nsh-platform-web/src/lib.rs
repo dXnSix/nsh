@@ -1819,20 +1819,6 @@ pub unsafe extern "C" fn nsh_focus_move(ptr: *const u8, len: usize) -> f64 {
     }
 }
 
-/// The stop that takes the keyboard focus as it appears (`autoFocus`,
-/// `web/nsh.js` `autoFocus`), as `focus::auto` reads the page's JSON
-/// description, or -1 for none.
-///
-/// # Safety
-///
-/// `ptr..ptr + len` is memory from [`nsh_alloc`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn nsh_focus_auto(ptr: *const u8, len: usize) -> f64 {
-    // SAFETY: guaranteed by the caller.
-    let json = unsafe { string(ptr, len) };
-    focus::auto(&json).map_or(-1.0, f64::from)
-}
-
 /// An arrow toward `direction` (0 up, 1 down, 2 left, 3 right) scrolled
 /// the scroll view around stop `from`, which has the keyboard focus,
 /// instead of leaving it ([`nsh_focus_move`]): a list around it scrolls to

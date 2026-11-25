@@ -886,6 +886,22 @@ function shows(el) {
   return el.checkVisibility?.({ visibilityProperty: true }) ?? true;
 }
 
+/** The first stop in view `el` (itself, when it is one) that shows, in
+ * DOM order, as `collectStops` counts them; none inside a modal in it. */
+function firstStop(el) {
+  if (el._id !== undefined) {
+    const field = el._field;
+    const stop = field ? !field.disabled : el.getAttribute("tabindex") === "0";
+    if (stop && shows(el)) return el;
+  }
+  for (const child of el.children) {
+    if (child._kind === "modal") continue;
+    const stop = firstStop(child);
+    if (stop) return stop;
+  }
+  return null;
+}
+
 /** The text node and offset of character `offset` of a run. */
 function runPoint(run, offset) {
   const walker = document.createTreeWalker(run, NodeFilter.SHOW_TEXT);
@@ -2545,7 +2561,6 @@ class Player {
     if (this.changedStacks.size) this.reconcileStacks();
     if (this.removals.length) this.finishRemovals();
     if (this.readingHosts?.size) this.orderReading();
-    this.focusAfterBatch();
     if (this.relating?.size) this.linkRelations();
     if (this.viewportOverlays) this.syncFloats();
     if (this.autoFocusing?.size) this.focusAppeared();
@@ -2559,19 +2574,46 @@ class Player {
    * meanwhile is forgotten. Like a focus command's, the focus is this
    * press's (`pressFocus`): the mouse events the browser makes of a touch
    * would otherwise take it away, the finger being over the views the
-   * press replaced. */
+   * press replaced. Other views with `autoFocus` go through `viewAppeared`
+   * (nshx: focus). */
   focusAppeared() {
+    let viewFocused = false;
     for (const el of this.autoFocusing) {
       if (this.views.get(el._id) !== el) {
         this.autoFocusing.delete(el);
         continue;
       }
       if (!el.isConnected) continue;
+      if (!el._field) {
+        viewFocused = this.viewAppeared(el, viewFocused) || viewFocused;
+        continue;
+      }
       this.autoFocusing.delete(el);
       el._field?.focus();
       this.pressFocus = el._field ?? null;
     }
   }
+
+  /** A view with `autoFocus` (`focusAppeared`) once it is in the page: in
+   * the focus scope that shows (the newest modal, else the root), the
+   * first stop in it (itself, when it is one) takes the focus as an arrow
+   * gives it (`focusStop`). One behind a modal, or with no stop yet, waits
+   * for a later batch. Of those ready in one batch the first in the set
+   * takes it (`focused`: one already did), and the rest have had their
+   * chance. Whether this one took it. */
+  viewAppeared(el, focused) {
+    let layer = el;
+    while (layer.parentNode && layer.parentNode !== this.root) layer = layer.parentNode;
+    if ((layer._kind === "modal" ? layer : null) !== this.topModal()) return false;
+    const stop = firstStop(el);
+    if (!stop) return false;
+    this.autoFocusing.delete(el);
+    if (focused) return false;
+    this.focusStop(stop);
+    this.pressFocus = stop._field ?? stop;
+    return true;
+  }
+
 
   /** The DOM id of view `id`: unique on the page, beside other players. */
   domId(id) {
@@ -3351,8 +3393,12 @@ class Player {
     if (props.href != null) el.setAttribute("href", this.siteBase ? this.linkHref(props.href) : props.href);
     else el.removeAttribute("href");
     el._props = props;
-    // A stop that takes the focus as it appears: looked at after the batch.
-    if (props.autoFocus) this.autoPending = this.autoViews = true;
+    // A view that takes the focus as it appears (itself, or the first stop
+    // in it): once the batch has put it in the page (`focusAppeared`).
+    if (props.autoFocus && !el._autoFocused) {
+      el._autoFocused = true;
+      (this.autoFocusing ??= new Set()).add(el);
+    }
     // A list in its parent's viewport: its cells are read in screen order.
     if (el._screenOrder !== props.screenOrder) {
       el._screenOrder = props.screenOrder;
@@ -9887,46 +9933,6 @@ class Player {
     if (el._field) el._field.focus({ preventScroll: true });
     else this.focusPressable(el);
     this.revealFocus(el);
-  }
-
-  /** The batch is applied: after one that brought a view with `autoFocus`
-   * (`op_vp`), or a new focus scope (a modal presented or gone) once the
-   * app has such views, the stops that take the focus as they appear are
-   * looked at (`autoFocus`), once the call that applied it has returned:
-   * the focus events that follow reach the engine, which is not
-   * reentrant. */
-  focusAfterBatch() {
-    const scope = this.topModal()?._id ?? ROOT_ID;
-    if (this.focusScope !== scope) {
-      this.focusScope = scope;
-      if (this.autoViews) this.autoPending = true;
-    }
-    if (!this.autoPending || this.autoQueued) return;
-    this.autoQueued = true;
-    queueMicrotask(() => {
-      this.autoQueued = false;
-      this.autoPending = false;
-      if (this.wasm && !this.trapped) this.autoFocus();
-    });
-  }
-
-  /** The first stop of the focus scope with `autoFocus` (its own, or a
-   * view's around it) that has not had its chance takes the focus
-   * (`nsh_focus_auto`, `focus::auto_focus`); every one there has had it
-   * then, and has it again only once it was removed and comes back. */
-  autoFocus() {
-    const active = document.activeElement;
-    const { stops, request } = this.focusStops(active && this.root.contains(active) ? active : null);
-    const seen = (this.autoSeen ??= new Set());
-    for (const el of seen) if (!el.isConnected) seen.delete(el);
-    const json = JSON.stringify({ ...request, seen: [...seen].map((el) => el._id) });
-    const answer = this.withStrings([json], (p, l) => this.wasm.nsh_focus_auto(p, l));
-    // The scope `nsh_core::focus::focus_scope` picks: the newest modal that shows.
-    let scope = ROOT_ID;
-    for (const [id, showing] of request.modals) if (showing) scope = id;
-    for (const stop of request.stops) if (stop.auto && stop.scope === scope) seen.add(stops.get(stop.id));
-    const el = stops.get(answer);
-    if (el) this.focusStop(el);
   }
 
   /**
