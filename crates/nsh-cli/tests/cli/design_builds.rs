@@ -21,15 +21,25 @@ impl Drop for App {
     }
 }
 
-/// The stand-in cargo: `metadata --no-deps` (the app's crate) is the real one's; the workspace's
-/// metadata and tree, which feature unification asks for at its best effort, fail; a build is
-/// written to `$BUILDS` and makes each program it names in the profile's folder of
-/// `$CARGO_TARGET_DIR`.
+/// The stand-in cargo: `metadata --no-deps` (the app's crate) is the real one's; the app crate's
+/// metadata with its dependencies (the nshm it links through Cargo) is the crate alone, linking
+/// none; the workspace's metadata and tree, which feature unification asks for at its best effort,
+/// fail; a build is written to `$BUILDS` and makes each program it names in the profile's folder
+/// of `$CARGO_TARGET_DIR`.
 const CARGO: &str = r#"#!/bin/sh
 set -eu
 case "$1" in
 metadata)
     case " $* " in *' --no-deps '*) exec "$REAL_CARGO" "$@";; esac
+    manifest=; prev=
+    for a in "$@"; do
+        if [ "$prev" = --manifest-path ]; then manifest=$a; fi
+        prev=$a
+    done
+    if [ -n "$manifest" ] && [ "$manifest" -ef "$(dirname "$BUILDS")/Cargo.toml" ]; then
+        printf '{"packages":[{"id":"app","name":"app-native","manifest_path":"%s","dependencies":[]}],"resolve":{"nodes":[{"id":"app","deps":[]}]}}\n' "$manifest"
+        exit 0
+    fi
     exit 1;;
 tree) exit 1;;
 build) ;;
