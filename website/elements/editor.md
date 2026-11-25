@@ -21,22 +21,6 @@ code blocks use: a built-in palette in light and dark, each kind of code recolor
 (`syntax-keyword`, `syntax-string`, …: [Theme roles](../modules/nsh-base.md#theme-roles)). Each part takes the app's styles over these defaults (`classes` and `styles`).
 Rust makes one with `nsh_base::editor()`, TSX with `<Editor>` from `nsh/base`.
 
-```rust tabs
-use nsh_base::editor;
-use nsh_core::prelude::*;
-
-const MAIN: &str = "fn main() {\n    println!(\"Hello, world!\");\n}\n";
-
-fn code() -> impl IntoElement {
-    let source = signal(SharedString::from(MAIN));
-    editor()
-        .value(move || Some(source.get()))
-        .language("rust")
-        .on_change(move |value: &SharedString| source.set(value.clone()))
-        .flex_1()
-}
-```
-
 ```tsx tabs
 import { mount, signal } from "nsh";
 import { Editor } from "nsh/base";
@@ -57,6 +41,22 @@ mount(() => (
     <App />
   </Window>
 ));
+```
+
+```rust tabs
+use nsh_base::editor;
+use nsh_core::prelude::*;
+
+const MAIN: &str = "fn main() {\n    println!(\"Hello, world!\");\n}\n";
+
+fn code() -> impl IntoElement {
+    let source = signal(SharedString::from(MAIN));
+    editor()
+        .value(move || Some(source.get()))
+        .language("rust")
+        .on_change(move |value: &SharedString| source.set(value.clone()))
+        .flex_1()
+}
 ```
 
 The editor fills the box the app gives it (`flex-1`, a height) and scrolls its text inside: vertically always,

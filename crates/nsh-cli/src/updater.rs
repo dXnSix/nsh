@@ -90,6 +90,7 @@ pub(crate) fn add_config(
     built.assets.push(crate::build::Asset {
         path: CONFIG_ASSET.to_owned(),
         source,
+        targets: Vec::new(),
     });
     Ok(())
 }
@@ -373,12 +374,7 @@ fn notes(args: &[String]) -> anyhow::Result<Notes> {
 
 /// `nsh update-manifest`.
 pub(crate) fn manifest(options: ManifestOptions<'_>) -> anyhow::Result<()> {
-    let entry = dunce::canonicalize(options.entry)?;
-    let entry = if entry.is_dir() {
-        entry.join("App.tsx")
-    } else {
-        entry
-    };
+    let entry = crate::entry::resolve(&dunce::canonicalize(options.entry)?)?;
     let config = crate::package::read_config(&entry)?;
     let (name, id) = crate::package::release_name_and_id(&entry, &config)?;
     let Some(runtime) = runtime_config(&config, &id)? else {

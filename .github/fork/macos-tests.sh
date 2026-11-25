@@ -11,9 +11,11 @@ set -euo pipefail
 
 # The test target with cases left out, and the cases it still runs (its
 # arguments; harness = false). draw_on_show's `canvas`: "the canvas's mount
-# never happened", on upstream's own a9bf6adff too (sync #293, 2026-11-20).
+# never happened", on upstream's own a9bf6adff too (sync #293, 2026-11-20);
+# its `window` and `unhide`: "the first mount never happened", on upstream's
+# own 3f8ecd8b3 too (sync #299, 2026-11-25).
 PARTIAL=draw_on_show
-KEPT="window unhide scaled animated sharp nested"
+KEPT="scaled animated sharp nested"
 
 args=()
 for p in "$@"; do args+=(-p "$p"); done

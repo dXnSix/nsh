@@ -140,7 +140,9 @@
   spacing, weight and family (a `leading-*`, `tracking-*` or `font-*` class of the element wins over those parts),
   `shadow-*` a shadow's layers, `bg-*` a gradient, `blur-*` a blur's radius. A number is points (`tracking-*` too),
   and `font-sans` is the default font of every text (Tailwind's `--font-sans`, a page's preflight). A class is one
-  rule with the token's one value, parsed as an arbitrary value, and depends on `deps::THEME`. When the design
+  rule with the token's one value, parsed as an arbitrary value, and depends on `deps::THEME`. A number becomes
+  a length in pixels (`[12px]`), except to the utilities that take a factor (`scale-*`, `takes_factor`) and after a
+  `number:` hint, where it stays bare (`scale-(--press)` is `scale-[0.97]`). When the design
   tokens the app draws with change (a theme action resolved by `Core::install_theme`: another document, a pick, the
   app's or the host's patch), `Core::class_tokens_changed` drops the cached strings that read a token whose value
   changed, or a role whose mapping changed (`ClassTokens::changed`), and resolves their nodes (and the app's classes
@@ -179,7 +181,7 @@
   context isolates it); `block` boxes never collapse margins with their children (an unset `align-content` resolves to
   `flex-start`, which makes taffy's block a formatting context); strings keep their whitespace (`whitespace-*` sets
   wrapping only; the JSX compiler collapses literal JSX text); `transition` / `transition-all` animate their groups
-  (`TransitionProps`: colors, opacity, transform, shadows, shape), and filters, backdrop filters, gradients and layout
+  (`TransitionProps`: colors, opacity, transform, shadows, shape; `transition-all` adds the clip path), and filters, backdrop filters, gradients and layout
   take their new values at once; `focus-visible:` (`state::FOCUS_VISIBLE`) is the focus that shows, after the
   browsers' `:focus-visible`: the platforms report only how the user last gave input (`InputModality`: a key, or a
   pointer, pen or finger going down; `EngineControl::set_input_modality`), and the core decides (`classes.rs`
@@ -288,7 +290,10 @@
   (Apple's Liquid Glass, drawn in the `backdropFilter`'s place on iOS 26 and macOS 26 and later (`UIGlassEffect`, `NSGlassEffectView`, both looked up at run time) and nowhere else, so give a glass
   view a blur to fall back to), `glassTintColor` (the tint of the native glass on iOS 26 and macOS 26;
   `null` restores its native default, an explicit transparent color remains a tint, and the earlier-system blur fallback is unchanged), `maskImage` (a gradient whose alpha decides how much of the view is drawn, its backdrop
-  filter included; iOS, macOS, Android, Linux and web, the topmost layer of several. A masked `backdropFilter` blurs by its exact radius on iOS and macOS, without the material's tint (`PlainBlur` in their `visual.rs`), so layers of them stack into a progressive blur), `mixBlendMode`, `outline*`, `visibility`, `cursor`, `transition*` (CSS: property groups,
+  filter included; iOS, macOS, Android, Linux and web, the topmost layer of several. A masked `backdropFilter` blurs by its exact radius on iOS and macOS, without the material's tint (`PlainBlur` in their `visual.rs`), so layers of them stack into a progressive blur), `clipPath` (CSS's `inset()` shape only, a rounded rectangle and no arbitrary
+  path: `ClipInset` in `effects.rs` resolves it against the view's size and is what every backend clips drawing and hit
+  testing to, `HitArea::clipped` for the desktops; it transitions between two insets and changes at once to or from
+  `none`), `mixBlendMode`, `outline*`, `visibility`, `cursor`, `transition*` (CSS: property groups,
   duration, delay, easing) and `animation*` (Tailwind's `spin` / `ping` / `pulse` / `bounce`), `display: grid` with
   `gridTemplateColumns/Rows` (line names: `grid.rs` turns them into taffy's `grid_template_*_names`, one set per
   line between components, a `repeat()` counting as one), `gridAutoFlow/Columns/Rows`, `gridColumn/Row(Start/End)` (by
@@ -603,5 +608,5 @@ gpui-kit's `Colorize` methods are inherent methods of `Hsla` (no trait to import
 ## Android differences
 
 - **Android differences**: shadows need a background (no content shadows, e.g. text with a transparent background); odd corner
-  radii clip by path before API 33; pull to refresh is our own (stretch overscroll stays native); `contentInset` is padding and
+  radii clip by path before API 33, and continuous corners clip their children through a layer (pitfalls); pull to refresh is our own (stretch overscroll stays native); `contentInset` is padding and
   `decelerationRate` only shapes snapping glides.

@@ -85,7 +85,6 @@ fn start(
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         cache: Default::default(),
         windows: None,

@@ -46,6 +46,8 @@ use std::{rc::Rc, sync::Arc};
 use slab::Slab;
 use taffy::{AvailableSpace, NodeId as LayoutId, Overflow, Position};
 
+#[doc(hidden)]
+pub use self::components::set_part_requester;
 pub use self::measure::{ListScrollPosition, Measurement};
 use self::{
     layout_tree::LayoutTree,
@@ -82,7 +84,9 @@ struct Run {
 
 /// A view's built-in scroll bar (`scrollbars.rs`) and the theme of its own
 /// it was made with.
-type Bar = (NodeId, Option<Arc<crate::JsonValue>>);
+/// A view's built-in bar, and the theme of the view's own it was made
+/// with (`None`: the app's).
+type Bar = (NodeId, Option<crate::ScrollbarSetting>);
 
 const NO_KEY: Key = Key::MAX;
 
@@ -471,8 +475,12 @@ struct InputState {
     scrollbar: crate::ScrollbarSetting,
     /// Its built-in bar ([`Core::sync_scrollbars`]), beside it.
     bar: Option<Bar>,
+    /// A scroll watch follows it (a bar of the app's own placed beside it,
+    /// `watch_scroll`): its platform reports its scrolling as for a
+    /// built-in bar ([`Core::sync_watched_inputs`]).
+    watched: bool,
     /// How far the platform scrolled its text, while it has a built-in
-    /// bar ([`Core::set_input_scroll`]).
+    /// bar or a watch ([`Core::set_input_scroll`]).
     scroll: Option<InputScroll>,
 }
 
@@ -594,6 +602,34 @@ impl<T: SharedDefault> PartialEq<T> for Sparse<T> {
     }
 }
 
+/// A node's flags about its children's positions among them (`first:`,
+/// `odd:`…), kept in a byte: the core keeps one record per node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Positional(u8);
+
+impl Positional {
+    const NONE: Self = Self(0);
+    /// A child's classes read their position among siblings.
+    const CHILDREN: Self = Self(1);
+    /// Its children moved, and it waits in `Core::position_parents` for
+    /// their positions to be looked at (`classes.rs` `flush_positions`).
+    const QUEUED: Self = Self(2);
+
+    fn has(self, flag: Self) -> bool {
+        self.0 & flag.0 != 0
+    }
+
+    fn remove(&mut self, flag: Self) {
+        self.0 &= !flag.0;
+    }
+}
+
+impl std::ops::BitOrAssign for Positional {
+    fn bitor_assign(&mut self, flag: Self) {
+        self.0 |= flag.0;
+    }
+}
+
 struct Node {
     id: NodeId,
     kind: Kind,
@@ -653,8 +689,9 @@ struct Node {
     /// What only some nodes have: state styles, the styles of a page's
     /// header or a list's content ([`classes::NodeParts`]).
     parts: Option<Box<classes::NodeParts>>,
-    /// A child's classes read their position among siblings.
-    positional_children: bool,
+    /// What its children's positions among them are to it
+    /// ([`Positional`]).
+    positional: Positional,
     /// Styled with the margin its parent's `space-*` gives it.
     spaced: bool,
     /// The text color it inherits (`None`: React Native's black), CSS's
@@ -1016,7 +1053,7 @@ impl Node {
             resting_fill: None,
             data: Box::default(),
             parts: None,
-            positional_children: false,
+            positional: Positional::NONE,
             spaced: false,
             inherited_color: None,
             child_perspective: None,
@@ -1407,6 +1444,9 @@ pub struct Core<M: TextEngine> {
     /// Scroll views and lists whose built-in bar may come or go
     /// ([`Core::sync_scrollbars`]).
     scrollbars_pending: Vec<Key>,
+    /// The multiline inputs scroll watches follow, sorted
+    /// ([`Core::sync_watched_inputs`]).
+    watched_inputs: Vec<NodeId>,
     /// Canvases fitting a view box into their box
     /// ([`crate::canvas::ViewPaint::Fit`]) to send once this round's
     /// layout gave them their size ([`Core::send_fitted`]).
@@ -1441,6 +1481,11 @@ pub struct Core<M: TextEngine> {
     /// Compiled shaders by the hash of their source, with their errors
     /// (an app setting the same source again compiles it once).
     shaders: rustc_hash::FxHashMap<u64, Result<crate::shader::Shader, crate::shader::ShaderError>>,
+    /// Web views whose URL `webview.hosts` does not grant, set while the
+    /// app may add an origin at run time (`webview.runtimeOrigin`): their
+    /// `allowOrigin` may come later in the same render, so they are
+    /// checked when their props go out ([`Self::settle_web_urls`]).
+    web_unchecked: rustc_hash::FxHashSet<(Key, NodeId)>,
     /// Shader transitions this commit starts ([`MountItem::ShaderTransition`]),
     /// put first in its batch.
     transition_starts: Vec<MountItem>,
@@ -1632,6 +1677,10 @@ pub struct Core<M: TextEngine> {
     /// `--font-sans`.
     default_font: Option<crate::style::FontFamily>,
     queue: Vec<Key>,
+    /// Parents whose children moved, each once: their children's positions
+    /// are looked at before the next flush (`classes.rs` `flush_positions`),
+    /// once however many joined or left.
+    position_parents: Vec<Key>,
     needs_layout: bool,
     /// Parsed classes and the theme.
     tailwind: Tailwind,
@@ -1696,9 +1745,6 @@ pub struct Core<M: TextEngine> {
     /// Opens and applies the app's windows of its own in place of the
     /// platform ([`Core::set_window_backend`]).
     window_backend: Option<Arc<dyn crate::desktop::WindowBackend>>,
-    /// Recognizes the app's speech in place of the platform
-    /// ([`Core::set_speech`]).
-    speech: Option<Arc<dyn crate::speech::SpeechBackend>>,
     /// Plays the app's sound in place of the platform ([`Core::set_audio`]).
     audio: Option<Arc<dyn crate::audio::AudioBackend>>,
     /// The app's login item ([`Core::set_login_item`]); without one the app
@@ -1787,7 +1833,6 @@ impl<M: TextEngine> Core<M> {
             clipboard: None,
             picker: None,
             window_backend: None,
-            speech: None,
             audio: None,
             login_item: None,
             components: components::Components::for_viewport(viewport),
@@ -1815,6 +1860,7 @@ impl<M: TextEngine> Core<M> {
             sticky_scrollers: Vec::new(),
             builtin_scrollbars: None,
             scrollbars_pending: Vec::new(),
+            watched_inputs: Vec::new(),
             fitted_pending: Vec::new(),
             decorated: Vec::new(),
             sticky_changed: false,
@@ -1826,6 +1872,7 @@ impl<M: TextEngine> Core<M> {
             sticky_warned: false,
             inset_warned: false,
             shaders: Default::default(),
+            web_unchecked: Default::default(),
             transition_starts: Vec::new(),
             pictured: Default::default(),
             unlinked_from: Vec::new(),
@@ -1893,6 +1940,7 @@ impl<M: TextEngine> Core<M> {
             font_scale: 1.0,
             default_font: None,
             queue: Vec::new(),
+            position_parents: Vec::new(),
             needs_layout: true,
             tailwind: Tailwind::new(),
             class_env: ClassEnvironment::default(),
@@ -2057,6 +2105,7 @@ impl<M: TextEngine> Core<M> {
             crate::element::global::<crate::element::desktop::WindowAccess>()
                 .set(crate::element::desktop::WindowAccess(Some(access.clone())));
         }
+        self.components.runtime.set_access(access.clone());
         self.access = access;
         self.canvas_images.clear();
     }
@@ -2142,13 +2191,6 @@ impl<M: TextEngine> Core<M> {
     /// stay with the platform.
     pub fn set_window_backend(&mut self, backend: Option<Arc<dyn crate::desktop::WindowBackend>>) {
         self.window_backend = backend;
-    }
-
-    /// Recognizes the app's speech (`Speech.start`) with `backend`, an
-    /// embedding app's own recognizer or a test's fake, instead of the
-    /// platform's (`None`: the platform's, the default).
-    pub fn set_speech(&mut self, backend: Option<Arc<dyn crate::speech::SpeechBackend>>) {
-        self.speech = backend;
     }
 
     /// Plays the app's sound (`Sound`, `AudioPlayer`) with `backend`, an
@@ -2327,6 +2369,9 @@ impl<M: TextEngine> Core<M> {
         if dependents {
             self.dependents_dirty(key);
         }
+        // Views that follow an element in what it scrolls go with it
+        // (`follow.rs`).
+        self.follow_changed |= moved && !self.followers.is_empty();
         // A link's hint placed where the pointer came over it would be left
         // behind by the content (`Core::overlay_scrolled`).
         if moved && !self.overlays.is_empty() {
@@ -2483,7 +2528,7 @@ impl<M: TextEngine> Core<M> {
 
     /// The platform scrolled the text of multiline input `id` to `offset`,
     /// its text `content` large in a `viewport` (reported while a built-in
-    /// bar takes the place of its indicator, `InputConfig::replaced`).
+    /// bar or a scroll watch follows it, `InputConfig::report_scroll`).
     pub fn set_input_scroll(
         &mut self,
         id: NodeId,
@@ -2723,6 +2768,24 @@ impl<M: TextEngine> Core<M> {
         self.needs_layout = true;
     }
 
+    /// A paste into input `id` (`onPaste`): its files larger than the
+    /// input's `pasteMaxSize` go to [`crate::PasteEvent::too_large`],
+    /// whichever platform read them, so every platform gives the app the
+    /// same files.
+    pub fn limit_paste(&self, id: NodeId, payload: &mut EventPayload) {
+        let EventPayload::Paste(paste) = payload else {
+            return;
+        };
+        let max = self
+            .key(id)
+            .ok()
+            .and_then(|key| self.nodes[key as usize].input.as_ref())
+            .and_then(|input| input.config.paste_max_size);
+        if let Some(max) = max {
+            paste.limit_files(max);
+        }
+    }
+
     /// The user edited input `id` (before JS sees the edit): keeps the text
     /// for layout and for stale-value detection.
     pub fn input_changed(&mut self, id: NodeId, text: &str, count: u32) {
@@ -2770,7 +2833,7 @@ impl<M: TextEngine> Core<M> {
                     ..
                 } | Op::Listen {
                     id: ROOT_ID,
-                    event: EventKind::BackPress | EventKind::KeyCommand,
+                    event: EventKind::BackPress | EventKind::BackProgress | EventKind::KeyCommand,
                     ..
                 } | Op::SetProp {
                     id: ROOT_ID,
@@ -2797,7 +2860,7 @@ impl<M: TextEngine> Core<M> {
             | Op::Placeholder { id }
             | Op::Command { id, .. } = op
         {
-            self.materialize_run(id);
+            self.materialize_run(id)?;
         }
         match op {
             Op::Evaluate {
@@ -2825,6 +2888,9 @@ impl<M: TextEngine> Core<M> {
                 }
                 self.check_id_range(id)?;
                 if self.fold_runs {
+                    if self.nodes.len().saturating_add(self.runs.len()) >= self.max_nodes {
+                        return Err(ApplyError::TooManyNodes(self.max_nodes));
+                    }
                     self.runs.insert(
                         id,
                         Run {
@@ -3249,7 +3315,14 @@ impl<M: TextEngine> Core<M> {
             .windows
             .keys()
             .copied()
-            .filter(|&id| self.key(id).is_err())
+            // Released, or out of the tree: a closed window's root that
+            // something still holds (a development host keeps the mounted
+            // app for hot updates) is not released yet, but it is gone.
+            .filter(|&id| {
+                !self
+                    .key(id)
+                    .is_ok_and(|k| id == crate::ROOT_ID || self.nodes[k as usize].parent != NO_KEY)
+            })
             .collect();
         for id in gone {
             self.windows.remove(&id);
@@ -3421,6 +3494,36 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// The bottom edge of the logical root's in-flow children, in surface points.
+    ///
+    /// Read after [`Self::commit`] for settled geometry, from the same frames
+    /// reported to layout listeners. Detached layout roots (such as overlays
+    /// and modals) and fixed or absolutely positioned children do not contribute.
+    /// `None` means there is no laid-out in-flow content. This does not run an
+    /// intrinsic-size pass or change the viewport.
+    pub fn content_height(&self) -> Option<Points> {
+        self.nodes[self.root as usize]
+            .children
+            .iter()
+            .filter_map(|&key| {
+                let node = &self.nodes[key as usize];
+                let layout = node.layout?;
+                if node.is_layout_root()
+                    || self.layout.displays_none(layout)
+                    || matches!(
+                        self.layout.style(layout).position,
+                        Position::Absolute | Position::Fixed
+                    )
+                    || node.frame.origin.y.0.is_nan()
+                {
+                    return None;
+                }
+                Some(node.frame.origin.y.0 + node.frame.size.height.0)
+            })
+            .reduce(f32::max)
+            .map(Points)
+    }
+
     /// Finishes a turn: rebuilds text, runs layout, updates lists and
     /// returns the mount items, or `None` when nothing changed.
     pub fn commit(&mut self) -> Option<MountBatch> {
@@ -3556,6 +3659,10 @@ impl<M: TextEngine> Core<M> {
         }
         // The views' patches and the views to make first.
         self.render_components();
+        // The children that moved, the app's and those the components just
+        // placed, styled at their places before anything reads their styles
+        // (`position: fixed`, the color they pass on).
+        self.flush_positions();
         self.prepare_reveals();
         // The focus reported since, after the components made and released
         // what they did: one change of the chain, the views both chains
@@ -3589,6 +3696,7 @@ impl<M: TextEngine> Core<M> {
             self.sync_kept();
         }
         self.sync_back();
+        self.sync_back_progress();
         self.sync_keys();
         // Platforms animate the frames, insertions and removals that follow
         // in the batch; ops may already have queued some.
@@ -3932,27 +4040,14 @@ impl<M: TextEngine> Core<M> {
                 }
                 // Checked before the grants: a host may put the name in a
                 // path or a URL, where `user.x/../admin` leaves `user.*`.
-                Command::HostCall { id: call, name, .. }
-                    if !crate::access::valid_host_name(name) =>
-                {
-                    let error = crate::host_channel::invalid_name(name);
-                    self.deny(error.message().to_owned());
-                    self.answer_host(*call, Err(error));
-                    continue;
-                }
-                Command::HostCall { id: call, name, .. } if !self.access.allows_host(name) => {
-                    let error = crate::host_channel::not_granted(name);
-                    self.deny(error.message().to_owned());
-                    self.answer_host(*call, Err(error));
-                    continue;
-                }
-                Command::HostPost { name, .. }
-                    if crate::host_channel::check_call(&self.access, name).is_err() =>
-                {
-                    let error = crate::host_channel::check_call(&self.access, name)
-                        .expect_err("a refused name");
-                    self.deny(error.message().to_owned());
-                    continue;
+                Command::HostCall { name, .. } | Command::HostPost { name, .. } => {
+                    if let Some(error) = crate::host_channel::refusal(&self.access, name) {
+                        self.deny(error.to_string());
+                        if let Command::HostCall { id: call, .. } = command {
+                            self.answer_host(call, Err(error));
+                        }
+                        continue;
+                    }
                 }
                 Command::SendInput(_) if !self.access.allows_web_input() => {
                     self.deny("trusted web view input is not granted: add `\"input\": true` to capabilities.webview in nsh.json".into());
@@ -3960,7 +4055,11 @@ impl<M: TextEngine> Core<M> {
                 }
                 // As a `src` the capability does not allow: the page is
                 // not loaded, so its headers go nowhere.
-                Command::Load(load) if !self.access.allows_webview(&load.src) => {
+                Command::Load(load)
+                    if !self
+                        .access
+                        .allows_webview_with(&load.src, self.web_origin(key)) =>
+                {
                     self.deny(not_granted("the web page", &load.src, "webview.hosts"));
                     continue;
                 }
@@ -4053,11 +4152,11 @@ impl<M: TextEngine> Core<M> {
 
     fn alloc(&mut self, id: NodeId, kind: Kind) -> Result<Key, ApplyError> {
         let idx = id as usize;
-        if self.nodes.len() >= self.max_nodes {
+        if self.nodes.len().saturating_add(self.runs.len()) >= self.max_nodes {
             return Err(ApplyError::TooManyNodes(self.max_nodes));
         }
         self.check_id_range(id)?;
-        if self.slots.contains(idx) {
+        if self.slots.contains(idx) || self.runs.contains_key(&id) {
             return Err(ApplyError::DuplicateNode(id));
         }
         let key = self.nodes.insert(Node::new(id, kind)) as Key;
@@ -4169,6 +4268,7 @@ impl<M: TextEngine> Core<M> {
                         | R::ImageButton
                         | R::Link
                         | R::Search
+                        | R::Textbox
                         | R::Checkbox
                         | R::Radio
                         | R::Switch
@@ -4875,7 +4975,10 @@ impl<M: TextEngine> Core<M> {
         // automatic minimum size as a flex or grid item 0, which clipping the
         // paint must not do. Set here rather than while parsing the style so
         // that what `overflow` sets as a style stays what it was.
-        let clip = if node.view_style.overflow_hidden {
+        // An input always clips: it scrolls its own text, so text taller than
+        // its box (a fixed height, a `maxHeight`) stays in it and must not
+        // grow the content size of a scroll view around it.
+        let clip = if node.view_style.overflow_hidden || node.kind == Kind::Input {
             taffy::Overflow::Clip
         } else {
             taffy::Overflow::Visible
@@ -5291,27 +5394,32 @@ impl<M: TextEngine> Core<M> {
     /// video or web view source shows nothing and fails (`onError` with
     /// `code` `ERR_ACCESS_DENIED`).
     fn check_prop(&mut self, key: Key, prop: Prop) -> Prop {
+        let prop = match prop {
+            Prop::Native(NativeProp::AllowOrigin(Some(origin))) => {
+                Prop::Native(NativeProp::AllowOrigin(self.check_allow_origin(&origin)))
+            }
+            prop => prop,
+        };
         if self.access.is_unrestricted() {
             return prop;
         }
         let node = &self.nodes[key as usize];
         let (id, kind) = (node.id, node.kind);
+        // With `webview.runtimeOrigin`, a URL `webview.hosts` does not
+        // grant waits for the web view's `allowOrigin`, which may come
+        // after it in this render: it is checked when the props go out.
+        if kind == Kind::WebView
+            && self.access.allows_runtime_origin()
+            && let Some(url) = web_url(&prop)
+            && !url.is_empty()
+            && !self.access.allows_webview_with(url, self.web_origin(key))
+        {
+            self.web_unchecked.insert((key, id));
+            return prop;
+        }
         // Always reported: the `onError` listener may be set after the
         // source (JS finds the handler when the event is delivered).
-        let report = |core: &mut Self, message: String| {
-            core.events.push(crate::element::JsEvent::Event(
-                id,
-                EventKind::Error,
-                EventPayload::Map(vec![
-                    ("message", PayloadValue::Str(message.clone())),
-                    (
-                        "code",
-                        PayloadValue::Str(crate::element::codes::ACCESS_DENIED.into()),
-                    ),
-                ]),
-            ));
-            core.deny(message);
-        };
+        let report = |core: &mut Self, message: String| core.report_access_denied(id, message);
         let refuse = |core: &mut Self, what: &str, uri: &str, capability: &str| {
             report(core, not_granted(what, uri, capability));
         };
@@ -5359,7 +5467,8 @@ impl<M: TextEngine> Core<M> {
                 }
             }
             Prop::Native(NativeProp::Src(Some(url)))
-                if kind == Kind::WebView && !self.access.allows_webview(&url) =>
+                if kind == Kind::WebView
+                    && !self.access.allows_webview_with(&url, self.web_origin(key)) =>
             {
                 refuse(self, "the web page", &url, "webview.hosts");
                 Prop::Native(NativeProp::Src(None))
@@ -5382,7 +5491,8 @@ impl<M: TextEngine> Core<M> {
                 }
             }
             Prop::Native(NativeProp::Source(crate::WebSource::Uri(uri)))
-                if kind == Kind::WebView && !self.access.allows_webview(&uri) =>
+                if kind == Kind::WebView
+                    && !self.access.allows_webview_with(&uri, self.web_origin(key)) =>
             {
                 refuse(self, "the web page", &uri, "webview.hosts");
                 Prop::Native(NativeProp::Source(crate::WebSource::None))
@@ -5403,7 +5513,7 @@ impl<M: TextEngine> Core<M> {
                 if kind == Kind::WebView
                     && !url.is_empty()
                     && self.access.allows_webviews()
-                    && !self.access.allows_webview(&url) =>
+                    && !self.access.allows_webview_with(&url, self.web_origin(key)) =>
             {
                 refuse(self, "the base URL", &url, "webview.hosts");
                 Prop::Native(NativeProp::BaseUrl(None))
@@ -5413,7 +5523,7 @@ impl<M: TextEngine> Core<M> {
                 base_url: Some(url),
             })) if kind == Kind::WebView
                 && !url.is_empty()
-                && !self.access.allows_webview(&url) =>
+                && !self.access.allows_webview_with(&url, self.web_origin(key)) =>
             {
                 refuse(self, "the base URL", &url, "webview.hosts");
                 Prop::Native(NativeProp::Source(crate::WebSource::Html {
@@ -5423,6 +5533,97 @@ impl<M: TextEngine> Core<M> {
             }
             prop => prop,
         }
+    }
+
+    /// `allowOrigin` as the web view keeps it: the origin in its one
+    /// written form, or none (with a message) when it is not an origin or
+    /// the app may not add one (`webview.runtimeOrigin`).
+    fn check_allow_origin(&mut self, origin: &str) -> Option<Arc<str>> {
+        match crate::access::WebOrigin::parse(origin) {
+            Err(e) => {
+                self.deny(format!("`allowOrigin`: {e}"));
+                None
+            }
+            Ok(_) if !self.access.is_unrestricted() && !self.access.allows_runtime_origin() => {
+                self.deny(
+                    "`allowOrigin` is not granted: add `\"runtimeOrigin\": true` to capabilities.webview in nsh.json"
+                        .into(),
+                );
+                None
+            }
+            Ok(o) => Some(o.to_string().into()),
+        }
+    }
+
+    /// The `allowOrigin` of the web view `key`, when it has one.
+    fn web_origin(&self, key: Key) -> Option<&crate::access::WebOrigin> {
+        match self.nodes[key as usize].control.as_deref() {
+            Some(NativeProps::WebView(p)) => p.allow_origin.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Checks the URLs of web view `key` that waited for its `allowOrigin`
+    /// ([`Self::web_unchecked`]) as its props go out: what neither
+    /// `webview.hosts` nor its origin grants is refused as a prop would be
+    /// (`onError` with `ERR_ACCESS_DENIED`, and nothing loaded).
+    fn settle_web_urls(&mut self, key: Key) {
+        let id = self.nodes[key as usize].id;
+        if !self.web_unchecked.remove(&(key, id)) {
+            return;
+        }
+        let access = &self.access;
+        let Some(NativeProps::WebView(p)) = self.nodes[key as usize].control.as_deref_mut() else {
+            return;
+        };
+        let origin = p.allow_origin.clone();
+        let refuses =
+            |url: &str| !url.is_empty() && !access.allows_webview_with(url, origin.as_ref());
+        let mut messages = Vec::new();
+        // `src`, also while `html` shows instead: clearing `html` loads it.
+        let src = p.src.take_if(|url| refuses(url));
+        if let Some(url) = &src {
+            messages.push(not_granted("the web page", url, "webview.hosts"));
+        }
+        // What loads: `src`, or a URL Rust set as the source.
+        if let crate::WebSource::Uri(url) = &p.source
+            && refuses(url)
+        {
+            if src.as_ref() != Some(url) {
+                messages.push(not_granted("the web page", url, "webview.hosts"));
+            }
+            p.source = crate::WebSource::None;
+        }
+        let base = p.base_url.take_if(|url| refuses(url));
+        if let Some(url) = &base {
+            messages.push(not_granted("the base URL", url, "webview.hosts"));
+        }
+        if let crate::WebSource::Html { base_url, .. } = &mut p.source
+            && let Some(url) = base_url.take_if(|url| refuses(url))
+            && base.as_ref() != Some(&url)
+        {
+            messages.push(not_granted("the base URL", &url, "webview.hosts"));
+        }
+        for message in messages {
+            self.report_access_denied(id, message);
+        }
+    }
+
+    /// A refused source of node `id`: its `onError` (`ERR_ACCESS_DENIED`)
+    /// and the app's console.
+    fn report_access_denied(&mut self, id: NodeId, message: String) {
+        self.events.push(crate::element::JsEvent::Event(
+            id,
+            EventKind::Error,
+            EventPayload::Map(vec![
+                ("message", PayloadValue::Str(message.clone())),
+                (
+                    "code",
+                    PayloadValue::Str(crate::element::codes::ACCESS_DENIED.into()),
+                ),
+            ]),
+        ));
+        self.deny(message);
     }
 
     /// `source` compiled, once per source while the cache keeps it (its
@@ -5890,7 +6091,9 @@ impl<M: TextEngine> Core<M> {
                 )
                 | Prop::Native(NativeProp::Scrollable(false)) => list::ignored::BEHAVIOR,
                 Prop::Scrollbar(
-                    crate::ScrollbarSetting::Hidden | crate::ScrollbarSetting::Themed(_),
+                    crate::ScrollbarSetting::Hidden
+                    | crate::ScrollbarSetting::Themed(_)
+                    | crate::ScrollbarSetting::ThemeValue(_),
                 ) => list::ignored::SCROLLBAR,
                 Prop::Refreshing(true) => list::ignored::REFRESH,
                 Prop::ScrollValue(Some(_)) => list::ignored::SCROLL_VALUE,
@@ -5987,6 +6190,8 @@ impl<M: TextEngine> Core<M> {
                         ScrollProp::Deceleration(r) => b.deceleration = r,
                         ScrollProp::Bounces(on) => b.bounces = on,
                         ScrollProp::ScrollsToTop(on) => b.scrolls_to_top = on,
+                        ScrollProp::SmoothWheel(on) => b.smooth_wheel = on,
+                        ScrollProp::WheelLineHeight(h) => b.wheel_line_height = h.max(Points::ZERO),
                         ScrollProp::ContentInset(i) => b.content_inset = i,
                         ScrollProp::ScrollbarInset(i) => {
                             // Negative insets count as none.
@@ -6289,6 +6494,10 @@ impl<M: TextEngine> Core<M> {
                 if props.href != value {
                     props.href = value;
                     flags |= dirty::VIEW_PROPS;
+                    // A span's is recorded in its block's text (`link_hrefs`).
+                    if node.kind == Kind::Text && node.inline {
+                        rebuild_span = true;
+                    }
                 }
             }
             Prop::PanActivation(value) => {
@@ -6623,6 +6832,7 @@ impl<M: TextEngine> Core<M> {
                     AccessibilityProp::LiveRegion(v) => a.live_region = v,
                     AccessibilityProp::Actions(v) => a.actions = v,
                     AccessibilityProp::Level(v) => a.level = v,
+                    AccessibilityProp::Orientation(v) => a.orientation = v,
                     // Set as relations, above.
                     AccessibilityProp::ActiveDescendant(_)
                     | AccessibilityProp::Controls(_)
@@ -6742,6 +6952,17 @@ impl<M: TextEngine> Core<M> {
             }
             Prop::Overlay(prop) => {
                 use crate::OverlayProp;
+                // A hint makes an overlay a tooltip's, which counts among no
+                // siblings (`is_element_child`): theirs move.
+                let parent = node.parent;
+                if matches!(prop, OverlayProp::Hint(_))
+                    && parent != NO_KEY
+                    && self.nodes[parent as usize]
+                        .positional
+                        .has(Positional::CHILDREN)
+                {
+                    self.queue_positions(parent);
+                }
                 self.set_overlay_config(key, |c| match prop {
                     OverlayProp::Anchor(v) => c.anchor = v,
                     OverlayProp::Placement(v) => c.placement = v,
@@ -6864,6 +7085,7 @@ impl<M: TextEngine> Core<M> {
                 {
                     let changed = match &prop {
                         NativeProp::Incognito(on) => Some(("`incognito` is", *on != p.incognito)),
+                        NativeProp::Zoomable(on) => Some(("`zoomable` is", *on != p.zoomable)),
                         // A re-render builds new handlers: only a change
                         // of the schemes served is worth a warning.
                         NativeProp::UrlSchemes(schemes) => Some((
@@ -6968,6 +7190,10 @@ impl<M: TextEngine> Core<M> {
                     }
                     Prop::PasteBehavior(behavior) => {
                         c.paste_behavior = behavior;
+                        false
+                    }
+                    Prop::PasteMaxSize(max) => {
+                        c.paste_max_size = max;
                         false
                     }
                     Prop::AutoFocus(on) => {
@@ -7080,13 +7306,19 @@ impl<M: TextEngine> Core<M> {
     }
 
     /// Gives run `id` its node, in its block if it is in one (for any use
-    /// other than holding text as a block's only child).
-    pub(super) fn materialize_run(&mut self, id: NodeId) {
+    /// other than holding text as a block's only child). Remove it from
+    /// `runs` during allocation so the quota counts it only once, and
+    /// restore it on failure so its block keeps its text.
+    pub(super) fn materialize_run(&mut self, id: NodeId) -> Result<(), ApplyError> {
         let Some(run) = self.runs.remove(&id) else {
-            return;
+            return Ok(());
         };
-        let Ok(key) = self.alloc(id, Kind::RawText) else {
-            return;
+        let key = match self.alloc(id, Kind::RawText) {
+            Ok(key) => key,
+            Err(e) => {
+                self.runs.insert(id, run);
+                return Err(e);
+            }
         };
         self.nodes[key as usize].text = run.text;
         if run.block != NO_KEY {
@@ -7094,6 +7326,7 @@ impl<M: TextEngine> Core<M> {
             let parent = self.nodes[run.block as usize].id;
             let _ = self.insert(parent, id, None);
         }
+        Ok(())
     }
 
     /// The text of the run text block or span `key` holds without a node.
@@ -7116,12 +7349,12 @@ impl<M: TextEngine> Core<M> {
             if self.fold_run(parent, parent_id, child_id, before) {
                 return Ok(());
             }
-            self.materialize_run(child_id);
+            self.materialize_run(child_id)?;
             if let Some(b) = before {
-                self.materialize_run(b);
+                self.materialize_run(b)?;
             }
             if let Some(&run) = self.folded.get(&parent) {
-                self.materialize_run(run);
+                self.materialize_run(run)?;
             }
         }
         let child = self.key(child_id)?;
@@ -7240,10 +7473,13 @@ impl<M: TextEngine> Core<M> {
             .as_ref()
             .is_some_and(|c| c.deps() & crate::tailwind::deps::POSITION != 0)
         {
-            self.nodes[parent as usize].positional_children = true;
+            self.nodes[parent as usize].positional |= Positional::CHILDREN;
         }
-        if self.nodes[parent as usize].positional_children {
-            self.positions_changed(parent);
+        if self.nodes[parent as usize]
+            .positional
+            .has(Positional::CHILDREN)
+        {
+            self.queue_positions(parent);
         }
         self.spacing_changed(parent, child);
         if self.pointer_none_classes > 0 {
@@ -7364,8 +7600,11 @@ impl<M: TextEngine> Core<M> {
         if let Some(list) = self.nodes[parent as usize].list.as_mut() {
             list.remove_cell(key);
         }
-        if self.nodes[parent as usize].positional_children {
-            self.positions_changed(parent);
+        if self.nodes[parent as usize]
+            .positional
+            .has(Positional::CHILDREN)
+        {
+            self.queue_positions(parent);
         }
         self.nodes[key as usize].parent = NO_KEY;
         if self.nodes[key as usize].states & crate::tailwind::state::FOCUS_WITHIN != 0 {
@@ -8241,6 +8480,8 @@ impl<M: TextEngine> Core<M> {
 
     fn flush_dirty(&mut self) {
         loop {
+            // The children that moved since, each parent's once.
+            self.flush_positions();
             self.flush_dirty_once();
             // Text blocks create the views of new attachments while
             // flushing, which queues them; texts inside attachments built
@@ -8476,6 +8717,9 @@ impl<M: TextEngine> Core<M> {
                     self.mount.push(MountItem::ComponentProps { id, props });
                 }
             }
+            if flags & dirty::NATIVE != 0 && !self.web_unchecked.is_empty() {
+                self.settle_web_urls(key);
+            }
             let node = &self.nodes[key as usize];
             if flags & dirty::NATIVE != 0
                 && let Some(control) = &node.control
@@ -8547,7 +8791,7 @@ impl<M: TextEngine> Core<M> {
                     // A built-in bar takes the indicator's place.
                     config.scrollbar_visible =
                         input.scrollbar != crate::ScrollbarSetting::Hidden && input.bar.is_none();
-                    config.replaced = input.bar.is_some();
+                    config.report_scroll = input.bar.is_some() || input.watched;
                     self.mount.push(MountItem::Input {
                         id,
                         config: Box::new(config),
@@ -9000,6 +9244,12 @@ impl<M: TextEngine> Core<M> {
                         if press && tracked & crate::tailwind::state::PRESSED != 0 {
                             events.set(EventKind::PressDown, true);
                             events.set(EventKind::PressUp, true);
+                        }
+                        // Where it goes (`TextView`'s links), for platforms
+                        // that make it a hyperlink (the web's `<a href>`).
+                        if let Some(href) = child.props.as_ref().and_then(|p| p.href.clone()) {
+                            out.link_hrefs
+                                .push(crate::text::LinkHref::new(out.links.len() as u32, href));
                         }
                         out.links.push(crate::text::TextLink {
                             start,
@@ -10511,7 +10761,11 @@ impl<M: TextEngine> Core<M> {
             }
         }
         if kind == Kind::Scroll {
-            self.set_scroll_content(key, scroll_extent(&l));
+            let horizontal = self.nodes[key as usize]
+                .scroll
+                .as_ref()
+                .is_some_and(|s| s.horizontal);
+            self.set_scroll_content(key, scroll_extent(&l, horizontal));
         }
         // List cells are positioned by `update_lists`, roots by
         // `layout_roots`.
@@ -10799,6 +11053,9 @@ impl<M: TextEngine> Core<M> {
             return;
         }
         node.spare = spare;
+        // A spare cell shows no row for views to follow (`follow.rs`).
+        self.follow_changed |= !self.followers.is_empty();
+        let node = &self.nodes[key as usize];
         if !node.created {
             // Its new view gets both (`ensure_created`).
             return;
@@ -11585,15 +11842,22 @@ fn ceil_to_pixel(value: Points, ratio: f32) -> Points {
 /// A scroll view's scrollable extent from its rounded layout: the overflow
 /// rectangle is measured from the padding box origin and stops at the
 /// children's border boxes, so the leading border and trailing padding are
-/// added.
-fn scroll_extent(l: &taffy::Layout) -> Size<Points> {
+/// added. The cross axis keeps the viewport's length, which the content
+/// spans (a vertical scroll view's width, a horizontal one's height). The
+/// main axis is the content's own extent, below the viewport too: a platform
+/// adds its own insets around the viewport (iOS's bars under a large title),
+/// and a floor there gives it a range to scroll over content that fits.
+fn scroll_extent(l: &taffy::Layout, horizontal: bool) -> Size<Points> {
     let o = l.scrollable_overflow_rect;
-    size_pt(
-        l.size.width.max(l.border.left + o.right + l.padding.right),
-        l.size
-            .height
-            .max(l.border.top + o.bottom + l.padding.bottom),
-    )
+    let (width, height) = (
+        l.border.left + o.right() + l.padding.right,
+        l.border.top + o.bottom() + l.padding.bottom,
+    );
+    if horizontal {
+        size_pt(width, height.max(l.size.height))
+    } else {
+        size_pt(width.max(l.size.width), height)
+    }
 }
 
 /// `layout` rounded as Taffy's rounding pass (`taffy::round_layout`) rounds
@@ -11657,10 +11921,17 @@ fn rounded(layout: &taffy::Layout, origin: Origin, ratio: taffy::Size<f32>) -> t
     out.padding.top = span(top, top + layout.padding.top, ry);
     out.padding.bottom = span(bottom - layout.padding.bottom, bottom, ry);
     let o = layout.scrollable_overflow_rect;
-    out.scrollable_overflow_rect.left = points(pixel(x + o.left, rx) - x0, rx);
-    out.scrollable_overflow_rect.right = points(pixel(x + o.right, rx) - x0, rx);
-    out.scrollable_overflow_rect.top = points(pixel(y + o.top, ry) - y0, ry);
-    out.scrollable_overflow_rect.bottom = points(pixel(y + o.bottom, ry) - y0, ry);
+    // Taffy packs the scroll-origin directions into the rectangle's signs;
+    // keep them, and keep the origin inside the rounded rectangle.
+    out.scrollable_overflow_rect = taffy::ScrollableOverflow::new(
+        taffy::Rect {
+            left: points(pixel(x + o.left(), rx) - x0, rx).min(0.0),
+            right: points(pixel(x + o.right(), rx) - x0, rx).max(0.0),
+            top: points(pixel(y + o.top(), ry) - y0, ry).min(0.0),
+            bottom: points(pixel(y + o.bottom(), ry) - y0, ry).max(0.0),
+        },
+        o.is_reversed(),
+    );
     out
 }
 
@@ -11950,7 +12221,7 @@ fn measure_leaf<M: TextEngine>(
         && let Some(LeafContext::Text(cx)) = cx
     {
         use taffy::util::ResolveOrZero;
-        let resolve = |_: *const (), _: f32| 0.0;
+        let resolve = |_: taffy::CalcHandle, _: f32| 0.0;
         let padding = style
             .padding
             .resolve_or_zero(input.parent_size.width, resolve);
@@ -12041,7 +12312,8 @@ fn measure_leaf_size<M: TextEngine>(
         }
         inset
     };
-    taffy::compute_leaf_layout(
+    let image = matches!(cx, Some(LeafContext::Image(_)));
+    let mut output = taffy::compute_leaf_layout(
         input,
         style,
         |_, _| 0.0,
@@ -12050,9 +12322,32 @@ fn measure_leaf_size<M: TextEngine>(
                 width: known.width.map(|w| (w - inset.width).max(0.0)),
                 height: known.height.map(|h| (h - inset.height).max(0.0)),
             };
+            // The space Taffy offers the content box is the space around
+            // the box less its padding and border, negative where that
+            // space is narrower than they are (a column squeezed while it
+            // resizes). The content then has no room, as with a known
+            // size: an input measured as wide as that negative space gave
+            // Taffy a negative overflow, which its debug assertions reject.
+            let available = taffy::Size {
+                width: available.width.map_definite_value(|w| w.max(0.0)),
+                height: available.height.map_definite_value(|h| h.max(0.0)),
+            };
             measure_content(engine, cache, cx, known, available, input_max_height)
         },
-    )
+    );
+    // An image is drawn inside its box whatever its fit (CSS's replaced
+    // elements have no scrollable overflow). Taffy lays a leaf out without
+    // the sizes its style gives it (`RunMode::PerformLayout`), so what was
+    // measured is the natural size: a 24 point icon in a 14 point box
+    // would give the scroll view around it 10 points to scroll.
+    if image {
+        let o = output.scrollable_overflow_rect;
+        let mut rect = o.rect();
+        rect.right = rect.right.min(output.size.width);
+        rect.bottom = rect.bottom.min(output.size.height);
+        output.scrollable_overflow_rect = taffy::ScrollableOverflow::new(rect, o.is_reversed());
+    }
+    output
 }
 
 /// The size of a leaf's content: `known` and `available` are its content
@@ -12330,6 +12625,24 @@ fn definite(size: Size<Points>) -> taffy::Size<AvailableSpace> {
 }
 
 /// The message for a refused URL.
+/// The URL a web view prop loads at or resolves against, when it is one.
+fn web_url(prop: &Prop) -> Option<&str> {
+    match prop {
+        Prop::Native(
+            NativeProp::Src(Some(url))
+            | NativeProp::BaseUrl(Some(url))
+            | NativeProp::Source(
+                crate::WebSource::Uri(url)
+                | crate::WebSource::Html {
+                    base_url: Some(url),
+                    ..
+                },
+            ),
+        ) => Some(url),
+        _ => None,
+    }
+}
+
 fn not_granted(what: &str, uri: &str, capability: &str) -> String {
     let advice = crate::access::grant_advice(uri, capability);
     format!("{what} {uri} is not granted: {advice}")
@@ -12382,6 +12695,9 @@ fn apply_native(control: &mut NativeProps, prop: NativeProp) {
             }
             p.base_url = url;
         }
+        (NativeProps::WebView(p), P::AllowOrigin(v)) => {
+            p.allow_origin = v.and_then(|o| crate::access::WebOrigin::parse(&o).ok());
+        }
         (NativeProps::WebView(p), P::InjectedJavaScript(v)) => p.injected_js = v,
         (NativeProps::WebView(p), P::InjectedJavaScriptBefore(v)) => p.injected_js_before = v,
         (NativeProps::WebView(p), P::UserAgent(v)) => p.user_agent = v,
@@ -12389,6 +12705,7 @@ fn apply_native(control: &mut NativeProps, prop: NativeProp) {
         (NativeProps::WebView(p), P::JavaScriptEnabled(v)) => p.javascript_enabled = v,
         (NativeProps::WebView(p), P::BackForwardGestures(v)) => p.back_forward_gestures = v,
         (NativeProps::WebView(p), P::Incognito(v)) => p.incognito = v,
+        (NativeProps::WebView(p), P::Zoomable(v)) => p.zoomable = v,
         (NativeProps::WebView(p), P::UrlSchemes(v)) => p.url_schemes = v,
         (NativeProps::WebView(p), P::DeferDownloads(v)) => p.defer_downloads = v,
         (NativeProps::Video(p), P::Source(v)) => {
@@ -12646,7 +12963,6 @@ fn shown_by(item: &MountItem) -> Shown {
                 | C::Share { .. }
                 | C::RenderCanvas { .. }
                 | C::FileRequest { .. }
-                | C::Speech { .. }
                 | C::Audio { .. }
                 | C::Notification { .. }
                 | C::Desktop { .. }

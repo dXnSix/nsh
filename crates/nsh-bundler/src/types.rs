@@ -250,6 +250,7 @@ mod tests {
             set.assets.push(AssetDescription {
                 path: format!("@acme-ui/{path}"),
                 source: format!("/acme-ui/assets/{path}"),
+                targets: Vec::new(),
             });
         }
         let declaration = super::set_assets_declaration(&[set]);

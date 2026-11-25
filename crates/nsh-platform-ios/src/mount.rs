@@ -594,6 +594,11 @@ struct Slot {
     gesture_start: [f32; 4],
     pan_scroll_handoff: bool,
     pan_scroll: Option<PanScroll>,
+    /// `panActivation`: the view's own pan starts as it activates.
+    pan_activation: Option<nsh_core::PanActivation>,
+    /// Where the finger of the view's own pan went down (window points),
+    /// for `PanEvent::origin`.
+    pan_down: CGPoint,
     /// `delayLongPress` (milliseconds).
     long_press_delay: Option<f32>,
     /// A horizontal list laid out right to left: mirrored as a whole.
@@ -667,6 +672,8 @@ impl Slot {
             gesture_start: [0.0; 4],
             pan_scroll_handoff: false,
             pan_scroll: None,
+            pan_activation: None,
+            pan_down: CGPoint::ZERO,
             long_press_delay: None,
             mirrored: false,
             in_mirrored: false,
@@ -2278,9 +2285,6 @@ impl Mounter {
                     &self.control,
                 );
             }
-            (Command::Speech(command), _) if id == nsh_core::ROOT_ID => {
-                crate::speech::command(&self.control, &command);
-            }
             (Command::Audio(command), _) if id == nsh_core::ROOT_ID => {
                 use nsh_core::image::loader::AssetBase as Base;
                 let base = self.images.asset_base().map(|base| match base {
@@ -2603,22 +2607,29 @@ impl Mounter {
     pub(crate) fn keyboard_changed(&mut self, height: f32, motion: KeyboardMotion) {
         self.keyboard = height;
         self.keyboard_motion = motion;
-        self.avoid_keyboard(motion);
         if height <= 0.0 {
             // Hiding: what moved up comes back down with the keyboard.
+            self.avoid_keyboard(motion);
             self.pan_for_keyboard(motion);
         } else {
             // Showing: the app may make room for the keyboard itself, in
-            // the batch it answers with ([`Mounter::keyboard_settled`]).
+            // the batch it answers with ([`Mounter::keyboard_settled`]). A
+            // scroll view it lifts above the keyboard (a panel padded by
+            // the keyboard's height) needs no inset: measured before that
+            // batch, it would keep one as tall as the keyboard and scroll
+            // its content up for nothing.
             self.keyboard_pending = true;
         }
     }
 
     /// The engine handled the keyboard's change: the batch the app
-    /// answered with, if any, is applied. If the focused input is in no
-    /// scroll view and still under the keyboard, its content moves up.
+    /// answered with, if any, is applied. What the keyboard still covers
+    /// of the focused input's scroll view gets a bottom inset; if the
+    /// input is in no scroll view and still under the keyboard, its
+    /// content moves up.
     pub(crate) fn keyboard_settled(&mut self) {
         if std::mem::take(&mut self.keyboard_pending) {
+            self.avoid_keyboard(self.keyboard_motion);
             self.pan_for_keyboard(self.keyboard_motion);
         }
     }
@@ -2841,15 +2852,15 @@ impl Mounter {
             self.touch_listeners = self.touch_listeners.saturating_sub(1);
         }
         let on = self.touch_listeners > 0;
-        if on && self.touch_trackers.is_empty() {
+        // Ensure the root view and every modal still carry a tracker while
+        // touches are listened to. Gating this on `touch_trackers.is_empty()`
+        // left a modal opened after the first tracker set (the root's tracker
+        // outlives every modal) without one, so a modal reopened later never
+        // delivered its JS touch gestures. `add_touch_tracker` dedupes by
+        // node, so re-ensuring here each time is idempotent.
+        if on {
             self.add_touch_tracker(nsh_core::ROOT_ID);
-            let modals: Vec<NodeId> = self
-                .views
-                .iter()
-                .flatten()
-                .filter(|s| matches!(s.native, Native::Modal(_)))
-                .map(|s| s.native.view().tag() as NodeId)
-                .collect();
+            let modals: Vec<NodeId> = self.modal_attached.iter().map(|&(id, _)| id).collect();
             for modal in modals {
                 self.add_touch_tracker(modal);
             }
@@ -3102,6 +3113,9 @@ impl Mounter {
         let transition = style
             .transition
             .filter(|t| t.run_ms() > 0.0 && s.styled && view.window().is_some());
+        if let Some(nsh) = s.native.nsh() {
+            nsh.set_clip_path(style.clip_path().copied());
+        }
         s.style = style;
         s.styled = true;
         view.setHidden(s.style.hidden);
@@ -3777,6 +3791,7 @@ impl Mounter {
         }
         let v = slot.values;
         let handoff = slot.pan_scroll_handoff;
+        let activation = slot.pan_activation;
         let any = |kinds: &[EventKind]| kinds.iter().any(|&k| events.contains(k));
         let handles_press = any(&[
             EventKind::Press,
@@ -3806,16 +3821,7 @@ impl Mounter {
         // mounter keeps alive as long as the recognizers; so is the delegate.
         unsafe {
             toggle(&mut g.pan, wants_pan, view, || {
-                let r = UIPanGestureRecognizer::initWithTarget_action(
-                    UIPanGestureRecognizer::alloc(mtm),
-                    Some(&target),
-                    Some(sel!(handlePan:)),
-                );
-                r.setDelegate(Some(delegate));
-                if handoff {
-                    r.setMaximumNumberOfTouches(1);
-                }
-                r
+                new_pan(mtm, &target, activation, handoff)
             });
             toggle(&mut g.pinch, wants_pinch, view, || {
                 let r = UIPinchGestureRecognizer::initWithTarget_action(
@@ -3836,6 +3842,8 @@ impl Mounter {
                 r
             });
         }
+        let gated = nsh_core::input::gate_activation(&v, events, activation);
+        sync_gate(&mut g.gate, view, gated, mtm);
         if let Some(press) = &g.press {
             press.set_long_press(events.contains(EventKind::LongPress) || links_long_press);
             press.set_own(own_press, handles_press, nsh_core::input::has_tap(events));
@@ -3901,6 +3909,9 @@ impl Mounter {
             || wants_context
         {
             view.setUserInteractionEnabled(true);
+        }
+        if wants_touch || wants_pinch || wants_rotation {
+            view.setMultipleTouchEnabled(true);
         }
         if let Some(nsh) = slot.native.nsh() {
             nsh.set_target(&target);
@@ -4321,7 +4332,8 @@ impl Mounter {
                     // already on screen (new content, or a header that turned
                     // large in place) would keep its offset: its content
                     // under the header, read as scrolled, the title collapsed.
-                    let at_top = scroll.contentOffset().y <= -scroll.adjustedContentInset().top;
+                    let at_top =
+                        scroll.contentOffset().y <= -scroll.adjustedContentInset().top + 0.5;
                     scroll.setContentInsetAdjustmentBehavior(
                         UIScrollViewContentInsetAdjustmentBehavior::Automatic,
                     );
@@ -4331,7 +4343,21 @@ impl Mounter {
                         scroll.setContentOffset(offset);
                     }
                 }
+            } else if let Some(scroll) = first_scroll_view(&screen.view)
+                && scroll.contentInsetAdjustmentBehavior()
+                    != UIScrollViewContentInsetAdjustmentBehavior::Never
+            {
+                let at_top = scroll.contentOffset().y <= -scroll.adjustedContentInset().top + 0.5;
+                scroll.setContentInsetAdjustmentBehavior(
+                    UIScrollViewContentInsetAdjustmentBehavior::Never,
+                );
+                if at_top {
+                    let mut offset = scroll.contentOffset();
+                    offset.y = -scroll.contentInset().top;
+                    scroll.setContentOffset(offset);
+                }
             }
+            screen.controller.follow_large_title();
         }
         for (id, follows) in follows {
             self.following_scroll.retain(|&other| other != id);
@@ -4547,6 +4573,10 @@ impl Mounter {
     fn wait_for(&mut self, id: NodeId, awaited: &objc2_ui_kit::UIViewController) {
         if !self.waiting_modals.contains(&id) {
             self.waiting_modals.push(id);
+        }
+        // Presented once that modal is gone: its dismissal's end does so.
+        if crate::navigation::held_under_system_ui(awaited) {
+            return;
         }
         let Some(coordinator) = awaited.transitionCoordinator() else {
             return Self::present_waiting(&self.shared);
@@ -5355,15 +5385,20 @@ impl Mounter {
             });
         }
         let activation = props.pan_activation;
-        toggle(
-            &mut s.gestures.gate,
-            activation.is_some(),
-            s.native.view(),
-            || crate::touch::PanGate::new(mtm, activation.unwrap_or_default()),
-        );
-        if let (Some(gate), Some(a)) = (&s.gestures.gate, activation) {
-            gate.set_activation(a);
+        // The view's own pan follows the activation: a different one may
+        // need a different recognizer.
+        if s.pan_activation != activation {
+            s.pan_activation = activation;
+            if let Some(old) = s.gestures.pan.take() {
+                let view = s.native.view();
+                view.removeGestureRecognizer(&old);
+                let pan = new_pan(mtm, &target, activation, s.pan_scroll_handoff);
+                view.addGestureRecognizer(&pan);
+                s.gestures.pan = Some(pan);
+            }
         }
+        let gated = nsh_core::input::gate_activation(&s.values, s.events, activation);
+        sync_gate(&mut s.gestures.gate, s.native.view(), gated, mtm);
         if let Some(press) = &s.gestures.press {
             press.set_long_press_delay(props.long_press_delay);
         }
@@ -5689,9 +5724,13 @@ impl Mounter {
 
     /// Whether a drag on view `id` moving at `velocity` may start: a pan
     /// with only a horizontal (or vertical) value waits for a mostly
-    /// horizontal (vertical) movement, so it coexists with scrolling.
+    /// horizontal (vertical) movement, so it coexists with scrolling. A pan
+    /// with a `panActivation` begins as the activation activates instead.
     pub(crate) fn pan_should_begin(&self, id: NodeId, velocity: CGPoint) -> bool {
         let Some(s) = self.slot(id) else { return true };
+        if s.pan_activation.is_some() {
+            return true;
+        }
         match (s.values.pan_x.is_some(), s.values.pan_y.is_some()) {
             (true, false) => velocity.x.abs() > velocity.y.abs(),
             (false, true) => velocity.y.abs() > velocity.x.abs(),
@@ -5700,9 +5739,14 @@ impl Mounter {
     }
 
     /// A cooperating pan sees only scrolls between its view and the touch,
-    /// never a scroll elsewhere in the sheet or behind its backdrop.
-    pub(crate) fn pan_touch(&mut self, id: NodeId, touched: &UIView) {
+    /// never a scroll elsewhere in the sheet or behind its backdrop. `down`
+    /// is where the pan's first finger goes down (window points), when this
+    /// touch is that finger.
+    pub(crate) fn pan_touch(&mut self, id: NodeId, touched: &UIView, down: Option<CGPoint>) {
         let Some(s) = self.slot_mut(id) else { return };
+        if let Some(down) = down {
+            s.pan_down = down;
+        }
         s.pan_scroll = None;
         if !s.pan_scroll_handoff {
             return;
@@ -5789,6 +5833,7 @@ impl Mounter {
     ) {
         let Some(s) = self.slot(id) else { return };
         let (values, events) = (s.values, s.events);
+        let origin = self.pointer_positions(s.native.view(), s.pan_down).1;
         let payload = |m: &Self| {
             if state == UIGestureRecognizerState::Cancelled {
                 EventPayload::PanCancelled {
@@ -5797,6 +5842,7 @@ impl Mounter {
                     velocity_y: v.y as f32,
                     value_x: values.pan_x.map(|n| Points(m.animator.value(n))),
                     value_y: values.pan_y.map(|n| Points(m.animator.value(n))),
+                    origin,
                 }
             } else {
                 EventPayload::Pan {
@@ -5805,6 +5851,7 @@ impl Mounter {
                     velocity_y: v.y as f32,
                     value_x: values.pan_x.map(|n| Points(m.animator.value(n))),
                     value_y: values.pan_y.map(|n| Points(m.animator.value(n))),
+                    origin,
                 }
             }
         };
@@ -6334,6 +6381,79 @@ pub(crate) fn first_scroll_view(view: &UIView) -> Option<Retained<UIScrollView>>
 }
 
 /// Adds or removes a gesture recognizer.
+/// A view's own pan, as its `panActivation` asks: an edge pan is the
+/// system's screen edge pan (which waits for a stack's swipe back, see
+/// `gestureRecognizer:shouldRequireFailureOfGestureRecognizer:`); a pan
+/// along a way or past offsets begins as the activation activates.
+fn new_pan(
+    mtm: MainThreadMarker,
+    target: &Retained<EventTarget>,
+    activation: Option<nsh_core::PanActivation>,
+    handoff: bool,
+) -> Retained<UIPanGestureRecognizer> {
+    use nsh_core::PanEdge;
+    use objc2_ui_kit::{UIRectEdge, UIScreenEdgePanGestureRecognizer};
+    let action = sel!(handlePan:);
+    let r: Retained<UIPanGestureRecognizer> = match activation {
+        Some(nsh_core::PanActivation {
+            edge: Some(edge), ..
+        }) => {
+            // SAFETY: `EventTarget` implements `handlePan:` and outlives
+            // the recognizer (the mounter keeps both).
+            let r = unsafe {
+                UIScreenEdgePanGestureRecognizer::initWithTarget_action(
+                    UIScreenEdgePanGestureRecognizer::alloc(mtm),
+                    Some(target),
+                    Some(action),
+                )
+            };
+            r.setEdges(match edge {
+                PanEdge::Left => UIRectEdge::Left,
+                PanEdge::Right => UIRectEdge::Right,
+                PanEdge::Top => UIRectEdge::Top,
+                PanEdge::Bottom => UIRectEdge::Bottom,
+                // An edge this backend does not know starts no pan.
+                _ => UIRectEdge::None,
+            });
+            Retained::into_super(r)
+        }
+        Some(a) => Retained::into_super(crate::touch::ActivatedPan::new(mtm, a, target, action)),
+        // SAFETY: as above.
+        None => unsafe {
+            UIPanGestureRecognizer::initWithTarget_action(
+                UIPanGestureRecognizer::alloc(mtm),
+                Some(target),
+                Some(action),
+            )
+        },
+    };
+    r.setDelegate(Some(ProtocolObject::from_ref(&**target)));
+    if handoff {
+        r.setMaximumNumberOfTouches(1);
+    }
+    r
+}
+
+/// Adds or removes the gate of a view's `panActivation` (`PanGate`), which
+/// decides with `activation` (`nsh_core::input::gate_activation`): none
+/// while neither the view's native pan nor its responder follows the
+/// activation, so that a view whose pan is off leaves the drags to its
+/// content, among them a stack's swipe back from the middle of its page,
+/// which the gate would otherwise prevent.
+fn sync_gate(
+    gate: &mut Option<Retained<crate::touch::PanGate>>,
+    view: &UIView,
+    activation: Option<nsh_core::PanActivation>,
+    mtm: MainThreadMarker,
+) {
+    toggle(gate, activation.is_some(), view, || {
+        crate::touch::PanGate::new(mtm, activation.unwrap_or_default())
+    });
+    if let (Some(gate), Some(a)) = (gate.as_ref(), activation) {
+        gate.set_activation(a);
+    }
+}
+
 fn toggle<G: AsRef<UIGestureRecognizer>>(
     slot: &mut Option<Retained<G>>,
     wanted: bool,
@@ -6363,6 +6483,7 @@ fn key_modifiers(flags: isize) -> nsh_core::keymap::Modifiers {
         alt: has(19),
         shift: has(17),
         cmd: has(20),
+        alt_graph: false,
     }
 }
 

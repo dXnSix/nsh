@@ -1,6 +1,6 @@
 ---
 title: Android
-description: Run Rust and TSX NSH apps on Android with Android views, on an emulator or a device, package them as an .apk, and embed them in an existing Android app with nsh.aar and NshView.
+description: Run TSX and Rust NSH apps on Android with Android views, on an emulator or a device, package them as an .apk, and embed them in an existing Android app with nsh.aar and NshView.
 order: 12
 group: platforms
 ---
@@ -8,7 +8,7 @@ group: platforms
 # Android
 
 NSH apps run on Android with ordinary Android views and `StaticLayout` text, from Android 8 (API 26), on `arm64-v8a`,
-`armeabi-v7a` and `x86_64`. Whole apps written in Rust and in TSX run and package as on the other platforms, and an existing app
+`armeabi-v7a` and `x86_64`. Whole apps written in TSX and in Rust run and package as on the other platforms, and an existing app
 can embed modules in an `NshView` and load signed packages it downloads, under limits and capabilities it sets. On Android, `os()` is `Os::Android` (`platform.os` is `"android"` in TSX) and TSX's
 `android={{…}}` props apply.
 
@@ -34,6 +34,11 @@ and installs it again. For a TSX app, it installs a development host APK (rebuil
 forwards the dev server's port with `adb reverse`, so it works over USB without a shared network; the app updates as
 you save, with logs in the terminal.
 
+These development builds carry `libnsh.so` without its debug info, which keeps their APKs small enough to update on an
+emulator; the complete library is in `symbols/<abi>/` next to it, for `ndk-stack` and debuggers. When the device has no
+room to update the development host, NSH uninstalls it and installs it again: it holds only what the apps it runs
+wrote. An app's own APK is never uninstalled for you: the error says how to make room.
+
 ## Packaging
 
 ```sh
@@ -53,19 +58,19 @@ runtime in `symbols/<abi>/libnsh.so` (a Rust app's in `.nsh/rust/android-rust-re
 
 ## Upload to Google Play
 
-`nsh publish android` uploads an Android App Bundle (`.aab`) to Google Play's internal testing track
-([CLI](./cli.md#nsh-publish-android)):
+`nsh publish android` uploads an Android App Bundle (`.aab`) to a Google Play track, internal testing unless `--track`
+names another ([CLI](./cli.md#nsh-publish-android)):
 
 ```sh
-export NSH_PLAY_CREDENTIALS=~/keys/play-service-account.json   # never commit it
+export NSH_PLAY_CREDENTIALS=~/keys/play-service-account.json
+nsh publish doctor android
 nsh publish android .nsh/out/App.aab
+nsh publish android --from internal --track production --rollout 0.1
+nsh publish status android --json
 ```
 
-Once per app: create the app in Play Console, create a service account in Google Cloud with the Google Play Android
-Developer API enabled, download its JSON key, and invite the service account's email under **Users and permissions**
-with permission to release to testing tracks. Until the app's first release is made in Play Console, pass `--draft`.
-The bundle's version code must be higher than any uploaded before. Promoting a release beyond internal testing stays a
-step in Play Console.
+The Play Console and service account setup, the upload key, tracks, staged rollouts, the store listing and common errors:
+[Publish to Google Play](./publish.md#publish-to-google-play).
 
 ## Embedding in an Android app
 
@@ -101,7 +106,7 @@ cargo xtask android-embed    # writes dist/nsh/embed/android/{nsh,nsh-dev}.aar
 
 The AAR holds the Java runtime and `libnsh.so` for `arm64-v8a`, `armeabi-v7a` and `x86_64`, with their symbols: the
 app's Gradle build strips them when it packages the app and keeps the symbols for its crash reports. It declares the
-`INTERNET` permission and needs **API 26** (Android 8) or newer. It carries its R8 rules (`proguard.txt`), which a
+`INTERNET` and `ACCESS_NETWORK_STATE` permissions and needs **API 26** (Android 8) or newer. It carries its R8 rules (`proguard.txt`), which a
 minified build applies on its own: the native library finds the runtime's classes by name, so `com.longbridge.nsh`
 stays as it is.
 
@@ -418,6 +423,19 @@ file as `Picker.pickImages` does. `with_env(f)` runs `f` with the thread's JNI e
 logged and cleared). A request made while the app is in the background fails with `ActivityError::NoActivity`. `nsh-extra`'s camera
 (`crates/nsh-extra/src/camera/android.rs`) uses all of them.
 
+## Java listeners in Rust
+
+An Android API that calls back through an interface (a `Runnable` posted to the UI thread, a framework's
+`...Listener`) takes an object `proxy::implement(env, &["android.speech.RecognitionListener"], handler)` makes: a Java
+object implementing those interfaces whose calls reach `handler` (the method's name and its arguments) on the thread
+Java makes them on, so the crate ships no Java of its own. Keep the `Proxy` it returns as long as Java may call it;
+once it is dropped, its calls do nothing. `nsh-extra`'s speech recognition (`crates/nsh-extra/src/speech/android.rs`)
+listens to `SpeechRecognizer` this way. Only interfaces can be implemented so: an API that takes an abstract class
+(`UtteranceProgressListener`) needs a Java subclass, which the crate ships as a library
+([Java code](./packaging.md#java-code)). A method that returns a primitive must get a value boxed as its type
+(`java.lang.Boolean` for `boolean`): returning `None` there, or a call after the `Proxy` is dropped, throws a
+`NullPointerException` in Java.
+
 ## Notifications from other code
 
 [`Notifications`](../modules/nsh.md#notifications) reports presses of the notifications the app showed. Notifications
@@ -555,6 +573,7 @@ config of the app may override it). The release `nsh.aar` does not.
 
 ## See also
 
+- [Publish to Google Play](./publish.md#publish-to-google-play)
 - [Building with Rust](./rust.md)
 - [Embedding in iOS apps](./ios.md)
 - [Native components](./native-components.md)

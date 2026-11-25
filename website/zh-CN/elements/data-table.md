@@ -11,24 +11,6 @@ demo: el-data-table
 
 `DataTable` 提供布局、对齐、虚拟化和交互。应用通过 `classes` 和 `styles` 设置各部件的内边距、颜色、边框和选中态外观。Rust 用 `nsh_base::data_table()` 创建它，TSX 用 `nsh/base` 中的 `<DataTable>`。
 
-```rust tabs
-use nsh_base::{DataTableColumn, data_table};
-use nsh_core::prelude::*;
-
-fn column(key: &str, title: &str) -> DataTableColumn {
-    let mut column = DataTableColumn::default();
-    column.key = key.into();
-    column.title = Some(title.into());
-    column
-}
-
-fn table() -> impl IntoElement {
-    data_table()
-        .columns(vec![column("name", "Name"), column("city", "City")])
-        .flex_1()
-}
-```
-
 ```tsx tabs
 import { mount } from "nsh";
 import { DataTable, type DataTableColumn } from "nsh/base";
@@ -55,6 +37,24 @@ mount(() => (
     <App />
   </Window>
 ));
+```
+
+```rust tabs
+use nsh_base::{DataTableColumn, data_table};
+use nsh_core::prelude::*;
+
+fn column(key: &str, title: &str) -> DataTableColumn {
+    let mut column = DataTableColumn::default();
+    column.key = key.into();
+    column.title = Some(title.into());
+    column
+}
+
+fn table() -> impl IntoElement {
+    data_table()
+        .columns(vec![column("name", "Name"), column("city", "City")])
+        .flex_1()
+}
 ```
 
 表格填满应用给它的盒子（`flex-1`、一个高度），在其中滚动：纵向滚动所有行，横向滚动所有列，带滚动条（`scrollbar={false}` 隐藏滚动条，`bounces={false}` 关闭有回弹的平台上的边缘回弹）。
@@ -185,6 +185,7 @@ const page = signal({ start: 0, rows: load(0) });
 | Tab、Shift+Tab | 移动到下一列或上一列。 |
 | Page Up、Page Down | 按页移动行。 |
 | Home、End | 移动到第一个或最后一个。 |
+| Enter、Return | 激活获得焦点的行（`onRowActivate({ row })`），除非表格内的输入框或控件先接住了按键。 |
 | Escape | 先清除选择，再交出键盘。 |
 | 复制快捷键 | 把选中内容的文字放到剪贴板（`copy()`）。 |
 
@@ -410,6 +411,7 @@ const columns: DataTableColumn[] = [
 | `onRowPress` | `.on_row_press(\|event: &DataTablePress\| ..)` | 按下了一行或一个单元格：`{ row, column?, clicks, shift, control, alt, platform }`。 |
 | `onColumnPress` | `.on_column_press(\|event: &DataTableColumnPress\| ..)` | 按下了一个标题：`{ column, clicks, shift, control, alt, platform }`。 |
 | `onDoublePress` | `.on_double_press(\|target: &DataTableTarget\| ..)` | 一行、一个单元格或一个标题被连按两次：`{ target }`，一个 `{ row?, column? }`。 |
+| `onRowActivate` | `.on_row_activate(\|row: &u32\| ..)` | 获得焦点的行被激活（Enter / Return）：`{ row }`，与 `onRowPress` 报告的数字相同。 |
 | `onContextMenu` | `.on_context_menu(\|event: &DataTableContextMenu\| ..)` | 请求了上下文菜单：`{ row?, column?, x, y }`，位置位于根视图中。 |
 | `onSortChange` | `.on_sort_change(\|sort: &Option<DataTableSort>\| ..)` | 按下了排序按钮：`{ sort }`，下一个排序 `{ key, direction }` 或 `null`。 |
 | `onColumnResize` | `.on_column_resize(\|key: &SharedString, width: &Points\| ..)` | 列被调整宽度（`{ key, width }`），拖动的每一步都会触发，适配设置宽度时再触发一次。 |

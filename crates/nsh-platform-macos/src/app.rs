@@ -482,7 +482,6 @@ impl AppView {
             clipboard: None,
             host: options.host.clone(),
             picker: None,
-            speech: None,
             audio: None,
             // The app's windows of its own are this backend's.
             windows: None,
@@ -628,11 +627,12 @@ fn initial_environment() -> Environment {
         os: Os::MacOs,
         idiom: Idiom::Desktop,
         screen_color: true,
+        // `setString:forType:` says whether the pasteboard took the write.
+        clipboard_write_result: true,
         canvas_render: true,
         // `NSSharingServicePicker` (`crate::share`).
         share: true,
         file_requests: true,
-        speech: true,
         notifications: true,
         audio: true,
         web_input: true,

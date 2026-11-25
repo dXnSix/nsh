@@ -28,7 +28,6 @@ import ModMobile from "./mod-mobile";
 import ModPicker from "./mod-picker";
 import ModShare from "./mod-share";
 import ModNotifications from "./mod-notifications";
-import ModSpeech from "./mod-speech";
 import ModStorage from "./mod-storage";
 import ModWeb from "./mod-web";
 import ModUpdater from "./mod-updater";
@@ -58,7 +57,6 @@ const cases: Record<string, () => JSX.Element> = {
   "mod-picker": ModPicker,
   "mod-share": ModShare,
   "mod-notifications": ModNotifications,
-  "mod-speech": ModSpeech,
   "mod-storage": ModStorage,
   "mod-web": ModWeb,
   "mod-updater": ModUpdater,

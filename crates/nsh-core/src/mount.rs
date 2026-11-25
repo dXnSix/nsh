@@ -67,6 +67,11 @@ pub struct WebProps {
     /// The `baseUrl` prop, which [`Self::source`] holds while `html` is
     /// set.
     pub base_url: Option<Arc<str>>,
+    /// The one origin this web view may show besides `webview.hosts`
+    /// (`allowOrigin`, granted by `webview.runtimeOrigin`): a web view's
+    /// backend checks its navigations with
+    /// [`Access::allows_webview_with`](crate::access::Access::allows_webview_with).
+    pub allow_origin: Option<crate::access::WebOrigin>,
     /// Script run after each page loads.
     pub injected_js: Option<Arc<str>>,
     /// Script run before each page's own scripts.
@@ -84,6 +89,9 @@ pub struct WebProps {
     /// HTTP cache and no saved form data). Read when the platform makes the
     /// web view: the core keeps it from changing afterwards.
     pub incognito: bool,
+    /// The person can pinch to zoom the page, past its viewport's scale
+    /// limits. Read when the platform makes the web view, as `incognito`.
+    pub zoomable: bool,
     /// The URL schemes the page loads from the app
     /// ([`crate::web_resource`]). Read when the platform makes the web
     /// view, as `incognito`.
@@ -101,6 +109,7 @@ impl Default for WebProps {
             source: WebSource::None,
             src: None,
             base_url: None,
+            allow_origin: None,
             injected_js: None,
             injected_js_before: None,
             user_agent: None,
@@ -108,6 +117,7 @@ impl Default for WebProps {
             javascript_enabled: true,
             back_forward_gestures: false,
             incognito: false,
+            zoomable: false,
             url_schemes: Vec::new(),
             defer_downloads: false,
         }
@@ -206,6 +216,11 @@ pub struct ScrollBehavior {
     /// A tap at the top of the window scrolls it to its top (iOS:
     /// `UIScrollView.scrollsToTop`).
     pub scrolls_to_top: bool,
+    /// A mouse wheel's notches glide (`smoothWheel`).
+    pub smooth_wheel: bool,
+    /// Points a mouse wheel's line scrolls; 0 for the platform's own
+    /// (`wheelLineHeight`).
+    pub wheel_line_height: Points,
     /// Room around the content.
     pub content_inset: EdgeInsets,
     /// How far the scroll indicator keeps from each edge of the view: its
@@ -253,6 +268,8 @@ impl Default for ScrollBehavior {
             enabled: true,
             bounces: true,
             scrolls_to_top: true,
+            smooth_wheel: false,
+            wheel_line_height: Points::ZERO,
             content_inset: EdgeInsets::default(),
             scrollbar_inset: EdgeInsets::default(),
             keyboard_taps: KeyboardTaps::Never,
@@ -633,6 +650,9 @@ pub struct InputConfig {
     pub submit_behavior: Option<SubmitBehavior>,
     /// What a paste does (`pasteBehavior`).
     pub paste_behavior: PasteBehavior,
+    /// The largest pasted file read, in bytes (`pasteMaxSize`): a larger
+    /// one goes to [`crate::PasteEvent::too_large`] unread. `None`: all.
+    pub paste_max_size: Option<u64>,
     /// Focus once on screen.
     pub auto_focus: bool,
     /// Select the whole text when the input takes the focus
@@ -656,10 +676,11 @@ pub struct InputConfig {
     /// A multiline input shows its scroll indicator (`scrollbar`; false
     /// while a built-in bar takes its place).
     pub scrollbar_visible: bool,
-    /// A built-in bar of the app's takes the indicator's place: the
+    /// A bar of the app's follows a multiline input's text (its built-in
+    /// bar, or one the app placed that watches it, `watch_scroll`): the
     /// platform reports how far the text scrolled
-    /// (`EngineControl::input_scroll`) and takes `Command::ScrollTo`.
-    pub replaced: bool,
+    /// (`EngineControl::input_scroll`). Off, it reports nothing.
+    pub report_scroll: bool,
 }
 
 impl InputConfig {
@@ -710,6 +731,7 @@ impl Default for InputConfig {
             blur_on_submit: true,
             submit_behavior: None,
             paste_behavior: PasteBehavior::Insert,
+            paste_max_size: None,
             auto_focus: false,
             select_text_on_focus: false,
             selection_color: None,
@@ -720,7 +742,7 @@ impl Default for InputConfig {
             accessory_id: None,
             accessory: None,
             scrollbar_visible: true,
-            replaced: false,
+            report_scroll: false,
         }
     }
 }

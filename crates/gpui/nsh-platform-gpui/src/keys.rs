@@ -202,6 +202,7 @@ pub(crate) fn key_modifiers(m: &gpui::Modifiers) -> KeyModifiers {
         ctrl: m.control,
         alt: m.alt,
         cmd: m.platform,
+        alt_graph: false,
     }
 }
 

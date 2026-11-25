@@ -553,8 +553,11 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
 
     @Override
     public void draw(Canvas canvas) {
-        if (decor.masks.length == 0) super.draw(canvas);
-        else decor.drawMasked(canvas, this, () -> super.draw(canvas));
+        // `clipPath` clips everything, its shadows and children included.
+        decor.drawClipped(canvas, this, () -> {
+            if (decor.masks.length == 0) super.draw(canvas);
+            else decor.drawMasked(canvas, this, () -> super.draw(canvas));
+        });
     }
 
     @Override
@@ -571,13 +574,115 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
         // the border at the corners: like CSS, a uniform border clips inside it.
         float inset = clip && decor.rounded() && decor.hasBorder() && decor.uniformBorder() ? decor.borderWidths[0] : 0;
         if ((decor.needsPathClip(clip) || inset > 0) && content == null) {
+            Path shape = decor.shape(new Rect(0, 0, getWidth(), getHeight()), inset, clipPath);
+            if (decor.continuous && canvas.isHardwareAccelerated() && outside(shape, inset)) {
+                drawInCorners(canvas);
+                return;
+            }
             canvas.save();
-            canvas.clipPath(decor.shape(new Rect(0, 0, getWidth(), getHeight()), inset, clipPath));
+            canvas.clipPath(shape);
             super.dispatchDraw(canvas);
             canvas.restore();
         } else {
             super.dispatchDraw(canvas);
         }
+    }
+
+    /**
+     * Draws the children clipped to continuous corners without clipping to
+     * their path. The GPU clips to a path of cubics through a coverage mask
+     * made for each draw inside it, every frame: the gallery's index, a
+     * banner of 330 dots and cards, uploaded 440 textures a frame. Here the
+     * children are drawn clipped to rectangles (the shape's box but its
+     * corners' squares), which the GPU clips exactly, and into a small layer
+     * per corner's square, where what lies outside the corner
+     * ({@link #outside}) is erased: those paths stay while the box does, so
+     * their coverage is made once. A box too small for its corners' squares
+     * to leave a middle is drawn into one layer.
+     */
+    private void drawInCorners(Canvas canvas) {
+        float left = edges[0], top = edges[1], right = edges[2], bottom = edges[3];
+        float l = edges[4], t = edges[5], r = edges[6], b = edges[7];
+        if (l >= r || t >= b) {
+            int layer = canvas.saveLayer(left, top, right, bottom, null);
+            canvas.clipRect(left, top, right, bottom);
+            super.dispatchDraw(canvas);
+            for (Path p : outside) canvas.drawPath(p, eraser);
+            canvas.restoreToCount(layer);
+            return;
+        }
+        float[][] bands = {{left, t, right, b}, {l, top, r, t}, {l, b, r, bottom}};
+        for (float[] band : bands) {
+            if (band[2] <= band[0] || band[3] <= band[1]) continue;
+            canvas.save();
+            canvas.clipRect(band[0], band[1], band[2], band[3]);
+            super.dispatchDraw(canvas);
+            canvas.restore();
+        }
+        float[][] squares = {{left, top, l, t}, {r, top, right, t}, {r, b, right, bottom}, {left, b, l, bottom}};
+        for (int q = 0; q < 4; q++) {
+            float[] s = squares[q];
+            if (s[2] <= s[0] || s[3] <= s[1]) continue;
+            int layer = canvas.saveLayer(s[0], s[1], s[2], s[3], null);
+            canvas.clipRect(s[0], s[1], s[2], s[3]);
+            super.dispatchDraw(canvas);
+            canvas.drawPath(outside[q], eraser);
+            canvas.restoreToCount(layer);
+        }
+    }
+
+    /**
+     * What lies outside continuous corners within the shape's box, one piece
+     * per quarter of it (each only near its corner), for
+     * {@link #drawInCorners}.
+     */
+    private final Path[] outside = {new Path(), new Path(), new Path(), new Path()};
+    /**
+     * For {@link #drawInCorners} (px): the shape's box (left, top, right,
+     * bottom), then where its corners' squares end along each side (the
+     * left ones' right edge, the top ones' bottom edge, the right ones' left
+     * edge, the bottom ones' top edge), on whole pixels so the bands and the
+     * squares meet on pixel edges (`clipRect` does not antialias).
+     */
+    private final float[] edges = new float[8];
+    /** What {@link #outside} is for: width, height, inset and the four radii. */
+    private final float[] outsideFor = new float[7];
+    private android.graphics.Paint eraser;
+
+    /** Updates {@link #outside} for `shape`; false where the paths could not be made. */
+    private boolean outside(Path shape, float inset) {
+        float w = getWidth(), h = getHeight();
+        float[] key = {w, h, inset, decor.radii[0], decor.radii[1], decor.radii[2], decor.radii[3]};
+        if (eraser != null && java.util.Arrays.equals(key, outsideFor)) return true;
+        float left = inset, top = inset, right = w - inset, bottom = h - inset;
+        float cx = (left + right) / 2, cy = (top + bottom) / 2;
+        float[][] quarters = {{left, top, cx, cy}, {cx, top, right, cy}, {cx, cy, right, bottom}, {left, cy, cx, bottom}};
+        android.graphics.RectF[] at = new android.graphics.RectF[4];
+        for (int q = 0; q < 4; q++) {
+            Path p = outside[q];
+            p.reset();
+            p.addRect(quarters[q][0], quarters[q][1], quarters[q][2], quarters[q][3], Path.Direction.CW);
+            if (!p.op(shape, Path.Op.DIFFERENCE)) {
+                eraser = null;
+                return false;
+            }
+            at[q] = new android.graphics.RectF();
+            if (!p.isEmpty()) p.computeBounds(at[q], true);
+        }
+        edges[0] = left;
+        edges[1] = top;
+        edges[2] = right;
+        edges[3] = bottom;
+        edges[4] = (float) Math.ceil(Math.max(at[0].isEmpty() ? left : at[0].right, at[3].isEmpty() ? left : at[3].right));
+        edges[5] = (float) Math.ceil(Math.max(at[0].isEmpty() ? top : at[0].bottom, at[1].isEmpty() ? top : at[1].bottom));
+        edges[6] = (float) Math.floor(Math.min(at[1].isEmpty() ? right : at[1].left, at[2].isEmpty() ? right : at[2].left));
+        edges[7] = (float) Math.floor(Math.min(at[2].isEmpty() ? bottom : at[2].top, at[3].isEmpty() ? bottom : at[3].top));
+        if (eraser == null) {
+            eraser = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            eraser.setXfermode(new android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OUT));
+        }
+        System.arraycopy(key, 0, outsideFor, 0, key.length);
+        return true;
     }
 
     // --- Hover routing: pointerEvents -----------------------------------------
@@ -655,6 +760,12 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
     public boolean dispatchTouchEvent(MotionEvent e) {
         if (pointerEvents == 1) return false;
         int action = e.getActionMasked();
+        // Outside its clip path, neither the box nor its children: the touch
+        // goes on to what is under it.
+        if (action == MotionEvent.ACTION_DOWN && decor.clipsOut(this, e.getX(), e.getY())) {
+            overflowTarget = null;
+            return false;
+        }
         if (action == MotionEvent.ACTION_DOWN) {
             overflowTarget = null;
             // ViewGroup only delivers a touch to a child that contains it: a
@@ -743,6 +854,9 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
             View c = group.getChildAt(i);
             if (c.getVisibility() != VISIBLE) continue;
             float[] pt = inChild(c, x, y);
+            // Clipped out of the child: the point is for those under it.
+            Decor clipped = Decor.of(c);
+            if (clipped != null && clipped.clipsOut(c, pt[0], pt[1])) continue;
             if (pt[0] >= 0 && pt[1] >= 0 && pt[0] < c.getWidth() && pt[1] < c.getHeight()) {
                 return inBounds ? c : null;
             }
@@ -811,6 +925,8 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
     // --- Gestures ----------------------------------------------------------
 
     private float downRawX, downRawY;
+    /** This touch never starts the pan: it went down away from an edge pan's edge, or its activation failed. */
+    private boolean panRefused;
     /** Where the press went down (for the ripple). */
     private float pressX, pressY;
     /** The touch, for the press events' payload. */
@@ -899,15 +1015,41 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
 
     /** Whether this view's pan would start for a drag by ({@code dx}, {@code dy}) px (a scroll view inside asks). */
     boolean takesPan(float dx, float dy) {
-        return pannable() && panStarts(dx, dy, 0);
+        if (!pannable() || panRefused) return false;
+        float[] a = mounter.panActivation(id);
+        if (a == null) return panStarts(dx, dy, 0);
+        float d = mounter.density;
+        return TouchTracker.mayActivate(a, dx / d, dy / d);
     }
 
-    /** Whether a movement of (dx, dy) starts this view's pan. */
+    /**
+     * Whether a movement of (dx, dy) px starts this view's pan: past the slop, along its axis, or as its
+     * `panActivation` decides when it has one (once that fails, never for this touch).
+     */
     private boolean panStarts(float dx, float dy, float slop) {
-        if (Math.hypot(dx, dy) <= slop) return false;
+        if (panRefused || Math.hypot(dx, dy) <= slop) return false;
+        float[] a = mounter.panActivation(id);
+        if (a != null) {
+            float d = mounter.density;
+            Boolean decision = TouchTracker.decideActivation(a, dx / d, dy / d);
+            if (decision == null) return false;
+            panRefused = !decision;
+            return decision;
+        }
         if (panAxis == 1) return Math.abs(dx) > Math.abs(dy);
         if (panAxis == 2) return Math.abs(dy) > Math.abs(dx);
         return true;
+    }
+
+    /**
+     * A finger went down at the screen point ({@code rawX}, {@code rawY}): away from the edge of an edge pan
+     * (`PanActivation::edge`), the pan does not start for this touch.
+     */
+    private void panDown(float rawX, float rawY) {
+        downRawX = rawX;
+        downRawY = rawY;
+        float[] a = mounter.panActivation(id);
+        panRefused = a != null && !TouchTracker.startsAt(a, this, rawX, rawY, mounter.density);
     }
 
     /**
@@ -937,10 +1079,7 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
         if (contentWrapper) return false;
         if (pointerEvents == 3) return true;
         int action = e.getActionMasked();
-        if (action == MotionEvent.ACTION_DOWN) {
-            downRawX = e.getRawX();
-            downRawY = e.getRawY();
-        }
+        if (action == MotionEvent.ACTION_DOWN) panDown(e.getRawX(), e.getRawY());
         if (action == MotionEvent.ACTION_POINTER_DOWN && twoFinger() && e.getPointerCount() == 2) {
             // A second finger: take over from the child for pinch / rotation.
             tracking = false;
@@ -961,7 +1100,7 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
                 panning = true;
                 getParent().requestDisallowInterceptTouchEvent(true);
                 float density = mounter.density;
-                mounter.pan(id, 0, dx / density, dy / density, 0, 0);
+                mounter.pan(id, 0, dx / density, dy / density, 0, 0, this, downRawX, downRawY);
                 return true;
             }
         }
@@ -986,8 +1125,7 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
         if (pressable) longOnly.forward(e, mounter.handlesTap(id), mounter);
         switch (e.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                downRawX = e.getRawX();
-                downRawY = e.getRawY();
+                panDown(e.getRawX(), e.getRawY());
                 tracking = true;
                 pressedIn = false;
                 longPressed = false;
@@ -1024,9 +1162,9 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
                     tracking = false;
                     pressOut();
                     getParent().requestDisallowInterceptTouchEvent(true);
-                    mounter.pan(id, 0, dx / density, dy / density, 0, 0);
+                    mounter.pan(id, 0, dx / density, dy / density, 0, 0, this, downRawX, downRawY);
                 } else if (panning) {
-                    mounter.pan(id, 1, dx / density, dy / density, 0, 0);
+                    mounter.pan(id, 1, dx / density, dy / density, 0, 0, this, downRawX, downRawY);
                 } else if (tracking && !inside(e)) {
                     tracking = false;
                     pressOut();
@@ -1046,7 +1184,8 @@ class Box extends ViewGroup implements Node, NshView.ShaderFrames {
                     float dx = e.getRawX() - downRawX, dy = e.getRawY() - downRawY;
                     // Velocity in the parent's space, like the translation.
                     mounter.pan(id, up ? 2 : 3, dx / density, dy / density,
-                            velocity.getXVelocity() / density, velocity.getYVelocity() / density);
+                            velocity.getXVelocity() / density, velocity.getYVelocity() / density,
+                            this, downRawX, downRawY);
                 } else if (up && tracking) {
                     if (!pressedIn) onPressIn();
                     boolean press = !longPressed && wants(Native.PRESS);

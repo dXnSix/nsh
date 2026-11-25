@@ -78,7 +78,7 @@ nsh init [DIR] [--name <NAME>] [--template <ts|rust|mixed>] [--nsh-source <DIR>]
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop] [--background]
+nsh run [ENTRY] [--app <DIR>] [--target macos|linux|windows|ios|android|gpui|tui|web|tizen-web|tizen|catalyst] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop] [--background]
 ```
 
 ```sh
@@ -93,7 +93,7 @@ nsh run my-app/App.tsx --target web
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--target <TARGET>` | macOS 上为 `macos`，Linux 上为 `linux`，Windows 上为 `windows` | `catalyst`：Mac Catalyst 宿主，一个 iPhone 大小的窗口（390×844）。`ios`：iOS 模拟器中的宿主。`android`：Android 设备或模拟器上的宿主。`macos`：AppKit 宿主，一个 1200×800 的窗口（[macOS](./macos.md)）。`linux`：GTK 宿主，一个 390×844 的窗口（[Linux](./linux.md)）。`windows`：Win32 宿主，一个 1200×800 的窗口（[Windows](./windows.md)）。`gpui`：GPUI 宿主，一个 1200×800 的窗口，可在 macOS、Windows 或 Linux 上运行，以嵌入它的 GPUI 应用的方式显示 TSX 应用（[GPUI](./gpui.md)）。`tui`：当前终端中的宿主（[TUI](./tui.md)）。`web`：开发服务器的页面，地址会打印出来（[Web](./web.md#在浏览器里开发)）。`tizen-web`：同一个页面作为三星电视的页面，以电视 idiom 运行，在本机浏览器中打开；配置了 `nsh.json` 的 `tizen.signing` 时也在电视上运行（[Web](./web.md#三星电视)）。`tizen`：三星电视或 Tizen 模拟器上的 NSH 开发包，原生运行，通过 `sdb` 安装和连接（需要 `nsh.json` 的 `tizen.signing`；[Tizen](./tizen.md)）。其他名字运行在 NSH 之外构建的同名平台（[外部 target](#外部-target)）。 |
+| `--target <TARGET>` | macOS 上为 `macos`，Linux 上为 `linux`，Windows 上为 `windows` | `ios`：iOS 模拟器中的宿主。`android`：Android 设备或模拟器上的宿主。`macos`：AppKit 宿主，一个 1200×800 的窗口（[macOS](./macos.md)）。`linux`：GTK 宿主，一个 390×844 的窗口（[Linux](./linux.md)）。`windows`：Win32 宿主，一个 1200×800 的窗口（[Windows](./windows.md)）。`gpui`：GPUI 宿主，一个 1200×800 的窗口，可在 macOS、Windows 或 Linux 上运行，以嵌入它的 GPUI 应用的方式显示 TSX 应用（[GPUI](./gpui.md)）。`tui`：当前终端中的宿主（[TUI](./tui.md)）。`web`：开发服务器的页面，地址会打印出来（[Web](./web.md#在浏览器里开发)）。`tizen-web`：同一个页面作为三星电视的页面，以电视 idiom 运行，在本机浏览器中打开；配置了 `nsh.json` 的 `tizen.signing` 时也在电视上运行（[Web](./web.md#三星电视)）。`tizen`：三星电视或 Tizen 模拟器上的 NSH 开发包，原生运行，通过 `sdb` 安装和连接（需要 `nsh.json` 的 `tizen.signing`；[Tizen](./tizen.md)）。开发工具 `catalyst`：Mac Catalyst 宿主，一个 iPhone 大小的窗口（390×844），仅在确有需要时使用：检查 Catalyst 特有的行为，或在 Mac Catalyst 应用中嵌入 NSH。Mac 应用请用默认的 `macos`；要看应用在手机上的效果，请用 `--target ios`。其他名字运行在 NSH 之外构建的同名平台（[外部 target](#外部-target)）。 |
 | `--device <DEVICE>` | | 要使用的 iOS 模拟器，按名称（`"iPhone 16 Pro"`）或 UDID 指定。默认：已启动的模拟器，否则启动最新的 iPhone。配合 `--target android`：要使用的设备或模拟器，按序列号（`emulator-5554`，即 `adb devices` 列出的）指定。默认：`ANDROID_SERIAL` 指定的那台，否则第一台。使用 `tizen-web` 和 `tizen` 时：电视的 `sdb` 序列号（`192.168.1.5:26101`；`tizen` 默认用 `sdb devices` 列出的唯一一台）。 |
 | `--app <DIR>` | 入口所在目录 | 入口放在应用之外时（例如设计工具的入口）应用的目录：`nsh run ~/tool/Stage.tsx --app my-app`。应用的 `nsh.json`、crate、资源、翻译和 `.nsh/` 都取自这个目录，它的模块保留应用自己的入口给出的名称，会话同时监视它和入口。不给 `ENTRY` 时使用这个目录自己的入口。仅限 TSX 入口。 |
 | `--port <PORT>` | 此应用上次的端口，否则从 `8790` 起第一个空闲端口 | 开发服务器端口。等待此端口上的旧 NSH 开发会话清理完成后接管。 |
@@ -118,10 +118,10 @@ nsh run my-app/App.tsx --target web
 ## nsh dev
 
 ```sh
-nsh dev [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web|tizen-web|tizen] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
+nsh dev [ENTRY] [--app <DIR>] [--target macos|linux|windows|ios|android|gpui|tui|web|tizen-web|tizen|catalyst] [--device <DEVICE>] [--server-only] [--port <PORT>] [--host <HOST>] [--release] [--limits [<LIMITS>]] [--idiom tv|desktop]
 ```
 
-启动开发服务器并打开当前系统的原生宿主：macOS 使用 AppKit，Linux 使用 GTK，Windows 使用 Win32。开发 iOS 或 Android 应用时显式指定 `--target ios` 或 `--target android`。用 `--server-only` 为自己启动的宿主提供服务。服务器构建应用、监视入口所在目录（以及 `--app` 的目录），并把每次重新构建推送给连接到它的宿主。使用 `--server-only` 时，它会打印本机宿主使用的 URL、每个局域网地址对应的设备 URL，以及在 Web 运行时存在时，浏览器运行应用要打开的页面（[Web](./web.md#在浏览器里开发)）：
+启动开发服务器并打开当前系统的原生宿主：macOS 使用 AppKit，Linux 使用 GTK，Windows 使用 Win32。开发 iOS 或 Android 应用时显式指定 `--target ios` 或 `--target android`。用 `--server-only` 为自己启动的宿主提供服务。服务器构建应用、监视入口所在目录（以及 `--app` 的目录）以及应用的 `nsh.json`、主题和翻译文件，并把每次重新构建推送给连接到它的宿主。使用 `--server-only` 时，它会打印本机宿主使用的 URL，未绑定回环地址时还会打印每个局域网地址对应的设备 URL，以及在 Web 运行时存在时，浏览器运行应用要打开的页面（[Web](./web.md#在浏览器里开发)）：
 
 ```text
 ✓ built App.tsx (3.2 KB js, 9.8 KB bytecode, 21ms)
@@ -131,12 +131,12 @@ nsh dev [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows
   browsers on this network: http://192.168.1.20:8790/
 ```
 
-用 `nsh dev --server-only` 连接嵌入了开发版 SDK（`NativeShellDev.xcframework`、`nsh-dev.aar`）的应用。`--app`、`--target`、`--device`、`--port`、`--release`、`--limits` 和 `--idiom` 的含义与 `nsh run` 相同。配合 `--server-only` 时，`--idiom`（或 `nsh.json` 的 `dev.idiom`）设置它提供给浏览器的页面的界面风格（自己启动的 GPUI 宿主在它自己的命令行上接受 `--idiom tv`）。
+用 `nsh dev --server-only` 连接嵌入了开发版 SDK（`NativeShellDev.xcframework`、`nsh-dev.aar`）的应用。`--app`、`--target`、`--device`、`--port`、`--release`、`--limits` 和 `--idiom` 的含义与 `nsh run` 相同。配合 `--server-only` 时，`--idiom`（或 `nsh.json` 的 `dev.idiom`）设置它提供给浏览器的页面的界面风格（自己启动的 GPUI 宿主在它自己的命令行上接受 `--idiom tv`）。`--host <HOST>` 用于将开发服务器绑定到指定的 IPv4 地址，覆盖默认行为（`--server-only` 以及 `--target ios`、`android`、`web` 默认绑定 `0.0.0.0`；本机目标默认绑定 `127.0.0.1`），例如用 `nsh dev App.tsx --server-only --host 127.0.0.1` 仅监听本机回环地址。使用 `--target android` 时，由于 `adb reverse` 将设备的 `127.0.0.1` 转发到本机的 `127.0.0.1`，`--host` 只能指定为 `127.0.0.1` 或 `0.0.0.0`。
 
 ## nsh test
 
 ```sh
-nsh test [PATH] [--filter <NAME>] [--trace] [--fps] [--junit <FILE>] [--jobs <N>] [--target <TARGET>] [--browser <PATH>] [--web-host <JS>] [--device <DEVICE>] [--display <N>] [--foreground] [--idiom tv|desktop]
+nsh test [PATH] [--filter <NAME>] [--release] [--trace] [--fps] [--junit <FILE>] [--jobs <N>] [--target <TARGET>] [--browser <PATH>] [--web-host <JS>] [--device <DEVICE>] [--display <N>] [--foreground] [--idiom tv|desktop]
 ```
 
 以无界面方式运行应用的测试（[测试](./testing-and-trace.md)）：运行目录 `PATH`（默认为当前目录；跳过隐藏目录、`node_modules` 和 `target`）中的测试文件（`*.test.tsx`、`*.test.ts`，导入 `nsh/test`），或者测试文件 `PATH` 本身。如果传入的是带有自己 Rust crate 的应用（`nsh.json` `"rust"`：Rust 应用，或带 crate 的 TSX 应用）的目录，它会先在目录中每个 crate 自己的目录下运行 `cargo test`，并把每个 Rust 测试与 TypeScript 测试一起显示和计数，归在其测试目标的文件下（`src/lib.rs › tests::adds`）；只有 Rust 测试的 Rust 应用也这样测试。每个测试文件在各自的引擎上运行，测试打开的每个应用又在另一个全新的引擎上运行。它为每个测试打印一行；失败时还会打印抛出的内容、它在测试文件中的位置和屏幕上的文字。只要有失败，就以非零退出码结束。如果传入的是应用入口（`nsh test App.tsx`；Rust 应用为 `nsh test nsh.json`），它会在真实网络下打开应用，让它运行 1.2 s，然后执行标准输入给出的步骤（`await app.press("Add")`，其中 `app` 就是这个应用）。TSX 应用在 CLI 自己的进程里运行；带有自己 Rust crate 的应用在用这些 crate 构建的无界面运行器中运行，由 CLI 为它构建入口。除非测试以 Android 打开应用（`open` 的 `platform`），无界面运行按 iOS 处理：`platform.os` 为 `"ios"`，`ios:` 类和 `ios={{…}}` 属性都会生效。
@@ -149,6 +149,7 @@ nsh test [PATH] [--filter <NAME>] [--trace] [--fps] [--junit <FILE>] [--jobs <N>
 | 参数 | 说明 |
 |---|---|
 | `--filter <NAME>` | 只运行名称（前面带上所在 `describe` 块的名称）包含 `NAME` 的测试；对 crate 则是 `cargo test <NAME>`。 |
+| `--release` | 对被测应用 bundle 压缩代码并去掉调试信息。对带有 Rust crate（`nsh.json` `"rust"` 或 Rust nshm）的应用，还会以 `cargo test --release` 运行其 crate 测试，并以优化模式（`--release`）构建其无界面运行器和开发宿主，与打包时一致。 |
 | `--trace` | 打印测试所打开应用的每个挂载批次，标注它所属的步骤（`── press(Add): 7 items`），以及每次 commit 的耗时：首帧、一个步骤或一帧滚动的开销。加上 `--target` 时，是 host 的批次和耗时。 |
 | `--fps` | 配合 `--target linux`、`macos`、`windows` 或 `ios`：host 每秒输出一行性能监视器读数（帧率、帧各阶段、commit、CPU、内存），用 `-v` 显示。 |
 | `--junit <FILE>` | 同时把结果以 JUnit XML 报告写入 `FILE`，CI 服务按这种格式展示测试结果：每个测试文件一个 `testsuite`，每个测试一个 `testcase`。 |
@@ -219,23 +220,23 @@ nsh build [ENTRY] [-o <OUT>] [--release] [--split]
 nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web|tizen-web|tizen [-o <OUT>] [flags]
 ```
 
-以 release 模式构建可安装的应用。Rust 应用（`nsh.json` 中有 `"root"`）用它自己的运行器打包，运行器由 Cargo 用你的 crate 和 NSH 的 crate 构建，挂载根组件，不带 QuickJS（见[用 Rust 开发](./rust.md)）；TSX 应用使用预构建的运行时。整个过程不需要 Xcode 工程或 Gradle 构建：NSH 自己组装应用包，并使用 Xcode 的 `actool` 和 `codesign`（iOS）或 SDK 中的 `aapt2`、`zipalign` 和 `apksigner`（Android）；macOS 则用 `codesign` 组装一个 ad hoc 签名的 `.app`（图标用 `sips` 转换）；Linux 则复制运行器并用 `tar` 生成 `.tar.gz`；Windows 则复制运行器、嵌入图标并生成 `.zip`，不需要任何工具；Web 则写出一个静态站点，同样不需要任何工具。元数据来自 `nsh.json`，可被参数覆盖。
+以 release 模式构建可安装的应用。Rust 应用（`nsh.json` 中有 `"root"`）用它自己的运行器打包，运行器由 Cargo 用你的 crate 和 NSH 的 crate 构建，挂载根组件，不带 QuickJS（见[用 Rust 开发](./rust.md)）；TSX 应用使用预构建的运行时。整个过程不需要 Xcode 工程或 Gradle 构建：NSH 自己组装应用包，并使用 Xcode 的 `actool` 和 `codesign`（iOS）或 SDK 中的 `aapt2`、`zipalign` 和 `apksigner`（Android）；macOS 则用 `codesign` 组装一个默认 ad hoc 签名或用 `--sign` 签名的 `.app`（图标用 `sips` 转换）；Linux 则复制运行器并用 `tar` 生成 `.tar.gz`；Windows 则复制运行器、嵌入图标并生成 `.zip`，不需要任何工具；Web 则写出一个静态站点，同样不需要任何工具。元数据来自 `nsh.json`，可被参数覆盖。
 
 | 参数 | 说明 |
 |---|---|
-| `--target <TARGET>` | 必填。`ios`：iOS 设备，签名的 `.ipa`（不带 `--sign` 时为未签名的 `.app`）。`ios-simulator`：ad hoc 签名的 `.app`。`android`：签名的 `.apk`。`macos`：ad hoc 签名的 `.app`（[macOS](./macos.md#打包)）。`linux`：一个目录 `<Name>/`（可执行文件、`nsh/`、`.desktop` 文件）和 `<Name>.tar.gz`（[Linux](./linux.md#打包)）。`windows`：一个目录 `<Name>\`（`<Name>.exe`、`nsh\`）、`<Name>.zip`、Inno Setup 脚本 `<Name>.iss`，以及装有 Inno Setup 时生成的安装程序 `<Name>-setup.exe`（[Windows](./windows.md#打包)）。`web`：一个目录 `<Name>/`，即静态站点（`index.html` 和以内容命名的文件）（[Web](./web.md#发布应用)）。`tizen-web`：三星电视的 Tizen Web 应用：站点加上 `config.xml` 和电视 shim，放在 `tizen-web/<Name>/`，打包成 `tizen-web/<Name>.wgt`，有签名配置时还有签名后的 `<Name>.wgt`（[Web](./web.md#三星电视)）。`tizen`：三星电视的 TPK，暂存在 `tizen/<Name>-<arch>/`，签名为 `<Name>.tpk`（指定多个 `--arch` 时，每个为 `<package>-<version>.<n>-<arch>.tpk`，外加多架构的 `<package>-<version>.zip`）；需要证书配置（[Tizen](./tizen.md#打包)）。其他名字为在 NSH 之外构建的同名平台打包（[外部 target](#外部-target)）。 |
+| `--target <TARGET>` | 必填。`ios`：iOS 设备，签名的 `.ipa`（不带 `--sign` 时为未签名的 `.app`）。`ios-simulator`：ad hoc 签名的 `.app`。`android`：签名的 `.apk`。`macos`：签名的 `.app`（不带 `--sign` 时为 ad hoc 签名）（[macOS](./macos.md#打包)）。`linux`：一个目录 `<Name>/`（可执行文件、`nsh/`、`.desktop` 文件）和 `<Name>.tar.gz`（[Linux](./linux.md#打包)）。`windows`：一个目录 `<Name>\`（`<Name>.exe`、`nsh\`）、`<Name>.zip`、Inno Setup 脚本 `<Name>.iss`，以及装有 Inno Setup 时生成的安装程序 `<Name>-setup.exe`（[Windows](./windows.md#打包)）。`web`：一个目录 `<Name>/`，即静态站点（`index.html` 和以内容命名的文件）（[Web](./web.md#发布应用)）。`tizen-web`：三星电视的 Tizen Web 应用：站点加上 `config.xml` 和电视 shim，放在 `tizen-web/<Name>/`，打包成 `tizen-web/<Name>.wgt`，有签名配置时还有签名后的 `<Name>.wgt`（[Web](./web.md#三星电视)）。`tizen`：三星电视的 TPK，暂存在 `tizen/<Name>-<arch>/`，签名为 `<Name>.tpk`（指定多个 `--arch` 时，每个为 `<package>-<version>.<n>-<arch>.tpk`，外加多架构的 `<package>-<version>.zip`）；需要证书配置（[Tizen](./tizen.md#打包)）。其他名字为在 NSH 之外构建的同名平台打包（[外部 target](#外部-target)）。 |
 | `-o, --out <OUT>` | 输出目录（默认 `.nsh/out`）。 |
 | `--name <NAME>` | 显示名称。 |
 | `--id <ID>` | Bundle identifier，例如 `com.example.app`。 |
 | `--app-version <VERSION>` | 版本号，例如 `1.2.0`。 |
 | `--build <BUILD>` | 构建号。 |
 | `--icon <ICON>` | 应用图标：正方形 PNG，最好是 1024×1024。 |
-| `--sign <IDENTITY>` | iOS 设备：代码签名身份，例如 `"Apple Development: …"`。`tizen-web` 和 `tizen`：Tizen SDK 的 `tz` 签名所用的证书配置（默认：`nsh.json` 的 `tizen.signing`）。 |
+| `--sign <IDENTITY>` | iOS 设备和 macOS：代码签名身份，例如 `"Apple Development: …"` 或 `"Developer ID Application: …"`。在 macOS 上启用 Hardened Runtime 和安全时间戳。`tizen-web` 和 `tizen`：Tizen SDK 的 `tz` 签名所用的证书配置（默认：`nsh.json` 的 `tizen.signing`）。 |
 | `--profile <FILE>` | iOS 设备：描述文件（`.mobileprovision`），entitlements 取自其中。可以重复传入，给每个应用扩展（`nsh.json` `ios.extensions`）各传一个。 |
 | `--keystore <FILE>` | Android：release keystore。默认使用 `~/.android/debug.keystore` 中的调试密钥（不存在时创建）。 |
 | `--key-alias <ALIAS>` | Android：keystore 中的密钥别名。 |
 | `--keystore-password <PASSWORD>` | Android：keystore 密码，也可从 `NSH_KEYSTORE_PASSWORD` 读取。 |
-| `--format <FORMAT>` | Android：`apk`（默认）或 `aab`，即用于 Google Play 的 Android App Bundle，使用 `jarsigner` 签名。不能与 `--run` 同时使用。 |
+| `--format <FORMAT>` | Android：`apk`（默认）或 `aab`，即用于 Google Play 的 Android App Bundle，使用 `jarsigner` 签名。Linux：`appimage` 或 `flatpak`，在目录和压缩包之外另行生成（见 [Linux](./linux.md)）。不能与 `--run` 同时使用。 |
 | `--abi <ABI>` | Android：APK 包含的 ABI（`arm64-v8a`、`armeabi-v7a`、`x86_64`），可重复或用逗号分隔。默认：`arm64-v8a` 和 `armeabi-v7a`，加上 `--run` 时还有设备的 ABI。 |
 | `--arch <ARCH>` | 包运行的处理器。macOS：`arm64`（Apple 芯片）、`x86_64`（Intel）或 `universal`（两者合在一个可执行文件里）；默认：本机的。为另一种处理器编 runner 需要它的 Rust target（`rustup target add x86_64-apple-darwin`）。Tizen：TPK 的架构（`armv7l`、`aarch64`、`x86_64`），可重复或用逗号分隔：每个架构一个包，指定多个时还生成用于三星 Seller Office 的多架构 `.zip`；默认：`armv7l`，即电视的架构，加上 `--run` 时为电视的架构。 |
 | `--run` | 打包完成后安装并启动应用：在模拟器中（`ios-simulator`）或在已连接的 Android 设备上；`macos`、`linux` 和 `windows` 则直接启动它；`web` 在本机提供站点服务，并打印其地址；`tizen-web` 和 `tizen` 把签名后的包安装到电视上并启动。 |
@@ -390,19 +391,68 @@ nsh publish [ENTRY] --key <KEY.secret> --cert <CERT> [-o <OUT>] [--id <ID>] [--a
 ### nsh publish android
 
 ```sh
-nsh publish android <BUNDLE.aab> [--entry <DIR>] [--package <NAME>] [--credentials <KEY.json>] [--draft]
+nsh publish android <BUNDLE.aab> [--track <TRACK>] [--rollout <FRACTION>] [--status <STATUS>] [--listing] [--draft]
+nsh publish android --from <TRACK> --track <TRACK> [--rollout <FRACTION>]
 ```
 
-把 Android App Bundle 上传到 Google Play，并发布到**内部测试**轨道，全程在一次 edit 中完成（创建、上传、更新轨道、提交；失败的 edit
-会被删除）。它不会走得更远：要发布到封闭测试、开放测试或正式版，请在 Play Console 中推进。登录身份是一个在 Play Console
-中有该应用发布权限的 Google Cloud 服务账号（[Android](./android.md#上传到-google-play)）。
+把 Android App Bundle 上传到 Google Play 并发布到某个轨道，全程在一次 edit 中完成（创建、上传、更新轨道、提交；失败的 edit
+会被删除）。不带 `--track` 时只发布到**内部测试**；发布给更多测试者或公众，必须显式给出 `--track`。用 `--from` 代替 bundle
+时，把一个轨道上最新的版本推进到另一个轨道。登录身份是一个在 Play Console 中有该应用发布权限的 Google Cloud
+服务账号（[发布到 Google Play](./publish.md#publish-to-google-play)）。
 
 | 参数 | 说明 |
 |---|---|
 | `--entry <DIR>` | 应用目录或入口，其 `nsh.json` 的 `id` 即包名。默认：`.`。 |
 | `--package <NAME>` | Google Play 上的包名。默认：`nsh.json` 的 `id`。 |
 | `--credentials <KEY.json>` | 服务账号的 JSON 密钥。默认读取 `NSH_PLAY_CREDENTIALS`。不要提交到仓库。 |
+| `--track <TRACK>` | `internal`（默认）、`alpha`、`beta`、`production` 或自定义轨道名。 |
+| `--from <TRACK>` | 推进：把该轨道最新版本的 version code 发布到 `--track`，不上传任何文件。 |
+| `--rollout <FRACTION>` | 分阶段发布给该轨道这一比例的用户，大于 0 小于 1，例如 `0.1`。 |
+| `--status <STATUS>` | `completed`（默认）、`in-progress`（带 `--rollout` 时的默认）、`halted`（暂停分阶段发布，需带 `--rollout`）或 `draft`。 |
 | `--draft` | 以草稿发布：应用在 Play Console 中完成首次发布之前，Play 只接受草稿。 |
+| `--store <DIR>` | [商店目录](./publish.md#store-listing)。默认：应用目录下的 `store`。 |
+| `--listing` | 同时按商店目录更新商店信息（名称、描述、图片），覆盖 Play 上这些语言已有的内容。 |
+
+要扩大分阶段发布，用更大的 `--rollout` 再发布同一版本；要全量发布，不带 `--rollout` 再发布一次。
+
+### nsh publish status android
+
+```sh
+nsh publish status android [--entry <DIR>] [--package <NAME>] [--credentials <KEY.json>] [--json]
+```
+
+列出每个轨道的版本：状态、version code 和放量比例。它在一个随后删除的 edit 中读取，不做任何改动。`--json` 输出
+`{"package", "releases": [{"track", "name", "status", "version_codes", "user_fraction"}]}`，供脚本使用。
+
+### nsh publish doctor android
+
+```sh
+nsh publish doctor android [--entry <DIR>] [--package <NAME>] [--credentials <KEY.json>] [--store <DIR>]
+```
+
+不改动 Play 上的任何内容，检查 `nsh publish android` 所需的一切：服务账号密钥、包名、商店目录、登录，以及对该应用的访问权限（打开一个
+edit 再删除）。有检查失败时以错误退出。
+
+
+### nsh publish linux
+
+```sh
+nsh publish linux <ARCHIVE.tar.gz> [--url <URL>] [--entry <DIR>] [--out <DIR>]
+nsh publish status linux [--entry <DIR>] [--json]
+nsh publish doctor linux [--entry <DIR>]
+```
+
+为发布压缩包写入或更新应用的 Flathub manifest（`<id>.yml`）：下载 URL 与 SHA-256。下载 URL 默认取 `nsh.json` 的 `store.linux.archiveUrl`（其中 `{version}` 替换为版本号），也可用 `--url` 指定。不会创建 Pull Request，需自行提交到 `flathub/<id>` 仓库。`status` 显示 Flathub 上的版本，与 `nsh.json` 不一致时退出码为 1；`doctor` 检查 Flathub 要求的元数据（`id`、商店文案、`store.linux`、图标），并校验 metainfo 与 desktop 文件。
+
+### nsh publish windows
+
+```sh
+nsh publish windows <APP.msix> [--entry <DIR>] [--product-id <ID>] [--notes <FILE>|<LANG>=<FILE>]... [--wait]
+nsh publish status windows [--entry <DIR>] [--product-id <ID>] [--submission <ID>] [--json]
+nsh publish doctor windows [--entry <DIR>] [--product-id <ID>]
+```
+
+用 Store submission API 把 MSIX 包提交到 Microsoft Store：基于上次发布创建 submission、替换包、设置各 listing 的更新说明（默认取商店文案各语言的 `releaseNotes`，也可用 `--notes` 指定）、上传并提交认证。提交前失败会删除该 submission；已有 pending submission 时拒绝执行。`--wait` 轮询直到认证结束。`status` 退出码：已发布 0、进行中 2、失败 1。`doctor` 只读检查 `nsh.json`、凭据和 Store ID。Store ID 写在 `nsh.json` 的 `store.windows.productId`（或用 `--product-id`）。凭据为关联 Partner Center 的 Azure AD 应用，只从 `NSH_MS_TENANT_ID`、`NSH_MS_CLIENT_ID`、`NSH_MS_CLIENT_SECRET` 读取。首次提交（定价、分级、商店页）需在 Partner Center 完成。
 
 ### nsh verify
 
@@ -455,9 +505,12 @@ nsh revoke --root <ROOT.secret> [--extend <LIST>] [--sequence <N>] [--key <ID>].
 ## nsh publish ios
 
 ```sh
-nsh publish ios <IPA> --app-id <ID> --issuer-id <ID> --key-id <ID> --private-key <PATH>
+nsh publish ios <IPA> [--app-id <ID>] [--issuer-id <ID>] [--key-id <ID>] [--private-key <PATH>]
 ```
 
-在 macOS 上将经过 App Store 签名的 IPA 上传到 App Store Connect，用于 TestFlight。参数也可通过
+在 macOS 上将经过 App Store 签名的 IPA 上传到 App Store Connect，等待处理、分发 TestFlight 测试组、
+准备 App Store 版本与商店文案，加 `--submit` 时提交审核。`nsh publish status ios` 与 `nsh publish doctor ios`
+报告发布状态并检查配置。参数也可通过
 `NSH_APP_STORE_APP_ID`、`NSH_APP_STORE_ISSUER_ID`、`NSH_APP_STORE_KEY_ID` 和
-`NSH_APP_STORE_PRIVATE_KEY` 环境变量提供。签名、凭据和处理流程见[上传到 TestFlight](./packaging.md#上传到-testflight)。
+`NSH_APP_STORE_PRIVATE_KEY` 环境变量提供。App ID 默认读 `nsh.json` 的 `store.ios.appId`，私钥默认读
+`~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`，配置好的应用只需 `nsh publish ios <IPA>`。签名、凭据和处理流程见[发布到 App Store](./publish.md#upload-to-testflight)。

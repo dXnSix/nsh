@@ -582,6 +582,9 @@ impl ClassTokens {
     /// else the token of that name. `None` when it names none, or one its
     /// hint takes no value of. The tokens read are added to `read`.
     pub(crate) fn variables(&self, utility: &str, read: &mut Vec<u64>) -> Option<String> {
+        // A number is a length in pixels, except to the utilities that
+        // take a factor (`scale-(--press)`).
+        let factor = takes_factor(utility);
         let mut out = String::with_capacity(utility.len() + 8);
         let mut rest = utility;
         while let Some(open) = rest.find('(') {
@@ -624,6 +627,9 @@ impl ClassTokens {
                     let n = number(token)?;
                     match hint {
                         Some("number") => {
+                            let _ = write!(out, "{n}");
+                        }
+                        None if factor => {
                             let _ = write!(out, "{n}");
                         }
                         _ => {
@@ -708,6 +714,18 @@ pub(crate) fn token_key(name: &str) -> u64 {
     let mut hasher = rustc_hash::FxHasher::default();
     name.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Whether `utility`'s value is a unitless factor, as CSS's `scale`
+/// takes one: `scale-(--press)` with a token of 0.97 is `scale-[0.97]`.
+fn takes_factor(utility: &str) -> bool {
+    let prefix = utility
+        .strip_prefix('-')
+        .unwrap_or(utility)
+        .split('(')
+        .next()
+        .unwrap_or("");
+    matches!(prefix, "scale-" | "scale-x-" | "scale-y-")
 }
 
 fn map<V>(entries: &[(&str, V)]) -> FxHashMap<Box<str>, V>

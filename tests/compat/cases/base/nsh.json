@@ -140,6 +140,18 @@
         "kind": "number",
         "value": 14
       },
+      "press-scale": {
+        "kind": "number",
+        "value": 0.97
+      },
+      "ring-width": {
+        "kind": "number",
+        "value": 3
+      },
+      "ring-gap": {
+        "kind": "number",
+        "value": 2
+      },
       "up": {
         "kind": "color",
         "value": "#138a5a"

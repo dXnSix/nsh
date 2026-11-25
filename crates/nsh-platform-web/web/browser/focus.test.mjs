@@ -29,16 +29,14 @@ async function realWasm() {
 }
 
 /** A fake engine: records each `nsh_focus_move` request and answers
- * `answer()`, each `nsh_focus_auto` one (in `autos`) and answers `autoAnswer()`. */
-function fakeWasm(answer, autoAnswer) {
+ * `answer()`. */
+function fakeWasm(answer) {
   const memory = { buffer: new ArrayBuffer(1 << 16) };
   let next = 8;
   const requests = [];
-  const autos = [];
   const read = (ptr, len) => JSON.parse(new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)));
   return {
     requests,
-    autos,
     memory,
     nsh_alloc(len) {
       const ptr = next;
@@ -50,10 +48,6 @@ function fakeWasm(answer, autoAnswer) {
     nsh_focus_move(ptr, len) {
       requests.push(read(ptr, len));
       return answer() ?? -1;
-    },
-    nsh_focus_auto(ptr, len) {
-      autos.push(read(ptr, len));
-      return autoAnswer() ?? -1;
     },
     nsh_focus_past: () => -1,
     // A scrolled key's move (upstream #2192): nothing to follow here.
@@ -152,16 +146,15 @@ class El {
 }
 
 /** A player over `root` (the root view, 800 × 600) on the module or a fake
- * answering `answer` (`autoAnswer` for `autoFocus`); `pasts` records the
- * page's `nsh_focus_past` calls. */
-async function setup(children, answer = () => null, autoAnswer = () => null) {
+ * answering `answer`; `pasts` records the page's `nsh_focus_past` calls. */
+async function setup(children, answer = () => null) {
   const root = new El({ id: 1, rect: [0, 0, 800, 600] }, children);
   const page = new El({}, [root]);
   globalThis.document = { body: new El({}), activeElement: null };
   document.activeElement = document.body;
   globalThis.getSelection = () => null;
   const player = Object.create(Player.prototype);
-  const wasm = module ? { ...(await realWasm()) } : fakeWasm(answer, autoAnswer);
+  const wasm = module ? { ...(await realWasm()) } : fakeWasm(answer);
   const pasts = [];
   const past = wasm.nsh_focus_past;
   wasm.nsh_focus_past = (from, direction) => {
@@ -186,7 +179,7 @@ async function setup(children, answer = () => null, autoAnswer = () => null) {
     },
   });
   void page;
-  return { player, root, wasm, scrolls, pasts, requests: wasm.requests ?? [], autos: wasm.autos ?? [] };
+  return { player, root, wasm, scrolls, pasts, requests: wasm.requests ?? [] };
 }
 
 /** A key event of `key` on the page, which records whether it was prevented.
@@ -466,40 +459,63 @@ test("FocusGroup with trap: the arrows never take the focus out of it", async ()
   }
 });
 
-test("autoFocus: the first stop to appear with it takes the focus, once", async () => {
-  const page = new El({ id: 2, rect: [0, 0, 800, 600] }, [button(4, [10, 10, 80, 40])]);
-  const autoAnswers = [6, null, 34];
-  const answers = [4];
-  const { player, root, autos } = await setup([page], () => answers.shift(), () => autoAnswers.shift());
-  // A batch brings two with autoFocus (`op_vp`): the first in tree order
-  // takes it, once the call that applied the batch returns.
-  page.add(button(6, [110, 10, 80, 40], { props: { autoFocus: true } }));
-  page.add(button(8, [210, 10, 80, 40], { props: { autoFocus: true } }));
-  player.autoPending = player.autoViews = true;
-  player.focusAfterBatch();
-  assert.equal(document.activeElement, document.body);
-  await null;
-  assert.equal(document.activeElement._id, 6);
-  // Once: their props sent again take nothing from the user.
-  assert.equal(press(player, "ArrowLeft").focused, 4);
-  player.autoPending = true;
-  player.focusAfterBatch();
-  await null;
-  assert.equal(document.activeElement._id, 4);
-  // A modal presented is a new scope: its autoFocus stop takes the focus.
-  const modal = new El({ id: 30, kind: "modal", rect: [0, 0, 800, 600] }, [
-    new El({ id: 31, rect: [0, 0, 800, 600] }, [button(32, [10, 200, 80, 40]), button(34, [110, 200, 80, 40], { props: { autoFocus: true } })]),
-  ]);
-  root.add(modal);
-  player.focusAfterBatch();
-  await null;
-  assert.equal(document.activeElement._id, 34);
-  if (!module) {
-    assert.deepEqual(autos[0].stops.map((s) => [s.id, s.auto]), [[4, false], [6, true], [8, true]]);
-    assert.deepEqual(autos[0].seen, []);
-    assert.deepEqual(autos[1].seen, [6, 8]);
-    assert.deepEqual(autos[2].modals, [[30, true]]);
+/** Views `els` appear with `autoFocus` in a batch (`op_vp`), which then
+ * ends (`focusAppeared`). */
+function appear(player, ...els) {
+  const views = (player.views ??= new Map());
+  for (const el of els) {
+    views.set(el._id, el);
+    (player.autoFocusing ??= new Set()).add(el);
   }
+  player.focusAppeared();
+}
+
+test("autoFocus: a view that appears with it gives its first stop the focus, once", async () => {
+  const page = new El({ id: 2, rect: [0, 0, 800, 600] }, [button(4, [10, 10, 80, 40])]);
+  const answers = [4];
+  const { player, root } = await setup([page], () => answers.shift());
+  // A batch brings two with autoFocus: the first takes it as the batch
+  // ends, in the same turn, and the second has had its chance.
+  const first = page.add(button(6, [110, 10, 80, 40], { props: { autoFocus: true } }));
+  const second = page.add(button(8, [210, 10, 80, 40], { props: { autoFocus: true } }));
+  appear(player, first, second);
+  assert.equal(document.activeElement._id, 6);
+  assert.equal(player.pressFocus, first);
+  assert.equal(player.autoFocusing.size, 0);
+  // Once: a later batch takes nothing from the user.
+  assert.equal(press(player, "ArrowLeft").focused, 4);
+  appear(player);
+  assert.equal(document.activeElement._id, 4);
+  // A view around stops gives the first of them the focus.
+  const group = page.add(new El({ id: 10, rect: [0, 100, 800, 100], props: { autoFocus: true } }, [button(12, [10, 110, 80, 40]), button(14, [110, 110, 80, 40])]));
+  appear(player, group);
+  assert.equal(document.activeElement._id, 12);
+  // One with no stop yet waits for the batch that brings one.
+  const empty = page.add(new El({ id: 20, rect: [0, 200, 800, 100], props: { autoFocus: true } }));
+  appear(player, empty);
+  assert.equal(document.activeElement._id, 12);
+  empty.add(button(22, [10, 210, 80, 40]));
+  appear(player);
+  assert.equal(document.activeElement._id, 22);
+  // A modal that shows is the scope: its view takes the focus, and one
+  // behind it waits until it is gone.
+  const modal = root.add(new El({ id: 30, kind: "modal", rect: [0, 0, 800, 600] }, [
+    new El({ id: 31, rect: [0, 0, 800, 600] }, [button(32, [10, 200, 80, 40]), button(34, [110, 200, 80, 40], { props: { autoFocus: true } })]),
+  ]));
+  const behind = page.add(button(40, [310, 10, 80, 40], { props: { autoFocus: true } }));
+  appear(player, behind, modal.children[0].children[1]);
+  assert.equal(document.activeElement._id, 34);
+  assert.deepEqual([...player.autoFocusing].map((el) => el._id), [40]);
+  modal._leaving = true;
+  appear(player);
+  assert.equal(document.activeElement._id, 40);
+  // A view removed before it showed is forgotten.
+  const gone = button(50, [410, 10, 80, 40], { props: { autoFocus: true } });
+  gone.isConnected = false;
+  appear(player, gone);
+  player.views.delete(50);
+  appear(player);
+  assert.equal(player.autoFocusing.size, 0);
 });
 
 test("a scroll view that can scroll on keeps the focus, and a list goes on to its next row", async () => {

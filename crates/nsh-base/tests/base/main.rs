@@ -68,6 +68,7 @@ mod theme_documents;
 mod theme_format_roles;
 mod theme_roles;
 mod time_field;
+mod toast;
 mod toggle;
 mod token_roles;
 mod toolbar;

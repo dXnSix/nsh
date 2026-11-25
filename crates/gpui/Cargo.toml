@@ -13,7 +13,7 @@ members = ["nsh-platform-gpui", "nsh-gpui-host", "nsh-platform-tizen"]
 default-members = ["nsh-platform-gpui", "nsh-gpui-host"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 license = "Apache-2.0"
 homepage = "https://nsh.dev"
@@ -34,17 +34,17 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_vendor, values("tiz
 
 [workspace.dependencies]
 # nsh's crates, from the main workspace.
-nsh-core = { version = "0.6.0", path = "../nsh-core" }
-nsh-dev = { version = "0.6.0", path = "../nsh-dev" }
-nsh-testing = { version = "0.6.0", path = "../nsh-testing", default-features = false }
-nsh-engine = { version = "0.6.0", path = "../nsh-engine", default-features = false }
-nsh-base = { version = "0.6.0", path = "../nsh-base", default-features = false }
+nsh-core = { version = "0.7.0", path = "../nsh-core" }
+nsh-dev = { version = "0.7.0", path = "../nsh-dev" }
+nsh-testing = { version = "0.7.0", path = "../nsh-testing", default-features = false }
+nsh-engine = { version = "0.7.0", path = "../nsh-engine", default-features = false }
+nsh-base = { version = "0.7.0", path = "../nsh-base", default-features = false }
 # The JSX compiler alone (tests compile their apps).
-nsh-bundler = { version = "0.6.0", path = "../nsh-bundler", default-features = false }
+nsh-bundler = { version = "0.7.0", path = "../nsh-bundler", default-features = false }
 # The backend itself. Its shader views render through `nsh-engine`'s `shader`
 # feature, on the main workspace's wgpu (30), the version gpui-fast draws with,
 # so this lockfile holds one wgpu and one naga.
-nsh-platform-gpui = { version = "0.6.0", path = "nsh-platform-gpui", default-features = false }
+nsh-platform-gpui = { version = "0.7.0", path = "nsh-platform-gpui", default-features = false }
 
 # Samsung TVs: GPUI's Tizen platform and its bindings to the Tizen C APIs
 # (dXn.GpuiTizen), by commit until they are published (`docs/dev/tizen.md`).
@@ -52,8 +52,8 @@ nsh-platform-gpui = { version = "0.6.0", path = "nsh-platform-gpui", default-fea
 # `rev` and takes it from there, so dXn.GpuiTizen is published before an NSH
 # release with a crate that depends on it. TV builds take gpui-fast and wgpu
 # from their forks (`[patch.crates-io]` below).
-dxn_gpui_tizen = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "8de11018db4896c9fed2e8d737d64c170fbf43cb" }
-dxn_gpui_tizen_sys = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "8de11018db4896c9fed2e8d737d64c170fbf43cb" }
+dxn_gpui_tizen = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "7ac6b53a596e6c535cc6ad7af9d103d2ed1f3745" }
+dxn_gpui_tizen_sys = { version = "0.1.0", git = "https://github.com/dXnSix/dXn.GpuiTizen", rev = "7ac6b53a596e6c535cc6ad7af9d103d2ed1f3745" }
 # Freeing the C strings the Tizen APIs return.
 libc = "0.2"
 
@@ -72,8 +72,8 @@ futures-channel = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # GPUI Fast (Zed's GPUI with retained rendering), the renderer; the published
 # crates under GPUI's library names, as GPUI Kit apps use them.
-gpui = { package = "gpui-fast", version = "0.1.16", default-features = false, features = ["font-kit", "wayland", "x11"] }
-gpui_platform = { package = "gpui-fast-platform", version = "0.1.16", default-features = false, features = ["font-kit", "wayland", "x11"] }
+gpui = { package = "gpui-fast", version = "0.1.19", default-features = false, features = ["font-kit", "wayland", "x11"] }
+gpui_platform = { package = "gpui-fast-platform", version = "0.1.19", default-features = false, features = ["font-kit", "wayland", "x11"] }
 # Tests check the accessibility tree as the platforms' adapters do (the
 # version GPUI's adapters use).
 accesskit_consumer = "0.38"
@@ -115,6 +115,16 @@ codegen-units = 1
 opt-level = 3
 [profile.dev.package.taffy]
 opt-level = 3
+# Text shaping: an Input reshapes its whole line after each edit, and
+# unoptimized, a line of 10,000 characters takes milliseconds each time.
+[profile.dev.package.cosmic-text]
+opt-level = 3
+[profile.dev.package.harfrust]
+opt-level = 3
+[profile.dev.package.read-fonts]
+opt-level = 3
+[profile.dev.package.font-types]
+opt-level = 3
 # SVG images are drawn when they load: unoptimized, a large one takes seconds.
 [profile.dev.package.tiny-skia]
 opt-level = 3
@@ -135,11 +145,12 @@ opt-level = 3
 opt-level = 3
 
 # The renderer changes dXn.GpuiTizen builds on, until gpui-fast and wgpu release
-# them: all nine `gpui-fast-*` crates from the gpui-fast fork's `tizen-release`
+# them: all ten `gpui-fast-*` crates from the gpui-fast fork's `tizen-release`
 # and the wgpu stack from the wgpu fork's `v30-tizen`, the same set as
 # dXn.GpuiTizen's own `Cargo.toml` (`docs/dev/tizen.md`). Dropped, with the
 # git dependencies above, once both are published.
 [patch.crates-io]
+gpui-fast-scheduler = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
 gpui-fast-macros = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
 gpui-fast = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }
 gpui-fast-apple = { git = "https://github.com/dXnSix/gpui-fast", branch = "tizen-release" }

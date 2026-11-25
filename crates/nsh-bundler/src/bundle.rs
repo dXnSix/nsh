@@ -13,7 +13,7 @@ use rolldown::{
 };
 use rolldown_common::{ChunkFilenamesOutputOption, CodeSplittingMode, Output, SanitizeFilename};
 
-use crate::{compile, compile::strip_ansi, plugin};
+use crate::{app_dir::app_dir, compile, compile::strip_ansi, plugin};
 
 /// What to bundle and how.
 #[derive(Debug, Clone, Default)]
@@ -215,7 +215,7 @@ pub struct Chunk {
 pub fn capabilities(
     dir: &std::path::Path,
 ) -> Result<Option<nsh_core::access::Capabilities>, BundleError> {
-    let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
+    let Ok(text) = crate::app_dir::read(&dir.join("nsh.json")) else {
         return Ok(None);
     };
     let config: serde_json::Value =
@@ -242,7 +242,7 @@ pub fn capabilities(
 /// The schemes of the `"schemes"` of the `nsh.json` in `dir` (the app's),
 /// checked ([`nsh_core::url_scheme::schemes_from_json`]).
 pub fn url_schemes(dir: &std::path::Path) -> Result<Vec<String>, BundleError> {
-    let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
+    let Ok(text) = crate::app_dir::read(&dir.join("nsh.json")) else {
         return Ok(Vec::new());
     };
     let config: serde_json::Value =
@@ -264,7 +264,7 @@ pub fn url_schemes(dir: &std::path::Path) -> Result<Vec<String>, BundleError> {
 /// `file:` when it opens files, as [`url_schemes`]) and its `"links"`,
 /// checked ([`nsh_core::url_scheme::AppLinks::from_json`]).
 pub fn app_links(dir: &std::path::Path) -> Result<nsh_core::url_scheme::AppLinks, BundleError> {
-    let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
+    let Ok(text) = crate::app_dir::read(&dir.join("nsh.json")) else {
         return Ok(Default::default());
     };
     let config: serde_json::Value =
@@ -282,7 +282,7 @@ pub fn app_links(dir: &std::path::Path) -> Result<nsh_core::url_scheme::AppLinks
 /// `read_config` warns of it).
 #[doc(hidden)]
 pub fn main_window(dir: &std::path::Path) -> Result<Option<String>, BundleError> {
-    let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
+    let Ok(text) = crate::app_dir::read(&dir.join("nsh.json")) else {
         return Ok(None);
     };
     let config: serde_json::Value =
@@ -298,7 +298,7 @@ pub fn main_window(dir: &std::path::Path) -> Result<Option<String>, BundleError>
 /// ([`nsh_core::desktop::ApplicationOptions::from_json`]).
 #[doc(hidden)]
 pub fn application(dir: &std::path::Path) -> Result<Option<String>, BundleError> {
-    let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
+    let Ok(text) = crate::app_dir::read(&dir.join("nsh.json")) else {
         return Ok(None);
     };
     let config: serde_json::Value =
@@ -309,8 +309,8 @@ pub fn application(dir: &std::path::Path) -> Result<Option<String>, BundleError>
         .map(serde_json::Value::to_string))
 }
 
-/// How bare imports resolve: the `"resolve"` of the `nsh.json` next to the
-/// entry, checked.
+/// How bare imports resolve: the `"resolve"` of the app's `nsh.json`,
+/// checked.
 #[derive(Debug, Default)]
 struct ResolveSetup {
     /// The export conditions of npm packages (`None`: `browser`).
@@ -322,7 +322,7 @@ struct ResolveSetup {
 
 impl ResolveSetup {
     fn read(dir: &std::path::Path) -> Result<Self, BundleError> {
-        let Ok(text) = std::fs::read_to_string(dir.join("nsh.json")) else {
+        let Ok(text) = crate::app_dir::read(&dir.join("nsh.json")) else {
             return Ok(Self::default());
         };
         let config: serde_json::Value = serde_json::from_str(&text)
@@ -479,7 +479,7 @@ pub fn app_theme(
     dir: &std::path::Path,
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<AppTheme, BundleError> {
-    let text = std::fs::read_to_string(dir.join("nsh.json")).ok();
+    let text = crate::app_dir::read(&dir.join("nsh.json")).ok();
     let config = match &text {
         Some(text) => {
             serde_json::from_str(text).map_err(|e| BundleError::other(format!("nsh.json: {e}")))?
@@ -611,7 +611,7 @@ fn theme_member(
         None => None,
         Some(serde_json::Value::String(file)) => Some((
             file.clone(),
-            std::fs::read_to_string(dir.join(file))
+            crate::app_dir::read(&dir.join(file))
                 .map_err(|e| BundleError::other(format!("nsh.json: {key}: {file}: {e}")))?,
         )),
         Some(v) => {
@@ -657,7 +657,7 @@ pub(crate) fn tailwind_setup(
     setup.ui = shipped_theme(&theme);
     setup.theme_warnings = theme.warnings.clone();
     let path = dir.join("nsh.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let Ok(text) = crate::app_dir::read(&path) else {
         setup.theme.set_tokens(&theme.tokens);
         setup.i18n = i18n_json(dir, None)?;
         setup.app = app_json(&serde_json::Value::Null, development, info);
@@ -718,10 +718,11 @@ fn app_json(config: &serde_json::Value, development: bool, info: &AppInfo) -> St
     .to_string()
 }
 
-/// The app's translations (`locales/`) and the language data of the
+/// The app's translations (`locales/`), the language data of the
 /// languages `nsh.json` `"locales"` lists (or, without it, of the
-/// translations' languages), as the runtime takes them; `None` when it has
-/// neither.
+/// translations' languages) and the rules of the time zones its
+/// `"timeZones"` lists, as the runtime takes them; `None` when it has none
+/// of them.
 pub fn i18n_json(
     dir: &std::path::Path,
     config: Option<&serde_json::Value>,
@@ -749,9 +750,30 @@ pub fn i18n_json(
             None
         }
     };
+    let time_zones = match config.and_then(|c| c.get("timeZones")) {
+        None => Vec::new(),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| match item.as_str() {
+                Some(zone) => Some(zone.to_owned()),
+                None => {
+                    warn_ignored("timeZones", &[format!("{item} is not a time zone's name")]);
+                    None
+                }
+            })
+            .collect(),
+        Some(other) => {
+            warn_ignored(
+                "timeZones",
+                &[format!("{other} is not a list of time zone names")],
+            );
+            Vec::new()
+        }
+    };
     Ok(nsh_i18n::bundle_json(
         &translations,
         locales.as_deref(),
+        &time_zones,
         |warning| log::warn!(target: "nsh::build", "nsh.json: {warning}"),
     ))
 }
@@ -765,36 +787,6 @@ fn warn_ignored(section: &str, ignored: &[String]) {
             "nsh.json: {section}: {what}, ignored (one of a newer NSH, or a typo)"
         );
     }
-}
-
-/// The directory of the app whose entry is in `dir`, where its `nsh.json`
-/// is: `dir` itself, or, when `dir` has neither an `nsh.json` nor an
-/// `App.tsx`, the nearest directory up with an `nsh.json`, else the nearest
-/// one up with an `App.tsx`, else `dir`. An entry a test opens
-/// (`tests/MenuApp.tsx`), or the one `nsh test` makes for a test file
-/// (`.nsh/test/<file>.run.js`), is built with its app's theme, translations
-/// and the rest of its `nsh.json`, as the app is, and names its assets
-/// from the app's directory ([`Bundle::asset_root`]).
-fn app_dir(dir: &std::path::Path) -> PathBuf {
-    let has_config = |d: &std::path::Path| d.join("nsh.json").is_file();
-    let has_entry = |d: &std::path::Path| {
-        std::fs::read_dir(d).is_ok_and(|entries| {
-            entries.filter_map(Result::ok).any(|e| {
-                e.file_name()
-                    .to_str()
-                    .is_some_and(|n| n.eq_ignore_ascii_case("App.tsx"))
-            })
-        })
-    };
-    if has_config(dir) || has_entry(dir) {
-        return dir.to_owned();
-    }
-    dir.ancestors()
-        .skip(1)
-        .find(|d| has_config(d))
-        .or_else(|| dir.ancestors().skip(1).find(|d| has_entry(d)))
-        .unwrap_or(dir)
-        .to_owned()
 }
 
 /// Bundles an app, blocking the current thread.
@@ -816,29 +808,25 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         .ok_or_else(|| BundleError::other("entry has no parent directory"))?
         .to_path_buf();
     let cwd_for_errors = cwd.clone();
-    let cwd_root = cwd.clone();
     // Canonical: `cwd` is, and so is each directory above it.
     let app = app_dir_of(options.app_dir.as_deref(), &cwd)?;
     // The `nsh.json` whose theme and translations a change rebuilds with.
-    let cwd_root = if options.app_dir.is_some() {
-        app.clone()
-    } else {
-        cwd_root
-    };
+    let watch_root = app.clone();
     let tailwind = tailwind_setup(&app, options.development, &options.app, &options.ui_sets)?;
     let capabilities = capabilities(&app)?;
     let links = app_links(&app)?;
-    // Beside the entry, as `app.json`, `nsh run` and `nsh test`'s
-    // real-window hosts read it (the CLI's `read_config`): an app a test
-    // opens below its app's root starts alike headless and in a window.
-    // An entry kept outside its app reads them from the app's directory.
+    // The entry's own `nsh.json` (beside it, or the one above that names
+    // it), as `app.json`, `nsh run` and `nsh test`'s real-window hosts read
+    // it (the CLI's `read_config`): an app a test opens below its app's
+    // root starts alike headless and in a window. An entry kept outside
+    // its app reads them from the app's directory.
     let config_dir = if options.app_dir.is_some() {
-        &app
+        app.clone()
     } else {
-        &cwd
+        crate::app_dir::config_dir_of(&entry)
     };
-    let main_window = main_window(config_dir)?;
-    let application = application(config_dir)?;
+    let main_window = main_window(&config_dir)?;
+    let application = application(&config_dir)?;
     let resolve = ResolveSetup::read(&app)?.with_nshm(&app)?;
     let asset_root = match &options.asset_root_from {
         Some(file) => {
@@ -972,7 +960,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         entry_imports,
         assets,
         asset_root,
-        watch_files: watch_files(&bundler, &cwd_root),
+        watch_files: watch_files(&bundler, &watch_root),
         glob_dirs,
         glob_patterns,
         natives: natives.into_iter().collect(),
@@ -1009,7 +997,12 @@ fn watch_files(bundler: &rolldown::Bundler, dir: &std::path::Path) -> Vec<PathBu
         .map(|path| PathBuf::from(path.key().as_str()))
         .filter(|path| path.is_file())
         .collect();
-    if let Ok(config) = std::fs::read_to_string(dir.join("nsh.json"))
+    // The app's `nsh.json` itself, which may be above the entry's directory
+    // (`"entry"`) and so outside what the development server watches.
+    if let Ok(path) = dunce::canonicalize(dir.join("nsh.json")) {
+        files.push(path);
+    }
+    if let Ok(config) = crate::app_dir::read(&dir.join("nsh.json"))
         && let Ok(config) = serde_json::from_str::<serde_json::Value>(&config)
     {
         // The theme and its overrides, files of their own.
@@ -1020,7 +1013,7 @@ fn watch_files(bundler: &rolldown::Bundler, dir: &std::path::Path) -> Vec<PathBu
                 .filter_map(|file| dunce::canonicalize(dir.join(file)).ok()),
         );
     }
-    // The translations come with the entry: a change rebuilds it.
+    // The app's translations: a change rebuilds it.
     files.extend(nsh_i18n::locale_files(dir));
     files.sort();
     files.dedup();
@@ -1424,8 +1417,8 @@ pub async fn bundle_hot_in_async(
             .collect(),
         entry: entry_id.ok_or_else(|| BundleError::other("bundle produced no entry chunk"))?,
         assets,
+        watch_files: watch_files(&bundler, &app),
         asset_root: app,
-        watch_files: watch_files(&bundler, &cwd),
         glob_dirs,
         glob_patterns,
         capabilities,
@@ -2477,6 +2470,80 @@ mod tests {
             Some(r#"{"defaultVisible":false}"#)
         );
         assert_eq!(build("tests/MenuApp.tsx").main_window, None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A UTF-8 BOM (a Windows editor's, PowerShell's) in `nsh.json` or the
+    /// theme file it names does not make the config unread.
+    #[test]
+    fn a_utf8_bom_is_taken_off_the_config() {
+        let dir = std::env::temp_dir().join(format!("nsh-bom-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("nsh.json"),
+            format!(
+                "\u{feff}{}",
+                r##"{
+                    "capabilities": { "network": { "hosts": ["api.example.com"] } },
+                    "theme": { "tokens": { "primary": { "kind": "color", "value": "#e11d48" } } }
+                }"##
+            ),
+        )
+        .unwrap();
+        let caps = capabilities(&dir).unwrap().unwrap();
+        assert_eq!(caps.network.hosts.len(), 1);
+        assert_ne!(
+            app_theme(&dir, &[]).unwrap().tokens.color("primary"),
+            nsh_base::Theme::default().into_tokens().color("primary")
+        );
+        // The theme in a file of its own, itself with a BOM.
+        std::fs::write(
+            dir.join("nsh.json"),
+            "\u{feff}{ \"theme\": \"theme.json\" }",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("theme.json"),
+            "\u{feff}{ \"tokens\": { \"primary\": { \"kind\": \"color\", \"value\": \"#0ea5e9\" } } }",
+        )
+        .unwrap();
+        assert_ne!(
+            app_theme(&dir, &[]).unwrap().tokens.color("primary"),
+            nsh_base::Theme::default().into_tokens().color("primary")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// UTF-16 (PowerShell's `>` and Out-File write it on Windows) reads:
+    /// with a BOM, and without one, where a NUL in the first two bytes
+    /// says UTF-16.
+    #[test]
+    fn a_utf16_config_reads_too() {
+        let dir = std::env::temp_dir().join(format!("nsh-utf16-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let json = r#"{ "capabilities": { "network": { "hosts": ["api.example.com"] } } }"#;
+        let encoded = |le: bool, bom: bool| -> Vec<u8> {
+            let mut out = Vec::new();
+            if bom {
+                out.extend_from_slice(if le { &[0xFF, 0xFE] } else { &[0xFE, 0xFF] });
+            }
+            for unit in json.encode_utf16() {
+                let bytes = if le {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                out.extend_from_slice(&bytes);
+            }
+            out
+        };
+        for (le, bom) in [(true, true), (false, true), (true, false)] {
+            std::fs::write(dir.join("nsh.json"), encoded(le, bom)).unwrap();
+            let caps = capabilities(&dir).unwrap().unwrap();
+            assert_eq!(caps.network.hosts.len(), 1, "le {le} bom {bom}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -222,6 +222,7 @@ own path. An app without `capabilities` loads local files as before.
 | `hosts` | `string[]` | Hosts a [web view](./web-view-and-video.md) may show and navigate to (`http` and `https`). Without `webview`, the app may not show web pages at all. |
 | `input` | `boolean` | A web view's ref may give its page trusted input ([`sendInput`](./web-view-and-video.md#input-as-the-users-own)). Never granted unless declared, also for an app without `"capabilities"`. |
 | `media` | `string[]` | What web pages may capture with `getUserMedia`: `"microphone"`, `"camera"`. Never granted unless declared, also for an app without `"capabilities"`. |
+| `runtimeOrigin` | `boolean` | A web view's `allowOrigin` may add one origin, decided while the app runs, to the hosts that web view may show ([`allowOrigin`](../elements/web-view.md)). Never granted unless declared, also for an app without `"capabilities"`. |
 
 Top-level navigations inside the web view are checked too, by the platform's navigation delegate, before they load.
 The page's own subresources (its scripts, images, XHRs) are the web content's business and are not checked.
@@ -268,6 +269,10 @@ for when a page first needs them. The development hosts (`nsh run`) carry the us
 `"picker": true` lets the app show the system's picker for photos ([`Picker`](../modules/nsh.md#picker)): the user
 picks what reaches the app.
 
+It also grants the photo library to an app that turns on `nsh-extra`'s [`Photos`](./nshm.md#photos): reading the
+recent photos, their thumbnails and the photos themselves. What the user allows holds for the whole app, so this
+capability is what decides which code reaches them.
+
 ### `share`
 
 `"share": true` lets the app show the system's share sheet ([`Share`](../modules/nsh.md#share)): the user chooses
@@ -275,8 +280,8 @@ where the content goes. A shared file must also be readable under `fs.read`.
 
 ### `speech`
 
-`"speech": true` lets the app recognize what the user says ([`Speech`](../modules/nsh.md#speech)): the microphone and
-the system's speech recognizer, whose transcript reaches the app. The system still asks the user once.
+`"speech": true` lets the app recognize what the user says (`nsh-extra`'s [`Speech`](./nshm.md#speech)): the
+microphone and the system's speech recognizer, whose transcript reaches the app. The system still asks the user once.
 
 ### `audio`
 
@@ -374,6 +379,7 @@ if (host.available()) {
 | Speech | `Speech.start` throws `ERR_ACCESS_DENIED`, `permission` `"speech"` and `resource` `""`; the microphone stays off. |
 | Sound | `Sound.load` rejects and `new AudioPlayer` throws `ERR_ACCESS_DENIED`, `permission` `"audio"` and `resource` the source; nothing is read or played. |
 | Notifications | Each function of `Notifications` rejects or throws `ERR_ACCESS_DENIED`, `permission` `"notifications"` and `resource` `""`; nothing shows. |
+| Photos | Each function of `nsh-extra`'s `Photos` but `access()` rejects or throws `ERR_ACCESS_DENIED`, `permission` `"picker"` and `resource` `""`; the library is not read and the user is not asked. |
 | Push | Each function of `nsh-extra`'s `Push` but `available()` rejects or throws `ERR_ACCESS_DENIED`, `permission` `"notifications"` and `resource` `""`; the device is not registered, and no token or delivery reaches the app. |
 | `openUrl` | The promise rejects with `ERR_ACCESS_DENIED`, `permission` `"openUrl"` and `resource` the URL; nothing opens. |
 | Host call | `host.call` rejects with `ERR_ACCESS_DENIED`, `permission` `"host"` and `resource` the function's name (`host.post` throws it); the call never reaches the host. |

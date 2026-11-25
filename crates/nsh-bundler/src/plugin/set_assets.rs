@@ -201,6 +201,7 @@ mod tests {
             set.assets.push(AssetDescription {
                 path: format!("@acme-ui/{path}"),
                 source: source.to_string_lossy().into_owned(),
+                targets: Vec::new(),
             });
         }
         set

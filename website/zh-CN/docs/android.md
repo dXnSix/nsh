@@ -1,6 +1,6 @@
 ---
 title: Android
-description: 在 Android 上用 Android 视图运行 Rust 和 TSX 编写的 NSH 应用（模拟器或真机），打包成 .apk，并通过 nsh.aar 和 NshView 嵌入现有 Android 应用。
+description: 在 Android 上用 Android 视图运行 TSX 和 Rust 编写的 NSH 应用（模拟器或真机），打包成 .apk，并通过 nsh.aar 和 NshView 嵌入现有 Android 应用。
 order: 12
 group: platforms
 ---
@@ -8,7 +8,7 @@ group: platforms
 # Android
 
 NSH 应用在 Android 上用普通的 Android 视图和 `StaticLayout` 文本运行，要求 Android 8（API 26）及以上，支持 `arm64-v8a`、
-`armeabi-v7a` 和 `x86_64`。用 Rust 和 TSX 编写的完整应用，运行和打包方式与其他平台相同；现有应用也可以在 `NshView` 中嵌入模块，加载它下载的签名包，并按自己设定的限制和能力运行它们。在
+`armeabi-v7a` 和 `x86_64`。用 TSX 和 Rust 编写的完整应用，运行和打包方式与其他平台相同；现有应用也可以在 `NshView` 中嵌入模块，加载它下载的签名包，并按自己设定的限制和能力运行它们。在
 Android 上，`os()` 是 `Os::Android`（TSX 中 `platform.os` 是 `"android"`），TSX 的 `android={{…}}` 属性生效。
 
 ## 环境要求
@@ -31,6 +31,10 @@ nsh run App.tsx --target android       # TSX 应用
 安装 APK 并启动它；修改 crate 的 Rust 代码会重新构建并安装。对 TSX 应用，`nsh` 会安装一个开发宿主 APK（只在运行时变化时重新构建），并通过
 `adb reverse` 转发开发服务器的端口，因此通过 USB 即可工作，无需共享网络；你保存时应用会更新，日志显示在终端中。
 
+这些开发构建中的 `libnsh.so` 不带调试信息，APK 因此小到能在模拟器上更新；完整的库在它旁边的 `symbols/<abi>/` 中，供 `ndk-stack`
+和调试器使用。设备没有空间更新开发宿主时，NSH 会先卸载它再重新安装：它只保存所运行应用写下的数据。应用自己的 APK 从不会被自动卸载：
+错误信息会说明如何腾出空间。
+
 ## 打包
 
 ```sh
@@ -48,17 +52,17 @@ release APK 中的 `libnsh.so` 不带符号表和调试信息。完整的库位�
 
 ## 上传到 Google Play
 
-`nsh publish android` 把 Android App Bundle（`.aab`）上传到 Google Play 的内部测试轨道（[CLI](./cli.md#nsh-publish-android)）：
+`nsh publish android` 把 Android App Bundle（`.aab`）上传到 Google Play 的某个轨道，未用 `--track` 指定时为内部测试（[CLI](./cli.md#nsh-publish-android)）：
 
 ```sh
-export NSH_PLAY_CREDENTIALS=~/keys/play-service-account.json   # 不要提交到仓库
+export NSH_PLAY_CREDENTIALS=~/keys/play-service-account.json
+nsh publish doctor android
 nsh publish android .nsh/out/App.aab
+nsh publish android --from internal --track production --rollout 0.1
+nsh publish status android --json
 ```
 
-每个应用做一次：在 Play Console 中创建应用；在 Google Cloud 中启用 Google Play Android Developer API 并创建服务账号，下载其
-JSON 密钥；在 Play Console 的**用户和权限**中邀请该服务账号的邮箱，并授予发布到测试轨道的权限。应用在 Play Console
-中完成首次发布之前，请加 `--draft`。Bundle 的 version code 必须高于此前上传过的所有版本。发布到内部测试之外的轨道仍在 Play
-Console 中操作。
+Play Console 与服务账号的准备、上传密钥、轨道、分阶段发布、商店文案和常见错误见[发布到 Google Play](./publish.md#publish-to-google-play)。
 
 ## 嵌入 Android 应用
 
@@ -92,8 +96,8 @@ cargo xtask android-embed    # writes dist/nsh/embed/android/{nsh,nsh-dev}.aar
 `--no-dev` 不构建 `nsh-dev.aar`。默认包含 `arm64-v8a`、`armeabi-v7a` 和 `x86_64`；重复 `--abi` 可以少构建几个。
 
 AAR 包含 Java 运行时以及适用于 `arm64-v8a`、`armeabi-v7a` 和 `x86_64` 的 `libnsh.so`，库中带有符号：应用的 Gradle
-构建在打包时去除符号，并保留它们用于崩溃报告。它声明了 `INTERNET`
-权限，要求 **API 26**（Android 8）或更高版本。它自带 R8 规则（`proguard.txt`），开启混淆的构建会自动应用：原生库按名字
+构建在打包时去除符号，并保留它们用于崩溃报告。它声明了 `INTERNET` 和
+`ACCESS_NETWORK_STATE` 权限，要求 **API 26**（Android 8）或更高版本。它自带 R8 规则（`proguard.txt`），开启混淆的构建会自动应用：原生库按名字
 查找运行时的类，因此 `com.longbridge.nsh` 保持原样。
 
 把它加入应用模块，例如从 `libs` 文件夹引入：
@@ -380,6 +384,16 @@ file provider 写入的 `content://` URI（`MediaStore.EXTRA_OUTPUT`）；`picke
 `ActivityError::NoActivity` 失败。`nsh-extra` 的相机
 （`crates/nsh-extra/src/camera/android.rs`）用到了它们全部。
 
+## 用 Rust 实现 Java 监听器
+
+通过接口回调的 Android API（投递到 UI 线程的 `Runnable`、框架的各种 `...Listener`）可以接收
+`proxy::implement(env, &["android.speech.RecognitionListener"], handler)` 创建的对象：一个实现这些接口的 Java 对象，它的调用会在
+Java 发起调用的线程上交给 `handler`（方法名和参数），所以 crate 不需要自带 Java 代码。Java 可能调用它期间要一直持有返回的 `Proxy`；
+丢弃之后，它的调用什么都不做。`nsh-extra` 的语音识别（`crates/nsh-extra/src/speech/android.rs`）就是这样监听 `SpeechRecognizer` 的。
+这种方式只能实现接口：接收抽象类的 API（`UtteranceProgressListener`）需要一个 Java 子类，由 crate 作为库自带（[Java 代码](./packaging.md#java-代码)）。
+返回基本类型的方法必须得到装箱成对应类型的值（`boolean` 对应 `java.lang.Boolean`）：在这里返回 `None`，或在 `Proxy` 丢弃后被调用，都会在 Java 中抛出
+`NullPointerException`。
+
 ## 来自其他代码的通知
 
 [`Notifications`](../modules/nsh.md#notifications) 报告应用自己显示的通知的点击。推送 SDK 等其他代码显示的通知，点击时打开应用的启动
@@ -507,6 +521,7 @@ adb reverse tcp:8790 tcp:8790
 
 ## 另请参阅
 
+- [发布到 Google Play](./publish.md#publish-to-google-play)
 - [用 Rust 开发](./rust.md)
 - [嵌入 iOS 应用](./ios.md)
 - [原生组件](./native-components.md)

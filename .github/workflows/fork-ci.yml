@@ -397,9 +397,9 @@ jobs:
         with:
           cache: rust-app
       - name: Clippy
-        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/push --locked -- -D warnings
+        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/speech --locked -- -D warnings
       - name: Test the crate
-        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/push --locked
+        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/speech --locked
       - name: Check the native dependency graph
         run: |
           cargo tree -p gallery-native --locked -e normal > "$RUNNER_TEMP/rust-app-dependencies.txt"
@@ -470,7 +470,7 @@ jobs:
         run: cargo build -p nsh-cli --locked
       - name: Run the examples' tests
         run: |
-          for app in post-editor rust-exports tasks-rs; do
+          for app in extra post-editor rust-exports tasks-rs; do
             ./target/debug/nsh test "examples/$app"
           done
 

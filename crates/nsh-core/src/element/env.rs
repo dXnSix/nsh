@@ -3,7 +3,7 @@
 
 use crate::{
     EdgeInsets, Points, Size,
-    platform::{Idiom, Lifecycle, Locale, LocaleSettings, Os},
+    platform::{Idiom, Lifecycle, Locale, LocaleSettings, Network, Os},
 };
 
 /// The environment of a surface, as the platform reports it.
@@ -70,6 +70,9 @@ pub struct Environment {
     /// How many times the system woke from sleep while the surface ran
     /// ([`crate::platform::Environment::wake_count`]).
     pub wake_count: u32,
+    /// How the device reaches the network
+    /// ([`crate::platform::Environment::network`]).
+    pub network: Network,
     /// The platform picks colors from the screen
     /// ([`crate::platform::Environment::screen_color`]).
     pub screen_color: bool,
@@ -95,9 +98,6 @@ pub struct Environment {
     /// The platform shows file dialogs and opens, reveals and trashes local
     /// paths ([`crate::platform::Environment::file_requests`]).
     pub file_requests: bool,
-    /// The platform recognizes speech
-    /// ([`crate::platform::Environment::speech`]).
-    pub speech: bool,
     /// The platform shows notifications
     /// ([`crate::platform::Environment::notifications`]).
     pub notifications: bool,
@@ -164,6 +164,7 @@ impl Default for Environment {
             host: false,
             lifecycle: Lifecycle::Active,
             wake_count: 0,
+            network: Network::default(),
             screen_color: false,
             clipboard_write_result: false,
             canvas_render: false,
@@ -172,7 +173,6 @@ impl Default for Environment {
             auth_session: false,
             scheme_links: true,
             file_requests: false,
-            speech: false,
             notifications: false,
             audio: false,
             tab_bar: true,
