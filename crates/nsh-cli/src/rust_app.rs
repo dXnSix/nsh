@@ -6415,6 +6415,7 @@ mod tests {
         let version = super::VERSION;
         let mut patches = String::new();
         for crate_ in [
+            "gpui-fast-scheduler",
             "gpui-fast-macros",
             "gpui-fast",
             "gpui-fast-apple",

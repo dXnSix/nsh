@@ -316,10 +316,16 @@ fn EmbeddedTheme() -> impl nsh_core::element::IntoElement {
 fn embedding_screenshots(cx: &mut HeadlessAppContext, output: &Path) {
     use nsh_core::platform::Appearance;
 
-    let theme = r##"{ "cssVars": {
-        "light": { "background": "#f8fafc", "foreground": "#172033" },
-        "dark": { "background": "#141821", "foreground": "#edf2f7" }
-    } }"##;
+    // nshx: a theme document (the fork reads no `cssVars`), dark values in its `colorMode`.
+    let theme = r##"{
+        "tokens": {
+            "background": { "kind": "color", "value": "#f8fafc" },
+            "foreground": { "kind": "color", "value": "#172033" }
+        },
+        "modifiers": { "colorMode": { "default": "light", "contexts": {
+            "light": {}, "dark": { "background": "#141821", "foreground": "#edf2f7" } } } },
+        "resolutionOrder": ["colorMode"]
+    }"##;
     for (name, appearance) in [("light", Appearance::Light), ("dark", Appearance::Dark)] {
         let (tx, rx) = futures_channel::oneshot::channel();
         let options = AppOptions {
@@ -336,7 +342,7 @@ fn embedding_screenshots(cx: &mut HeadlessAppContext, output: &Path) {
         cx.update(|cx| {
             window
                 .update(cx, |view, _, cx| {
-                    view.set_theme_json(theme, cx).unwrap();
+                    view.set_theme_json(Some(theme), cx).unwrap();
                     view.set_appearance(appearance, cx);
                     view.load(App::Rust(Root::of::<EmbeddedTheme>()));
                 })
