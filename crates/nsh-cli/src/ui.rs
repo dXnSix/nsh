@@ -37,6 +37,8 @@ struct Term {
     tty: bool,
     color: bool,
     verbose: bool,
+    /// Structured non-TTY progress lines (`→ ...`) enabled via `NSH_PROGRESS=1`.
+    progress: bool,
 }
 
 static TERM: OnceLock<Term> = OnceLock::new();
@@ -45,14 +47,20 @@ fn term() -> &'static Term {
     TERM.get_or_init(|| Term::detect(false))
 }
 
+fn progress_enabled(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|v| !v.is_empty() && v != "0")
+}
+
 impl Term {
     fn detect(verbose: bool) -> Term {
         let tty = std::io::stderr().is_terminal();
         let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
+        let progress = progress_enabled(std::env::var_os("NSH_PROGRESS").as_deref());
         Term {
             tty,
             color: tty && !no_color,
             verbose,
+            progress,
         }
     }
 }
@@ -651,22 +659,30 @@ pub(crate) struct Step {
     start: Instant,
 }
 
+/// Whether structured non-TTY progress lines should be emitted (`NSH_PROGRESS=1`).
+fn progress() -> bool {
+    term().progress && !term().tty && !verbose() && !LOGGING.load(Ordering::Acquire)
+}
+
 impl Step {
     /// Starts the step, `label` saying what it does ("building …").
     pub(crate) fn start(label: impl Into<String>) -> Step {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         let start = Instant::now();
+        let label = label.into();
         if term().tty && !verbose() && !LOGGING.load(Ordering::Acquire) {
             spin();
             let mut out = out();
             out.spinners.push(Spinner {
                 id,
-                label: label.into(),
+                label,
                 status: String::new(),
                 start,
             });
             out.draw(&mut std::io::stderr().lock());
+        } else if progress() {
+            note(&label);
         }
         Step { id, start }
     }
@@ -851,7 +867,11 @@ pub(crate) fn cargo_as(cmd: &mut Command, doing: [&str; 2], what: &str) -> anyho
         let line = strip_ansi(line);
         let line = line.trim_start();
         if let Some(rest) = line.strip_prefix("Compiling ") {
-            step.status(rest.split(' ').next().unwrap_or(rest));
+            let krate = rest.split(' ').next().unwrap_or(rest);
+            step.status(krate);
+            if progress() {
+                note(format!("compiling {krate}"));
+            }
         }
         warnings += generated_warnings(line);
     })
@@ -1009,5 +1029,15 @@ mod tests {
         assert_eq!(duration(Duration::from_millis(21)), "21ms");
         assert_eq!(duration(Duration::from_millis(12_640)), "12.6s");
         assert_eq!(duration(Duration::from_secs(63)), "1m 3s");
+    }
+
+    #[test]
+    fn progress_env_parses_truthy_values() {
+        use std::ffi::OsStr;
+        assert!(!progress_enabled(None));
+        assert!(!progress_enabled(Some(OsStr::new(""))));
+        assert!(!progress_enabled(Some(OsStr::new("0"))));
+        assert!(progress_enabled(Some(OsStr::new("1"))));
+        assert!(progress_enabled(Some(OsStr::new("true"))));
     }
 }
