@@ -3007,6 +3007,105 @@ fn scroll_reports_content_size() {
     )));
 }
 
+/// A scroll view's content extent is its content's own, even below the
+/// viewport (#2901): the frame floor made a short list under an iOS large
+/// title scroll by the insets UIKit adds around the viewport.
+#[test]
+fn scroll_content_below_the_viewport_is_the_content() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Scroll,
+            },
+            style_op(2, &[("height", StyleValue::Number(200.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            style_op(3, &[("height", StyleValue::Number(100.0))]),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+        ],
+    );
+    let content = |batch: &MountBatch| {
+        batch.items.iter().find_map(|i| match i {
+            MountItem::ScrollContent { id: 2, size } => Some(*size),
+            _ => None,
+        })
+    };
+    let batch = c.commit().unwrap();
+    // The row is the content, not the 200-point viewport it lies in.
+    assert_eq!(content(&batch), Some(size_pt(320.0, 100.0)));
+
+    // Growing past the viewport reports the grown content.
+    apply(
+        &mut c,
+        vec![style_op(3, &[("height", StyleValue::Number(500.0))])],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(content(&batch), Some(size_pt(320.0, 500.0)));
+}
+
+/// A horizontal scroll view's main axis is its width: content narrower
+/// than the viewport is its own extent there too, while the height it
+/// spans stays the viewport's.
+#[test]
+fn horizontal_scroll_content_below_the_viewport_is_the_content() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Scroll,
+            },
+            style_op(
+                2,
+                &[
+                    ("width", StyleValue::Number(200.0)),
+                    ("height", StyleValue::Number(100.0)),
+                ],
+            ),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Horizontal(true),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            style_op(3, &[("width", StyleValue::Number(50.0))]),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let content = batch.items.iter().find_map(|i| match i {
+        MountItem::ScrollContent { id: 2, size } => Some(*size),
+        _ => None,
+    });
+    assert_eq!(content, Some(size_pt(50.0, 100.0)));
+}
+
 /// `scrollsToTop` reaches the scroll view's mounted behavior (iOS sets
 /// `UIScrollView.scrollsToTop` from it): on by default, off when the app
 /// says so, and on again.
@@ -13705,6 +13804,261 @@ fn web_source(batch: &MountBatch, view: NodeId) -> Option<crate::WebSource> {
         } if *id == view => Some(p.source.clone()),
         _ => None,
     })
+}
+
+/// A core whose app declares `capabilities`, with web view 2 made from
+/// `props` in one render (its errors listened to): the source the platform
+/// receives, its `allowOrigin`, and the access errors it heard.
+fn web_view_with_access(
+    capabilities: serde_json::Value,
+    props: Vec<Prop>,
+) -> (
+    Core<FakeEngine>,
+    Option<crate::WebSource>,
+    Option<crate::access::WebOrigin>,
+    Vec<String>,
+) {
+    let mut c = core();
+    c.set_access(Arc::new(crate::access::Access {
+        declared: crate::access::Capabilities::from_json(&capabilities).unwrap(),
+        granted: None,
+    }));
+    let mut ops = vec![
+        Op::Create {
+            id: 2,
+            tag: Tag::WebView,
+        },
+        Op::Listen {
+            id: 2,
+            event: EventKind::Error,
+            enabled: true,
+        },
+    ];
+    ops.extend(props.into_iter().map(|prop| Op::SetProp { id: 2, prop }));
+    ops.push(Op::Insert {
+        parent: ROOT_ID,
+        child: 2,
+        before: None,
+    });
+    apply(&mut c, ops);
+    let batch = c.commit().unwrap();
+    let origin = batch.items.iter().rev().find_map(|i| match i {
+        MountItem::NativeProps {
+            id: 2,
+            props: crate::NativeProps::WebView(p),
+        } => Some(p.allow_origin.clone()),
+        _ => None,
+    });
+    let denied = access_errors(&mut c, 2);
+    (c, web_source(&batch, 2), origin.flatten(), denied)
+}
+
+/// The messages of the access errors node `view` heard.
+fn access_errors(c: &mut Core<FakeEngine>, view: NodeId) -> Vec<String> {
+    js_events(c)
+        .into_iter()
+        .filter_map(|e| match e {
+            (id, EventKind::Error, EventPayload::Map(fields))
+                if id == view
+                    && fields.iter().any(|(k, v)| {
+                        *k == "code" && *v == crate::PayloadValue::Str("ERR_ACCESS_DENIED".into())
+                    }) =>
+            {
+                fields.into_iter().find_map(|(k, v)| match (k, v) {
+                    ("message", crate::PayloadValue::Str(m)) => Some(m.to_string()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// `allowOrigin` adds one origin, decided while the app runs, to the hosts
+/// a web view may show, when the app declares `webview.runtimeOrigin`; set
+/// in the same render as `src`, before or after it, it applies to it.
+#[test]
+fn web_view_allow_origin_grants_its_origin() {
+    let caps = serde_json::json!({ "webview": { "hosts": ["127.0.0.1"], "runtimeOrigin": true } });
+    let page = "http://192.168.1.5:9876/session-page/T/index.html";
+    let src = || Prop::Native(NativeProp::Src(Some(page.into())));
+    let origin = |o: &str| Prop::Native(NativeProp::AllowOrigin(Some(o.into())));
+    let loaded = Some(crate::WebSource::Uri(page.into()));
+    for props in [
+        vec![src(), origin("http://192.168.1.5:9876")],
+        vec![origin("http://192.168.1.5:9876"), src()],
+    ] {
+        let (c, source, kept, denied) = web_view_with_access(caps.clone(), props);
+        assert_eq!(source, loaded);
+        assert_eq!(
+            kept.map(|o| o.to_string()).as_deref(),
+            Some("http://192.168.1.5:9876")
+        );
+        assert!(denied.is_empty(), "{denied:?}");
+        assert!(c.denied.is_empty(), "{:?}", c.denied);
+    }
+    // Written in its one form: the default port and the case dropped.
+    let (_, _, kept, _) =
+        web_view_with_access(caps.clone(), vec![origin("HTTPS://Name.Example.net:443/")]);
+    assert_eq!(
+        kept.map(|o| o.to_string()).as_deref(),
+        Some("https://name.example.net")
+    );
+    // Another origin is refused once, as a host not granted is.
+    for other in [
+        "http://192.168.1.5:9877/x",
+        "https://192.168.1.5:9876/x",
+        "http://a.192.168.1.5:9876/x",
+        "http://192.168.1.5:9876@evil.com/",
+    ] {
+        let (_, source, _, denied) = web_view_with_access(
+            caps.clone(),
+            vec![
+                Prop::Native(NativeProp::Src(Some(other.into()))),
+                origin("http://192.168.1.5:9876"),
+            ],
+        );
+        assert_eq!(source, Some(crate::WebSource::None), "{other}");
+        assert!(
+            matches!(&denied[..], [m] if m.contains("the web page")),
+            "{other}: {denied:?}"
+        );
+    }
+    // A base URL at the origin is kept with its HTML.
+    let (_, source, _, denied) = web_view_with_access(
+        caps.clone(),
+        vec![
+            Prop::Native(NativeProp::Html(Some("<b>hi</b>".into()))),
+            Prop::Native(NativeProp::BaseUrl(Some(
+                "http://192.168.1.5:9876/r/".into(),
+            ))),
+            origin("http://192.168.1.5:9876"),
+        ],
+    );
+    assert_eq!(
+        source,
+        Some(crate::WebSource::Html {
+            html: "<b>hi</b>".into(),
+            base_url: Some("http://192.168.1.5:9876/r/".into()),
+        })
+    );
+    assert!(denied.is_empty(), "{denied:?}");
+    // `webview.hosts` still grants on its own.
+    let (_, source, _, denied) = web_view_with_access(
+        caps,
+        vec![Prop::Native(NativeProp::Src(Some(
+            "http://127.0.0.1:6711/".into(),
+        )))],
+    );
+    assert_eq!(
+        source,
+        Some(crate::WebSource::Uri("http://127.0.0.1:6711/".into()))
+    );
+    assert!(denied.is_empty(), "{denied:?}");
+}
+
+/// Without `webview.runtimeOrigin` the prop is refused with a message and
+/// the web view keeps to `webview.hosts`, its URLs refused as before; a
+/// value that is not an origin is refused whatever the grant.
+#[test]
+fn web_view_allow_origin_needs_the_grant_and_an_origin() {
+    let page = "http://192.168.1.5:9876/index.html";
+    let (c, source, kept, denied) = web_view_with_access(
+        serde_json::json!({ "webview": { "hosts": ["127.0.0.1"] } }),
+        vec![
+            Prop::Native(NativeProp::AllowOrigin(Some(
+                "http://192.168.1.5:9876".into(),
+            ))),
+            Prop::Native(NativeProp::Src(Some(page.into()))),
+        ],
+    );
+    assert_eq!(source, Some(crate::WebSource::None));
+    assert_eq!(kept, None);
+    assert!(
+        matches!(&denied[..], [m] if m.contains("the web page")),
+        "{denied:?}"
+    );
+    assert!(
+        c.denied
+            .iter()
+            .any(|m| m.contains("add `\"runtimeOrigin\": true`")),
+        "{:?}",
+        c.denied
+    );
+    let caps = serde_json::json!({ "webview": { "hosts": ["127.0.0.1"], "runtimeOrigin": true } });
+    for bad in [
+        "http://h/path",
+        "http://h?q",
+        "http://h#f",
+        "http://u@h",
+        "*",
+        "ftp://h",
+        "http://*.h",
+        "http://bücher.example",
+        "h:80",
+    ] {
+        let (c, _, kept, _) = web_view_with_access(
+            caps.clone(),
+            vec![Prop::Native(NativeProp::AllowOrigin(Some(bad.into())))],
+        );
+        assert_eq!(kept, None, "{bad}");
+        assert!(
+            c.denied.iter().any(|m| m.starts_with("`allowOrigin`")),
+            "{bad}: {:?}",
+            c.denied
+        );
+    }
+}
+
+/// `load()` checks against the web view's origin of the moment: a new
+/// `allowOrigin` refuses the old one from the next load.
+#[test]
+fn web_view_allow_origin_applies_to_loads() {
+    let caps = serde_json::json!({ "webview": { "hosts": ["127.0.0.1"], "runtimeOrigin": true } });
+    let (mut c, _, _, _) = web_view_with_access(
+        caps,
+        vec![Prop::Native(NativeProp::AllowOrigin(Some(
+            "http://192.168.1.5:9876".into(),
+        )))],
+    );
+    let load = |c: &mut Core<FakeEngine>, url: &str| {
+        apply(
+            c,
+            vec![Op::Command {
+                id: 2,
+                command: Command::Load(crate::WebLoad {
+                    src: url.into(),
+                    headers: Vec::new(),
+                }),
+            }],
+        );
+        let batch = c.commit();
+        let sent = batch.is_some_and(|b| {
+            b.items.iter().any(|i| {
+                matches!(i, MountItem::Command { id: 2, command: Command::Load(l) } if l.src == url)
+            })
+        });
+        (sent, access_errors(c, 2))
+    };
+    assert_eq!(load(&mut c, "http://192.168.1.5:9876/a"), (true, vec![]));
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::Native(NativeProp::AllowOrigin(Some("http://10.0.0.2:9876".into()))),
+        }],
+    );
+    c.commit();
+    let (sent, _) = load(&mut c, "http://192.168.1.5:9876/b");
+    assert!(!sent);
+    assert!(
+        c.denied
+            .iter()
+            .any(|m| m.contains("http://192.168.1.5:9876/b")),
+        "{:?}",
+        c.denied
+    );
+    assert!(load(&mut c, "http://10.0.0.2:9876/c").0);
 }
 
 /// Inline HTML loaded with a base URL runs at the base URL's origin
@@ -33678,6 +34032,119 @@ fn fixed_views_are_laid_out_in_their_root_view() {
     let batch = c.commit().unwrap();
     assert!(inserts(&batch).contains(&(ROOT_ID, 4, None)));
     assert_eq!(frame_of(&batch, 4), Some(rect(0.0, 440.0, 320.0, 40.0)));
+}
+
+#[test]
+fn fixing_a_view_in_a_scroll_view_unculls_its_subtree() {
+    let mut c = core();
+    // Scroll view (2) -> wrapper (3) -> toolbar (4) with an existing item (5),
+    // plus a tall spacer (6) and an off-screen descendant (7) that starts culled.
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::Scroll,
+            },
+            style_op(2, &[("height", StyleValue::Number(100.0))]),
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+            Op::Create {
+                id: 3,
+                tag: Tag::View,
+            },
+            class_op(3, "h-[1200px]"),
+            Op::Insert {
+                parent: 2,
+                child: 3,
+                before: None,
+            },
+            Op::Create {
+                id: 4,
+                tag: Tag::View,
+            },
+            class_op(4, "flex-row h-[40px]"),
+            Op::Insert {
+                parent: 3,
+                child: 4,
+                before: None,
+            },
+            Op::Create {
+                id: 5,
+                tag: Tag::View,
+            },
+            class_op(5, "w-[40px] h-[40px]"),
+            Op::Insert {
+                parent: 4,
+                child: 5,
+                before: None,
+            },
+            Op::Create {
+                id: 6,
+                tag: Tag::View,
+            },
+            class_op(6, "h-[1000px]"),
+            Op::Insert {
+                parent: 3,
+                child: 6,
+                before: None,
+            },
+            Op::Create {
+                id: 7,
+                tag: Tag::View,
+            },
+            class_op(7, "h-[40px]"),
+            Op::Insert {
+                parent: 3,
+                child: 7,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert!(created_in(&batch).contains(&3));
+    assert!(created_in(&batch).contains(&4));
+    assert!(created_in(&batch).contains(&5));
+    assert!(!created_in(&batch).contains(&7));
+
+    // In the same commit: promote wrapper (3) to `position: fixed` and insert a
+    // new child (8) into toolbar (4). Before `sync_fixed()` runs, `insert` sees
+    // the outer scroll view as the culling scope and holds back (8); once (3)
+    // becomes fixed (`is_layout_root()`), the outer scroll view skips it.
+    apply(
+        &mut c,
+        vec![
+            class_op(3, "fixed inset-0"),
+            Op::Create {
+                id: 8,
+                tag: Tag::View,
+            },
+            class_op(8, "w-[60px] h-[40px]"),
+            Op::Insert {
+                parent: 4,
+                child: 8,
+                before: None,
+            },
+        ],
+    );
+    let batch = c.commit().unwrap();
+    let created = created_in(&batch);
+    assert!(
+        created.contains(&8),
+        "newly inserted child must be created: {created:?}"
+    );
+    assert!(
+        created.contains(&7),
+        "previously culled descendant must be created: {created:?}"
+    );
+    let ins = inserts(&batch);
+    assert!(ins.contains(&(ROOT_ID, 3, None)), "{ins:?}");
+    assert!(ins.contains(&(4, 8, None)), "{ins:?}");
+    assert!(ins.contains(&(3, 7, None)), "{ins:?}");
+    assert_eq!(frame_of(&batch, 8), Some(rect(40.0, 0.0, 60.0, 40.0)));
 }
 
 #[test]

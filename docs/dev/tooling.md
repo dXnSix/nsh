@@ -447,8 +447,9 @@ views that report it:
   `SubmitEditing` (then `Blur` for blur-and-submit), or a line break;
 - `scroll`: the scroll view (the match, the nearest one around it, else the first in it) moves along its axis 10
   points per frame within its content (`ScrollDragStart`, offsets with the applied count as platforms report them,
-  `ScrollDragEnd`, `ScrollEnd`), and fails on one the user cannot scroll (`scrollable={false}`); the model applies `ScrollBy` and `ScrollTo` / `ScrollToEnd` and reports where a
-  command moved the view;
+  `ScrollDragEnd`, `ScrollEnd`), and fails on one the user cannot scroll (`scrollable={false}`); the model applies `ScrollBy` and `ScrollTo` / `ScrollToEnd` and reports where they
+  moved the view, once a batch, as platforms report it: the core's offset (`ref.measure()`, a list's window) takes in
+  the scrolls that keep a list's rows in place as rows above them change size;
 - `drag` (`headless/pointer.rs`): a finger lands on the match's middle (`Screen::bounds_in_root`), rests 100 ms,
   moves 10 points a frame and lifts; on a desktop environment or the web it is the mouse (`Headless::pointer`, the
   pointer `hover` has): its touches say `PointerType::Mouse` and it grabs as a mouse
@@ -1273,7 +1274,9 @@ for the release runner in both. The test runner links QuickJS, so the first `nsh
   nshm link one copy. A pure TSX app with TSX nshm stays without Rust. `add`, `remove` and `upgrade` edit `nsh.json`,
   `nsh.lock` and the app crate's `[dependencies]` (`cargo_toml.rs`), restoring them on error. `platform_program`
   builds a platform nshm's `nsh-platform-<name>` from a copy in the app's `.nsh/platforms/<name>` (so Cargo writes
-  nothing into the shared installation); `platforms::dispatch` tries it before `PATH`.
+  nothing into the shared installation), as a workspace of its own (`own_workspace`: a Rust app's `Cargo.toml` is a
+  workspace root above the copy, and a published crate's manifest has no `[workspace]`); `platforms::dispatch` tries
+  it before `PATH`.
 - `rust_app::cargo_nshm`: the Rust nshm the app's own crates (`"rust"`) reach through Cargo alone are linked as well,
   after the listed crates, by package name: packages of the crates' graph (normal dependencies) that depend on
   `nsh-core` and have a `#[native_module]` at their root (`specifier_of`, the test `manifest.rs` applies). The

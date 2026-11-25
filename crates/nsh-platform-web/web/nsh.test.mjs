@@ -3890,6 +3890,77 @@ test("a copy gives attachments' copy texts where the layout put them among the r
   assert.equal(player.selectedText(root, reaching(0, 2)), "Area is  here,\n next");
 });
 
+test("a selectable view's selection carries the box around it", (t) => {
+  const saved = ["getComputedStyle", "document", "getSelection"].map((k) => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
+  t.after(() => {
+    for (const [k, d] of saved) d ? Object.defineProperty(globalThis, k, d) : delete globalThis[k];
+  });
+  globalThis.getComputedStyle = () => ({ visibility: "visible" });
+  // Where the selected part of each run shows on the page.
+  const shown = new Map();
+  globalThis.document = {
+    createRange: () => ({
+      selectNodeContents(run) {
+        this.run = run;
+      },
+      setStart() {},
+      setEnd() {},
+      getClientRects() {
+        return shown.get(this.run) ?? [];
+      },
+    }),
+  };
+  const { player, sent } = fakePlayer();
+  const runs = [{}, {}, {}];
+  for (const run of runs) run.contains = () => false;
+  // A view 320 by 60 drawn at twice its size (a scaled player), at 100, 200
+  // on the page.
+  const area = {
+    _id: 4,
+    _events: new Set(["onSelectionChange"]),
+    isConnected: true,
+    querySelectorAll: () => runs,
+    getBoundingClientRect: () => ({ left: 100, top: 200, width: 640, height: 120 }),
+    offsetWidth: 320,
+    offsetHeight: 60,
+  };
+  // From the first run into the second; the third is not reached.
+  const range = { intersectsNode: (run) => run !== runs[2], startContainer: null, endContainer: null };
+  globalThis.getSelection = () => ({ rangeCount: 1, isCollapsed: false, anchorNode: { nodeType: 1 }, getRangeAt: () => range });
+  // The first line's part, and the empty box at its end (its break only).
+  shown.set(runs[0], [
+    { left: 140, top: 200, right: 300, bottom: 240, width: 160, height: 40 },
+    { left: 320, top: 200, right: 320, bottom: 240, width: 0, height: 40 },
+  ]);
+  shown.set(runs[1], [{ left: 100, top: 256, right: 180, bottom: 296, width: 80, height: 40 }]);
+  shown.set(runs[2], [{ left: 100, top: 300, right: 700, bottom: 340, width: 600, height: 40 }]);
+  Object.assign(player, {
+    root: { contains: () => true },
+    areaOf: () => area,
+    selectableText: () => true,
+    selectedText: () => "beta\nDel",
+    selectionStart: () => 6,
+  });
+  const reports = () => sent.filter(([name]) => name === "onSelectionChange").map(([, p]) => p);
+  player.areaSelectionChanged();
+  // In the view's own points, from its top left corner.
+  assert.deepEqual(reports(), [
+    { text: "beta\nDel", start: 6, bounds: { origin: { x: 0, y: 0 }, size: { width: 100, height: 48 } } },
+  ]);
+  // The same selection where it was: nothing to report.
+  player.areaSelectionChanged();
+  assert.equal(reports().length, 1);
+  // The same text selected elsewhere (the second line's part further on).
+  shown.set(runs[1], [{ left: 100, top: 256, right: 400, bottom: 296, width: 300, height: 40 }]);
+  player.areaSelectionChanged();
+  assert.equal(reports().length, 2);
+  assert.deepEqual(reports()[1].bounds, { origin: { x: 0, y: 0 }, size: { width: 150, height: 48 } });
+  // Nothing selected: no box.
+  player.selectedText = () => "";
+  player.areaSelectionChanged();
+  assert.deepEqual(reports().slice(2), [{ text: "", start: 0 }]);
+});
+
 test("text with its HTML goes on the clipboard as one item of both types", async (t) => {
   const log = fakeClipboard(t);
   const { player } = fakePlayer();
@@ -4986,5 +5057,133 @@ test("window blur resets hoverButtons and cancels all active pointers", () => {
     else globalThis.window = savedWindow;
     if (savedDocument === undefined) delete globalThis.document;
     else globalThis.document = savedDocument;
+  }
+});
+
+test("point, corner, wheel, context menu, pinch, and scrollbar drag undo ancestor CSS zoom", () => {
+  const savedStyle = globalThis.getComputedStyle;
+  const styles = new Map();
+  globalThis.getComputedStyle = (node) => styles.get(node) ?? { zoom: "1", direction: "ltr" };
+  try {
+    const { player, sent } = fakePlayer();
+    const host = { parentElement: null };
+    const root = {
+      parentElement: host,
+      getBoundingClientRect: () => ({ left: 30, top: 15 }),
+    };
+    styles.set(host, { zoom: "1.5" });
+    styles.set(root, { zoom: "1" });
+    player.root = root;
+
+    // Fallback path when currentCSSZoom is absent: multiplies ancestor computed zoom.
+    assert.equal(player.cssZoom(root), 1.5);
+    assert.deepEqual(player.point({ clientX: 180, clientY: 90, target: root }, null), [100, 50]);
+
+    // Fast path when currentCSSZoom is present.
+    const view = {
+      _id: 9,
+      parentNode: root,
+      parentElement: root,
+      currentCSSZoom: 1.5,
+      _events: new Set(["onWheel", "onContextMenu", "onPinch"]),
+      getBoundingClientRect: () => ({ left: 60, top: 45, right: 360, bottom: 195 }),
+      matches: () => false,
+    };
+    root.currentCSSZoom = 1.5;
+    assert.deepEqual(player.corner(view, null), [20, 20]);
+    assert.deepEqual(player.point({ clientX: 210, clientY: 120, target: view }, null), [120, 70]);
+
+    // Wheel local position and pagePosition both report logical points.
+    player.viewOf = () => view;
+    player.ancestors = () => [view];
+    player.wheelTracked = new Set([9]);
+    player.size = [800, 600];
+    player.wheelEvent({
+      target: view,
+      clientX: 210,
+      clientY: 120,
+      deltaX: 0,
+      deltaY: 40,
+      deltaMode: 0,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+    });
+    assert.deepEqual(sent.at(-1)[1].position, { x: 100, y: 50 });
+    assert.deepEqual(sent.at(-1)[1].pagePosition, { x: 120, y: 70 });
+
+    // Context menu local position and pagePosition both report logical points.
+    player.contextMenu({
+      target: view,
+      clientX: 210,
+      clientY: 120,
+      button: 2,
+      pointerType: "mouse",
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false,
+      preventDefault() {},
+    });
+    assert.deepEqual(sent.at(-1)[1].position, { x: 100, y: 50 });
+    assert.deepEqual(sent.at(-1)[1].pagePosition, { x: 120, y: 70 });
+
+    // Pinch local position and pagePosition both report logical points.
+    view.isConnected = true;
+    player.pinchEvent(
+      {
+        target: view,
+        clientX: 210,
+        clientY: 120,
+        scale: 1.2,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        metaKey: false,
+        preventDefault() {},
+      },
+      0,
+    );
+    assert.deepEqual(sent.at(-1)[1].position, { x: 100, y: 50 });
+    assert.deepEqual(sent.at(-1)[1].pagePosition, { x: 120, y: 70 });
+
+    // mousePoint and mouseEvent fallback both undo ancestor CSS zoom.
+    styles.set(view, { transform: "none", scale: "none", zoom: "1", width: "200px", height: "100px" });
+    styles.set(host, { transform: "none", scale: "none", zoom: "1.5" });
+    styles.set(root, { transform: "none", scale: "none", zoom: "1" });
+    assert.deepEqual(player.mousePoint(view, { clientX: 210, clientY: 120 }), [100, 50]);
+    styles.set(view, { transform: "none", scale: "0", zoom: "1", width: "200px", height: "100px" });
+    const mousePayload = player.mouseEvent(
+      view,
+      { clientX: 210, clientY: 120, buttons: 0, pointerType: "mouse" },
+      true,
+    );
+    assert.deepEqual(mousePayload.position, { x: 100, y: 50 });
+    assert.deepEqual(mousePayload.pagePosition, { x: 120, y: 70 });
+
+    // Scrollbar hit-testing and drag divide viewport coordinates by CSS zoom.
+    const scroll = {
+      _horizontal: false,
+      clientWidth: 200,
+      clientHeight: 100,
+      scrollTop: 0,
+      currentCSSZoom: 1.5,
+      getBoundingClientRect: () => ({ left: 60, top: 45 }),
+    };
+    player.barShown = () => true;
+    player.barThumb = () => [10, 40, 60, 300];
+    player.barEdge = () => 200;
+    // Viewport x = 60 + 195 * 1.5 = 352.5 (logical 195, inside right edge grab zone),
+    // y = 45 + 25 * 1.5 = 82.5 (logical 25, inside thumb [10, 50]).
+    assert.equal(player.barHit(scroll, { clientX: 352.5, clientY: 82.5 }), true);
+    // Unscaled logical y = 25 would look like 25/1.5 = 16.6 if not zoomed; check outside at logical 60.
+    assert.equal(player.barHit(scroll, { clientX: 352.5, clientY: 45 + 60 * 1.5 }), false);
+    player.dragBar({ scroll, start: 82.5, offset: 0 }, { clientY: 82.5 + 30 });
+    // 30 viewport px / 1.5 = 20 logical px; 20 * (300 / 60) = 100 logical scroll offset.
+    assert.equal(scroll.scrollTop, 100);
+  } finally {
+    if (savedStyle === undefined) delete globalThis.getComputedStyle;
+    else globalThis.getComputedStyle = savedStyle;
   }
 });

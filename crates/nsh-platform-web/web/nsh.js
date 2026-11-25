@@ -3293,7 +3293,8 @@ class Player {
     if (!position) {
       if (!always) return null;
       const r = el.getBoundingClientRect();
-      position = [e.clientX - r.left, e.clientY - r.top];
+      const z = this.cssZoom(el);
+      position = [(e.clientX - r.left) / z, (e.clientY - r.top) / z];
     }
     const [pageX, pageY] = this.point(e);
     const held = MOUSE_BUTTONS.find(([bit]) => e.buttons & bit);
@@ -5136,7 +5137,8 @@ class Player {
     const thumb = this.barThumb(el);
     if (!thumb) return false;
     const r = el.getBoundingClientRect();
-    const [x, y] = [e.clientX - r.left, e.clientY - r.top];
+    const z = this.cssZoom(el);
+    const [x, y] = [(e.clientX - r.left) / z, (e.clientY - r.top) / z];
     const [along, across] = el._horizontal ? [x, y] : [y, x];
     const edge = this.barEdge(el);
     return across >= edge - BAR_GRAB && across <= edge && along >= thumb[0] - 4 && along <= thumb[0] + thumb[1] + 4;
@@ -5176,7 +5178,8 @@ class Player {
     const el = p.scroll;
     const thumb = this.barThumb(el);
     if (!thumb || thumb[2] <= 0) return;
-    const d = ((el._horizontal ? e.clientX : e.clientY) - p.start) * (thumb[3] / thumb[2]);
+    const z = this.cssZoom(el);
+    const d = (((el._horizontal ? e.clientX : e.clientY) - p.start) / z) * (thumb[3] / thumb[2]);
     if (el._horizontal) el.scrollLeft = p.offset + d;
     else el.scrollTop = p.offset + d;
   }
@@ -5419,12 +5422,13 @@ class Player {
     }
     if (p.takes) e.preventDefault();
     const r = p.el.getBoundingClientRect();
+    const z = this.cssZoom(p.el);
     const [pageX, pageY] = this.point(e);
     // Nothing changes at the end, as on the native backends.
     const delta = phase === 2 ? 0 : e.scale / (p.scale || 1) - 1;
     p.scale = e.scale;
     this.event(p.el._id, "onPinch", {
-      position: { x: e.clientX - r.left, y: e.clientY - r.top },
+      position: { x: (e.clientX - r.left) / z, y: (e.clientY - r.top) / z },
       pagePosition: { x: pageX, y: pageY },
       delta,
       phase: phase === 0 ? "start" : phase === 1 ? "move" : "end",
@@ -9145,9 +9149,16 @@ class Player {
         const [sx, sy = sx] = style.scale.split(" ").map(Number);
         [a, b, c, d] = [sx * a, sy * b, sx * c, sy * d];
       }
+      const zoom = parseFloat(style.zoom);
+      if (zoom > 0 && zoom !== 1) [a, b, c, d] = [zoom * a, zoom * b, zoom * c, zoom * d];
       // Top-layer views ignore their DOM ancestors' transforms (including
-      // the preserved app scale inside an elevated iframe).
-      if (node.classList?.contains("nsh-viewport")) break;
+      // the preserved app scale inside an elevated iframe), while CSS zoom
+      // still scales them through their ancestors.
+      if (node.classList?.contains("nsh-viewport")) {
+        const z = this.cssZoom(node.parentElement);
+        if (z !== 1) [a, b, c, d] = [z * a, z * b, z * c, z * d];
+        break;
+      }
     }
     const r = el.getBoundingClientRect();
     const det = a * d - b * c;
@@ -9305,8 +9316,9 @@ class Player {
           at = { clientX: rtl ? r.right : r.left, clientY: r.bottom, target: e.target };
         }
         const [pageX, pageY] = this.point(at);
+        const z = this.cssZoom(el);
         this.event(el._id, "onContextMenu", {
-          position: { x: at.clientX - r.left, y: at.clientY - r.top },
+          position: { x: (at.clientX - r.left) / z, y: (at.clientY - r.top) / z },
           pagePosition: { x: pageX, y: pageY },
           modifiers: { control: e.ctrlKey, alt: e.altKey, shift: e.shiftKey, platform: e.metaKey },
           pointerType: ["mouse", "pen", "touch"].includes(pointerType) ? pointerType : pointerType && "mouse",
@@ -9695,9 +9707,50 @@ class Player {
     return (this.selectedText(area, before) ?? "").length;
   }
 
+  /** The box around the selection's characters in `area` (`[x, y, width,
+   * height]` in the area, from its top left corner, as its layout places
+   * it), or null when they show nowhere: the boxes of the selected parts of
+   * the texts it reaches, united, as the native platforms report it
+   * (`SelectionModel::selected_bounds`). */
+  selectionBounds(area) {
+    const sel = getSelection();
+    if (!sel?.rangeCount || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const run of area.querySelectorAll(".nsh-run")) {
+      // The runs a copy takes (`selectedText`).
+      if (!range.intersectsNode(run) || !this.selectableText(run)) continue;
+      if (getComputedStyle(run).visibility === "hidden") continue;
+      const part = document.createRange();
+      part.selectNodeContents(run);
+      if (run.contains(range.startContainer)) part.setStart(range.startContainer, range.startOffset);
+      if (run.contains(range.endContainer)) part.setEnd(range.endContainer, range.endOffset);
+      for (const r of part.getClientRects()) {
+        // The empty box at a line's end where the selection only reaches its break.
+        if (r.width <= 0 || r.height <= 0) continue;
+        left = Math.min(left, r.left);
+        top = Math.min(top, r.top);
+        right = Math.max(right, r.right);
+        bottom = Math.max(bottom, r.bottom);
+      }
+    }
+    if (left > right) return null;
+    // In the area's own points: a transform around it (a scaled player,
+    // a zoomed scroll view) scales what the browser measures on screen.
+    const box = area.getBoundingClientRect();
+    const sx = area.offsetWidth ? box.width / area.offsetWidth : 1;
+    const sy = area.offsetHeight ? box.height / area.offsetHeight : 1;
+    return [(left - box.left) / sx, (top - box.top) / sy, (right - left) / sx, (bottom - top) / sy];
+  }
+
   /** The document's selection changed: the selectable view it is in (the
-   * outermost) hears its text (`onSelectionChange`), and one it left hears
-   * "" (nothing selected), each only when its text changed. */
+   * outermost) hears its text (`onSelectionChange`) with the box around it
+   * as of now (`bounds`, to which the core adds `pageBounds`), and one it
+   * left hears "" (nothing selected), each only when its text or the box
+   * changed (the same text selected elsewhere is a change). */
   areaSelectionChanged() {
     const sel = getSelection();
     const anchor = sel?.rangeCount ? sel.anchorNode : null;
@@ -9710,14 +9763,23 @@ class Player {
         this.event(last._id, "onSelectionChange", { text: "", start: 0 });
       }
       last._selectedText = "";
+      last._selectedBox = "";
     }
     if (!area) return;
     this._selectedArea = area;
     if (!area._events?.has("onSelectionChange")) return;
     const text = this.selectedText(area) ?? "";
-    if (text === (area._selectedText ?? "")) return;
+    const box = text ? this.selectionBounds(area) : null;
+    const key = box ? box.join() : "";
+    if (text === (area._selectedText ?? "") && key === (area._selectedBox ?? "")) return;
     area._selectedText = text;
-    this.event(area._id, "onSelectionChange", { text, start: text ? this.selectionStart(area) : 0 });
+    area._selectedBox = key;
+    const payload = { text, start: text ? this.selectionStart(area) : 0 };
+    if (box) {
+      const [x, y, width, height] = box;
+      payload.bounds = { origin: { x, y }, size: { width, height } };
+    }
+    this.event(area._id, "onSelectionChange", payload);
   }
 
   /** Select all and Escape in selectable text with a selection: within it. */
@@ -10172,10 +10234,11 @@ class Player {
     this.wheelTaker = takes ? { el, t: now } : null;
     if (!el) return false;
     const r = el.getBoundingClientRect();
+    const z = this.cssZoom(el);
     const [pageX, pageY] = this.point(e);
     const page = e.deltaMode === 2 ? this.size[1] : 1;
     this.event(el._id, "onWheel", {
-      position: { x: e.clientX - r.left, y: e.clientY - r.top },
+      position: { x: (e.clientX - r.left) / z, y: (e.clientY - r.top) / z },
       pagePosition: { x: pageX, y: pageY },
       delta: { x: e.deltaX * page, y: e.deltaY * page },
       deltaMode: e.deltaMode === 1 ? "lines" : "points",
@@ -10592,10 +10655,23 @@ class Player {
     this.call(() => this.withStrings([json, bytes], (jp, jl, bp, bl) => this.wasm.nsh_file_drop(el._id, kind, jp, jl, bp, bl)));
   }
 
-  /** The scale layer `layer` is drawn at (`scaleLayer`): its points are
-   * the window's divided by it. */
+  /** Effective CSS zoom factor on `el` (accumulated through ancestors). */
+  cssZoom(el) {
+    if (el && typeof el.currentCSSZoom === "number" && el.currentCSSZoom > 0) return el.currentCSSZoom;
+    if (typeof getComputedStyle !== "function") return 1;
+    let z = 1;
+    for (let node = el; node; node = node.parentElement) {
+      const v = parseFloat(getComputedStyle(node).zoom);
+      if (v > 0) z *= v;
+    }
+    return z;
+  }
+
+  /** The scale layer `layer` is drawn at (`scaleLayer`), including external CSS zoom. */
   layerScale(layer) {
-    return (layer && this.frameScale) || [1, 1];
+    const [fx, fy] = (layer && this.frameScale) || [1, 1];
+    const z = this.cssZoom(layer || this.root);
+    return [fx * z, fy * z];
   }
 
   /** The top left of `el` in the coordinates `point` gives for `layer`. */
@@ -10618,7 +10694,8 @@ class Player {
   origin(layer) {
     if (layer) return [0, 0];
     const r = this.root.getBoundingClientRect();
-    return [r.left, r.top];
+    const [sx, sy] = this.layerScale(null);
+    return [r.left / sx, r.top / sy];
   }
 
   touchEvent(phase, changedId, activated) {
