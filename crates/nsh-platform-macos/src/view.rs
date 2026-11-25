@@ -366,6 +366,7 @@ fn raster_zoom(scale: f64) -> f64 {
     STEP.powf((scale.ln() / STEP.ln()).ceil())
 }
 
+#[cfg(feature = "dev")]
 /// Saved state of a content or overlay layer whose `contentsScale` was
 /// temporarily raised for a high-scale `nsh/design` picture capture
 /// ([`NshView::prepare_picture_scale`]).
@@ -378,6 +379,7 @@ pub(crate) struct SavedContentScale {
     is_content: bool,
 }
 
+#[cfg(feature = "dev")]
 impl SavedContentScale {
     /// Restores the layer's original scale, rastered flag, and contents inside
     /// the same `CATransaction`, leaving the live window untouched.
@@ -395,6 +397,7 @@ impl SavedContentScale {
     }
 }
 
+#[cfg(feature = "dev")]
 /// Whether rectangles `a` and `b` overlap (more than an edge).
 fn rects_overlap(a: CGRect, b: CGRect) -> bool {
     a.origin.x < b.origin.x + b.size.width
@@ -403,6 +406,7 @@ fn rects_overlap(a: CGRect, b: CGRect) -> bool {
         && b.origin.y < a.origin.y + a.size.height
 }
 
+#[cfg(feature = "dev")]
 impl NshView {
     /// Temporarily raises `contentsScale` and redraws content/overlay layers
     /// intersecting `root_rect` (in `root_layer`'s coordinates) to `scale` for

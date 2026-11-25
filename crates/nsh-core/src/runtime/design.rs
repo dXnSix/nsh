@@ -298,28 +298,33 @@ pub fn report(windows: &[DesignWindow]) {
 /// process id on Windows). A change in any extra field reports the window
 /// again.
 pub fn report_extra(windows: &[(&DesignWindow, &[(&'static str, u64)])]) {
-    let entries: Vec<(&DesignWindow, &[(&'static str, u64)], Option<DesignViewport>)> =
+    let entries: Vec<ReportedWindow<'_>> =
         windows.iter().map(|&(w, extra)| (w, extra, None)).collect();
     report_with_viewport(&entries);
 }
 
+/// A window [`report_with_viewport`] tells the tool of: the window, the
+/// extra numeric fields of its `surface` line, and the cropped/scaled live
+/// [`DesignViewport`] its surface presents, if any.
+pub type ReportedWindow<'a> = (
+    &'a DesignWindow,
+    &'a [(&'static str, u64)],
+    Option<DesignViewport>,
+);
+
 /// Like [`report_extra`], also carrying the optional cropped/scaled live
 /// [`DesignViewport`] each window's surface currently presents.
-pub fn report_with_viewport(
-    windows: &[(&DesignWindow, &[(&'static str, u64)], Option<DesignViewport>)],
-) {
+pub fn report_with_viewport(windows: &[ReportedWindow<'_>]) {
     let mut lines = Vec::new();
     {
         let mut told = TOLD.lock().unwrap_or_else(|e| e.into_inner());
         let told = told.get_or_insert_with(HashMap::new);
         for &(window, extra, viewport) in windows {
-            let changed = told.get(&window.id).is_none_or(
-                |(prev, prev_extra, prev_viewport)| {
-                    prev != window
-                        || prev_extra.as_slice() != extra
-                        || *prev_viewport != viewport
-                },
-            );
+            let changed = told
+                .get(&window.id)
+                .is_none_or(|(prev, prev_extra, prev_viewport)| {
+                    prev != window || prev_extra.as_slice() != extra || *prev_viewport != viewport
+                });
             if changed {
                 told.insert(
                     window.id.clone(),
@@ -1666,6 +1671,8 @@ mod format_tests {
                 }
             })
         );
-        assert!(is_input(&json!({ "viewport": { "id": "mounted", "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0, "scale": 4.0 } })));
+        assert!(is_input(
+            &json!({ "viewport": { "id": "mounted", "x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0, "scale": 4.0 } })
+        ));
     }
 }
