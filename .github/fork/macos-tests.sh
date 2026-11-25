@@ -10,12 +10,11 @@
 set -euo pipefail
 
 # The test target with cases left out, and the cases it still runs (its
-# arguments; harness = false). draw_on_show's `canvas`: "the canvas's mount
-# never happened", on upstream's own a9bf6adff too (sync #293, 2026-11-20);
-# its `window` and `unhide`: "the first mount never happened", on upstream's
-# own 3f8ecd8b3 too (sync #299, 2026-11-25).
-PARTIAL=draw_on_show
-KEPT="scaled animated sharp nested"
+# arguments; harness = false); none now. draw_on_show's `canvas`, `window`
+# and `unhide`, left out from sync #293 and #299, pass since the fork's
+# macos-inline-root (2026-11-25).
+PARTIAL=
+KEPT=
 
 args=()
 for p in "$@"; do args+=(-p "$p"); done
@@ -35,5 +34,7 @@ for p in json.load(sys.stdin)["packages"]:
 done
 cargo test "${args[@]}" "${targets[@]}"
 cargo test "${args[@]}" --doc
-# shellcheck disable=SC2086 # the cases are words
-cargo test "${args[@]}" --test "$PARTIAL" -- $KEPT
+if [ -n "$PARTIAL" ]; then
+  # shellcheck disable=SC2086 # the cases are words
+  cargo test "${args[@]}" --test "$PARTIAL" -- $KEPT
+fi
