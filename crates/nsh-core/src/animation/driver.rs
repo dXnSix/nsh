@@ -61,10 +61,12 @@ impl Running {
         self
     }
 
-    /// The frame time (seconds) of its last step: where an animation that
-    /// replaces it starts, holding the value and velocity of that frame.
+    /// The frame time (seconds) of its last step, or the start time carried
+    /// forward from an animation it replaced before the next frame: where an
+    /// animation that replaces it starts, holding the value and velocity of
+    /// that frame even when retargeted multiple times between frames.
     pub(crate) fn last_step(&self) -> Option<f64> {
-        self.last
+        self.last.or(self.start)
     }
 
     pub(crate) fn new(id: AnimationId, driver: Driver, from: f32, velocity: f32) -> Self {

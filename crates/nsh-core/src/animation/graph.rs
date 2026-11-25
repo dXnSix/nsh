@@ -2647,6 +2647,60 @@ mod tests {
         }
     }
 
+    /// A spring retargeted multiple times between display frames (for example
+    /// by a 1000 Hz mouse on a 60–120 Hz screen) keeps its previous frame's
+    /// start time across every retarget and moves as far as one retargeted
+    /// once per frame.
+    #[test]
+    fn a_spring_retargeted_many_times_between_frames_keeps_moving() {
+        let spring = |to| Driver::Spring {
+            to,
+            stiffness: 170.0,
+            damping: 26.0,
+            mass: 1.0,
+            velocity: None,
+            frame_rate: None,
+        };
+        let run = |retargets_per_frame: u32| {
+            let mut g = Graph::default();
+            let mut finished = Vec::new();
+            g.apply(
+                AnimationOp::CreateValue {
+                    node: 1,
+                    value: 0.0,
+                },
+                &mut finished,
+            );
+            let mut next_id = 1u32;
+            let mut trace = Vec::new();
+            for frame in 0..10u32 {
+                let count = if frame == 0 { 1 } else { retargets_per_frame };
+                for _ in 0..count {
+                    g.apply(
+                        AnimationOp::Start {
+                            node: 1,
+                            animation: next_id,
+                            driver: spring(100.0),
+                        },
+                        &mut finished,
+                    );
+                    next_id += 1;
+                }
+                g.tick(f64::from(frame) / 60.0, &mut finished);
+                trace.push(g.value(1).unwrap());
+            }
+            trace
+        };
+        let steady = run(0);
+        let fast_mouse = run(8);
+        for (frame, (a, b)) in steady.iter().zip(&fast_mouse).enumerate() {
+            assert!(
+                (a - b).abs() < 0.5,
+                "frame {frame}: {steady:?} vs {fast_mouse:?}"
+            );
+        }
+    }
+
     fn timing(to: f32, ms: f32) -> Driver {
         Driver::Timing {
             to,
