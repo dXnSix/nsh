@@ -11,7 +11,7 @@ use rolldown::{
     Bundler, BundlerOptions, InputItem, OutputFormat, Platform, RawMinifyOptions, SourceMapType,
     plugin::Pluginable,
 };
-use rolldown_common::{ChunkFilenamesOutputOption, CodeSplittingMode, Output};
+use rolldown_common::{ChunkFilenamesOutputOption, CodeSplittingMode, Output, SanitizeFilename};
 
 use crate::{compile, compile::strip_ansi, plugin};
 
@@ -1335,6 +1335,18 @@ pub async fn bundle_hot_in_async(
         // its directory, as its own entry names them, not from the folder
         // both share.
         preserve_modules_root: app_dir.map(|_| app.to_string_lossy().into_owned()),
+        // With `preserve_modules`, modules outside `preserve_modules_root` are
+        // named relative to Rolldown's common input base. When modules span
+        // Windows drives (for example a design tool's entry in `%LOCALAPPDATA%`
+        // on `C:` and the app plus a sibling library on `D:`), there is no
+        // common base across drives, so Rolldown falls back to `cwd` and emits
+        // leading `../` segments that its own `[name]` validator rejects. Keep
+        // app-internal module names untouched while turning leading `..` and
+        // absolute prefixes into safe virtual segments.
+        sanitize_filename: Some(SanitizeFilename::Fn(Arc::new(|name| {
+            let sanitized = sanitize_hot_chunk_name(name);
+            Box::pin(async move { Ok(sanitized) })
+        }))),
         // Every statement stays. Rolldown still leaves out the exports
         // no module imports: an edit that starts using one changes the
         // exporting module too, which then runs again.
@@ -1420,6 +1432,72 @@ pub async fn bundle_hot_in_async(
         links,
         elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
     })
+}
+
+/// Sanitizes a `preserve_modules` hot-bundle chunk name so Rolldown's
+/// `[name]` validator accepts cross-drive and outside-root modules while
+/// leaving normal app-relative names (such as `src/App`) unchanged.
+fn sanitize_hot_chunk_name(name: &str) -> String {
+    let is_invalid = |b: u8| {
+        matches!(
+            b,
+            0x00..=0x1f
+                | b'"'
+                | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'*'
+                | b'+'
+                | b','
+                | b':'
+                | b';'
+                | b'<'
+                | b'='
+                | b'>'
+                | b'?'
+                | b'['
+                | b']'
+                | b'^'
+                | b'`'
+                | b'{'
+                | b'|'
+                | b'}'
+                | 0x7f
+        )
+    };
+    let mut cleaned = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch == '\\' {
+            cleaned.push('/');
+        } else if u8::try_from(ch).is_ok_and(is_invalid) {
+            cleaned.push('_');
+        } else {
+            cleaned.push(ch);
+        }
+    }
+    let leading_slash = cleaned.starts_with('/');
+    let mut parts: Vec<String> = Vec::new();
+    if leading_slash {
+        parts.push("_abs_".to_owned());
+    }
+    for seg in cleaned.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            parts.push("_up_".to_owned());
+        } else if parts.is_empty() && seg.starts_with("..") {
+            parts.push(format!("_{seg}"));
+        } else {
+            parts.push(seg.to_owned());
+        }
+    }
+    if parts.is_empty() {
+        "_".to_owned()
+    } else {
+        parts.join("/")
+    }
 }
 
 #[cfg(test)]
@@ -2095,6 +2173,83 @@ mod tests {
         assert!(error.contains("is outside the app's directory"), "{error}");
         let _ = std::fs::remove_dir_all(tool);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn hot_chunk_names_keep_app_paths_and_sanitize_outside_and_drive_paths() {
+        assert_eq!(sanitize_hot_chunk_name("src/Shown"), "src/Shown");
+        assert_eq!(
+            sanitize_hot_chunk_name("src/screens/TripPlanner.meta"),
+            "src/screens/TripPlanner.meta"
+        );
+        assert_eq!(
+            sanitize_hot_chunk_name("../../../RayX/crates/rayx_components/src/auto_layout.meta"),
+            "_up_/_up_/_up_/RayX/crates/rayx_components/src/auto_layout.meta"
+        );
+        assert_eq!(
+            sanitize_hot_chunk_name("C:/Users/dev/AppData/Local/RayX Studio/stages/app/Stage"),
+            "C_/Users/dev/AppData/Local/RayX Studio/stages/app/Stage"
+        );
+        assert_eq!(sanitize_hot_chunk_name("/abs/mod"), "_abs_/abs/mod");
+        assert_eq!(sanitize_hot_chunk_name("./local/mod"), "local/mod");
+        assert_eq!(sanitize_hot_chunk_name("..hidden"), "_..hidden");
+        assert_eq!(sanitize_hot_chunk_name("a?b:c"), "a_b_c");
+    }
+
+    /// An external entry importing both an app module and a module outside the
+    /// app bundles hot even when the entry sits on a different root (such as
+    /// `%LOCALAPPDATA%` on `C:` with the app and sibling library on `D:` on
+    /// Windows).
+    #[test]
+    fn an_entry_on_another_root_bundles_hot_with_outside_modules() {
+        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-cross-root-hot")
+            .join(format!("p-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let app = base.join("apps/sample");
+        let lib = base.join("libs/ui");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(app.join("nsh.json"), r#"{}"#).unwrap();
+        std::fs::write(app.join("src/Card.ts"), "export const card = 'card';\n").unwrap();
+        std::fs::write(
+            lib.join("auto_layout.meta.ts"),
+            "export const meta = 'auto';\n",
+        )
+        .unwrap();
+
+        let tool =
+            std::env::temp_dir().join(format!("nsh-cross-root-stage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tool);
+        std::fs::create_dir_all(&tool).unwrap();
+        let card = app.join("src/Card.ts").to_string_lossy().replace('\\', "/");
+        let meta = lib
+            .join("auto_layout.meta.ts")
+            .to_string_lossy()
+            .replace('\\', "/");
+        std::fs::write(
+            tool.join("Stage.ts"),
+            format!(
+                "import {{ card }} from {card:?};\nexport const load = () => import({meta:?});\nconsole.log(card);\n"
+            ),
+        )
+        .unwrap();
+
+        let hot = bundle_hot_in(&tool.join("Stage.ts"), Some(&app), &[]).unwrap();
+        let ids: Vec<&str> = hot.modules.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"src/Card.js"), "{ids:?}");
+        assert!(
+            ids.iter().any(|id| id.ends_with("auto_layout.meta.js")),
+            "{ids:?}"
+        );
+        assert!(
+            ids.iter()
+                .all(|id| !id.starts_with("../") && !id.starts_with('/')),
+            "every hot module id is a safe relative path: {ids:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&tool);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// The app's own entry names its assets as it always did: its directory
