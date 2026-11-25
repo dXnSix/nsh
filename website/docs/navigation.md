@@ -405,7 +405,7 @@ fn compose(routes: Signal<Vec<Route>>) -> Screen {
 }
 ```
 
-A colored system header (in Rust, `header_style_with` takes typed styles: `bg`, `text_color` and `tint_color`, the color of the header's buttons; theme colors follow the appearance):
+A colored system header (in Rust, `header_style_with` takes typed styles: `bg`, `text_color` and `tint_color`, the color of the header's buttons; theme colors read in a binding follow the theme):
 
 ```tsx tabs
 <NavPage title="Profile" headerStyle={{ backgroundColor: "#1a7f37", color: "#ffffff", tintColor: "#ffffff" }}>

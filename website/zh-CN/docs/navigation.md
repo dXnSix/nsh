@@ -409,7 +409,7 @@ fn compose(routes: Signal<Vec<Route>>) -> Screen {
 }
 ```
 
-彩色系统标题栏（在 Rust 中，`header_style_with` 接收类型化的样式：`bg`、`text_color` 和标题栏按钮颜色 `tint_color`；主题颜色随外观切换）：
+彩色系统标题栏（在 Rust 中，`header_style_with` 接收类型化的样式：`bg`、`text_color` 和标题栏按钮颜色 `tint_color`；在绑定中读取的主题颜色跟随主题）：
 
 ```tsx tabs
 <NavPage title="Profile" headerStyle={{ backgroundColor: "#1a7f37", color: "#ffffff", tintColor: "#ffffff" }}>
