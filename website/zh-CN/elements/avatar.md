@@ -9,6 +9,30 @@ demo: el-avatar
 
 头像显示一个人的图片：团队成员、评论作者、标题栏里的账号。图片加载完成前、加载失败时以及没有图片时，它显示后备内容：这个人 `name` 的首字母，或者应用自己的内容（一个图标）。它负责图片的加载状态（由图片自己的加载和错误事件在原生侧驱动，不经过 JavaScript）以及屏幕阅读器读到的内容：一张以这个人名字为标签的图片。外观由应用决定：`Avatar` 没有自己的尺寸、形状、颜色或字体。`AvatarGroup` 显示一排头像中的前几个，以及代表其余人的溢出部分（“+5”）。
 
+```tsx tabs
+import { mount } from "nsh";
+import { Avatar } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  return (
+    <Avatar
+      src="https://example.com/ada.png"
+      name="Ada Lovelace"
+      class="size-10"
+      imageClass="rounded-full"
+      fallbackClass="items-center justify-center rounded-full bg-muted text-sm text-muted-foreground"
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{avatar, theme};
 use nsh_core::prelude::*;
@@ -28,25 +52,6 @@ fn author(name: &'static str, picture: &'static str) -> impl IntoElement {
                 .text_sm()
         })
 }
-```
-
-```tsx tabs
-import { mount } from "nsh";
-import { Avatar } from "nsh/base";
-
-function App() {
-  return (
-    <Avatar
-      src="https://example.com/ada.png"
-      name="Ada Lovelace"
-      class="size-10"
-      imageClass="rounded-full"
-      fallbackClass="items-center justify-center rounded-full bg-muted text-sm text-muted-foreground"
-    />
-  );
-}
-
-mount(App);
 ```
 
 `Avatar` 和 `AvatarGroup` 来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate。在 Rust 中，`avatar()` 和 `avatar_group()` 创建它们，每个 prop 有一个 setter（`.src(..)`、`.fallback_delay(..)`），头像本身用带类型的样式方法设置，显示在图片之上的内容用 `.child(..)` 添加。

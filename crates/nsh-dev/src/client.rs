@@ -3,14 +3,14 @@ use std::{
     net::TcpStream,
     sync::mpsc::{self, Receiver, SyncSender, TryRecvError},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use tungstenite::{Message, WebSocket, stream::MaybeTlsStream};
+use tungstenite::{Message, WebSocket, protocol::WebSocketConfig, stream::MaybeTlsStream};
 
 use crate::protocol::{
-    BundleFormat, ClientMessage, HostPlatform, LogLevel, PROTOCOL_VERSION, ServerMessage,
-    StepOutcome, TestStep,
+    BundleFormat, ClientMessage, HostPlatform, LogLevel, MAX_MESSAGE_SIZE, PROTOCOL_VERSION,
+    RunningBuild, ServerMessage, StepOutcome, TestStep,
 };
 
 /// Something the dev server told the host.
@@ -100,6 +100,9 @@ pub enum DevEvent {
         /// The main window's launch-time options (`nsh.json` `"window"`,
         /// JSON): give them to the bundle (`Bundle::with_main_window`).
         window: Option<String>,
+        /// The app's lifecycle (`nsh.json` `"application"`, JSON): give it
+        /// to the bundle (`Bundle::with_application`).
+        application: Option<String>,
         /// The VM limits to run it with (`nsh run --limits`, see
         /// [`ServerMessage::Bundle`]): `nsh_core::js::Limits::development`
         /// reads them; `None` is none.
@@ -145,35 +148,78 @@ impl DevClient {
     ) -> std::io::Result<DevClient> {
         let (logs, log_rx) = mpsc::sync_channel(LOG_QUEUE);
         let (replies, reply_rx) = mpsc::channel();
-        let hello = ClientMessage::Hello {
+        let mut hello = ClientMessage::Hello {
             protocol: PROTOCOL_VERSION,
             bytecode_version: host.bytecode_version,
             device: host.device,
             platform: Some(host.platform),
             ui_sets: Some(host.ui_sets),
             tests: host.tests,
+            running: None,
         };
+        // The build the app reached, across reconnects. Hosts check each
+        // patch's base themselves, so a patch the app could not apply only
+        // makes the server's catch-up patches fall through to the bundle.
+        let mut running: Option<RunningBuild> = None;
         thread::Builder::new()
             .name("nsh-dev-client".into())
             .spawn(move || {
-                let mut backoff = Duration::from_millis(100);
+                let mut backoff = MIN_BACKOFF;
+                // The last connection error reported, so a persistent one
+                // (a frame over the size limit) is not repeated each retry.
+                let mut reported: Option<String> = None;
                 loop {
                     // Dropped while disconnected: stop retrying.
                     if let Err(TryRecvError::Disconnected) = log_rx.try_recv() {
                         return;
                     }
-                    match tungstenite::connect(url.as_str()) {
+                    // The server sends a message in one frame: take frames
+                    // as large as the messages it sends (a test's pasted
+                    // files), not tungstenite's smaller default frame.
+                    let config = WebSocketConfig::default()
+                        .max_message_size(Some(MAX_MESSAGE_SIZE))
+                        .max_frame_size(Some(MAX_MESSAGE_SIZE));
+                    match tungstenite::client::connect_with_config(url.as_str(), Some(config), 3) {
                         Ok((socket, _)) => {
-                            backoff = Duration::from_millis(100);
                             on_event(DevEvent::Connected);
-                            if let Err(SessionEnd::Shutdown) =
-                                session(socket, &hello, &log_rx, &reply_rx, &mut on_event)
-                            {
-                                return;
+                            if let ClientMessage::Hello { running: said, .. } = &mut hello {
+                                *said = running;
                             }
+                            let started = Instant::now();
+                            let reached = running;
+                            let end = session(
+                                socket,
+                                &hello,
+                                &log_rx,
+                                &reply_rx,
+                                &mut running,
+                                &mut on_event,
+                            );
+                            let error = match end {
+                                Err(SessionEnd::Shutdown) => return,
+                                Err(SessionEnd::Disconnected(error)) => error,
+                                Ok(()) => None,
+                            };
                             on_event(DevEvent::Disconnected);
+                            // Only a session that got somewhere (a build
+                            // arrived, or it lasted) resets the backoff: one
+                            // the server ends right away, as with a frame
+                            // over the size limit, must not retry at 10 Hz.
+                            let progressed = running != reached || started.elapsed() >= STABLE;
+                            if progressed {
+                                backoff = MIN_BACKOFF;
+                                reported = None;
+                            } else {
+                                backoff = next_backoff(backoff);
+                            }
+                            if let Some(error) = error
+                                && reported.as_deref() != Some(error.as_str())
+                            {
+                                log::warn!("dev server connection error: {error}");
+                                reported = Some(error);
+                            }
                         }
-                        Err(_) => backoff = (backoff * 2).min(Duration::from_secs(2)),
+                        Err(_) => backoff = next_backoff(backoff),
                     }
                     thread::sleep(backoff);
                 }
@@ -213,8 +259,20 @@ impl DevClient {
     }
 }
 
+/// The first delay before reconnecting.
+const MIN_BACKOFF: Duration = Duration::from_millis(100);
+/// The longest delay between reconnects.
+const MAX_BACKOFF: Duration = Duration::from_secs(2);
+/// How long a session must last to count as working when no build arrived.
+const STABLE: Duration = Duration::from_secs(5);
+
+fn next_backoff(backoff: Duration) -> Duration {
+    (backoff * 2).min(MAX_BACKOFF)
+}
+
 enum SessionEnd {
-    Disconnected,
+    /// The connection ended, with the error that ended it, if any.
+    Disconnected(Option<String>),
     /// The `DevClient` was dropped.
     Shutdown,
 }
@@ -224,6 +282,7 @@ fn session(
     hello: &ClientMessage,
     logs: &Receiver<ClientMessage>,
     replies: &Receiver<ClientMessage>,
+    running: &mut Option<RunningBuild>,
     on_event: &mut impl FnMut(DevEvent),
 ) -> Result<(), SessionEnd> {
     if let MaybeTlsStream::Plain(stream) = socket.get_mut() {
@@ -242,6 +301,7 @@ fn session(
         capabilities: Option<String>,
         app_id: Option<String>,
         window: Option<String>,
+        application: Option<String>,
         limits: Option<String>,
         bytes: Option<Vec<u8>>,
     }
@@ -265,7 +325,7 @@ fn session(
             {
                 continue;
             }
-            Err(_) => return Err(SessionEnd::Disconnected),
+            Err(err) => return Err(SessionEnd::Disconnected(Some(err.to_string()))),
         };
         match msg {
             Message::Text(text) => match serde_json::from_str::<ServerMessage>(&text) {
@@ -286,7 +346,10 @@ fn session(
                     environment,
                 }),
                 Ok(ServerMessage::Fetch { id, reply }) => on_event(DevEvent::Fetch { id, reply }),
-                Ok(ServerMessage::Root) => on_event(DevEvent::Root),
+                Ok(ServerMessage::Root) => {
+                    *running = None;
+                    on_event(DevEvent::Root)
+                }
                 Ok(ServerMessage::Building) => on_event(DevEvent::Building),
                 Ok(ServerMessage::BuildFailed { message }) => {
                     on_event(DevEvent::BuildFailed(message))
@@ -301,6 +364,7 @@ fn session(
                     capabilities,
                     app_id,
                     window,
+                    application,
                     limits,
                 }) => {
                     pending = Some(Pending {
@@ -311,6 +375,7 @@ fn session(
                         capabilities,
                         app_id,
                         window,
+                        application,
                         limits,
                         bytes: None,
                     })
@@ -328,6 +393,7 @@ fn session(
                         capabilities: None,
                         app_id: None,
                         window: None,
+                        application: None,
                         limits: None,
                         bytes: None,
                     })
@@ -350,29 +416,48 @@ fn session(
                 };
                 match p.base {
                     Some(base) => match String::from_utf8(bytes) {
-                        Ok(code) => on_event(DevEvent::Patch {
-                            session: server_session,
-                            version: p.version,
-                            base,
-                            code,
-                            source_map,
-                        }),
+                        Ok(code) => {
+                            let from = RunningBuild {
+                                session: server_session,
+                                version: base,
+                            };
+                            if *running == Some(from) {
+                                *running = Some(RunningBuild {
+                                    session: server_session,
+                                    version: p.version,
+                                });
+                            }
+                            on_event(DevEvent::Patch {
+                                session: server_session,
+                                version: p.version,
+                                base,
+                                code,
+                                source_map,
+                            })
+                        }
                         Err(_) => log::warn!("dev server sent a non-UTF-8 patch"),
                     },
-                    None => on_event(DevEvent::Bundle {
-                        session: server_session,
-                        version: p.version,
-                        format: p.format,
-                        bytes,
-                        source_map,
-                        capabilities: p.capabilities,
-                        app_id: p.app_id,
-                        window: p.window,
-                        limits: p.limits,
-                    }),
+                    None => {
+                        *running = Some(RunningBuild {
+                            session: server_session,
+                            version: p.version,
+                        });
+                        on_event(DevEvent::Bundle {
+                            session: server_session,
+                            version: p.version,
+                            format: p.format,
+                            bytes,
+                            source_map,
+                            capabilities: p.capabilities,
+                            app_id: p.app_id,
+                            window: p.window,
+                            application: p.application,
+                            limits: p.limits,
+                        })
+                    }
                 }
             }
-            Message::Close(_) => return Err(SessionEnd::Disconnected),
+            Message::Close(_) => return Err(SessionEnd::Disconnected(None)),
             _ => {}
         }
     }
@@ -385,5 +470,5 @@ fn send(
     let text = serde_json::to_string(msg).expect("serializable");
     socket
         .send(Message::Text(text.into()))
-        .map_err(|_| SessionEnd::Disconnected)
+        .map_err(|err| SessionEnd::Disconnected(Some(err.to_string())))
 }

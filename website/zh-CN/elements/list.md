@@ -10,6 +10,33 @@ demo: el-list
 
 `List` 用来展示很长或无上限的数据。视口附近的行才真正存在：用户滚动时，离开视口的行会被回收，用来显示新进入的行。哪些行存在、它们的位置、多列布局、吸顶标题和可见性都在原生侧计算，所以滚动一个上千项的列表，开销和二十项的列表相当。Rust 用 `virtual_list(count, |at| row)` 创建，TSX 用从 `nsh` 导入的 `<List>`。
 
+```tsx tabs
+import { List, mount, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
+
+const contacts = Array.from({ length: 1000 }, (_, i) => ({ id: i, name: `联系人 ${i + 1}` }));
+
+function App() {
+  return (
+    <List each={contacts} estimatedItemSize={56} style={{ flex: 1 }}>
+      {(contact, index) => (
+        <View style={{ height: 56, paddingHorizontal: 16, justifyContent: "center" }}>
+          <Text style={{ fontSize: 16 }}>
+            {index() + 1}. {contact().name}
+          </Text>
+        </View>
+      )}
+    </List>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -34,28 +61,6 @@ fn app() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { List, mount, Text, View } from "nsh";
-
-const contacts = Array.from({ length: 1000 }, (_, i) => ({ id: i, name: `联系人 ${i + 1}` }));
-
-function App() {
-  return (
-    <List each={contacts} estimatedItemSize={56} style={{ flex: 1 }}>
-      {(contact, index) => (
-        <View style={{ height: 56, paddingHorizontal: 16, justifyContent: "center" }}>
-          <Text style={{ fontSize: 16 }}>
-            {index() + 1}. {contact().name}
-          </Text>
-        </View>
-      )}
-    </List>
-  );
-}
-
-mount(App);
-```
-
 在 TSX 中，`List` 是泛型组件：`List<T>` 会检查 `each` 与行函数的条目类型是否一致，TypeScript 会从 `each` 推断出条目类型（参见 [List API](../modules/nsh-list.md)）。在 Rust 中，`virtual_list` 接收行数（一个值、signal 或闭包：列表就地增减）和在某个 `Position` 构建行的函数；行通过 `at.index()` 读取组件的数据。
 
 如果列表很短、所有行都应该存在（设置页、表单），在[滚动视图](./scroll.md)里用 [`Each`](./control-flow.md) 更简单。分组表格样式的列表见[设置风格的列表](../docs/lists.md#a-settings-style-list)。[列表指南](../docs/lists.md) 介绍了常见模式：无限加载、聊天、分组。
@@ -64,16 +69,16 @@ mount(App);
 
 行函数对每个单元格执行一次，而不是对每个条目执行一次。单元格被复用来显示另一个条目时，它的位置会变化（TSX 中为 `item()` 和 `index()` 访问器；Rust 中为 `at.index()`），读取它的地方随之更新：
 
-```rust tabs
-virtual_list(move || messages.with(|m| m.len()), move |at| {
-    text(move || messages.with(|m| m[at.index()].body.clone()))
-})
-```
-
 ```tsx tabs
 <List each={messages()}>
   {(message) => <Text>{message().body}</Text>}
 </List>
+```
+
+```rust tabs
+virtual_list(move || messages.with(|m| m.len()), move |at| {
+    text(move || messages.with(|m| m[at.index()].body.clone()))
+})
 ```
 
 因此，每个条目自己的状态要放在数据里（按 id 区分），不要放在行函数内部创建的 signal 里：那样的 signal 会跟着单元格走，出现在别的条目上。
@@ -91,10 +96,10 @@ virtual_list(move || messages.with(|m| m.len()), move |at| {
 | `viewport` | `.viewport(ListViewport::..)` | `"own" \| "parent"` | `"own"` | `"own"`：列表在自己的滚动视图中滚动。`"parent"`：列表没有自己的滚动视图，以完整长度排在父视图的布局中，只渲染外层滚动视图视口附近的行，随页面一起滚动（见[页面中的列表](../docs/lists.md#页面中的列表viewportparent)）。在列表创建时确定。 |
 | `numColumns` | `.columns(n)` | `number` | `1` | 每行的条目数（纵向列表）。 |
 | `inverted` | `.inverted()` | `boolean` | `false` | 从末端开始布局，第 0 项在最后（聊天样式）：初始滚动到末端，内容变化时保持与末端的距离。 |
-| `maintainVisibleContentPosition` | `.follow_end(px(threshold))` | `{ autoscrollToBottomThreshold?: number }` | | 用于非倒序列表：位于内容末端或距末端不超过该点数时，内容增长或视口缩小时列表保持在末端；向上滚得更远时，可见内容保持不动。 |
+| `maintainVisibleContentPosition` | `.follow_end(px(threshold))`、`.follow_end_animated(animated)` | `{ autoscrollToBottomThreshold?: number; animated?: boolean }` | | 用于非倒序列表：位于内容末端或距末端不超过该点数时，内容增长或视口缩小时列表保持在末端；向上滚得更远时，可见内容保持不动。设置 `animated` 后，末端一次后移达到列表高度的四分之一或更多时，以动画滚动跟随。 |
 | `stickyHeaderIndices` | `.sticky_header_indices([..])` | `number[]` | | 滚动经过时吸附在起始端的条目（单列、非倒序）。 |
-| `contentStyle` | `.content_padding(..)`、`.content_padding_x(..)`、`.row_gap(..)`、`.column_gap(..)` 等 | `ListContentStyle` | | 内容的内边距和间距（点）：`padding`、`paddingHorizontal`、`paddingVertical`、`paddingTop`、`paddingRight`、`paddingBottom`、`paddingLeft`、`gap`、`rowGap`、`columnGap`。 |
-| `contentClass` | | `string` | | 以类名（`p-*`、`gap-*`）给出的内容内边距和间距；`contentStyle` 优先。 |
+| `contentStyle` | `.content_padding(..)`、`.content_padding_x(..)`、`.row_gap(..)`、`.column_gap(..)` 等 | `ListContentStyle` | | 内容的内边距和间距（点）：`padding`、`paddingHorizontal`、`paddingVertical`、`paddingTop`、`paddingRight`、`paddingBottom`、`paddingLeft`、`gap`、`rowGap`、`columnGap`。`alignItems` 在交叉轴上对齐单元格：`stretch`（默认）、`flex-start`、`center` 或 `flex-end`。 |
+| `contentClass` | | `string` | | 以类名给出的内容内边距、间距和交叉轴对齐（`p-*`、`gap-*`、`items-start`、`items-center`、`items-end`、`items-stretch`）；`contentStyle` 优先。 |
 | `header` | `.header(el)` | `ListSlot` | | 条目之前的内容：一个组件（`Header`）或一个元素（`<Header />`）。 |
 | `footer` | `.footer(el)` | `ListSlot` | | 条目之后的内容。 |
 | `empty` | `.empty(el)` | `ListSlot` | | `each` 为空时代替条目显示。 |
@@ -119,7 +124,7 @@ virtual_list(move || messages.with(|m| m.len()), move |at| {
 | `testID` | `.test_id(id)` | `string` | | UI 测试查找列表滚动视图所用的 id（`nsh test` 的 `id:`、XCUITest、UI Automator）。 |
 | `ref` | `.element_ref(&handle)` | `ListRef \| (node: ListRef) => void` | | 列表的 ref（见 [ref 方法](#ref-方法)）。 |
 
-列表同样支持 [`Scroll`](./scroll.md#滚动) 的滚动属性（Rust 中为 `Scrollable` 方法）：`pagingEnabled`、`snapToInterval`、`snapToOffsets`、`snapToAlignment`、`disableIntervalMomentum`、`decelerationRate`、`bounces`、`contentInset`、`contentOffset`、`keyboardShouldPersistTaps`、`scrollEventThrottle` 和 `scrollable`。列表保持原有比例。
+列表同样支持 [`Scroll`](./scroll.md#滚动) 的滚动属性（Rust 中为 `Scrollable` 方法）：`pagingEnabled`、`snapToInterval`、`snapToOffsets`、`snapToAlignment`、`disableIntervalMomentum`、`decelerationRate`、`bounces`、`contentInset`、`scrollbarInset`、`contentOffset`、`keyboardShouldPersistTaps`、`scrollEventThrottle`、`scrollable`、`smoothWheel` 和 `wheelLineHeight`。列表保持原有比例。
 
 所有元素通用的属性（[通用属性](./index.md#通用属性)）原样传给列表的滚动视图：`testID`、`accessibilityLabel` 等无障碍属性、样式、`onLayout`、触摸和响应者属性。UI 测试按 `testID` 找到列表，和找其他视图一样。
 
@@ -160,6 +165,25 @@ virtual_list(move || messages.with(|m| m.len()), move |at| {
 
 带标题和可见性回调的网格：
 
+```tsx tabs
+const visible = signal("");
+let list!: ListRef;
+
+<List
+  ref={list}
+  each={photos}
+  numColumns={3}
+  estimatedItemSize={120}
+  contentStyle={{ padding: 12, gap: 8 }}
+  viewabilityConfig={{ itemVisibleThreshold: 0.5 }}
+  onViewableItemsChange={({ viewableItems }) => visible.set(`${viewableItems.length} 项可见`)}
+  header={<Text onPress={() => list.scrollToIndex({ index: 60, viewPosition: 0.5 })}>跳到第 60 项</Text>}
+  style={{ flex: 1 }}
+>
+  {(photo) => <Image src={photo().url} style={{ height: 120, borderRadius: 8 }} />}
+</List>;
+```
+
 ```rust tabs
 let visible = signal(SharedString::default());
 let list = element_ref();
@@ -184,26 +208,13 @@ virtual_list(move || photos.with(|p| p.len()), move |at| {
 .flex_1()
 ```
 
-```tsx tabs
-const visible = signal("");
-let list!: ListRef;
-
-<List
-  ref={list}
-  each={photos}
-  numColumns={3}
-  estimatedItemSize={120}
-  contentStyle={{ padding: 12, gap: 8 }}
-  viewabilityConfig={{ itemVisibleThreshold: 0.5 }}
-  onViewableItemsChange={({ viewableItems }) => visible.set(`${viewableItems.length} 项可见`)}
-  header={<Text onPress={() => list.scrollToIndex({ index: 60, viewPosition: 0.5 })}>跳到第 60 项</Text>}
-  style={{ flex: 1 }}
->
-  {(photo) => <Image src={photo().url} style={{ height: 120, borderRadius: 8 }} />}
-</List>;
-```
-
 聊天：
+
+```tsx tabs
+<List each={messages()} inverted estimatedItemSize={64} keyboardDismissMode="interactive" style={{ flex: 1 }}>
+  {(m) => <Bubble message={m()} />}
+</List>
+```
 
 ```rust tabs
 virtual_list(move || messages.with(|m| m.len()), move |at| bubble(messages, at))
@@ -212,12 +223,6 @@ virtual_list(move || messages.with(|m| m.len()), move |at| bubble(messages, at))
     .estimated_item_size(px(64.0))
     .keyboard_dismiss_mode(KeyboardDismissMode::Interactive)
     .flex_1()
-```
-
-```tsx tabs
-<List each={messages()} inverted estimatedItemSize={64} keyboardDismissMode="interactive" style={{ flex: 1 }}>
-  {(m) => <Bubble message={m()} />}
-</List>
 ```
 
 第 0 项是最新的消息，画在最底部；新消息插到条目开头时，用户正在看的内容不会跳动。

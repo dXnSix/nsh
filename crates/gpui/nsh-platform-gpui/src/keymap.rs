@@ -108,7 +108,13 @@ pub(crate) fn key_stroke(
     // Return and Space on a focused control fire only the focus' own
     // bindings; else the control takes them (`key_focus::key`).
     let control = !editing && crate::key_focus::on_control(surface);
-    let found = table.find_at(window, keystroke, editing, control, repeat);
+    // A focus a dialog covers has no keys of its own: the dialog's take
+    // them.
+    let mut focus = nsh_core::keymap::KeyFocus::default();
+    focus.editing = editing;
+    focus.control = control;
+    focus.covered = crate::key_focus::covered(surface);
+    let found = table.find_with(window, keystroke, focus, repeat);
     if let Some(id) = found.fired() {
         surface.event(
             ROOT_ID,
@@ -193,6 +199,7 @@ fn keystroke(event: &KeyEvent) -> Option<Keystroke> {
         alt: m.alt,
         shift: m.shift,
         cmd: m.meta,
+        alt_graph: false,
     };
     Some(Keystroke {
         modifiers,

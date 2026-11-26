@@ -59,6 +59,11 @@ frame id:faded 0 302 40 40
 frame id:box 0 359 50 20
 tap id:grow
 frame id:box 0 359 150 20
+# A physical spring animates the next commit, and one view's change.
+tap id:spring
+expect Laid out: sprung 150
+tap id:scoped
+expect Laid out: scoped 150
 covers [nsh] Animated
 covers [nsh] AnimatedNode
 covers [nsh] AnimatedValue
@@ -79,12 +84,18 @@ drawing id:canvas rect 120 10 60 40
 nodrawing id:canvas clearRect...
 expect Not checked
 tap id:check
-expect size 200x100 canvas 200x100 drawn true context true gradient true in true out false added true current true stroke true dash 3,1 measured true
+expect size 200x100 canvas 200x100 drawn true context true gradient true in true out false added true current true stroke true dash 3,1 measured true extent true
 covers [nsh] Canvas
 covers [nsh] CanvasGradient
 covers [nsh] CanvasRenderingContext2D
 covers [nsh] Path2D
 covers [props] Canvas.draw
+# core-gpu-view
+tap id:case-core-gpu-view
+expect Over the scene
+frame id:scene 0 64 200 100
+frame id:label 10 10 180 17
+covers [nsh] gpuView
 # core-shader
 tap id:case-core-shader
 expect Over the shader
@@ -273,6 +284,12 @@ covers [nsh] untracked
 covers [nsh:rt] cond
 covers [nsh:rt] merge
 covers [nsh:rt] spread
+# core-clear-selection
+tap id:case-core-clear-selection
+expect Cleared: no
+# Clearing a selectable view with nothing selected is no error.
+tap id:clear
+expect Cleared: yes
 # core-ref
 tap id:case-core-ref
 # The signal and the function got their node when the views were made.
@@ -443,6 +460,10 @@ expect Steps: 0 0.25 0.5 0.75 1
 expect Transform steps: 7
 expect Bound: true
 expect Started: yes
+expect Sprung: yes
+# The exit interrupts the entrance and springs on from there to its end.
+animated id:sprung opacity 0
+animated id:sprung transform.1 24
 expect Staggered: function function
 covers [nsh] createMotion
 covers [nsh] motions

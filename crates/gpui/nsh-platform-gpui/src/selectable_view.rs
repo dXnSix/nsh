@@ -27,7 +27,7 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use nsh_core::{
     AttributedText, Bounds, EventKind, EventPayload, NodeId, PayloadValue, Points,
     geometry::{Point, point},
-    selection::{SelectionModel, SelectionTexts},
+    selection::{SelectionModel, SelectionTexts, marker_of},
 };
 use rustc_hash::FxHashSet;
 
@@ -90,6 +90,8 @@ struct AreaText {
     to_root: Mat4,
     /// Its content box in the area's coordinates.
     frame: Bounds<Points>,
+    /// The list marker beside it (`selection::marker_of`).
+    marker: Option<String>,
 }
 
 /// The texts of an area in document order, as the model sees them.
@@ -102,6 +104,10 @@ struct AreaTexts {
 impl SelectionTexts for AreaTexts {
     fn len(&self) -> usize {
         self.texts.len()
+    }
+
+    fn marker(&self, i: usize) -> Option<&str> {
+        self.texts[i].marker.as_deref()
     }
 
     fn content(&self, i: usize) -> &str {
@@ -139,7 +145,7 @@ impl AreaTexts {
     fn of(area: &NshView) -> Option<Self> {
         let to_root = area.to_root()?;
         let mut texts = Vec::new();
-        collect(area, &to_root, &to_root, &mut texts);
+        collect(area, &to_root, &to_root, &mut texts, &mut None);
         Some(AreaTexts {
             area: to_root,
             texts,
@@ -170,26 +176,37 @@ impl AreaTexts {
 
 /// Adds the texts of `view`'s subtree (`m`: from its coordinates to the
 /// root's), depth first: drawing order, which is the document's.
-fn collect(view: &NshView, m: &Mat4, area: &Mat4, out: &mut Vec<AreaText>) {
+fn collect(
+    view: &NshView,
+    m: &Mat4,
+    area: &Mat4,
+    out: &mut Vec<AreaText>,
+    chrome: &mut Option<(String, Bounds<Points>)>,
+) {
     let s = view.state();
     if s.style.hidden || s.concealed || s.live.as_ref().is_some_and(|l| l.dying()) {
         return;
     }
     if let Some(drawn) = &s.text
-        && drawn.text.selectable != Some(false)
         && let Some(frame) = frame_in(area, m, drawn.content)
     {
-        out.push(AreaText {
-            view: view.clone(),
-            text: drawn.text.clone(),
-            to_root: *m,
-            frame,
-        });
+        if drawn.text.selectable == Some(false) {
+            // A list marker, maybe: the next text's copy starts with it.
+            *chrome = Some((drawn.text.text.to_string(), frame));
+        } else {
+            out.push(AreaText {
+                view: view.clone(),
+                text: drawn.text.clone(),
+                to_root: *m,
+                frame,
+                marker: marker_of(chrome.take().as_ref(), frame),
+            });
+        }
     }
     view.with_children(|children| {
         for child in children {
             let local = s.child_matrix(&child.state());
-            collect(child, &Mat4::mul(&local, m), area, out);
+            collect(child, &Mat4::mul(&local, m), area, out, chrome);
         }
     });
 }
@@ -591,6 +608,29 @@ fn autoscroll(key: u64) {
     });
 }
 
+/// `ref.clearSelection()` on `view` (`Command::ClearSelection`): clears
+/// the area selection when the area is `view`, inside it or around it.
+pub(crate) fn clear_in(view: &NshView) {
+    let within = |inner: &NshView, outer: &NshView| {
+        let mut current = Some(inner.clone());
+        while let Some(v) = current {
+            if &v == outer {
+                return true;
+            }
+            current = v.parent_view();
+        }
+        false
+    };
+    let hit = ACTIVE.with_borrow(|active| {
+        active
+            .as_ref()
+            .is_some_and(|a| within(&a.area, view) || within(view, &a.area))
+    });
+    if hit {
+        clear_all();
+    }
+}
+
 /// Clears the area selection, if there is one (a text selects alone).
 pub(crate) fn clear_all() {
     if let Some(a) = ACTIVE.with_borrow_mut(Option::take) {
@@ -670,7 +710,43 @@ fn selected_text(surface: u64) -> Option<String> {
     })
 }
 
-/// A right click in `area`: Copy (its selection) and Select All.
+/// The app's items of `area`'s selection menu (`selectionMenu`), after a
+/// separator: each reports its id as the root's `Menu` event.
+fn app_items(area: &NshView, out: &mut Vec<crate::chrome::LocalItem>) {
+    use nsh_core::desktop::MenuItem;
+
+    use crate::chrome::LocalItem;
+    let menu = area.state().props.selection_menu.clone();
+    if menu.is_empty() {
+        return;
+    }
+    out.push(LocalItem::Separator);
+    for item in menu.iter() {
+        match item {
+            MenuItem::Action(action) => {
+                let id = action.id;
+                out.push(LocalItem::Item {
+                    role: None,
+                    label: action.label.clone().into(),
+                    enabled: action.enabled,
+                    action: Rc::new(move |s| {
+                        if id != 0 {
+                            s.event(
+                                nsh_core::ROOT_ID,
+                                EventKind::Menu,
+                                EventPayload::Map(vec![("id", PayloadValue::Number(id as f64))]),
+                            );
+                        }
+                    }),
+                });
+            }
+            MenuItem::Separator => out.push(LocalItem::Separator),
+            MenuItem::Submenu { .. } => {}
+        }
+    }
+}
+
+/// A right click in `area`: Copy (its selection), Select All and the app's items.
 pub(crate) fn context_menu(surface: &Rc<Surface>, area: &NshView) {
     use nsh_core::desktop::MenuRole;
 
@@ -679,27 +755,26 @@ pub(crate) fn context_menu(surface: &Rc<Surface>, area: &NshView) {
     let key = surface.key();
     let selected = with_area(key, area, |a| !a.model.is_empty());
     let all = area.clone();
-    crate::chrome::popup_actions(
-        surface,
-        vec![
-            LocalItem::Item {
-                role: Some(MenuRole::Copy),
-                label: "".into(),
-                enabled: selected,
-                action: Rc::new(move |s| {
-                    if let Some(text) = selected_text(s.key()) {
-                        crate::system::set_clipboard_text(&text);
-                    }
-                }),
-            },
-            LocalItem::Item {
-                role: Some(MenuRole::SelectAll),
-                label: "".into(),
-                enabled: true,
-                action: Rc::new(move |s| select_all(s.key(), &all)),
-            },
-        ],
-    );
+    let mut items = vec![
+        LocalItem::Item {
+            role: Some(MenuRole::Copy),
+            label: "".into(),
+            enabled: selected,
+            action: Rc::new(move |s| {
+                if let Some(text) = selected_text(s.key()) {
+                    crate::system::set_clipboard_text(&text);
+                }
+            }),
+        },
+        LocalItem::Item {
+            role: Some(MenuRole::SelectAll),
+            label: "".into(),
+            enabled: true,
+            action: Rc::new(move |s| select_all(s.key(), &all)),
+        },
+    ];
+    app_items(area, &mut items);
+    crate::chrome::popup_actions(surface, items);
 }
 
 /// Keys for the active area's selection (Ctrl+C or Ctrl+Insert, Ctrl+A,

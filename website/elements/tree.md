@@ -14,47 +14,10 @@ never made at all, so a tree of thousands of items opens and scrolls at once. Th
 nothing of its own, the app styles each row (`itemClass`) and draws its content (`renderItem`: an icon, the label
 indented by the item's depth, a chevron, a badge).
 
-```rust tabs
-use nsh_base::{TreeEntry, TreeItem, theme, tree};
-use nsh_core::prelude::*;
-
-fn files() -> impl IntoElement {
-    let items = vec![
-        TreeItem::new("src", "src")
-            .child(TreeItem::new("src/main.rs", "main.rs"))
-            .child(TreeItem::new("src/ui", "ui").child(TreeItem::new("src/ui/tree.rs", "tree.rs"))),
-        TreeItem::new("Cargo.toml", "Cargo.toml"),
-    ];
-    let selected = signal(None::<SharedString>);
-    tree()
-        .items(items)
-        .default_expanded(vec!["src".into()])
-        .selected(move || selected.get())
-        .on_selected_change(move |id: &SharedString| selected.set(Some(id.clone())))
-        .accessibility_label("Files")
-        .h(px(320.0))
-        .list_class("p-1")
-        .item_class(
-            "group rounded-md hover:bg-accent selected:bg-primary/10 \
-             focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:opacity-50",
-        )
-        .render_item(|entry: &TreeEntry| {
-            view()
-                .flex_row()
-                .gap_2()
-                .h_8()
-                .items_center()
-                .rounded_md()
-                .pl(px(8.0 + 16.0 * entry.depth as f32))
-                .child(text(if entry.folder { "▸" } else { " " }).text_color(move || theme().muted_foreground))
-                .child(text(entry.label.clone()))
-        })
-}
-```
-
 ```tsx tabs
 import { mount, signal, Text, View } from "nsh";
 import { Tree, type TreeItem } from "nsh/base";
+import { Window } from "nsh/desktop";
 
 const files: TreeItem[] = [
   {
@@ -94,7 +57,49 @@ function App() {
   );
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
+```rust tabs
+use nsh_base::{TreeEntry, TreeItem, theme, tree};
+use nsh_core::prelude::*;
+
+fn files() -> impl IntoElement {
+    let items = vec![
+        TreeItem::new("src", "src")
+            .child(TreeItem::new("src/main.rs", "main.rs"))
+            .child(TreeItem::new("src/ui", "ui").child(TreeItem::new("src/ui/tree.rs", "tree.rs"))),
+        TreeItem::new("Cargo.toml", "Cargo.toml"),
+    ];
+    let selected = signal(None::<SharedString>);
+    tree()
+        .items(items)
+        .default_expanded(vec!["src".into()])
+        .selected(move || selected.get())
+        .on_selected_change(move |id: &SharedString| selected.set(Some(id.clone())))
+        .accessibility_label("Files")
+        .h(px(320.0))
+        .list_class("p-1")
+        .item_class(
+            "group rounded-md hover:bg-accent selected:bg-primary/10 \
+             focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring disabled:opacity-50",
+        )
+        .render_item(|entry: &TreeEntry| {
+            view()
+                .flex_row()
+                .gap_2()
+                .h_8()
+                .items_center()
+                .rounded_md()
+                .pl(px(8.0 + 16.0 * entry.depth as f32))
+                .child(text(if entry.folder { "▸" } else { " " }).text_color(move || theme().muted_foreground))
+                .child(text(entry.label.clone()))
+        })
+}
 ```
 
 `Tree` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. The expanded items and the
@@ -133,6 +138,8 @@ chevron turns with a transition.
 | `reveal` | `.reveal(..)` | `boolean` | `false` | Expanding and collapsing move the rows after the item to their new places with a spring, run natively. Off with reduced motion. |
 | `accessibilityLabel` | `.accessibility_label(..)` | `string` | none | What screen readers call the tree ("Files"). |
 | `renderItem` | `.render_item(..)` | `(entry: TreeEntry) => JSX.Element` | none | A row's content, for the rows in view; without it a row shows the item's label. |
+| `header` | `.header(..)` | `JSX.Element` | none | What shows above the rows, inside the tree's scroll view: it scrolls with them (pinned items, a heading). |
+| `empty` | `.empty(..)` | `JSX.Element` | none | What shows instead of the rows while no item does: no items, a filter that left none. |
 | `itemClass`, `itemStyle` | `.item_class(..)`, `.item_style(..)` | `string`, `StyleProp<TextStyle>` | none | Each row: its height, padding, surface and states (below); its text styles reach the label. |
 | `listClass`, `listStyle` | `.list_class(..)`, `.list_style(..)` | `string`, `StyleProp<ViewStyle>` | none | The scroll view of the rows inside the tree: its padding and gaps. |
 | `class`, `style` | style methods | `string`, `StyleProp<ViewStyle>` | none | The tree itself. Give it a height (or `flex-1` in a parent that has one): the rows scroll inside it, and only those in view are made. |
@@ -164,8 +171,10 @@ moving through the files previews them one by one, Return or a double click open
 |---|---|---|---|
 | The tree | | `class`, `style` | |
 | The list | the tree | `listClass`, `listStyle` | |
+| `header` | the list | the app's element | |
 | A row | the list | `itemClass`, `itemStyle` | `selected:`, `aria-expanded:` (a folder that is open), `focus:` (while the tree has the keyboard focus, the row the keys act on: the selected row, the collapsed item a hidden selection is under, or the first row while nothing is selected), `focus-visible:` (that row while the tree's focus shows: the keys moved it, not a click), `disabled:`, `hover:`, `active:` |
 | A row's content | a row | `renderItem` | `group-selected:`, `group-aria-expanded:`, `group-focus:`, `group-focus-visible:`, `group-disabled:` under `group` in `itemClass` |
+| `empty` | the list | the app's element | |
 
 Show the selected row with `selected:` and the keyboard's place with `focus-visible:`, which shows
 once the keys move and not after a click (see

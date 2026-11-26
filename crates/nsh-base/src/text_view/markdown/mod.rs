@@ -11,10 +11,16 @@
 //! its tree converted. Definitions and footnotes are
 //! collected from the trees first, so references resolve wherever they
 //! stand and footnotes are numbered by their first reference.
+//!
+//! A view whose text grows at its end (a reply still arriving) reads it
+//! from where it can still change and keeps the blocks before
+//! (`incremental.rs`); a long text is read in parts the same way. Both are
+//! held to [`parse_whole`], which reads a whole text in one parse.
 
 mod autolink;
 mod cjk;
 mod container;
+mod incremental;
 mod latex;
 mod offsets;
 mod streaming;
@@ -28,8 +34,11 @@ use markdown::{
     mdast::{self, AlignKind, AttributeContent, AttributeValue, Node},
 };
 
-pub(crate) use self::streaming::repair_streaming;
 use self::{container::Segment, offsets::Inserted};
+pub(crate) use self::{
+    incremental::{Incremental, Parsed, SharedBlock},
+    streaming::repair_streaming,
+};
 use super::{
     Parser,
     common::{self, Slugger},
@@ -37,38 +46,35 @@ use super::{
         Alert, Block, CodeBlock, ColumnAlign, CustomNode, Document, Footnote, Image, Inline,
         ListItem, Table, TableCell, inline_text,
     },
-    extension::{ParseContext, ReadChildren},
+    extension::{ConversionId, ParseContext, ReadChildren},
     html,
 };
+use crate::mdast_tree::{Mdast, plain_text};
 
 /// How deep blocks and inline content are read: deeper content is text.
 const MAX_DEPTH: usize = 32;
 
-/// Markdown `source` read with `parser`'s options, extensions and plugins.
+/// Markdown `source` read with `parser`'s options, extensions and plugins:
+/// the document [`parse_whole`] makes of it, a long text read a part at a
+/// time where nothing after a part changes it (`incremental.rs`).
 pub(crate) fn parse(parser: &Parser, source: &str) -> Document {
-    let mut source = if source.contains('\r') {
+    incremental::parse_long(parser, source).unwrap_or_else(|| parse_whole(parser, source))
+}
+
+/// Markdown `source` read in one parse.
+pub(crate) fn parse_whole(parser: &Parser, source: &str) -> Document {
+    parse_whole_in(parser, source, ConversionId::next())
+}
+
+/// [`parse_whole`] as part of conversion `conversion` (what plugins are
+/// told).
+fn parse_whole_in(parser: &Parser, source: &str, conversion: ConversionId) -> Document {
+    let source = if source.contains('\r') {
         Cow::Owned(source.replace("\r\n", "\n").replace('\r', "\n"))
     } else {
         Cow::Borrowed(source)
     };
-    if parser.options.streaming {
-        let repaired = match repair_streaming(&source) {
-            Cow::Owned(repaired) => Some(repaired),
-            Cow::Borrowed(_) => None,
-        };
-        if let Some(repaired) = repaired {
-            source = Cow::Owned(repaired);
-        }
-    }
-    if parser.options.math {
-        let rewritten = match latex::rewrite(&source) {
-            Cow::Owned(rewritten) => Some(rewritten),
-            Cow::Borrowed(_) => None,
-        };
-        if let Some(rewritten) = rewritten {
-            source = Cow::Owned(rewritten);
-        }
-    }
+    let source = prepare(parser, source);
     let source = source.as_ref();
 
     let segments = if parser.extensions.iter().any(|e| e.container.is_some()) {
@@ -100,7 +106,7 @@ pub(crate) fn parse(parser: &Parser, source: &str) -> Document {
         }
     }
 
-    let mut converter = Converter::new(parser, &trees);
+    let mut converter = Converter::new(parser, &trees, conversion);
     let mut blocks = Vec::new();
     let mut next = 0;
     converter.segments(&segments, &trees, &mut next, &mut blocks);
@@ -108,11 +114,36 @@ pub(crate) fn parse(parser: &Parser, source: &str) -> Document {
     Document { blocks, footnotes }
 }
 
+/// Markdown `source` (its line endings `\n`) as it is parsed: the end of a
+/// streamed reply repaired, TeX's delimiters rewritten. Positions in the
+/// syntax tree, and so what plugins read, are offsets in it.
+fn prepare<'s>(parser: &Parser, mut source: Cow<'s, str>) -> Cow<'s, str> {
+    if parser.options.streaming {
+        let repaired = match repair_streaming(&source) {
+            Cow::Owned(repaired) => Some(repaired),
+            Cow::Borrowed(_) => None,
+        };
+        if let Some(repaired) = repaired {
+            source = Cow::Owned(repaired);
+        }
+    }
+    if parser.options.math {
+        let rewritten = match latex::rewrite(&source) {
+            Cow::Owned(rewritten) => Some(rewritten),
+            Cow::Borrowed(_) => None,
+        };
+        if let Some(rewritten) = rewritten {
+            source = Cow::Owned(rewritten);
+        }
+    }
+    source
+}
+
 /// A Markdown part of the source and its syntax tree, whose positions are
 /// offsets in it.
 struct Tree<'s> {
     source: &'s str,
-    root: Node,
+    root: Mdast,
 }
 
 fn parse_trees<'s>(
@@ -154,7 +185,7 @@ fn tree<'s>(parser: &Parser, text: &'s str, first: bool) -> Tree<'s> {
     let mut source = marked.map_or(ended, Cow::Owned);
     inserted.insert(&marks, cjk::MARK.len_utf8());
     let strip = !ends.is_empty() || !marks.is_empty();
-    let mut root = parse_tree(parser, &source, first);
+    let mut root = Mdast(parse_tree(parser, &source, first));
     if parser.options.math {
         // Pairs of `$` that are prose: their opening `$` escaped, the text
         // is read again, as a whole (emphasis may span the pair); a
@@ -176,7 +207,7 @@ fn tree<'s>(parser: &Parser, text: &'s str, first: bool) -> Tree<'s> {
             }
             escaped.push_str(&source[at..]);
             inserted.insert(&opens, 1);
-            root = parse_tree(parser, &escaped, first);
+            root = Mdast(parse_tree(parser, &escaped, first));
             source = Cow::Owned(escaped);
         }
     }
@@ -217,7 +248,16 @@ fn definitions(trees: &[Tree<'_>]) -> String {
     out
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The longest text one `markdown-rs` parse read on this thread: a long
+    /// text read in parts is never parsed whole.
+    static LONGEST_PARSE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn parse_tree(parser: &Parser, text: &str, first: bool) -> Node {
+    #[cfg(test)]
+    LONGEST_PARSE.with(|longest| longest.set(longest.get().max(text.len())));
     let mdx = parser.options.mdx;
     match markdown::to_mdast(text, &options(parser, first, mdx)) {
         Ok(root) => root,
@@ -243,6 +283,26 @@ fn parse_tree(parser: &Parser, text: &str, first: bool) -> Node {
 
 /// `markdown-rs`'s options for `parser`'s.
 fn options(parser: &Parser, frontmatter: bool, mdx: bool) -> ParseOptions {
+    let mut options = own_options(parser, frontmatter, mdx);
+    for plugin in &parser.plugins.0 {
+        plugin.configure(&mut options);
+    }
+    options
+}
+
+/// Whether `parser`'s plugins leave the syntax of a text as its options
+/// make it: they turn no construct on or off (what else they configure,
+/// as `gfm_strikethrough_single_tilde`, is read inside a paragraph).
+fn plugins_keep_constructs(parser: &Parser) -> bool {
+    parser.plugins.is_empty()
+        || [true, false].into_iter().all(|first| {
+            let mdx = parser.options.mdx;
+            options(parser, first, mdx).constructs == own_options(parser, first, mdx).constructs
+        })
+}
+
+/// [`options`] without the plugins'.
+fn own_options(parser: &Parser, frontmatter: bool, mdx: bool) -> ParseOptions {
     let opts = &parser.options;
     let mut options = ParseOptions::gfm();
     let c = &mut options.constructs;
@@ -259,9 +319,6 @@ fn options(parser: &Parser, frontmatter: bool, mdx: bool) -> ParseOptions {
         c.mdx_expression_text = true;
         c.mdx_jsx_flow = true;
         c.mdx_jsx_text = true;
-    }
-    for plugin in &parser.plugins.0 {
-        plugin.configure(&mut options);
     }
     options
 }
@@ -311,6 +368,8 @@ fn is_prose(source: &str, tex: &str, start: usize, end: usize) -> bool {
 /// Reads the trees into the document.
 struct Converter<'a> {
     parser: &'a Parser,
+    /// The conversion it reads for (`ParseContext::conversion_id`).
+    conversion: ConversionId,
     /// The source of the tree being read.
     source: &'a str,
     /// Link and image definitions by identifier.
@@ -327,9 +386,10 @@ struct Converter<'a> {
 }
 
 impl<'a> Converter<'a> {
-    fn new(parser: &'a Parser, trees: &'a [Tree<'a>]) -> Self {
+    fn new(parser: &'a Parser, trees: &'a [Tree<'a>], conversion: ConversionId) -> Self {
         let mut converter = Self {
             parser,
+            conversion,
             source: "",
             definitions: HashMap::new(),
             footnote_definitions: HashMap::new(),
@@ -437,10 +497,11 @@ impl<'a> Converter<'a> {
         if parser.plugins.is_empty() {
             return None;
         }
-        let source = self.source;
+        let (source, conversion) = (self.source, self.conversion);
         let mut cx = ParseContext {
             source,
             reader: self,
+            conversion,
         };
         parser.plugins.0.iter().find_map(|p| p.block(node, &mut cx))
     }
@@ -450,10 +511,11 @@ impl<'a> Converter<'a> {
         if parser.plugins.is_empty() {
             return None;
         }
-        let source = self.source;
+        let (source, conversion) = (self.source, self.conversion);
         let mut cx = ParseContext {
             source,
             reader: self,
+            conversion,
         };
         parser
             .plugins
@@ -468,7 +530,7 @@ impl<'a> Converter<'a> {
         // The tree is read recursively, as it is shown: deeper content is
         // its text, so no input runs the stack out.
         if self.depth >= MAX_DEPTH {
-            let text: String = nodes.iter().map(Node::to_string).collect();
+            let text = plain_text(nodes);
             if !text.trim().is_empty() {
                 out.push(Block::Paragraph {
                     content: vec![Inline::Text { text }],
@@ -711,7 +773,7 @@ impl<'a> Converter<'a> {
         let Node::Html(open) = &nodes[at] else {
             return None;
         };
-        let name = unclosed_element(&open.value).filter(|name| self.is_element(name))?;
+        let name = unclosed_element(&open.value).filter(|name| is_element(self.parser, name))?;
         let close = matching_close(nodes, at, name)?;
         let Node::Html(close_node) = &nodes[close] else {
             return None;
@@ -748,13 +810,13 @@ impl<'a> Converter<'a> {
 
     fn inlines(&mut self, nodes: &[Node]) -> Vec<Inline> {
         if self.depth >= MAX_DEPTH {
-            let text: String = nodes.iter().map(Node::to_string).collect();
+            let text = plain_text(nodes);
             return vec![Inline::Text { text }];
         }
         self.depth += 1;
         let out = self.read_inlines(nodes);
         self.depth -= 1;
-        out
+        common::without_links_and_images(&self.parser.options, out)
     }
 
     fn read_inlines(&mut self, nodes: &[Node]) -> Vec<Inline> {
@@ -788,7 +850,7 @@ impl<'a> Converter<'a> {
         if !self.parser.options.html {
             return None;
         }
-        let name = unclosed_element(&open.value).filter(|name| self.is_element(name))?;
+        let name = unclosed_element(&open.value).filter(|name| is_element(self.parser, name))?;
         let close = matching_close(nodes, at, name)?;
         let start = nodes[at].position()?.start.offset;
         let end = nodes[close].position()?.end.offset;
@@ -798,14 +860,15 @@ impl<'a> Converter<'a> {
     /// A formatting element in text whose content is Markdown
     /// (`<strong>b *c*</strong>`: `c` is emphasized), as gpui-kit pairs
     /// formatting tags: the element as HTML reads its opening tag (a
-    /// `<mark>`'s color, a link's URL), holding the Markdown between its
-    /// tags. `None` for other elements, read as HTML.
+    /// `<mark>`'s color, a `<span>`'s text color, a link's URL), holding the
+    /// Markdown between its tags. `None` for other elements (and for a
+    /// `<span>` or `<font>` without a color), read as HTML.
     fn formatting_element(&mut self, nodes: &[Node], open: usize, close: usize) -> Option<Inline> {
         /// Stands for the content while the opening tag is read.
         const CONTENT: &str = "\u{e000}";
         const FORMATTING: &[&str] = &[
-            "a", "b", "cite", "del", "dfn", "em", "i", "ins", "mark", "s", "small", "strike",
-            "strong", "sub", "sup", "u", "var",
+            "a", "b", "cite", "del", "dfn", "em", "font", "i", "ins", "mark", "s", "small", "span",
+            "strike", "strong", "sub", "sup", "u", "var",
         ];
         let Node::Html(tag) = &nodes[open] else {
             return None;
@@ -822,6 +885,7 @@ impl<'a> Converter<'a> {
             | Inline::Strikethrough { content }
             | Inline::Underline { content }
             | Inline::Highlight { content, .. }
+            | Inline::TextStyle { content, .. }
             | Inline::Superscript { content }
             | Inline::Subscript { content }
             | Inline::Small { content }
@@ -945,19 +1009,8 @@ impl<'a> Converter<'a> {
         }
     }
 
-    /// Whether `name` is an element of HTML or of a `tag` extension: a tag
-    /// of another name (`<US tech>`, `</Foo>`) is text.
-    fn is_element(&self, name: &str) -> bool {
-        html::is_element(name)
-            || self.parser.extensions.iter().any(|ext| {
-                ext.tag
-                    .as_deref()
-                    .is_some_and(|tag| tag.eq_ignore_ascii_case(name))
-            })
-    }
-
     /// Whether HTML `html` is markup: it starts with a tag of an element
-    /// ([`Self::is_element`]), a comment, a declaration or an instruction.
+    /// ([`is_element`]), a comment, a declaration or an instruction.
     fn is_tag(&self, html: &str) -> bool {
         let inner = html.trim_start().strip_prefix('<').unwrap_or_default();
         let name = inner.strip_prefix('/').unwrap_or(inner);
@@ -965,7 +1018,7 @@ impl<'a> Converter<'a> {
             .bytes()
             .take_while(|b| b.is_ascii_alphanumeric() || *b == b'-')
             .count();
-        len == 0 || self.is_element(&name[..len])
+        len == 0 || is_element(self.parser, &name[..len])
     }
 
     /// Node `node` as the text it was written as.
@@ -974,7 +1027,7 @@ impl<'a> Converter<'a> {
             .position()
             .and_then(|p| self.source.get(p.start.offset..p.end.offset))
             .map(|s| s.replace('\n', " "))
-            .unwrap_or_else(|| node.to_string());
+            .unwrap_or_else(|| plain_text(std::slice::from_ref(node)));
         push_text(out, &text);
     }
 
@@ -1001,6 +1054,17 @@ impl<'a> Converter<'a> {
         }
         node
     }
+}
+
+/// Whether `name` is an element of HTML or of one of `parser`'s `tag`
+/// extensions: a tag of another name (`<US tech>`, `</Foo>`) is text.
+fn is_element(parser: &Parser, name: &str) -> bool {
+    html::is_element(name)
+        || parser.extensions.iter().any(|ext| {
+            ext.tag
+                .as_deref()
+                .is_some_and(|tag| tag.eq_ignore_ascii_case(name))
+        })
 }
 
 impl ReadChildren for Converter<'_> {
@@ -1171,6 +1235,7 @@ fn has_link(inline: &Inline) -> bool {
         | Inline::Strikethrough { content }
         | Inline::Underline { content }
         | Inline::Highlight { content, .. }
+        | Inline::TextStyle { content, .. }
         | Inline::Superscript { content }
         | Inline::Subscript { content }
         | Inline::Small { content } => content.iter().any(has_link),
@@ -1186,6 +1251,7 @@ fn formatted_content(inline: &mut Inline) -> Option<&mut Vec<Inline>> {
         | Inline::Strikethrough { content }
         | Inline::Underline { content }
         | Inline::Highlight { content, .. }
+        | Inline::TextStyle { content, .. }
         | Inline::Superscript { content }
         | Inline::Subscript { content }
         | Inline::Small { content } => Some(content),

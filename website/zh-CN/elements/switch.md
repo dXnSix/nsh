@@ -9,6 +9,33 @@ demo: el-switch
 
 开关用来打开或关闭一项设置，改变立即生效。它负责行为：按压、键盘激活、禁用状态，以及屏幕阅读器读到的开关角色和它的值。外观由应用决定：`Switch` 没有自己的颜色、尺寸、动效或文字。它由一条轨道、轨道里的滑块以及之后的子元素（标签）组成，应用为每个部件设置样式，部件上的 `checked:` 和 `disabled:` 类跟随开关的状态。
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { Switch } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const on = signal(false);
+  return (
+    <Switch
+      checked={on()}
+      onChange={({ checked }) => on.set(checked)}
+      class="flex-row items-center gap-3"
+      trackClass="w-11 rounded-full bg-muted p-0.5 transition-colors checked:bg-primary"
+      thumbClass="size-5 rounded-full bg-background shadow-sm transition-transform checked:translate-x-5"
+    >
+      <Text>Wi-Fi</Text>
+    </Switch>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{switch, theme};
 use nsh_core::prelude::*;
@@ -41,28 +68,6 @@ fn wifi() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { Switch } from "nsh/base";
-
-function App() {
-  const on = signal(false);
-  return (
-    <Switch
-      checked={on()}
-      onChange={({ checked }) => on.set(checked)}
-      class="flex-row items-center gap-3"
-      trackClass="w-11 rounded-full bg-muted p-0.5 transition-colors checked:bg-primary"
-      thumbClass="size-5 rounded-full bg-background shadow-sm transition-transform checked:translate-x-5"
-    >
-      <Text>Wi-Fi</Text>
-    </Switch>
-  );
-}
-
-mount(App);
-```
-
 `Switch` 来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate。值由应用持有：按压时通过 `onChange` 报告下一个值，开关显示应用传回的 `checked`。在 Rust 中，`switch()` 创建一个开关，每个属性对应一个设置方法（`.checked(..)`、`.track_style(..)`），每个事件对应一个监听方法（`.on_change(..)`），开关自身用类型化的样式方法，标签用 `.child(..)`；部件的样式接受跟随开关的状态方法（`.checked(..)`、`.disabled_style(..)`）。
 
 <a id="props"></a>
@@ -75,6 +80,7 @@ mount(App);
 | `disabled` | `.disabled(..)` | `boolean` | `false` | 不响应按压，也没有按压反馈；开关及其部件的 `disabled:` 样式生效，屏幕阅读器会报告它不可用。 |
 | `checkedStyle` | `.checked_style(\|s\| ..)` | `StyleProp<ViewStyle>` | 无 | `checked` 且未禁用时开关自身的样式，与 `checked:` 类相同。 |
 | `accessibilityLabel` | `.accessibility_label(..)` | `string` | 无 | 屏幕阅读器读出的文字：子元素没有说明它打开什么的文字时设置。 |
+| `accessibilityHint` | `.accessibility_hint(..)` | `string` | 无 | 向屏幕阅读器说明切换开关会做什么，与视图的 `accessibilityHint` 相同。 |
 | `trackClass`、`trackStyle` | `.track_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 轨道，滑块沿着它移动。 |
 | `thumbClass`、`thumbStyle` | `.thumb_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 滑块，在轨道里面。 |
 | `hitSlop` | `.hit_slop(..)` | `number \| Partial<Edges>` | 无 | 按压在边界之外多远仍然算数，单位为点：一个数字表示每一边，或分别指定各边。与视图的 `hitSlop` 相同。 |
@@ -99,11 +105,26 @@ mount(App);
 | 部件 | 位置 | 样式 | 状态 |
 |---|---|---|---|
 | 开关 | | `class`、`style` | `checked:`、`disabled:`、`active:`、`hover:`、`focus:`（或 `checkedStyle`、`disabledStyle` 等） |
-| 轨道 | 开关里的第一个 | `trackClass`、`trackStyle` | `checked:`、`disabled:` 跟随开关 |
-| 滑块 | 轨道里 | `thumbClass`、`thumbStyle` | `checked:`、`disabled:` 跟随开关 |
+| 轨道 | 开关里的第一个 | `trackClass`、`trackStyle` | `checked:`、`disabled:`、`active:` 跟随开关 |
+| 滑块 | 轨道里 | `thumbClass`、`thumbStyle` | `checked:`、`disabled:`、`active:` 跟随开关 |
 | 标签 | 开关里，轨道之后 | 它自己的元素（`children`） | 在开关的 `class` 上加 `group` 后，使用 `group-checked:` 等 `group-*:` 变体 |
 
 滑块靠它自己的 `checked:` 样式移动：位移（`checked:translate-x-5`），或者外边距、轨道的对齐方式（轨道上的 `checked:justify-end`）。`transition-*` 类会在原生层为变化加上动画。要把标签放在轨道前面，反转这一行即可：`class="flex-row-reverse justify-between"`。
+
+<a id="held-down"></a>
+
+## 按住
+
+指针或手指按住开关时（无论按在开关的哪里，包括标签），轨道和滑块的 `active:` 类与开关自身的一样生效，直到松开或取消按压。它们和其他状态一样变化：变换、颜色和不透明度随 `transition-*` 动画，宽度等布局（`active:w-5`）立即变化。要让滑块像 macOS 的开关那样平滑地变宽，用缩放：关闭时从左边缘、开启时从右边缘放大，使它朝中间伸展，`transition-transform` 在原生层为它加上动画：
+
+```tsx
+<Switch
+  checked={on()}
+  onChange={({ checked }) => on.set(checked)}
+  trackClass="w-[38px] rounded-full bg-muted p-0.5 checked:bg-primary"
+  thumbClass="size-4 rounded-full bg-background transition-transform origin-left active:scale-x-125 checked:translate-x-[18px] checked:origin-right"
+/>
+```
 
 <a id="disabled"></a>
 
@@ -145,6 +166,7 @@ mount(App);
 
 ## 无障碍
 
+- 标签不能说明改变设置的效果时，设置 `accessibilityHint`。它跟随响应式值变化；设为 `undefined` 会移除提示。
 - 开关对屏幕阅读器而言是一个元素，角色是 `"switch"`，带有它的值（开或关）；轨道和滑块是它的部件。它的标签是子元素的文字；没有文字时设置 `accessibilityLabel`。
 - `disabled` 按平台的方式报告（VoiceOver、TalkBack、UI Automation、浏览器的无障碍树）。
 - 在 macOS 和 Web 上，开关是键盘焦点的一站：Tab 可以到达它，Space 和 Return 切换它，`focus-visible:` 样式显示焦点所在。

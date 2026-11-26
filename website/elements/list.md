@@ -13,6 +13,33 @@ recycled for the rows that come in. Which rows exist, their positions, columns, 
 computed natively, so scrolling a list of thousands of items costs as much as a list of twenty. Rust makes one with
 `virtual_list(count, |at| row)`, TSX with `<List>` from `nsh`.
 
+```tsx tabs
+import { List, mount, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
+
+const contacts = Array.from({ length: 1000 }, (_, i) => ({ id: i, name: `Contact ${i + 1}` }));
+
+function App() {
+  return (
+    <List each={contacts} estimatedItemSize={56} style={{ flex: 1 }}>
+      {(contact, index) => (
+        <View style={{ height: 56, paddingHorizontal: 16, justifyContent: "center" }}>
+          <Text style={{ fontSize: 16 }}>
+            {index() + 1}. {contact().name}
+          </Text>
+        </View>
+      )}
+    </List>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -37,28 +64,6 @@ fn app() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { List, mount, Text, View } from "nsh";
-
-const contacts = Array.from({ length: 1000 }, (_, i) => ({ id: i, name: `Contact ${i + 1}` }));
-
-function App() {
-  return (
-    <List each={contacts} estimatedItemSize={56} style={{ flex: 1 }}>
-      {(contact, index) => (
-        <View style={{ height: 56, paddingHorizontal: 16, justifyContent: "center" }}>
-          <Text style={{ fontSize: 16 }}>
-            {index() + 1}. {contact().name}
-          </Text>
-        </View>
-      )}
-    </List>
-  );
-}
-
-mount(App);
-```
-
 In TSX, `List` is generic: `List<T>` checks that `each` and the row function agree on the item type, which TypeScript
 infers from `each` (see the [List API](../modules/nsh-list.md)). In Rust, `virtual_list` takes the number of rows (a
 value, a signal or a closure: the list grows and shrinks in place) and the function that builds the row at a
@@ -74,16 +79,16 @@ infinite loading, chat, sections.
 The row function runs once per cell, not once per item. When a cell is reused for another item, its position changes
 (TSX: the `item()` and `index()` accessors; Rust: `at.index()`) and everything that reads it updates:
 
-```rust tabs
-virtual_list(move || messages.with(|m| m.len()), move |at| {
-    text(move || messages.with(|m| m[at.index()].body.clone()))
-})
-```
-
 ```tsx tabs
 <List each={messages()}>
   {(message) => <Text>{message().body}</Text>}
 </List>
+```
+
+```rust tabs
+virtual_list(move || messages.with(|m| m.len()), move |at| {
+    text(move || messages.with(|m| m[at.index()].body.clone()))
+})
 ```
 
 So keep per-item state in your data (keyed by id), not in signals created inside the row function: such a signal stays
@@ -103,10 +108,10 @@ touches and UI tests meet each row once.
 | `viewport` | `.viewport(ListViewport::..)` | `"own" \| "parent"` | `"own"` | `"own"`: the list scrolls in a scroll view of its own. `"parent"`: it lies at its full length in its parent's layout and renders the rows near the viewport of the scroll view around it, which scrolls it with the rest of the page (see [lists in a page](../docs/lists.md#lists-in-a-page-viewportparent)). Chosen when the list is made. |
 | `numColumns` | `.columns(n)` | `number` | `1` | Items per row (vertical lists). |
 | `inverted` | `.inverted()` | `boolean` | `false` | Laid out from the end, item 0 last (chat style): starts scrolled to the end and keeps its distance from the end as content changes. |
-| `maintainVisibleContentPosition` | `.follow_end(px(threshold))` | `{ autoscrollToBottomThreshold?: number }` | | For lists that are not inverted: at the end of the content, or within that many points of it, the list stays at the end as the content grows or the viewport shrinks; scrolled further up, the visible content stays. |
+| `maintainVisibleContentPosition` | `.follow_end(px(threshold))`, `.follow_end_animated(animated)` | `{ autoscrollToBottomThreshold?: number; animated?: boolean }` | | For lists that are not inverted: at the end of the content, or within that many points of it, the list stays at the end as the content grows or the viewport shrinks; scrolled further up, the visible content stays. With `animated`, an end that moves away by a quarter of the list's height or more at once is followed by an animated scroll. |
 | `stickyHeaderIndices` | `.sticky_header_indices([..])` | `number[]` | | Items that stick to the start while scrolled past (one column, not inverted). |
-| `contentStyle` | `.content_padding(..)`, `.content_padding_x(..)`, `.row_gap(..)`, `.column_gap(..)`, … | `ListContentStyle` | | Padding and gaps of the content, in points: `padding`, `paddingHorizontal`, `paddingVertical`, `paddingTop`, `paddingRight`, `paddingBottom`, `paddingLeft`, `gap`, `rowGap`, `columnGap`. |
-| `contentClass` | | `string` | | Padding and gaps of the content as classes (`p-*`, `gap-*`); `contentStyle` wins over them. |
+| `contentStyle` | `.content_padding(..)`, `.content_padding_x(..)`, `.row_gap(..)`, `.column_gap(..)`, … | `ListContentStyle` | | Padding and gaps of the content, in points: `padding`, `paddingHorizontal`, `paddingVertical`, `paddingTop`, `paddingRight`, `paddingBottom`, `paddingLeft`, `gap`, `rowGap`, `columnGap`. `alignItems` aligns cells on the cross axis: `stretch` (default), `flex-start`, `center` or `flex-end`. |
+| `contentClass` | | `string` | | Padding, gaps and cross-axis alignment as classes (`p-*`, `gap-*`, `items-start`, `items-center`, `items-end`, `items-stretch`); `contentStyle` wins over them. |
 | `header` | `.header(el)` | `ListSlot` | | Before the items: a component (`Header`) or an element (`<Header />`). |
 | `footer` | `.footer(el)` | `ListSlot` | | After the items. |
 | `empty` | `.empty(el)` | `ListSlot` | | Shown instead of the items while `each` is empty. |
@@ -133,7 +138,8 @@ touches and UI tests meet each row once.
 
 Lists also take the scrolling props of [`Scroll`](./scroll.md#scrolling) (the `Scrollable` methods in Rust):
 `pagingEnabled`, `snapToInterval`, `snapToOffsets`, `snapToAlignment`, `disableIntervalMomentum`, `decelerationRate`,
-`bounces`, `contentInset`, `contentOffset`, `keyboardShouldPersistTaps`, `scrollEventThrottle` and `scrollable`.
+`bounces`, `contentInset`, `scrollbarInset`, `contentOffset`, `keyboardShouldPersistTaps`, `scrollEventThrottle`,
+`scrollable`, `smoothWheel` and `wheelLineHeight`.
 Lists keep their scale.
 
 The props every element takes ([common props](./index.md#common-props)) go to the list's scroll view as they are:
@@ -178,6 +184,25 @@ viewable rows, `changed()` the rows that came or went.
 
 A grid with a header and viewability:
 
+```tsx tabs
+const visible = signal("");
+let list!: ListRef;
+
+<List
+  ref={list}
+  each={photos}
+  numColumns={3}
+  estimatedItemSize={120}
+  contentStyle={{ padding: 12, gap: 8 }}
+  viewabilityConfig={{ itemVisibleThreshold: 0.5 }}
+  onViewableItemsChange={({ viewableItems }) => visible.set(`${viewableItems.length} visible`)}
+  header={<Text onPress={() => list.scrollToIndex({ index: 60, viewPosition: 0.5 })}>Jump to 60</Text>}
+  style={{ flex: 1 }}
+>
+  {(photo) => <Image src={photo().url} style={{ height: 120, borderRadius: 8 }} />}
+</List>;
+```
+
 ```rust tabs
 let visible = signal(SharedString::default());
 let list = element_ref();
@@ -202,26 +227,13 @@ virtual_list(move || photos.with(|p| p.len()), move |at| {
 .flex_1()
 ```
 
-```tsx tabs
-const visible = signal("");
-let list!: ListRef;
-
-<List
-  ref={list}
-  each={photos}
-  numColumns={3}
-  estimatedItemSize={120}
-  contentStyle={{ padding: 12, gap: 8 }}
-  viewabilityConfig={{ itemVisibleThreshold: 0.5 }}
-  onViewableItemsChange={({ viewableItems }) => visible.set(`${viewableItems.length} visible`)}
-  header={<Text onPress={() => list.scrollToIndex({ index: 60, viewPosition: 0.5 })}>Jump to 60</Text>}
-  style={{ flex: 1 }}
->
-  {(photo) => <Image src={photo().url} style={{ height: 120, borderRadius: 8 }} />}
-</List>;
-```
-
 A chat:
+
+```tsx tabs
+<List each={messages()} inverted estimatedItemSize={64} keyboardDismissMode="interactive" style={{ flex: 1 }}>
+  {(m) => <Bubble message={m()} />}
+</List>
+```
 
 ```rust tabs
 virtual_list(move || messages.with(|m| m.len()), move |at| bubble(messages, at))
@@ -230,12 +242,6 @@ virtual_list(move || messages.with(|m| m.len()), move |at| bubble(messages, at))
     .estimated_item_size(px(64.0))
     .keyboard_dismiss_mode(KeyboardDismissMode::Interactive)
     .flex_1()
-```
-
-```tsx tabs
-<List each={messages()} inverted estimatedItemSize={64} keyboardDismissMode="interactive" style={{ flex: 1 }}>
-  {(m) => <Bubble message={m()} />}
-</List>
 ```
 
 Item 0 is the newest message, drawn at the bottom; new messages prepended to the items appear without moving what the

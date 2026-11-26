@@ -13,8 +13,9 @@
 //! a popup at its trigger or the pointer, with cascading submenus, and a
 //! press outside closes a popup and goes on to what is under it; on phones
 //! and tablets a menu is a sheet at the bottom of the screen whose
-//! submenus replace its items, and a press outside a popup only closes it
-//! (a transparent backdrop takes it). A popover stays anchored to its
+//! submenus replace its items (an iPad in a regular width shows the
+//! desktops' popup: `menu.rs`'s `as_sheet`), and a press outside a popup
+//! only closes it (a transparent backdrop takes it). A popover stays anchored to its
 //! trigger everywhere: what it shows belongs next to it.
 
 use std::{rc::Rc, time::Duration};
@@ -251,6 +252,22 @@ impl StateLooks {
         self.ending_class.with_untracked(|c| c.is_some())
             || self.ending_style.with_untracked(|s| *s != Style::default())
     }
+}
+
+/// The core notes the keyboard focus and the input each time `open` turns
+/// true, the popup that gives the focus back to `trigger` opening
+/// ([`ElementRef::focus_back_origin`]): on macOS and iOS, a popup a
+/// pointer opened gives it back where it was, as AppKit and UIKit do (a pointer's press leaves the
+/// focus where it is), one the keyboard opened to its trigger. `open` is
+/// tracked.
+pub(crate) fn note_focus_origin(open: impl Fn() -> bool + 'static, trigger: ElementRef) {
+    let was = stored(false);
+    effect(move || {
+        let now = open();
+        if !was.replace(now) && now {
+            untracked(|| trigger.focus_back_origin());
+        }
+    });
 }
 
 /// A popup's presence (`Popover`'s, `HoverCard`'s, a desktop menu's and
@@ -490,6 +507,12 @@ pub(crate) struct SheetMotion {
     /// Downward dragging is in points, independently of the entrance's
     /// fraction of the current panel size.
     pub(crate) drag_y: AnimatedValue,
+    /// Where `drag_y` rests while it is there: 0, or how far below its
+    /// top a sheet at a smaller detent stands.
+    rest_y: Stored<f32>,
+    /// `drag_y` stays where it is as it goes (a sheet with detents, whose
+    /// translation reads it scaled by the backdrop's fade).
+    hold_drag: Stored<bool>,
     away_x: AnimatedValue,
     away_y: AnimatedValue,
     away: Stored<(f32, f32)>,
@@ -524,6 +547,8 @@ impl SheetMotion {
             x: away_x.mul(&remaining),
             y: away_y.mul(&remaining).add(&drag_y),
             drag_y,
+            rest_y: stored(0.0),
+            hold_drag: stored(false),
             away_x,
             away_y,
             away: stored((0.0, 0.0)),
@@ -551,6 +576,16 @@ impl SheetMotion {
         self
     }
 
+    /// Where `drag_y` rests once it came in ([`Self::come_in`]).
+    pub(crate) fn rest_at(self, y: f32) {
+        self.rest_y.replace(y);
+    }
+
+    /// Whether `drag_y` stays where it is as the sheet goes.
+    pub(crate) fn hold_drag(self, hold: bool) {
+        self.hold_drag.replace(hold);
+    }
+
     fn follow(self, open: bool, side: Placement) {
         self.side.replace(side);
         if open {
@@ -563,7 +598,7 @@ impl SheetMotion {
                 return;
             }
             self.fade.set(0.0);
-            self.drag_y.set(0.0);
+            self.drag_y.set(self.rest_y.get());
             self.shown.set(true);
             // A kept panel laid out before says its size no more.
             let known = self.kept.get().then(|| self.panel.with(|p| *p)).flatten();
@@ -586,7 +621,9 @@ impl SheetMotion {
             // Going before it stops being settled: it is there until gone.
             self.closing.replace(true);
             self.settled.set(false);
-            self.drag_y.timing(0.0, SHEET_OUT_MS, Easing::EaseIn);
+            if !self.hold_drag.get() {
+                self.drag_y.timing(0.0, SHEET_OUT_MS, Easing::EaseIn);
+            }
             let end = self.fade.timing(0.0, SHEET_OUT_MS, Easing::EaseIn);
             let (shown, closing) = (self.shown, self.closing);
             // Gone when the motion ends: the platform runs it and reports
@@ -644,13 +681,14 @@ impl SheetMotion {
     /// it is there.
     pub(crate) fn come_in(self) {
         let generation = self.next_motion();
+        let rest = self.rest_y.get();
         if reduce_motion() {
-            self.drag_y.set(0.0);
+            self.drag_y.set(rest);
             self.fade.set(1.0);
             self.settled.set(true);
             return;
         }
-        self.drag_y.timing(0.0, SHEET_IN_MS, Easing::EaseOut);
+        self.drag_y.timing(rest, SHEET_IN_MS, Easing::EaseOut);
         let end = self.fade.timing(1.0, SHEET_IN_MS, Easing::EaseOut);
         let (settled, closing) = (self.settled, self.closing);
         // There when the motion ends, or after its time (as it goes).
@@ -720,20 +758,24 @@ impl DropdownFrame {
 }
 
 /// A view inside a dropdown laid over its trigger (`Select`'s selected
-/// item).
+/// item) while `on` says so.
 #[derive(Clone, Copy)]
 pub(crate) struct Cover {
     /// The view.
     pub(crate) view: ElementRef,
     /// It is rendered and laid out (refs are not tracked).
     pub(crate) shown: Signal<bool>,
+    /// The dropdown lays it over the trigger (tracked); else the dropdown
+    /// goes on a side of the trigger.
+    pub(crate) on: Memo<bool>,
 }
 
 impl Cover {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(on: impl Fn() -> bool + 'static) -> Self {
         Self {
             view: element_ref(),
             shown: signal(false),
+            on: computed(on),
         }
     }
 }
@@ -748,9 +790,10 @@ pub(crate) struct Presence {
     /// It is all there (`true`) or all gone (`false`).
     pub(crate) shown: Rc<dyn Fn(bool)>,
     /// The desktops: it closed and starts to go (a popup that was made);
-    /// the keyboard focus goes where the component puts it (its trigger,
-    /// unless what closed it took the focus elsewhere).
-    pub(crate) back: Rc<dyn Fn()>,
+    /// the keyboard focus goes from the popup it is given where the
+    /// component puts it (its trigger, unless what closed it took the
+    /// focus elsewhere: [`ElementRef::focus_back`]).
+    pub(crate) back: Rc<dyn Fn(ElementRef)>,
 }
 
 /// A dropdown while it is open (`Select`'s list, `DatePicker`'s calendar):
@@ -819,7 +862,7 @@ pub(crate) fn dropdown(
                     made.replace(true);
                 }
             } else if made.replace(false) {
-                untracked(|| back());
+                untracked(|| back(popup.popup()));
             }
         });
     }
@@ -915,7 +958,7 @@ pub(crate) fn dropdown(
             // A view inside over the trigger (a select's selected item);
             // on a side of it while there is none.
             .when_some(cover, |p, cover| {
-                p.cover(&cover.view, move || cover.shown.get())
+                p.cover(&cover.view, move || cover.on.get() && cover.shown.get())
             })
             // Never past the room on its side: its rows scroll. Until
             // the core says where it went, the window bounds it, so the

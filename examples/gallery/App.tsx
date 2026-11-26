@@ -2,8 +2,8 @@ import { type Bounds, type JSX, computed, effect, type InputRef, mount, Scroll, 
 import { Animated, createAnimatedValue, Easing } from "nsh";
 import { fpsEnabled, platform, setFpsEnabled, windowSize } from "nsh";
 import process from "process";
-import { Application, isAvailable as desktopWindows, Menu as AppMenu, titleBar } from "nsh/desktop";
-import { AlertDialog, Input, Menu, MenuItem, NavPage, NavStack, Scrollbar } from "nsh/base";
+import { Window, Application, isAvailable as desktopWindows, Menu as AppMenu } from "nsh/desktop";
+import { AlertDialog, Input, Menu, MenuItem, NavPage, NavStack, Scrollbar, TitleBar as WindowTitleBar } from "nsh/base";
 import { keymap } from "nsh";
 import { Storage } from "nsh";
 import { Icon, LucideIcon, type LucideIconName } from "./icons";
@@ -61,7 +61,7 @@ const components: DemoEntry[] = [
   { name: "Collapsible", detail: "Storage and advanced settings under their summaries", icon: "collapsible", screen: lazy(() => import("./demos/Controls").then((m) => m.CollapsibleDemo)) },
   { name: "ColorPicker", detail: "An area, sliders of RGB, HSL, HSB or OKLCH, a field and swatches", icon: "styles", screen: lazy(() => import("./demos/ColorPickerDemo").then((m) => m.ColorPickerDemo)) },
   { name: "Combobox", detail: "Topics picked several at once with search, a reviewer picked alone", icon: "select", screen: lazy(() => import("./demos/Controls").then((m) => m.ComboboxDemo)) },
-  { name: "Command", detail: "A Cmd+K palette in a dialog, an inline menu, 5 000 files that filter at every keystroke, a search the server answers", icon: "search", screen: lazy(() => import("./demos/CommandDemo").then((m) => m.CommandDemo)) },
+  { name: "Command", detail: `A ${keymap.label("mod+k")} palette in a dialog, an inline menu, 5 000 files that filter at every keystroke, a search the server answers`, icon: "search", screen: lazy(() => import("./demos/CommandDemo").then((m) => m.CommandDemo)) },
   { name: "DataTable", detail: "A million stocks of sixty columns, their quotes ticking every 33 ms, fixed columns, sorting, selection, resized and moved columns", icon: "table", screen: lazy(() => import("./demos/DataTableDemo").then((m) => m.DataTableDemo)) },
   { name: "DatePicker", detail: "A due date on weekdays, a trip's range with presets, a meeting's day and time", icon: "select", screen: lazy(() => import("./demos/Controls").then((m) => m.DatePickerDemo)) },
   { name: "DiffView", detail: "Two texts side by side or unified, changes navigated, reverted and kept, a patch", icon: "diff", screen: lazy(() => import("./demos/DiffDemo").then((m) => m.DiffDemo)) },
@@ -81,10 +81,11 @@ const components: DemoEntry[] = [
   { name: "Progress", detail: "A transfer the app drives, and one of unknown size", icon: "progress", screen: lazy(() => import("./demos/Controls").then((m) => m.ProgressDemo)) },
   { name: "Radio", detail: "Plans, delivery options as cards, a reading preference", icon: "radio", screen: lazy(() => import("./demos/Controls").then((m) => m.RadioDemo)) },
   { name: "Resizable", detail: "Panels resized by dragging the lines between them, within their ranges", icon: "sidebar", screen: lazy(() => import("./demos/Resizable").then((m) => m.Resizable)) },
-  { name: "RichEditor", detail: "A document editor on Tiptap's extensions: lists, links, tables, Markdown shortcuts, undo and redo", icon: "richtext", screen: lazy(() => import("./demos/RichEditorDemo").then((m) => m.RichEditorDemo)) },
+  { name: "RichEditor", detail: "A document editor on Tiptap's extensions: lists, links, tables, Markdown shortcuts, undo and redo, stock tags and cards as node views", icon: "richtext", screen: lazy(() => import("./demos/RichEditorDemo").then((m) => m.RichEditorDemo)) },
   { name: "Select", detail: "A sort order, fonts in sections with search, a disabled language", icon: "select", screen: lazy(() => import("./demos/Controls").then((m) => m.SelectDemo)) },
   { name: "Sheet", detail: "A panel at an edge, over a backdrop; a swipe, the backdrop, Escape or back closes it", icon: "sheet", screen: lazy(() => import("./demos/Overlays").then((m) => m.SheetDemo)) },
   { name: "Slider", detail: "A level and a price range the app owns", icon: "sliders", screen: lazy(() => import("./demos/Controls").then((m) => m.SliderDemo)) },
+  { name: "SplitView", detail: "Mailboxes, messages and a message in columns: a sidebar that hides, one column at a time on a phone, each column's pages kept", icon: "sidebar", fill: true, screen: lazy(() => import("./demos/SplitViewDemo").then((m) => m.SplitViewDemo)) },
   { name: "Switch", detail: "Settings that take effect at once, one that needs another on", icon: "switch", screen: lazy(() => import("./demos/Controls").then((m) => m.SwitchDemo)) },
   { name: "Tabs", detail: "A section switcher, a disabled tab", icon: "tabs", screen: lazy(() => import("./demos/Controls").then((m) => m.TabsDemo)) },
   { name: "Terminal", detail: "A shell's colors, a progress bar redrawn in place, the keys typed sent back", icon: "terminal", screen: lazy(() => import("./demos/TerminalDemo").then((m) => m.TerminalDemo)) },
@@ -100,7 +101,7 @@ const components: DemoEntry[] = [
 const purposes: [string, string[]][] = [
   ["Actions", ["Button", "Link", "Toggle", "Toolbar", "Command"]],
   ["Inputs", ["Input", "NumberInput", "OtpInput", "Checkbox", "Radio", "Switch", "Slider", "Select", "Combobox", "DatePicker", "ColorPicker", "EmojiPicker"]],
-  ["Navigation", ["NavStack", "Tabs", "Pagination", "Accordion", "Collapsible", "Carousel", "Tree"]],
+  ["Navigation", ["NavStack", "SplitView", "Tabs", "Pagination", "Accordion", "Collapsible", "Carousel", "Tree"]],
   ["Overlays", ["Popover", "HoverCard", "Menu", "Tooltip", "Sheet", "Toast"]],
   ["Data", ["Avatar", "Progress", "DataTable", "Plot", "DiffView"]],
   ["Documents and workspaces", ["TextView", "Editor", "RichEditor", "Terminal", "Dock", "Resizable"]],
@@ -168,8 +169,11 @@ const allGroups: { title: string; demos: DemoEntry[] }[] = [
   },
 ];
 
-/** The demos a terminal has nothing to show for, left out of its index. */
-const TERMINAL_HIDDEN: Record<string, true> = { Image: true, Shader: true, WebView: true, Video: true, Photos: true };
+/**
+ * The demos left out of a terminal's index: those it has nothing to show for, a rich editor (formatting a terminal
+ * cannot show) and notifications (a terminal posts none).
+ */
+const TERMINAL_HIDDEN: Record<string, true> = { Shader: true, WebView: true, Video: true, RichEditor: true, Notifications: true };
 const keyboardAvailable = !terminal && (platform.desktop || platform.os === "web");
 const groups = allGroups.map((g) => ({
   ...g,
@@ -267,6 +271,17 @@ function Phone() {
             return <Home />;
           case "demo": {
             const Demo = route.demo.screen;
+            // A demo of its own pages (`fill`) takes the whole page: they show
+            // their headers and the way back.
+            if (route.demo.fill) {
+              return (
+                <NavPage title={route.demo.name} headerVisible={false}>
+                  <View style={{ flex: 1, backgroundColor: colors.background }}>
+                    <Demo />
+                  </View>
+                </NavPage>
+              );
+            }
             return (
               <NavPage title={route.demo.name} {...header} header={<PageHeader title={route.demo.name} />}>
                 <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -335,7 +350,7 @@ function SidebarRow(props: { demo: DemoEntry; focused: boolean; onLayout: (bound
         onLayout={({ bounds }) => props.onLayout(bounds)}
         role="button"
         accessibilityLabel={props.demo.name}
-        accessibilityState={{ selected: active() }}
+        accessibilityState={{ selected: active(), current: active() ? "page" : undefined }}
         style={{ height: TERMINAL_ROW, flexDirection: "row", alignItems: "center", paddingHorizontal: TERMINAL_COLUMN }}
       >
         <Text style={{ numberOfLines: 1, flex: 1, fontSize: 14, fontWeight: active() ? "600" : "400", color: colors.text }}>
@@ -351,7 +366,7 @@ function SidebarRow(props: { demo: DemoEntry; focused: boolean; onLayout: (bound
       onLayout={({ bounds }) => props.onLayout(bounds)}
       role="button"
       accessibilityLabel={props.demo.name}
-      accessibilityState={{ selected: active() }}
+      accessibilityState={{ selected: active(), current: active() ? "page" : undefined }}
       hoverStyle={active() ? undefined : hovered()}
       style={{
         height: 28,
@@ -386,7 +401,8 @@ function SidebarToggle() {
 }
 
 /** The sidebar's search: filters the demos by name or group as you type
- * (Ctrl+K / Cmd+K focuses it, Escape clears it). */
+ * (Ctrl+K / Cmd+K focuses it, Enter opens the demo named or else the first
+ * found, Escape clears it). */
 function Search() {
   let input: InputRef | undefined;
   keymap.bind("mod+k", () => input?.focus());
@@ -405,6 +421,12 @@ function Search() {
       value={query()}
       onChange={({ value }) => query.set(value)}
       onKeyPress={(e) => e.key === "Escape" && query.set("")}
+      onSubmit={() => {
+        const demos = found().flatMap((g) => g.demos);
+        const q = query().trim().toLowerCase();
+        const demo = demos.find((d) => d.name.toLowerCase() === q) ?? demos[0];
+        if (demo) select(demo);
+      }}
       placeholder={`Search demos  ${keymap.label("mod+k")}`}
       accessibilityLabel="Search demos"
     />
@@ -573,20 +595,21 @@ function Sidebar() {
           borderEndColor: colors.sidebarBorder,
         }}
       >
-        <View
-          desktop={{ windowDrag: true }}
-          style={
-            terminal
-              ? { height: TERMINAL_ROW, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: TERMINAL_COLUMN, marginBottom: TERMINAL_ROW }
-              : { height: 44, flexDirection: "row", alignItems: "center", paddingStart: (rtl() ? 0 : titleBar().left) + 16, paddingEnd: 10 }
-          }
-        >
-          {/* The mark at the sidebar's top start, past the window's controls (at the left, so right to left the sidebar is clear of them). */}
-          {!terminal && <Logo size={22} />}
-          {!terminal && <Text style={{ marginStart: 8, fontSize: 15, fontWeight: "600", color: colors.text, letterSpacing: -0.2 }}>NSH</Text>}
-          <View style={{ flex: 1 }} />
-          <SidebarToggle />
-        </View>
+        {/* The sidebar's part of the window's title bar: it steps aside of the window's controls only where it meets them (at the left, so right to left the sidebar is clear of them). */}
+        <WindowTitleBar>
+          <View
+            style={
+              terminal
+                ? { flex: 1, height: TERMINAL_ROW, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", paddingHorizontal: TERMINAL_COLUMN, marginBottom: TERMINAL_ROW }
+                : { flex: 1, height: 44, flexDirection: "row", alignItems: "center", paddingStart: 16, paddingEnd: 10 }
+            }
+          >
+            {!terminal && <Logo size={22} />}
+            {!terminal && <Text style={{ marginStart: 8, fontSize: 15, fontWeight: "600", color: colors.text, letterSpacing: -0.2 }}>NSH</Text>}
+            <View style={{ flex: 1 }} />
+            <SidebarToggle />
+          </View>
+        </WindowTitleBar>
         <Search />
         <DemoList />
         <View
@@ -707,23 +730,13 @@ function DemoPane() {
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <View style={terminal ? { height: 2 * TERMINAL_ROW, borderBottomWidth: 1, borderBottomColor: colors.line } : undefined}>
+        {/* The content pane's part of the window's title bar: clear of the window's controls only while it meets them (the sidebar hidden, or right to left). */}
+        <WindowTitleBar style={terminal ? undefined : { borderBottomWidth: 1, borderBottomColor: colors.line }}>
         <View
-          desktop={{ windowDrag: true }}
           style={
             terminal
-              ? { height: TERMINAL_ROW, flexDirection: "row", alignItems: "center", gap: TERMINAL_COLUMN, paddingHorizontal: TERMINAL_COLUMN }
-              : {
-                  height: 44,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 6,
-                  // Clear of the window's controls, at the left: the start
-                  // while the sidebar is hidden, the end right to left.
-                  paddingStart: sidebarOpen() ? 32 : (rtl() ? 0 : titleBar().left) + 12,
-                  paddingEnd: rtl() ? titleBar().left + 12 : 16,
-                  borderBottomWidth: 1,
-                  borderBottomColor: colors.line,
-                }
+              ? { flex: 1, height: TERMINAL_ROW, flexDirection: "row", alignItems: "center", gap: TERMINAL_COLUMN, paddingHorizontal: TERMINAL_COLUMN }
+              : { flex: 1, height: 43, flexDirection: "row", alignItems: "center", gap: 6, paddingStart: sidebarOpen() ? 32 : 12, paddingEnd: 16 }
           }
         >
           <If when={!sidebarOpen()}>
@@ -737,6 +750,7 @@ function DemoPane() {
           </If>
           <Text style={{ numberOfLines: 1, flex: 1, fontSize: 13, fontWeight: "600", color: colors.text }}>{selected().name}</Text>
         </View>
+        </WindowTitleBar>
       </View>
       <View style={{ flex: 1 }}>
         {(() => {
@@ -762,7 +776,7 @@ function Desktop() {
   wasDesktop.set(true);
   effect(() => shownDemo.set(selected()));
   keymap.bind("mod+b", toggleSidebar);
-  return (
+  const panes = (
     <View style={{ flex: 1, flexDirection: "row", backgroundColor: colors.background, direction: demoDirection() }}>
       <Sidebar />
       <NavStack state={nav} style={{ flex: 1 }}>
@@ -778,6 +792,39 @@ function Desktop() {
           return <Page />;
         }}
       </NavStack>
+    </View>
+  );
+  if (!terminal) return panes;
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      {panes}
+      <KeyHelp />
+    </View>
+  );
+}
+
+/** The keys a terminal's gallery answers, as a TUI's help line has them. */
+const KEY_HELP: [string, string][] = [
+  ["tab", "next"],
+  ["enter", "press"],
+  ["ctrl+k", "search"],
+  ["ctrl+b", "sidebar"],
+  ["ctrl+c", "quit"],
+];
+
+/**
+ * The terminal's help line under the panes, as Bubbles' `help` draws it: each
+ * key muted, what it does fainter, ` • ` between them, a column in from the edge.
+ */
+function KeyHelp() {
+  return (
+    <View style={{ flexDirection: "row", height: TERMINAL_ROW, paddingHorizontal: TERMINAL_COLUMN, overflow: "hidden" }}>
+      {KEY_HELP.map(([key, does], i) => (
+        <Text style={{ numberOfLines: 1, color: colors.faint }}>
+          {i > 0 ? " • " : ""}
+          <Text style={{ color: colors.muted }}>{key}</Text> {does}
+        </Text>
+      ))}
     </View>
   );
 }
@@ -913,4 +960,4 @@ function App() {
   );
 }
 
-mount(App);
+mount(() => <Window id="main">{App}</Window>);

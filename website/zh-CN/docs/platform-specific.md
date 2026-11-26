@@ -1,6 +1,6 @@
 ---
 title: 平台特定代码
-description: 为手机、桌面和浏览器编写同一个应用：ios={{}} / android={{}} / macos={{}} / desktop={{}} / web={{}} 中的平台专属属性，nsh/mobile 与 nsh/desktop 模块，platform.os 与 platform.select，以及平台相关的 Tailwind 变体。
+description: 为手机、桌面和浏览器编写同一个应用：ios={{}} / android={{}} / macos={{}} / windows={{}} / desktop={{}} / web={{}} 中的平台专属属性，nsh/mobile 与 nsh/desktop 模块，platform.os 与 platform.select，以及平台相关的 Tailwind 变体。
 order: 17
 group: platforms
 ---
@@ -11,7 +11,7 @@ group: platforms
 
 | Rust | TSX | 用途 |
 |---|---|---|
-| [构建方法（`.ripple(..)`、`.input_accessory(..)`）](#平台专属属性) | [`ios={{…}}`、`android={{…}}`、`macos={{…}}`、`desktop={{…}}`、`web={{…}}`](#平台专属属性) | 只有一个平台才有的属性。 |
+| [构建方法（`.ripple(..)`、`.input_accessory(..)`）](#平台专属属性) | [`ios={{…}}`、`android={{…}}`、`macos={{…}}`、`windows={{…}}`、`desktop={{…}}`、`web={{…}}`](#平台专属属性) | 只有一个平台才有的属性。 |
 | [`on_back_press`、`nsh_core::element::desktop`](#平台模块) | [`nsh/mobile`、`nsh/desktop`](#平台模块) | 只有移动平台或只有桌面才有的 API。 |
 | [`os()`、`idiom()`、`is_desktop()`](#platformos-与-platformselect) | [`platform.os`、`platform.desktop`、`platform.select`](#platformos-与-platformselect) | 按平台选择值或代码。 |
 | [`.when(os() == Os::Ios, ..)`](#tailwind-中的平台变体) | [`ios:` / `android:` / `web:` 类](#tailwind-中的平台变体) | 按平台设置样式。 |
@@ -20,11 +20,31 @@ group: platforms
 
 每个平台不是桌面就是移动端，判断规则只有一条。桌面是 macOS、Windows、Linux，以及桌面形态的浏览器（有鼠标且窗口较宽，见 [Web](./web.md)）。移动端是 iOS、Android，以及手机或平板形态的浏览器；Mac Catalyst 运行 iOS 后端，因此也属于移动端，适用 `ios={{…}}` 属性。`desktop={{…}}` 属性、`platform.select({ desktop, mobile })`、`platform.desktop` 和 `platform.idiom === "desktop"` 都遵循这条规则，`nsh/base` 的组件（菜单在桌面上是弹出层，在移动端是底部面板）和 Rust 中的 `is_desktop()` 也一样。
 
-`nsh/desktop` 的 `isAvailable` 回答的是一个更窄的问题：这个模块的窗口和菜单 API 是否可用，它们在 macOS、Windows 和 Linux 上可用。布局、密度和输入方式用 `platform.desktop` 判断，调用 `Window` 和 `Menu` 用 `isAvailable` 判断。
+`nsh/desktop` 的 `isAvailable` 回答的是一个更窄的问题：这个模块的窗口和菜单 API 是否可用，它们在 macOS、Windows 和 Linux 上可用，但在终端应用中不可用。布局、密度和输入方式用 `platform.desktop` 判断，调用 `Window` 和 `Menu` 用 `isAvailable` 判断。
 
 ## 平台专属属性
 
-在 Rust 中，只有一个平台才有的属性和其他属性一样是构建方法（Android 的 `.ripple(..)`、`.elevation(..)`，iOS 的 `.input_accessory(..)`，macOS 的 `.macos_backdrop(..)`，桌面的 `.window_drag(..)`）；其他平台会忽略它。在 TSX 中，只存在于某一个平台的属性，归入以该平台命名的对象中。每个元素都接受 `ios`、`android`、`macos`、`desktop`（macOS、Windows、Linux，以及界面风格为桌面的浏览器）和 `web`（浏览器）；在其他平台上这个对象会被忽略，在它自己的平台上只应用其中的键。macOS 同时应用 `macos` 和 `desktop`；桌面浏览器同时应用 `desktop` 和 `web`。
+在 Rust 中，只有一个平台才有的属性和其他属性一样是构建方法（Android 的 `.ripple(..)`、`.elevation(..)`，iOS 的 `.input_accessory(..)`，macOS 的 `.macos_backdrop(..)`，Windows 的 `.windows_backdrop(..)`，桌面的 `.window_drag(..)`）；其他平台会忽略它。在 TSX 中，只存在于某一个平台的属性，归入以该平台命名的对象中。每个元素都接受 `ios`、`android`、`macos`、`windows`、`desktop`（macOS、Windows、Linux，以及界面风格为桌面的浏览器）和 `web`（浏览器）；在其他平台上这个对象会被忽略，在它自己的平台上只应用其中的键。macOS 同时应用 `macos` 和 `desktop`，Windows 同时应用 `windows` 和 `desktop`；桌面浏览器同时应用 `desktop` 和 `web`。
+
+```tsx tabs
+<View
+  onPress={open}
+  activeStyle={{ opacity: 0.6 }}
+  android={{ ripple: { color: "rgba(0,0,0,0.12)" }, elevation: 4 }}
+  style={{ padding: 16, borderRadius: 12, backgroundColor: "#ffffff" }}
+>
+  <Text>Open</Text>
+</View>
+
+<Input
+  placeholder="Code"
+  ios={{ textContentType: "oneTimeCode" }}
+/>
+
+<Dialog open={open()} ios={{ supportedOrientations: ["portrait"] }} android={{ statusBarTranslucent: true }}>
+  …
+</Dialog>
+```
 
 ```rust tabs
 use nsh_base::dialog;
@@ -56,26 +76,6 @@ when(shown, || {
 })
 ```
 
-```tsx tabs
-<View
-  onPress={open}
-  activeStyle={{ opacity: 0.6 }}
-  android={{ ripple: { color: "rgba(0,0,0,0.12)" }, elevation: 4 }}
-  style={{ padding: 16, borderRadius: 12, backgroundColor: "#ffffff" }}
->
-  <Text>Open</Text>
-</View>
-
-<Input
-  placeholder="Code"
-  ios={{ textContentType: "oneTimeCode" }}
-/>
-
-<Dialog open={open()} ios={{ supportedOrientations: ["portrait"] }} android={{ statusBarTranslucent: true }}>
-  …
-</Dialog>
-```
-
 TSX 的这些对象和其他属性一样是响应式的；从对象中移除的键会被清除。
 
 目前已有的：
@@ -84,9 +84,10 @@ TSX 的这些对象和其他属性一样是响应式的；从对象中移除的�
 |---|---|---|---|
 | `.ripple(Ripple { .. })` | `android={{ ripple }}` | 所有元素 | 按下时的 Material 水波纹：颜色、无边界、半径、前景。 |
 | `.elevation(..)` | `android={{ elevation }}` | 所有元素 | 根据视图形状生成的 Material 阴影，单位为点。 |
-| | `android={{ accessibilityLiveRegion }}` | 所有元素 | `"none"`、`"polite"` 或 `"assertive"`：TalkBack 播报视图的变化。 |
+| | `android={{ accessibilityLiveRegion }}` | 所有元素 | `"none"`、`"polite"` 或 `"assertive"`：TalkBack 播报视图的变化。不带 bag 的同名 prop 在其他平台也一样（web 的 `aria-live`、Windows 的实时区域、macOS 的播报）。 |
 | `.status_bar_translucent(..)` | `android={{ statusBarTranslucent }}` | `Dialog` | 对话框的内容延伸到状态栏下方。 |
 | `.input_accessory(..)` | `ios={{ inputAccessoryViewID }}` | `Input` | 显示在键盘上方的 `InputAccessoryView`。 |
+| `.input_accessory(..)` | `inputAccessoryViewID` | `RichEditor` | 编辑器获得焦点时显示在键盘上方的 `InputAccessoryView`。 |
 | `.auto_fill(..)` | `ios={{ textContentType }}` | `Input` | iOS 对自动填充类型的叫法（Rust 的 `AutoFill` 覆盖两个平台）。 |
 | `.supported_orientations(..)` | `ios={{ supportedOrientations }}` | `Dialog` | 允许的方向。 |
 | `.supported_orientations(..)` | `ios={{ supportedOrientations }}`、`android={{ supportedOrientations }}` | `NavPage` | 页面显示时屏幕可以采用的方向（[NavPage](../elements/nav-stack.md#navpage-props)）。 |
@@ -101,8 +102,9 @@ TSX 的这些对象和其他属性一样是响应式的；从对象中移除的�
 | `.window_control(..)` | `desktop={{ windowControl }}` | 所有元素 | 这个视图就是窗口的最小化、最大化或关闭按钮，由应用绘制。 |
 | `.window_resize(..)` | `desktop={{ windowResize }}` | 所有元素 | 按住它从一条边或一个角调整无边框窗口的大小。 |
 | `.macos_backdrop(..)` | `macos={{ backdrop }}` | 所有元素 | macOS 上的 `NSVisualEffectView` 材质、混合方式与状态；见[滤镜与混合](./styling.md#滤镜与混合)。 |
+| `.windows_backdrop(..)` | `windows={{ backdrop }}` | 所有元素 | 在 Windows 11 及更高版本上，在视图下方显示系统对透明窗口背后内容的模糊；见[滤镜与混合](./styling.md#滤镜与混合)。 |
 
-在 TSX 中，`macos={{…}}`、`desktop={{…}}` 和 `web={{…}}` 在所有地方都可以使用。类型（`IOSProps`、`AndroidProps`、`MacOSProps`、`DesktopProps` 及其各元素的形式）会告诉编辑器每个元素接受什么。
+在 TSX 中，`macos={{…}}`、`windows={{…}}`、`desktop={{…}}` 和 `web={{…}}` 在所有地方都可以使用。类型（`IOSProps`、`AndroidProps`、`MacOSProps`、`WindowsProps`、`DesktopProps` 及其各元素的形式）会告诉编辑器每个元素接受什么。
 
 元素在各平台上都要表达的意思是顶层属性（Rust 中是同名方法），在有意义的平台上生效：`NavPage` 的 `title`、`headerStyle`、`headerLargeTitle` 和 `headerBackTitle` 设置 iOS 和 Android 的系统标题栏，它的 `header` 插槽是桌面和 Web 上的标题栏，`Dialog` 的 `presentation` 选择 iOS 的表单样式。`AlertDialog.show` 的 `closeOnBackdropPress`、`pagingEnabled`、`refreshing`、`hitSlop` 等在所有平台上都可用。平台系统自带的功能放进该平台的对象；几个平台都有时，用同一个名字分别放进各自的对象：`WebView` 的 `allowsBackForwardNavigationGestures`（系统的滑动前进后退手势）同时在 `ios={{…}}` 和 `desktop={{…}}` 里。
 
@@ -119,7 +121,22 @@ TSX 的这些对象和其他属性一样是响应式的；从对象中移除的�
 | Rust | TSX | 说明 |
 |---|---|---|
 | `on_back_press(listener)` | `BackHandler.on("press", listener)` | 在对话框之后、导航栈之前监听返回键；处理了就返回 `true`。监听器随添加它的组件（或 effect）一起结束；在 TSX 中，调用还会返回一个函数，用来提前停止监听。 |
+| `on_back_progress(listener)` | `BackHandler.on("progress", listener)` | 跟随返回手势（Android 14 及更高版本）：`start`、`move`，然后是 `end`（紧接着是返回操作）或 `cancel`，带有从 0 到 1 的 `progress` 和手势开始的边缘 `edge`。有监听器时，导航栈不再预览弹出。 |
 | | `BackHandler.exitApp()` | 退出应用。 |
+
+```tsx tabs
+import { BackHandler } from "nsh/mobile";
+
+function Player() {
+  // 返回键先退出全屏，再离开页面。监听器随组件一起结束。
+  BackHandler.on("press", () => {
+    if (!fullScreen()) return false;
+    fullScreen.set(false);
+    return true;
+  });
+  // …
+}
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -135,20 +152,6 @@ fn player() -> impl IntoElement {
         true
     });
     // …
-}
-```
-
-```tsx tabs
-import { BackHandler } from "nsh/mobile";
-
-function Player() {
-  // 返回键先退出全屏，再离开页面。监听器随组件一起结束。
-  BackHandler.on("press", () => {
-    if (!fullScreen()) return false;
-    fullScreen.set(false);
-    return true;
-  });
-  // …
 }
 ```
 
@@ -183,7 +186,7 @@ Rust 应用用 `nsh_core::element::desktop` 绘制自己的标题栏（[用 Rust
 | `titleBar` | 隐藏的标题栏的高度，以及系统窗口按钮占用的空间（响应式）。 |
 | `windowState`、`displays` | 当前窗口的外框、模式和所在显示器，以及各个显示器（响应式）。 |
 | `Menu` | `setApplicationMenu(items)`（菜单栏，带快捷键）和 `popup(items, at?)`（右键菜单）。菜单项的 `icon` 和 `<Image>` 的 `src` 一样是图片，菜单因此显示应用自己的图标：SVG 跟随菜单文字的颜色，位图保留自己的颜色。macOS 和 Windows 上会显示；GTK 的菜单不在文字旁显示图标。 |
-| `isAvailable` | 在窗口和菜单 API 可用的地方为 `true`：macOS、Windows 和 Linux。桌面浏览器的 `platform.desktop` 为 `true`，窗口和菜单仍是浏览器自己的。 |
+| `isAvailable` | 在窗口和菜单 API 可用的地方为 `true`：macOS、Windows 和 Linux，但终端应用除外。桌面浏览器的 `platform.desktop` 为 `true`，窗口和菜单仍是浏览器自己的。 |
 
 见 [nsh/desktop](../modules/nsh-desktop.md)。
 
@@ -194,18 +197,6 @@ Rust 应用用 `nsh_core::element::desktop` 绘制自己的标题栏（[用 Rust
 ### 状态栏
 
 在两个平台上，状态栏都属于最上层的页面或对话框，和 UIKit 中由最上层视图控制器决定一样：[`NavPage` 和 `Dialog` 接受 `statusBar`](../modules/nsh-base.md#status-bar)（Rust 中为 `.status_bar(StatusBarStyle::Light)`，其他字段用 `StatusBarSetting`），其中有 `foreground`（`"auto"`、深色背景用 `"light"`、浅色背景用 `"dark"`）、`hidden` 和 `animated`。最近显示的页面或对话框按字段逐项生效，它离开后下面那个重新生效。`nsh.json` 的 `"statusBar"` 是它们之下的应用默认值。
-
-```rust tabs
-use nsh_base::nav_page;
-use nsh_core::prelude::*;
-
-fn photo_viewer() -> impl IntoElement {
-    nav_page()
-        .header_visible(false)
-        .status_bar(StatusBarStyle::Light)
-        .child(view().flex_1().bg(black()))
-}
-```
 
 ```tsx tabs
 import { View } from "nsh";
@@ -220,19 +211,23 @@ function PhotoViewer() {
 }
 ```
 
+```rust tabs
+use nsh_base::nav_page;
+use nsh_core::prelude::*;
+
+fn photo_viewer() -> impl IntoElement {
+    nav_page()
+        .header_visible(false)
+        .status_bar(StatusBarStyle::Light)
+        .child(view().flex_1().bg(black()))
+}
+```
+
 在嵌入原生应用的场景下，iOS 上由宿主应用的视图控制器决定状态栏。在 `nsh.json` 中声明了 `"capabilities"` 的应用，需要 `"statusBar": true` 才能修改它。
 
 ## platform.os 与 platform.select
 
 Rust 中的 `os()` 和 TSX 中 `nsh` 的常量 `platform` 告诉你应用运行在哪里：`Os::Ios`、`Os::Android`、`Os::MacOs`、`Os::Windows`、`Os::Linux` 或 `Os::Web`，`platform.os` 为 `"ios"`、`"android"`、`"macos"`、`"windows"`、`"linux"` 或 `"web"`（Mac Catalyst 为 `"ios"`，无论哪种形态 `platform.catalyst` 都为真；[macOS 后端](./macos.md)为 `"macos"`，[Linux 后端](./linux.md)为 `"linux"`，[Windows 后端](./windows.md)为 `"windows"`，它们的元素会应用 `desktop` 属性；[浏览器](./web.md)为 `"web"`，`platform.desktop` 为 `true` 时也会应用 `desktop` 属性）。Rust 中的 `platform_name()` 和 TSX 中的 `platform.name` 是平台本身的名字：在 NSH 自带的平台上就是系统名，[在 NSH 之外构建的平台](./platform-extensions.md)则是它自己的名字（`"miniprogram"`），此时 `platform.os` 是它所运行设备的系统。版本、界面风格等见[设备与环境](./device-and-environment.md#平台)。
-
-```rust tabs
-use nsh_core::{element::Os, prelude::*};
-
-if os() == Os::Android {
-    // …
-}
-```
 
 ```tsx tabs
 import { platform } from "nsh";
@@ -242,9 +237,32 @@ if (platform.os === "android") {
 }
 ```
 
+```rust tabs
+use nsh_core::{element::Os, prelude::*};
+
+if os() == Os::Android {
+    // …
+}
+```
+
 ### platform.select
 
 在 Rust 中用 `match os()` 选择值，桌面用 `is_desktop()`（在 NSH 之外构建的平台可用 `platform_name()`）。在 TSX 中，`platform.select(spec)` 返回当前平台对应的值。它先查找 `platform.name`（在 NSH 之外构建的平台，如 `"miniprogram"`），再查找该操作系统自己的键（`platform.os`），然后按[上面的规则](#桌面与移动端)（`platform.desktop`）查找 `desktop` 或 `mobile`，再是 `native`（除 Web 外的所有平台），最后是 `default`：
+
+```tsx tabs
+const styles = {
+  card: {
+    borderRadius: 12,
+    backgroundColor: "#ffffff",
+    ...platform.select({
+      ios: { boxShadow: "0px 2px 8px rgb(0 0 0 / 0.12)" },
+      android: { borderWidth: 1, borderColor: "#e5e7eb" },
+    }),
+  },
+};
+
+const hint = platform.select({ ios: "Swipe down to close", android: "Press back to close", default: "Close" });
+```
 
 ```rust tabs
 use nsh_core::{element::Os, prelude::*};
@@ -265,26 +283,15 @@ let hint = match os() {
 };
 ```
 
-```tsx tabs
-const styles = {
-  card: {
-    borderRadius: 12,
-    backgroundColor: "#ffffff",
-    ...platform.select({
-      ios: { boxShadow: "0px 2px 8px rgb(0 0 0 / 0.12)" },
-      android: { borderWidth: 1, borderColor: "#e5e7eb" },
-    }),
-  },
-};
-
-const hint = platform.select({ ios: "Swipe down to close", android: "Press back to close", default: "Close" });
-```
-
 没有匹配项且没有 `default` 时返回 `undefined`。
 
 ### 渲染不同的组件
 
 组件也可以这样选择；选择永远不变时（TSX）放在模块顶层：
+
+```tsx tabs
+const Spinner = platform.select({ ios: IosSpinner, default: MaterialSpinner })!;
+```
 
 ```rust tabs
 fn spinner() -> AnyElement {
@@ -296,16 +303,7 @@ fn spinner() -> AnyElement {
 }
 ```
 
-```tsx tabs
-const Spinner = platform.select({ ios: IosSpinner, default: MaterialSpinner })!;
-```
-
 或者用 [`when` / `<If>`](../elements/control-flow.md) 内联：
-
-```rust tabs
-when(os() == Os::Ios, || input_accessory_view("bar").child(…))
-    .otherwise(|| text("Android has no input accessories."))
-```
 
 ```tsx tabs
 <If when={platform.os === "ios"} else={<Text>Android has no input accessories.</Text>}>
@@ -313,9 +311,19 @@ when(os() == Os::Ios, || input_accessory_view("bar").child(…))
 </If>
 ```
 
+```rust tabs
+when(os() == Os::Ios, || input_accessory_view("bar").child(…))
+    .otherwise(|| text("Android has no input accessories."))
+```
+
 ## Tailwind 中的平台变体
 
 Rust 用 `.when(os() == Os::Ios, |v| ..)` 按平台设置样式；在 TSX 中，`ios:`、`android:` 和 `web:` 变体只在一个平台上应用对应的类：
+
+```tsx tabs
+<View class="rounded-xl bg-white p-4 ios:shadow-md android:border android:border-zinc-200">…</View>
+<Text class="text-base android:font-medium">Title</Text>
+```
 
 ```rust tabs
 view()
@@ -324,11 +332,6 @@ view()
     .p_4()
     .when(os() == Os::Ios, |v| v.shadow_md())
     .when(os() == Os::Android, |v| v.border_1().border_color(rgb(0xe4e4e7)))
-```
-
-```tsx tabs
-<View class="rounded-xl bg-white p-4 ios:shadow-md android:border android:border-zinc-200">…</View>
-<Text class="text-base android:font-medium">Title</Text>
 ```
 
 ## 优先使用共享的行为

@@ -15,6 +15,39 @@ made. The look and the words are the app's: the picker draws nothing of its own 
 styles each part (`itemClass`, `groupClass`, `searchClass`, ...), names the groups (`groupLabels`) and fills its slots
 (the groups' tabs, a preview of the emoji under the pointer).
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { EmojiPicker } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const message = signal("");
+  return (
+    <EmojiPicker
+      recent={["👍", "🎉"]}
+      groupLabels={{ recent: "Frequently used", smileysEmotion: "Smileys & emotion", peopleBody: "People & body" }}
+      placeholder="Search emoji"
+      accessibilityLabel="Emoji"
+      autoFocus
+      onSelect={({ emoji }) => message.set(message() + emoji)}
+      class="h-96 w-[342px] overflow-hidden rounded-xl border border-border bg-popover"
+      searchBarClass="mx-2 mt-2 h-8 flex-row items-center rounded-lg bg-muted px-2.5"
+      searchClass="flex-1 text-sm text-foreground placeholder:text-muted-foreground"
+      rowClass="px-2"
+      groupClass="px-3 pt-2.5 pb-1 text-xs font-semibold text-muted-foreground"
+      itemClass="size-9 items-center justify-center rounded-md text-[22px] hover:bg-accent focus:bg-accent"
+      empty={<Text class="py-6 text-center text-sm text-muted-foreground">No emoji found</Text>}
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{EmojiGroupLabels, EmojiPickerEvent, emoji_picker};
 use nsh_core::prelude::*;
@@ -39,34 +72,6 @@ fn picker() -> impl IntoElement {
         .w(px(342.0))
         .h(px(380.0))
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { EmojiPicker } from "nsh/base";
-
-function App() {
-  const message = signal("");
-  return (
-    <EmojiPicker
-      recent={["👍", "🎉"]}
-      groupLabels={{ recent: "Frequently used", smileysEmotion: "Smileys & emotion", peopleBody: "People & body" }}
-      placeholder="Search emoji"
-      accessibilityLabel="Emoji"
-      autoFocus
-      onSelect={({ emoji }) => message.set(message() + emoji)}
-      class="h-96 w-[342px] overflow-hidden rounded-xl border border-border bg-popover"
-      searchBarClass="mx-2 mt-2 h-8 flex-row items-center rounded-lg bg-muted px-2.5"
-      searchClass="flex-1 text-sm text-foreground placeholder:text-muted-foreground"
-      rowClass="px-2"
-      groupClass="px-3 pt-2.5 pb-1 text-xs font-semibold text-muted-foreground"
-      itemClass="size-9 items-center justify-center rounded-md text-[22px] hover:bg-accent focus:bg-accent"
-      empty={<Text class="py-6 text-center text-sm text-muted-foreground">No emoji found</Text>}
-    />
-  );
-}
-
-mount(App);
 ```
 
 `EmojiPicker` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. In Rust,

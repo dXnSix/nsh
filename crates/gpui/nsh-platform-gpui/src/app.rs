@@ -146,23 +146,27 @@ pub struct AppOptions {
     /// embedded in a host app) unless set; the development host runs
     /// apps on their own, with none ([`Limits::standalone`]). See [`AppView::set_limits`].
     pub limits: Limits,
-    /// Where the apps it runs keep their data, each in `<dir>/<app id>`
-    /// (`nsh.json` `"id"`, which travels with the bundle): `None` uses the
-    /// system's data directory ([`nsh_engine::data_dir`]); an app that
-    /// embeds nsh gives its own (its data directory + `/nsh`, say).
-    pub data_dir: Option<PathBuf>,
     /// Where the apps it runs keep their caches (the images they
     /// downloaded) and how much each keeps: by default the system's cache
     /// directory, each app's in `<dir>/<app id>`. See [`AppView::set_cache`].
     pub cache: nsh_engine::CacheOptions,
+    /// The app's data directory, used as it is
+    /// ([`nsh_engine::EngineConfig::data_dir`]); `None`: the one under its
+    /// id in the system's directory for apps' data.
+    pub data_dir: Option<PathBuf>,
     /// The apps' storage (`nsh/storage`), overriding the `storage.json` in
-    /// their directory of [`data_dir`](Self::data_dir).
+    /// their data directory.
     pub storage: Option<Arc<dyn nsh_engine::StorageBackend>>,
     /// What the embedding app gives the engines of the views made with
     /// these options ([`nsh_engine::EngineConfig::context`]): its UI sets'
     /// functions read it with `nsh_core::element::engine_context`, so each view
     /// reaches its own part of the embedding app.
     pub context: nsh_engine::EngineContext,
+    /// Mounts a plain JS root in the view instead of opening an implicit
+    /// desktop window. The host still controls its own window; explicit
+    /// windows, the platform environment and Rust roots are unchanged.
+    /// False by default; [`open_app_window`] and [`run_app`] ignore this option.
+    pub inline_root: bool,
     /// The embedding app's channel with the apps the view runs
     /// (`nsh/host`): their launch parameters, events to them and handlers of
     /// their calls and posts ([`AppView::host`]). One for every app the view
@@ -234,6 +238,7 @@ impl std::fmt::Debug for AppOptions {
             .field("cache", &self.cache)
             .field("storage", &self.storage)
             .field("context", &self.context)
+            .field("inline_root", &self.inline_root)
             .field("host", &self.host)
             .field("transparent", &self.transparent)
             .field("windows", &self.windows.is_some())
@@ -256,10 +261,11 @@ impl Default for AppOptions {
             appearance: Appearance::System,
             fps: false,
             limits: Limits::default(),
-            data_dir: None,
             cache: Default::default(),
+            data_dir: None,
             storage: None,
             context: Default::default(),
+            inline_root: false,
             host: nsh_engine::HostChannel::default(),
             transparent: false,
             windows: None,
@@ -327,7 +333,11 @@ pub enum CloseRequest {
 /// gpui_platform::application().run(|cx| {
 ///     cx.open_window(WindowOptions::default(), |window, cx| {
 ///         cx.new(|cx| {
-///             let view = AppView::new(AppOptions::default(), window, cx);
+///             let options = AppOptions {
+///                 inline_root: true,
+///                 ..AppOptions::default()
+///             };
+///             let view = AppView::new(options, window, cx);
 ///             let code = std::fs::read_to_string("app/bundle.js").expect("bundle");
 ///             view.load(App::Js(Bundle::source(code)));
 ///             view
@@ -352,8 +362,18 @@ pub struct AppView {
 }
 
 impl AppView {
-    /// A view with no app yet (in `cx.new(|cx| AppView::new(...))`).
+    /// A view with no app yet (in `cx.new(|cx| AppView::new(...))`). Set
+    /// [`AppOptions::inline_root`] to embed a plain JS root in the view.
     pub fn new(options: AppOptions, window: &mut Window, cx: &mut Context<Self>) -> AppView {
+        #[cfg(feature = "js")]
+        let options = if options.inline_root {
+            AppOptions {
+                context: nsh_engine::with_inline_root(options.context),
+                ..options
+            }
+        } else {
+            options
+        };
         crate::rt::init(cx);
         // The focused field's caret follows the window's activation
         // (`text_input::window_focus`, checked as the view is drawn).
@@ -498,10 +518,11 @@ impl AppView {
     }
 
     /// Makes the window this view is drawn in its own, as
-    /// [`open_app_window`]'s is: the app's title (`currentWindow().set({ title })`), title
-    /// bar, application menu (macOS's menu bar, the menu bar drawn above
-    /// the view elsewhere) and window operations act on it, and the
-    /// window's reserved keys are the view's. The embedding app opens the
+    /// [`open_app_window`]'s is: it gets the view's title, title bar,
+    /// application menu (macOS's menu bar, the menu bar drawn above the
+    /// view elsewhere) and reserved keys. This does not change where a JS root
+    /// mounts or let an inline JS root control the host window. Use
+    /// [`AppOptions::inline_root`] for inline mounting. The embedding app opens the
     /// window itself (its bounds, its root element: GPUI Kit's `Root`
     /// around the view, say), best with [`crate::titlebar_options`], and
     /// calls this once, from the window's build closure.
@@ -523,9 +544,8 @@ impl AppView {
 
     /// Hands the quit and close requests of the window the view owns
     /// ([`AppView::own_window`]) to `f`, which decides: the reserved quit
-    /// key, Ctrl+W, the `quit` and `close` menu roles, `Application.quit()`,
-    /// the main window's `WindowRef.close()` and the window's close button no longer quit or
-    /// close by themselves.
+    /// key, Ctrl+W, the `quit` and `close` menu roles, `Application.quit()`
+    /// and the window's close button no longer quit or close by themselves.
     /// `f` runs on the main thread after the event that asked; it quits
     /// with `cx.quit()` or closes with `window.remove_window()` when the
     /// embedding app is ready to. Replaces the handler set before.
@@ -648,6 +668,18 @@ impl AppView {
     /// Replaces the handler [`AppView::on_error`] or this set.
     pub fn on_app_error(&self, f: impl Fn(&AppError) + 'static) {
         self.surface.set_error_handler(Box::new(f));
+    }
+
+    /// The bottom edge of the logical root's in-flow children in surface points.
+    ///
+    /// `None` until in-flow content is laid out. Overlays, modals and fixed or
+    /// absolutely positioned root children do not contribute. Observe this view's
+    /// GPUI notifications to read updated geometry after commits. This is not an
+    /// intrinsic-size layout pass: viewport-relative heights and flex growth
+    /// still depend on the viewport the embedding host supplies. When the host
+    /// owns the app, its root's `.on_layout(..)` can report its frame directly.
+    pub fn content_height(&self) -> Option<nsh_core::Points> {
+        self.surface.content_height.get()
     }
 
     pub(crate) fn surface(&self) -> &Rc<Surface> {
@@ -904,6 +936,12 @@ impl gpui::EntityInputHandler for AppView {
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The frame this render draws is presented by the next frame's
+        // callback: the process's first is logged there.
+        static FIRST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+        if FIRST.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            window.on_next_frame(|_, _| nsh_engine::perf::first_frame());
+        }
         let surface = SurfaceElement {
             surface: self.surface.clone(),
             focus: self.focus.clone(),
@@ -970,6 +1008,8 @@ fn initial_environment() -> Environment {
         web_views: cfg!(feature = "webview"),
         // wgpu, until it finds no GPU.
         shaders: nsh_engine::shader::LINKED,
+        // GPUI hands the app no links of its schemes.
+        scheme_links: Some(false),
         ..Environment::default()
     }
 }
@@ -987,9 +1027,11 @@ pub fn open_app_window(
 /// [`open_app_window`], and whether the window shows as it opens.
 fn open(
     source: AppSource,
-    options: AppOptions,
+    mut options: AppOptions,
     cx: &mut GpuiApp,
 ) -> anyhow::Result<(gpui::WindowHandle<AppView>, bool)> {
+    // A standalone launch keeps the implicit desktop window.
+    options.inline_root = false;
     // nsh.json `window` (a JS bundle's or a Rust root's), read before the
     // window is made so that its first frame has them (a dev server's
     // comes with its first bundle, and the engine applies its attributes
@@ -1091,10 +1133,10 @@ fn engine_config(options: &AppOptions, app: App) -> EngineConfig {
         trace: options.trace,
         content_culling: true,
         // Without `net`, `fetch` rejects and remote images fail.
-            #[cfg(feature = "net")]
-            network: Some(nsh_engine::net::network()),
-            #[cfg(not(feature = "net"))]
-            network: None,
+        #[cfg(feature = "net")]
+        network: Some(nsh_engine::net::network()),
+        #[cfg(not(feature = "net"))]
+        network: None,
         websocket: None,
         refuse_connections: None,
         filesystem: None,
@@ -1105,7 +1147,8 @@ fn engine_config(options: &AppOptions, app: App) -> EngineConfig {
         limits: options.limits,
         ui_sets: ui_sets(),
         runtime: None,
-        data_dir: options.data_dir.clone().or_else(nsh_engine::data_dir),
+        support_dir: nsh_engine::support_dir(),
+        data_dir: options.data_dir.clone(),
         cache: options.cache.clone(),
         storage: options.storage.clone(),
         clock: Default::default(),
@@ -1114,7 +1157,6 @@ fn engine_config(options: &AppOptions, app: App) -> EngineConfig {
         clipboard: None,
         host: options.host.clone(),
         picker: None,
-        speech: None,
         audio: None,
         windows: options.windows.clone(),
         login_item: None,

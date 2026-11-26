@@ -15,6 +15,40 @@ look is the app's: a toggle has no colors, sizes, icon or label of its own. Its 
 label, and `aria-pressed:` classes on the toggle, or `group-aria-pressed:` classes on what is inside it, follow its
 state.
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { Toggle, ToggleGroup } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const marks = signal<string[]>(["bold"]);
+  const item = (value: string, label: string) => (
+    <Toggle
+      pressed={marks().includes(value)}
+      accessibilityLabel={label}
+      onChange={({ pressed }) =>
+        marks.set(pressed ? [...marks(), value] : marks().filter((m) => m !== value))
+      }
+      class="group size-8 items-center justify-center rounded-(--radius) border border-transparent hover:bg-foreground/5 aria-pressed:border-border aria-pressed:bg-foreground/10"
+    >
+      <Text class="text-sm text-muted-foreground group-aria-pressed:text-foreground">{label[0]}</Text>
+    </Toggle>
+  );
+  return (
+    <ToggleGroup class="flex-row self-start gap-1">
+      {item("bold", "Bold")}
+      {item("italic", "Italic")}
+    </ToggleGroup>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{theme, toggle, toggle_group};
 use nsh_core::prelude::*;
@@ -46,35 +80,6 @@ fn formatting() -> impl IntoElement {
         .child(item("Bold", bold))
         .child(item("Italic", italic))
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { Toggle, ToggleGroup } from "nsh/base";
-
-function App() {
-  const marks = signal<string[]>(["bold"]);
-  const item = (value: string, label: string) => (
-    <Toggle
-      pressed={marks().includes(value)}
-      accessibilityLabel={label}
-      onChange={({ pressed }) =>
-        marks.set(pressed ? [...marks(), value] : marks().filter((m) => m !== value))
-      }
-      class="group size-8 items-center justify-center rounded-(--radius) border border-transparent hover:bg-foreground/5 aria-pressed:border-border aria-pressed:bg-foreground/10"
-    >
-      <Text class="text-sm text-muted-foreground group-aria-pressed:text-foreground">{label[0]}</Text>
-    </Toggle>
-  );
-  return (
-    <ToggleGroup class="flex-row self-start gap-1">
-      {item("bold", "Bold")}
-      {item("italic", "Italic")}
-    </ToggleGroup>
-  );
-}
-
-mount(App);
 ```
 
 `Toggle` and `ToggleGroup` come from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. The value is

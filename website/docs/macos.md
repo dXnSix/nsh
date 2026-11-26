@@ -1,6 +1,6 @@
 ---
 title: macOS
-description: Run Rust and TSX NSH apps on macOS in AppKit windows, package them as .app bundles, embed them in a Mac app with AppView, and what differs on macOS.
+description: Run TSX and Rust NSH apps on macOS in AppKit windows, package them as .app bundles, embed them in a Mac app with AppView, and what differs on macOS.
 order: 13
 group: platforms
 ---
@@ -112,14 +112,18 @@ Writes an app bundle:
 .nsh/out/<Name>.app/Contents/
   Info.plist
   MacOS/<Name>               the executable: a Rust app's own runner, built with its crate; nsh's release runner for TSX
+  PlugIns/<Ext>.appex        prebuilt app extensions listed in nsh.json `macos.extensions`, when set
   Resources/nsh/bundle.nshc  a TSX app, compiled
   Resources/nsh/assets/…     the assets it imports (a Rust crate's `assets!()` too)
   Resources/nsh/app.json     the window title, the app's appearance, its activation policy and nsh.json's window options
   Resources/AppIcon.icns     the icon, when nsh.json names one (converted with sips)
 ```
 
-The `.app` is signed ad hoc, so it runs on the Mac that built it. To distribute it, sign it with a Developer ID and
-notarize it. `--run` opens the app after packaging it.
+Without `--sign`, the `.app` is signed ad hoc so it runs on the Mac that built it. Pass `--sign <identity>` (for
+example `"Developer ID Application: …"`) to sign any nested extensions and the app with Hardened Runtime and a secure
+timestamp (`codesign --options runtime --timestamp`), ready to notarize and distribute; NSH verifies the signed bundle
+with `codesign --verify --deep --strict`. `--run` opens the app after packaging it. See
+[Packaging: macOS](./packaging.md#macos).
 
 The app logs its warnings, its errors and its `console.log` and `console.info` lines to the unified log, with its id
 as the subsystem: Console shows them, and so does `log stream --predicate 'subsystem == "com.example.notes"'`. Its
@@ -165,7 +169,7 @@ tooltip) and opens its window from there:
 
 ```tsx
 import { mount } from "nsh";
-import { currentWindow, Tray } from "nsh/desktop";
+import { currentWindow, Tray, Window } from "nsh/desktop";
 import icon from "./tray.svg";
 
 function App() {
@@ -177,7 +181,11 @@ function App() {
   return <Inbox />;
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
 ```
 
 A menu bar app often offers to open at login: when the user turns that on, `Application.setLaunchAtLogin(true)` registers the app
@@ -255,6 +263,11 @@ An embedded `AppView` does not change the window it is put in: make your own `NS
 `backgroundColor` for the same look.
 
 
+`AppOptions::handoff` gives the address the app sets with [`UrlScheme.setUrl`](../modules/nsh.md#handoff) to the system,
+so Handoff continues it on the user's other devices. An address of the app's own scheme needs `<bundle id>.url` in the
+Info.plist's `NSUserActivityTypes`. `run_app` turns it on when the bundle declares that type (`nsh.json`
+`"handoff": true`).
+
 `AppOptions::notifications` hands the process's [notifications](../modules/nsh.md#notifications) to the app the view runs:
 its banners, presses and badge. It is off by default, so an embedded app's notifications are `unavailable` and your
 app's stay yours; `run_app` sets it.
@@ -281,6 +294,14 @@ Native components are registered with `AppView::register_component`; see
 engine serves: NSH's (`nsh_base::registry()`) and your crates' (`my_app::registry()`, which `#[native_module]`
 makes), so the TSX a view loads imports your Rust components and modules too.
 
+## Notifications from other code
+
+Remote notifications, and those other native code schedules, never reach `Notifications`' `press`: they go to the
+handler Rust code sets with `nsh_platform_apple::notifications::set_foreign_handler`, as on
+[iOS](./ios.md#notifications-from-other-code). The handler decides how they show while the app is in front and hears
+their presses. An embedded app gets them only when the embedding app hands it the notifications
+(`AppOptions::notifications`) and has no notification center delegate of its own.
+
 ## What differs on macOS
 
 The environment is a desktop's: the safe area and the keyboard height are 0, `idiom()` is the desktop
@@ -288,6 +309,7 @@ The environment is a desktop's: the safe area and the keyboard height are 0, `id
 [Device and environment](./device-and-environment.md).
 
 Input is a desktop's: the mouse, the trackpad (scrolling with momentum, pinch and rotation) and the keyboard.
+Trackpad tap-to-click briefly shows the app’s `active:` feedback even when the press and release arrive together; press callbacks run at release. Reduced motion keeps immediate visual release.
 A zoomable scroll view zooms with a trackpad pinch or Control + wheel around the pointer, and scrolls both ways while
 zoomed.
 Selectable text is selected by dragging, double- and triple-clicking, and copied with Cmd+C. Escape, Option+Left,
@@ -321,12 +343,17 @@ press action and their row role, and labels and text children remain available t
 | Option+Left, Cmd+[, mouse back button | Go back (not while a field has the focus: there Option+Left moves the caret) |
 | Option / Cmd + arrows, with Shift; Option+Delete, Cmd+Delete; Ctrl+A / E / K | Move, select and delete by word and line in a field, as in every Mac app |
 | Cmd+Z, Shift+Cmd+Z, Cmd+X / C / V / A | Undo, redo, cut, copy, paste, select all (a `masked` field refuses cut and copy); Cmd+A / Cmd+C select and copy selectable text |
+| Shift + arrows, with Option or Cmd; Shift+Home / End | Extend the selection of the selectable view last pressed: by a character or a line, by a word or a paragraph (Option), to the line's or the view's ends (Cmd, Home / End); the scroll views around it follow |
 | Arrows; Page Up / Down, Space, Shift+Space, Option+Up / Down; Home / End, Cmd+Up / Down | Scroll the scroll view around the focused view or under the mouse by a line, a page, to the start / end (not while a field has the focus) |
 | Cmd+W, Cmd+M, Ctrl+Cmd+F, Cmd+H, Option+Cmd+H, Cmd+Q | Close, minimize, full screen, hide, hide others, quit (`nsh package` and `nsh run` apps' menus) |
 | Cmd+R | Reloads the latest build (`nsh run`) |
 
 The app's own shortcuts ([`keymap`](../modules/nsh.md#keymap)) come before these, except activation keys addressed to a focused pressable view, Quit, Hide,
 Minimize and Full Screen, which cannot be bound.
+
+While an input method is composing, its input keeps the keys before app shortcuts are matched, including
+`when: "always"` bindings. This also covers hosted native inputs implementing `NSTextInputClient`.
+Shortcuts resume once the composition ends.
 
 Shortcuts work with any keyboard layout (on a Cyrillic or Greek one, Cmd+C is the key that types C on a US layout).
 A return that commits an input method's composition (Chinese, Japanese, ...) never submits. `onKeyPress` reports
@@ -351,6 +378,7 @@ Not supported, or different:
 
 ## See also
 
+- [Sign, notarize and distribute](./packaging.md#sign-notarize-and-distribute)
 - [CLI](./cli.md): `nsh run --target macos`, `nsh package --target macos`
 - [Packaging](./packaging.md)
 - [Platform-specific code](./platform-specific.md)

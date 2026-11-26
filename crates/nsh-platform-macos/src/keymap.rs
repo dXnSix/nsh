@@ -23,9 +23,9 @@ use nsh_core::{
     keymap::{Key, Keymap, Keystroke, Modifiers},
     platform::Os,
 };
-use objc2_app_kit::{
-    NSEvent, NSEventModifierFlags, NSTextInputClient, NSTextView, NSView, NSWindow,
-};
+use objc2::{ProtocolType, msg_send};
+use objc2_app_kit::{NSEvent, NSEventModifierFlags, NSTextInputClient, NSView, NSWindow};
+use objc2_foundation::NSObjectProtocol;
 
 use crate::surface::Surface;
 
@@ -101,7 +101,13 @@ pub(crate) fn pressed(surface: &Rc<Surface>, event: &NSEvent) -> bool {
         return false;
     }
     // Only the bindings of the window the key is in (and JS's) take it.
-    let found = table.find_at(window_root, keystroke, editing, control, event.isARepeat());
+    // A focus a dialog covers has no keys of its own: the dialog's take
+    // them.
+    let mut focus = nsh_core::keymap::KeyFocus::default();
+    focus.editing = editing;
+    focus.control = control;
+    focus.covered = crate::input::focus_covered(surface);
+    let found = table.find_with(window_root, keystroke, focus, event.isARepeat());
     if let Some(id) = found.fired() {
         surface.event(
             ROOT_ID,
@@ -112,16 +118,24 @@ pub(crate) fn pressed(surface: &Rc<Surface>, event: &NSEvent) -> bool {
     found.consumed()
 }
 
-/// Whether an input method is composing in the focused text view (it has
+/// Whether an input method is composing in the focused input client (it has
 /// marked text: pinyin, kana). Every key is then the input method's:
 /// Backspace deletes a letter of the composition, Return and Space
 /// commit it, arrows move through its candidates. A binding taking one
 /// first would leave the composition stuck.
 fn composing(window: &NSWindow) -> bool {
-    window
-        .firstResponder()
-        .and_then(|r| r.downcast::<NSTextView>().ok())
-        .is_some_and(|t| t.hasMarkedText())
+    window.firstResponder().is_some_and(|responder| {
+        // Hosted inputs can implement the text input protocol without
+        // inheriting from NSTextView (a terminal, for example).
+        if !responder.conformsToProtocol(
+            <dyn NSTextInputClient>::protocol().expect("AppKit's text input protocol"),
+        ) {
+            return false;
+        }
+        // SAFETY: The responder conforms to NSTextInputClient, whose required
+        // hasMarkedText method is called on the main thread.
+        unsafe { msg_send![&*responder, hasMarkedText] }
+    })
 }
 
 /// Where the keyboard focus is: `Some(true)` in a text input or hosted
@@ -152,6 +166,7 @@ pub(crate) fn keystroke(event: &NSEvent) -> Option<Keystroke> {
         alt: flags.contains(NSEventModifierFlags::Option),
         shift: flags.contains(NSEventModifierFlags::Shift),
         cmd: flags.contains(NSEventModifierFlags::Command),
+        alt_graph: false,
     };
     // The virtual key codes (`kVK_*`) of keys that type no character.
     let code = event.keyCode();
@@ -190,6 +205,16 @@ pub(crate) fn reloads(event: &NSEvent) -> bool {
 /// Shift+/ is `shift+/`), in lower case; on a layout that types no ASCII
 /// there, the US layout's character of the key, as menus match it.
 fn character(event: &NSEvent, shift: bool) -> Option<char> {
+    // A letter is the same key with Shift or without: the event's own
+    // letter, as without Shift. Applying no modifiers translates the key
+    // code again through the current layout, which for a key code from
+    // another layout (QWERTZ swaps Z and Y) is another letter.
+    if let Some(c) = event
+        .charactersIgnoringModifiers()
+        .and_then(|s| letter(&s.to_string()))
+    {
+        return Some(c);
+    }
     let typed = if shift {
         event.charactersByApplyingModifiers(NSEventModifierFlags::empty())
     } else {
@@ -199,6 +224,16 @@ fn character(event: &NSEvent, shift: bool) -> Option<char> {
         Some(c) if c.is_ascii_graphic() => Some(c.to_ascii_lowercase()),
         _ => crate::input::us_key(event.keyCode()),
     }
+}
+
+/// The letter, in lower case, that `typed` (an event's characters) starts
+/// with: none for any other character.
+fn letter(typed: &str) -> Option<char> {
+    typed
+        .chars()
+        .next()
+        .filter(char::is_ascii_alphabetic)
+        .map(|c| c.to_ascii_lowercase())
 }
 
 /// The virtual key codes of F1 to F20.
@@ -231,5 +266,20 @@ mod tests {
         assert_eq!(super::function_key_code(20), Some(90));
         assert_eq!(super::function_key_code(0), None);
         assert_eq!(super::function_key_code(21), None);
+    }
+
+    /// A key event's letter is its own, with Shift as without: not the
+    /// letter its key code types on the current layout (QWERTZ's Z is the
+    /// US layout's Y, #3245).
+    #[test]
+    fn a_letter_is_the_events_own_with_shift() {
+        assert_eq!(super::letter("Z"), Some('z'));
+        assert_eq!(super::letter("z"), Some('z'));
+        assert_eq!(super::letter("Y"), Some('y'));
+        // Not a letter: the key's character without Shift decides.
+        assert_eq!(super::letter("?"), None);
+        assert_eq!(super::letter("1"), None);
+        assert_eq!(super::letter("é"), None);
+        assert_eq!(super::letter(""), None);
     }
 }

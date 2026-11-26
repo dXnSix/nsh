@@ -40,7 +40,7 @@ mod mac {
         NSWindow, NSWindowButton, NSWindowCollectionBehavior, NSWindowLevel, NSWindowOrderingMode,
         NSWindowStyleMask, NSWindowTitleVisibility,
     };
-    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use objc2_foundation::{NSNumber, NSPoint, NSRect, NSSize, ns_string};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::*;
@@ -131,6 +131,15 @@ mod mac {
                 .and_then(finite_size)
                 .unwrap_or(NSSize::new(NO_LIMIT, NO_LIMIT));
             w.setContentMaxSize(s);
+        });
+        // Content width / height kept through the user's resizes; AppKit
+        // holds a ratio or resize increments, the later set winning, so
+        // increments of one point clear it.
+        on(&a.aspect_ratio, |r| match r {
+            Some(r) if r.is_finite() && r > 0.0 => {
+                w.setContentAspectRatio(NSSize::new(f64::from(r), 1.0))
+            }
+            _ => w.setContentResizeIncrements(NSSize::new(1.0, 1.0)),
         });
     }
 
@@ -294,6 +303,51 @@ mod mac {
                 (gpui::DisplayId::new(u64::from(id)), bounds)
             })
             .collect()
+    }
+
+    /// The cutouts of display `id` (GPUI's id, its `CGDirectDisplayID`)
+    /// whose screen bounds are `bounds`: the notch of the `NSScreen` that
+    /// is that display, computed as the AppKit backend does
+    /// ([`nsh_core::desktop::notch`]). Only the auxiliary areas' sizes and
+    /// the safe area's inset are read, so `bounds` alone places it in the
+    /// same screen coordinates as the display.
+    pub(crate) fn cutouts(
+        id: gpui::DisplayId,
+        bounds: nsh_core::Bounds<nsh_core::Points>,
+    ) -> Vec<nsh_core::Bounds<nsh_core::Points>> {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return Vec::new();
+        };
+        let number = u64::from(id) as u32;
+        let Some(screen) = NSScreen::screens(mtm)
+            .iter()
+            .find(|s| screen_number(s) == Some(number))
+        else {
+            return Vec::new();
+        };
+        let area = |r: NSRect| {
+            nsh_core::Size::new(
+                nsh_core::Points(r.size.width as f32),
+                nsh_core::Points(r.size.height as f32),
+            )
+        };
+        nsh_core::desktop::notch(
+            bounds,
+            area(screen.auxiliaryTopLeftArea()),
+            area(screen.auxiliaryTopRightArea()),
+            nsh_core::Points(screen.safeAreaInsets().top as f32),
+        )
+        .into_iter()
+        .collect()
+    }
+
+    /// The screen's display id (`CGDirectDisplayID`).
+    fn screen_number(screen: &NSScreen) -> Option<u32> {
+        let number = screen
+            .deviceDescription()
+            .objectForKey(ns_string!("NSScreenNumber"))?;
+        let number = number.downcast::<NSNumber>().ok()?;
+        Some(number.unsignedIntValue())
     }
 
     /// The app runs in the background: it never becomes the active app
@@ -571,6 +625,14 @@ mod win {
         super::super::gpui_displays(cx)
     }
 
+    /// No display reports a cutout here.
+    pub(crate) fn cutouts(
+        _id: gpui::DisplayId,
+        _bounds: nsh_core::Bounds<nsh_core::Points>,
+    ) -> Vec<nsh_core::Bounds<nsh_core::Points>> {
+        Vec::new()
+    }
+
     /// Windows has no app activation: a background app's windows show
     /// without activating ([`show`]) and nothing brings them to the
     /// foreground.
@@ -725,6 +787,14 @@ mod linux {
     /// GPUI's displays, the primary one first.
     pub(crate) fn displays(cx: &gpui::App) -> Vec<(gpui::DisplayId, gpui::Bounds<gpui::Pixels>)> {
         super::super::gpui_displays(cx)
+    }
+
+    /// No display reports a cutout here.
+    pub(crate) fn cutouts(
+        _id: gpui::DisplayId,
+        _bounds: nsh_core::Bounds<nsh_core::Points>,
+    ) -> Vec<nsh_core::Bounds<nsh_core::Points>> {
+        Vec::new()
     }
 
     /// Nothing to set: a background app's windows open without the focus

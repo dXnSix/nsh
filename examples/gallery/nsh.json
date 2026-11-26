@@ -64,7 +64,7 @@
       ]
     },
     "picker": true,
-    "speech": true,
+    "share": true,
     "notifications": true,
     "audio": true,
     "windows": {

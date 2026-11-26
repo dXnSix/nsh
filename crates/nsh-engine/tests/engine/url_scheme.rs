@@ -153,6 +153,35 @@ fn run_app_with(
 }
 
 #[test]
+fn web_links_of_the_apps_hosts_and_paths_reach_the_listener() {
+    // As a packaged app's `app.json`, or its `nsh.json`, claims them.
+    let links = nsh_core::url_scheme::AppLinks::from_json(&serde_json::json!({
+        "links": [
+            { "host": "example.com", "paths": ["/orders/*"] },
+            { "host": "*.shop.example" }
+        ]
+    }));
+    assert_eq!(links.web().len(), 2);
+    let launch = [
+        "https://example.com/orders/7?ref=mail".to_owned(),
+        // Another path, host, scheme or port of the claimed host's.
+        "https://example.com/blog/1".to_owned(),
+        "https://other.test/orders/7".to_owned(),
+        "http://example.com/orders/8".to_owned(),
+        "https://example.com:8443/orders/9".to_owned(),
+        "https://eu.shop.example/cart".to_owned(),
+        "myapp://launch".to_owned(),
+    ];
+    let text = run_app(bundle().with_links(links), &["myapp"], &launch, |control| {
+        open(control, "https://EXAMPLE.com/orders/later")
+    });
+    assert_eq!(
+        text,
+        "links: https://example.com/orders/7?ref=mail https://eu.shop.example/cart myapp://launch https://EXAMPLE.com/orders/later done"
+    );
+}
+
+#[test]
 fn links_of_the_apps_schemes_reach_the_listener_in_order() {
     let launch = [
         "myapp://launch?ref=mail".to_owned(),
@@ -336,6 +365,53 @@ fn a_pushed_address_reads_back_at_once_and_an_unknown_history_is_a_type_error() 
     assert_eq!(
         text,
         "url: push:myapp://tabs/live replace:myapp://tabs/all wrong:TypeError:myapp://tabs/all done"
+    );
+}
+
+#[test]
+fn a_native_platform_gets_the_address_the_app_sets() {
+    use nsh_core::Command;
+    let config = EngineConfig {
+        viewport: Size::new(px(400.0), px(600.0)),
+        ui_sets: vec![nsh_base::registry()],
+        environment: nsh_engine::Environment {
+            os: nsh_core::platform::Os::Ios,
+            ..Default::default()
+        },
+        ..EngineConfig::new(bundle_of(PUSH_APP, "nsh-app-url-native").with_url_schemes(["myapp"]))
+    };
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let _engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
+    let mut addresses = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        let Ok(batch) = rx.recv_timeout(Duration::from_millis(50)) else {
+            continue;
+        };
+        let mut done = false;
+        for item in batch.items {
+            match item {
+                MountItem::Command {
+                    id: ROOT_ID,
+                    command: Command::PushAppUrl(url),
+                } => addresses.push(format!("push:{url}")),
+                MountItem::Command {
+                    id: ROOT_ID,
+                    command: Command::SetAppUrl(url),
+                } => addresses.push(format!("set:{url}")),
+                MountItem::Text { text, .. } => done |= text.text.contains("done"),
+                _ => {}
+            }
+        }
+        if done {
+            break;
+        }
+    }
+    // As on the web, in order: iOS and macOS give it to the system; the
+    // refused `history` sends nothing.
+    assert_eq!(
+        addresses,
+        ["push:myapp://tabs/live", "set:myapp://tabs/all"]
     );
 }
 

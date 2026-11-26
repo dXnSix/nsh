@@ -134,6 +134,10 @@ pub(crate) struct DevSession {
     status: Option<(String, u64)>,
     shown: u64,
     error: Option<DevError>,
+    /// A hot update threw part way: the modules it did not run keep their
+    /// old code, and later updates (only what changed since) never run
+    /// them, so the next build loads from scratch.
+    partial: bool,
     /// An error came since the last message was handled: a hidden window
     /// shows it.
     errored: bool,
@@ -252,6 +256,7 @@ pub(crate) fn start(this: &AppView, url: String, held: bool, cx: &mut Context<Ap
         status: None,
         shown: 0,
         error: None,
+        partial: false,
         errored: false,
         held,
     };
@@ -405,6 +410,9 @@ fn handle(view: &AppView, msg: Msg) {
     let load = match msg {
         Msg::Event(event) => on_event(view, session, *event),
         Msg::RuntimeError(error) => {
+            if error.kind == AppErrorKind::HotUpdate {
+                session.partial = true;
+            }
             session.show_error(error_title(&error), &error.to_string(), false);
             None
         }
@@ -428,7 +436,7 @@ fn handle(view: &AppView, msg: Msg) {
         session.held = false;
         let visible = load.as_ref().is_none_or(|app| {
             app.main_window()
-                .is_none_or(nsh_core::desktop::MainWindowOptions::visible_at_launch)
+                .is_some_and(nsh_core::desktop::MainWindowOptions::visible_at_launch)
         });
         if !visible {
             log::info!("the main window starts hidden (nsh.json window.defaultVisible: false)");
@@ -483,6 +491,7 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
             dev.latest = None;
             dev.running = None;
             dev.error = None;
+            dev.partial = false;
             return Some(App::Rust(root));
         }
         DevEvent::Building => dev.show_status(Status::Building),
@@ -504,6 +513,7 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
             app_id,
             limits,
             window,
+            application,
         } => {
             // A bundle reached through a hot update keeps its "Updated".
             if dev.running != Some((session, version)) {
@@ -534,6 +544,7 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
             // nsh.json `window`: the engine applies its attributes to the
             // window the host opened before the app was known.
             bundle = bundle.with_main_window(window.as_deref());
+            bundle = bundle.with_application(application.as_deref());
             bundle = match bundle
                 .with_app_id(app_id.as_deref())
                 .with_capabilities_json(capabilities.as_deref())
@@ -560,6 +571,7 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
             log::info!("loading build {version}");
             view.set_limits(limits);
             dev.error = None;
+            dev.partial = false;
             if running.is_some() {
                 dev.show_status(Status::Reloaded);
             }
@@ -572,8 +584,9 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
             code,
             source_map,
         } => {
-            if dev.running != Some((session, base)) {
-                // Not for the running build: its bundle follows.
+            // Not for the running build, or the app is part updated: its
+            // bundle follows, and loads.
+            if dev.running != Some((session, base)) || dev.partial {
                 return None;
             }
             let update = HotUpdate {
@@ -607,6 +620,7 @@ fn reload(dev: &mut DevSession) -> Option<Bundle> {
         _ => return None,
     };
     dev.running = target;
+    dev.partial = false;
     log::info!("reloading after an update that could not be applied in place");
     dev.show_status(Status::Reloaded);
     Some(bundle)
@@ -618,6 +632,7 @@ fn reload_latest(dev: &mut DevSession) -> Option<Bundle> {
     dev.running = Some((session, version));
     log::info!("reloading");
     dev.error = None;
+    dev.partial = false;
     dev.show_status(Status::Reloaded);
     Some(bundle)
 }

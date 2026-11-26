@@ -457,6 +457,9 @@ attributes! {
     min_size: Option<Size<Points>> = "minSize", nullable;
     /// The largest size the user may give it (content size, points).
     max_size: Option<Size<Points>> = "maxSize", nullable;
+    /// The ratio of width to height the user's resizes keep its content
+    /// at (`16 / 9`); the app's own `setBounds` is not limited.
+    aspect_ratio: Option<f32> = "aspectRatio", nullable;
     /// The window follows its content's laid-out size.
     size_to_content: SizeToContent = "sizeToContent", plain;
     /// The user may resize it.
@@ -511,6 +514,7 @@ impl WindowAttributes {
             frame: Some(super::WindowFrameStyle::Default),
             min_size: Some(None),
             max_size: Some(None),
+            aspect_ratio: Some(None),
             size_to_content: Some(SizeToContent::Off),
             resizable: Some(true),
             movable: Some(true),
@@ -595,8 +599,8 @@ impl WindowAttributes {
         self.pointer_events == Some(WindowPointerEvents::None)
     }
 
-    /// Keeps the values in their ranges: a size not finite and positive and
-    /// a progress out of 0 to 1 are left out (with `false`), the title bar's height capped as
+    /// Keeps the values in their ranges: a size or an aspect ratio not
+    /// finite and positive and a progress out of 0 to 1 are left out (with `false`), the title bar's height capped as
     /// [`super::title_bar_height`] does.
     pub fn sanitize(&mut self) -> bool {
         let mut fine = true;
@@ -610,6 +614,12 @@ impl WindowAttributes {
                 *size = None;
                 fine = false;
             }
+        }
+        if let Some(Some(r)) = self.aspect_ratio
+            && !(r.is_finite() && r > 0.0)
+        {
+            self.aspect_ratio = None;
+            fine = false;
         }
         if let Some(Some(p)) = &mut self.progress
             && let Some(v) = p.value
@@ -673,22 +683,20 @@ impl WindowOptions {
     }
 }
 
-/// The main window's launch-time options: nsh.json `"window"`, which the
-/// command line writes into the app's `app.json` (and the dev server's
-/// app info) and the runners read before any JS runs, so the first frame
-/// shows the window as the app wants it. The same keys as `WindowOptions`
-/// without `id`, `kind`, `parent` and `modal`: every attribute,
-/// `defaultSize`, `defaultPosition`, `display`, `defaultMode` and
-/// `restoreBounds`; and `defaultVisible`, which only the main window takes
-/// (the app opens its other windows when it wants them). At run time the
-/// app changes it with `currentWindow().set()`; the engine also sends its
-/// attributes to the main window with the first frame
-/// ([`crate::Core::set_main_window`]), so a window made before the app was
-/// known (a development host's) follows them too.
+/// Launch-time options for the first app window: nsh.json `"window"`, which
+/// the command line writes into the app's `app.json` (and the dev server's
+/// app info) and the runners read before any JS runs. The same keys as
+/// `WindowOptions` without `id`, `kind`, `parent` and `modal`: every
+/// attribute, `defaultSize`, `defaultPosition`, `display`, `defaultMode`
+/// and `restoreBounds`. The app declares the window with `<Window>` or
+/// [`crate::element::desktop::window()`] and inherits these; its own options
+/// override them. `defaultVisible` is parsed but has no effect in window
+/// model v2: the app host never shows. An unmodified window made before the
+/// app was known (a development host's) follows the attributes the engine
+/// sends with the first frame ([`crate::Core::set_main_window`]).
 ///
 /// Only standalone builds read it (their `app.json`). Signed packages
-/// (`.nshpkg`) carry none: they run in host apps, which own the main
-/// window.
+/// (`.nshpkg`) carry none: they run in host apps, which own their windows.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MainWindowOptions {
@@ -700,12 +708,9 @@ pub struct MainWindowOptions {
     pub display: Option<DisplayId>,
     /// The mode it opens in.
     pub default_mode: Option<WindowMode>,
-    /// Whether it shows when the app starts (`None`: it does). With `false`
-    /// the window is made and the app runs in it, unseen and unfocused,
-    /// until the app shows it (`show()`, `focus()`), a link of one of its
-    /// URL schemes opens it, or the user opens it again on macOS (its Dock
-    /// icon, the Finder): a tray app starts with only its tray icon. Read
-    /// at launch only.
+    /// Parsed for compatibility and has no effect in window model v2: the
+    /// host never shows, and the app declares its windows with `<Window>`
+    /// (hide one with `hide()`). Read at launch only.
     pub default_visible: Option<bool>,
     /// Opens where the user left it (the runner keeps its placement).
     pub restore_bounds: bool,
@@ -739,11 +744,12 @@ impl MainWindowOptions {
         Some(placement.fit_on_displays(displays))
     }
 
-    /// Whether the main window shows when the app starts: unless
-    /// `defaultVisible` is `false`. For the runners, as they launch the app.
+    /// Whether the host shows when the app starts: never in the window model
+    /// v2, where it is the invisible app host. `defaultVisible` is parsed but
+    /// has no effect; the app declares its windows with `<Window>`.
     #[doc(hidden)]
     pub fn visible_at_launch(&self) -> bool {
-        self.default_visible != Some(false)
+        false
     }
 
     /// The keys `"window"` takes besides the attributes.
@@ -848,7 +854,8 @@ pub fn declarations() -> String {
          * also changes, and its attributes. */\n\
          export interface WindowOptions extends Partial<WindowAttributes> {{\n  \
          /** The app's id for it: one window per id, the key its bounds are kept\n   \
-         * under (`restoreBounds`). `\"main\"` is the main window's. */\n  \
+         * under (`restoreBounds`). `\"main\"` is a conventional first-window id,\n   \
+         * with no special behavior. */\n  \
          id: string;\n  \
          /** What it is for: its attributes' defaults (`\"normal\"`). */\n  \
          kind?: WindowKind;\n  \
@@ -975,8 +982,12 @@ impl JsValue for WindowOptions {
 pub struct OpenWindow {
     /// The options, [`WindowOptions::attributes`] resolved.
     pub options: WindowOptions,
-    /// The root node of the parent window ([`crate::ROOT_ID`] for the main
-    /// window), if it has one.
+    /// The implicit first window `mount` opens around a released app's
+    /// plain root: the main window that app always had, not a window of
+    /// its own, so `capabilities.windows` does not grant it.
+    #[doc(hidden)]
+    pub implicit: bool,
+    /// The root node of the parent window, if the app has it open.
     pub parent: Option<NodeId>,
     /// The placement kept for its id ([`WindowOptions::restore_bounds`]),
     /// fitted on the displays there are now: it wins over the default size,
@@ -1063,6 +1074,11 @@ pub enum WindowEvent {
         /// Which policy.
         cause: WindowCloseCause,
     },
+    /// The OS asked the app to show itself: macOS's Dock or Finder reopen,
+    /// or a second launch on Windows or Linux. Reported on the root only.
+    /// The app opens or focuses the window it wants; NSH shows none by
+    /// itself ([`crate::element::desktop::on_reopen`]).
+    Reopen,
     /// The user asked to quit the app (its Quit item, the platform's quit
     /// key) while the app listens to quit requests
     /// ([`super::DesktopCommand::SetQuitOnRequest`]): the platform did not
@@ -1083,16 +1099,24 @@ pub(crate) struct WindowRecord {
     /// The size it opened at, its content's until the platform reports
     /// it (`Core::set_root_size`).
     pub(crate) size: Option<Size<Points>>,
+    /// Whether this window is the implicit first window created by `mount`
+    /// for a plain root that declared no `<Window>` scenes.
+    pub(crate) implicit: bool,
 }
 
 impl WindowRecord {
     /// A window the platform opened with `attributes`, at `size`.
-    pub(crate) fn opened(attributes: WindowAttributes, size: Option<Size<Points>>) -> WindowRecord {
+    pub(crate) fn opened(
+        attributes: WindowAttributes,
+        size: Option<Size<Points>>,
+        implicit: bool,
+    ) -> WindowRecord {
         WindowRecord {
             sent: attributes,
             pending: WindowAttributes::default(),
             fitted: None,
             size,
+            implicit,
         }
     }
 
@@ -1182,7 +1206,9 @@ mod tests {
             fn load(&self) -> Result<std::collections::BTreeMap<String, String>, String> {
                 Ok([("nsh.window:main".to_owned(), self.0.clone())].into())
             }
-            fn write(&self, _: StorageChange) {}
+            fn write(&self, _: StorageChange) -> Result<(), String> {
+                Ok(())
+            }
         }
         let display = Display::new(
             DisplayId(1),
@@ -1215,13 +1241,14 @@ mod tests {
         let read = |json: &str| {
             MainWindowOptions::from_json(&serde_json::from_str::<crate::JsonValue>(json).unwrap())
         };
-        // Shown unless the app says otherwise.
-        assert!(MainWindowOptions::default().visible_at_launch());
+        // The host never shows: `defaultVisible` is kept for the first app
+        // window (the app declares it), not applied to the host.
+        assert!(!MainWindowOptions::default().visible_at_launch());
         let shown = read(r#"{"title":"Mail"}"#).unwrap();
         assert_eq!(shown.default_visible, None);
-        assert!(shown.visible_at_launch());
+        assert!(!shown.visible_at_launch());
         assert!(
-            read(r#"{"defaultVisible":true}"#)
+            !read(r#"{"defaultVisible":true}"#)
                 .unwrap()
                 .visible_at_launch()
         );
@@ -1238,6 +1265,7 @@ mod tests {
         let mut record = WindowRecord::opened(
             WindowAttributes::resolve(WindowKind::Normal, &Default::default()),
             None,
+            false,
         );
         // Setting what it has sends nothing.
         record.pending.title = Some(String::new());
@@ -1276,6 +1304,7 @@ mod tests {
     fn values_out_of_range_are_left_out() {
         let mut a = WindowAttributes {
             min_size: Some(Some(size(px(-1.0), px(10.0)))),
+            aspect_ratio: Some(Some(0.0)),
             progress: Some(Some(WindowProgress {
                 value: Some(Percentage(2.0)),
                 state: ProgressState::Normal,
@@ -1284,6 +1313,24 @@ mod tests {
         };
         assert!(!a.sanitize());
         assert_eq!(a.min_size, None);
+        assert_eq!(a.aspect_ratio, None);
         assert_eq!(a.progress.unwrap().unwrap().value, Some(Percentage(1.0)));
+        for bad in [f32::NAN, f32::INFINITY, -1.5] {
+            let mut a = WindowAttributes {
+                aspect_ratio: Some(Some(bad)),
+                ..Default::default()
+            };
+            assert!(!a.sanitize());
+            assert_eq!(a.aspect_ratio, None);
+        }
+        // A ratio given and `null` (cleared) are both kept.
+        for fine in [Some(16.0 / 9.0), None] {
+            let mut a = WindowAttributes {
+                aspect_ratio: Some(fine),
+                ..Default::default()
+            };
+            assert!(a.sanitize());
+            assert_eq!(a.aspect_ratio, Some(fine));
+        }
     }
 }

@@ -46,6 +46,13 @@ pub struct NodeViewCx {
     selected: ReadSignal<bool>,
     decorations: ReadSignal<Vec<Decoration>>,
     content: RefCell<Option<AnyElement>>,
+    /// The editor's component host and the element's key among the
+    /// editor's node views (stable while the node stays where it is in
+    /// its block): where an app's JS node view renders.
+    pub(crate) at: (nsh_core::NodeId, SharedString),
+    /// What the node's position follows (the document revision): read before
+    /// [`NodeViewCx::pos`] in an effect, it reruns when the node moves.
+    pub(crate) moves: Option<ReadSignal<u64>>,
 }
 
 impl fmt::Debug for NodeViewCx {
@@ -72,7 +79,21 @@ impl NodeViewCx {
             selected,
             decorations,
             content: RefCell::new(content),
+            at: (0, SharedString::default()),
+            moves: None,
         }
+    }
+
+    /// Rendered by the editor on node `host`, under `key`.
+    pub(crate) fn rendered_at(
+        mut self,
+        host: nsh_core::NodeId,
+        key: SharedString,
+        moves: ReadSignal<u64>,
+    ) -> Self {
+        self.at = (host, key);
+        self.moves = Some(moves);
+        self
     }
 
     /// Where the node starts in the current document (ProseMirror's
@@ -129,7 +150,12 @@ pub trait NodeView: Send + Sync {
 
     /// Whether the editor renders the node's content, editable, into the
     /// element (`cx.take_content()`); `false` (the default) makes the node
-    /// an atom, edited as one unit.
+    /// an atom, edited as one unit. The content's place in the element is
+    /// measured again when its frame in its parent changes and when the
+    /// element's size does: a part that moves the content without either
+    /// (a wider marker before content in a fixed-width box) leaves the
+    /// caret and presses where the content was, so let the content's box
+    /// grow and shrink with it (`flex_1`).
     fn editable_content_slot(&self) -> bool {
         false
     }

@@ -6,9 +6,10 @@ use crate::{
     animation::{AnimationOp, AnimationProp},
     geometry::{Bounds, Points, Size},
     ops::{
-        AutoCapitalize, Command, EventMask, ImageSource, KeyboardAppearance, KeyboardDismissMode,
-        KeyboardTaps, KeyboardType, ModalAnimation, ModalPresentation, NodeId, PasteBehavior,
-        ResizeMode, ReturnKeyType, ScreenAnimation, SnapAlignment, SubmitBehavior, WebSource,
+        AutoCapitalize, Command, EventMask, HeaderTitleAlign, ImageSource, KeyboardAppearance,
+        KeyboardDismissMode, KeyboardTaps, KeyboardType, ModalAnimation, ModalPresentation, NodeId,
+        PasteBehavior, ResizeMode, ReturnKeyType, ScreenAnimation, SnapAlignment, SubmitBehavior,
+        WebSource,
     },
     props::{EdgeInsets, GestureValues, LayoutAnimation, ViewProps},
     style::{Color, TextAlign, ViewStyle},
@@ -66,6 +67,11 @@ pub struct WebProps {
     /// The `baseUrl` prop, which [`Self::source`] holds while `html` is
     /// set.
     pub base_url: Option<Arc<str>>,
+    /// The one origin this web view may show besides `webview.hosts`
+    /// (`allowOrigin`, granted by `webview.runtimeOrigin`): a web view's
+    /// backend checks its navigations with
+    /// [`Access::allows_webview_with`](crate::access::Access::allows_webview_with).
+    pub allow_origin: Option<crate::access::WebOrigin>,
     /// Script run after each page loads.
     pub injected_js: Option<Arc<str>>,
     /// Script run before each page's own scripts.
@@ -83,14 +89,16 @@ pub struct WebProps {
     /// HTTP cache and no saved form data). Read when the platform makes the
     /// web view: the core keeps it from changing afterwards.
     pub incognito: bool,
+    /// The person can pinch to zoom the page, past its viewport's scale
+    /// limits. Read when the platform makes the web view, as `incognito`.
+    pub zoomable: bool,
     /// The URL schemes the page loads from the app
     /// ([`crate::web_resource`]). Read when the platform makes the web
     /// view, as `incognito`.
     pub url_schemes: Vec<crate::web_resource::WebUrlScheme>,
-    /// Internal: an `on_download_pending` listener asks the platform to
-    /// defer every download for the app's destination. A platform without
-    /// web view requests cannot honor it, so the core gives it an inert
-    /// page instead of letting it download automatically.
+    /// Internal: an `on_download` or `on_download_pending` listener asks
+    /// the platform to hold every download for the core. Read by the
+    /// web view's backend.
     #[doc(hidden)]
     pub defer_downloads: bool,
 }
@@ -101,6 +109,7 @@ impl Default for WebProps {
             source: WebSource::None,
             src: None,
             base_url: None,
+            allow_origin: None,
             injected_js: None,
             injected_js_before: None,
             user_agent: None,
@@ -108,6 +117,7 @@ impl Default for WebProps {
             javascript_enabled: true,
             back_forward_gestures: false,
             incognito: false,
+            zoomable: false,
             url_schemes: Vec::new(),
             defer_downloads: false,
         }
@@ -140,6 +150,9 @@ pub enum AudioSession {
 pub struct VideoProps {
     /// The video's URL (or `asset:/` URI).
     pub source: Option<Arc<str>>,
+    /// An image (URL or `asset:/` URI) shown while the video loads, until
+    /// its first frame is ready.
+    pub poster: Option<Arc<str>>,
     /// What its sound does to the rest of the device's audio.
     pub audio_session: AudioSession,
     /// Paused.
@@ -164,6 +177,7 @@ impl Default for VideoProps {
     fn default() -> Self {
         Self {
             source: None,
+            poster: None,
             audio_session: AudioSession::default(),
             paused: false,
             muted: false,
@@ -203,8 +217,22 @@ pub struct ScrollBehavior {
     pub enabled: bool,
     /// It overscrolls past its edges.
     pub bounces: bool,
+    /// A tap at the top of the window scrolls it to its top (iOS:
+    /// `UIScrollView.scrollsToTop`).
+    pub scrolls_to_top: bool,
+    /// A mouse wheel's notches glide (`smoothWheel`).
+    pub smooth_wheel: bool,
+    /// Points a mouse wheel's line scrolls; 0 for the platform's own
+    /// (`wheelLineHeight`).
+    pub wheel_line_height: Points,
     /// Room around the content.
     pub content_inset: EdgeInsets,
+    /// How far the scroll indicator keeps from each edge of the view: its
+    /// track runs between the top and bottom insets (a horizontal view's:
+    /// left and right), and it moves in from the right (bottom) edge by
+    /// the right (bottom) one. Platforms add the room they keep for the
+    /// keyboard to the bottom.
+    pub scrollbar_inset: EdgeInsets,
     /// Whether taps dismiss the keyboard.
     pub keyboard_taps: KeyboardTaps,
     /// A fling moves one snap point at most (`disableIntervalMomentum`).
@@ -243,7 +271,11 @@ impl Default for ScrollBehavior {
             deceleration: 0.0,
             enabled: true,
             bounces: true,
+            scrolls_to_top: true,
+            smooth_wheel: false,
+            wheel_line_height: Points::ZERO,
             content_inset: EdgeInsets::default(),
+            scrollbar_inset: EdgeInsets::default(),
             keyboard_taps: KeyboardTaps::Never,
             one_step: false,
             min_zoom: 1.0,
@@ -407,6 +439,14 @@ pub struct ScreenConfig {
     pub large_title: bool,
     /// The content extends under the header.
     pub header_transparent: bool,
+    /// The hairline under the header (iOS).
+    pub header_shadow_visible: bool,
+    /// Where the title sits (Android; iOS's system bar always centers it and
+    /// ignores this).
+    pub title_align: HeaderTitleAlign,
+    /// A transparent header shows its background once the content scrolls
+    /// under it (iOS).
+    pub header_background_on_scroll: bool,
     /// The system tab bar leaves while this page is on top.
     pub hides_bottom_bar_when_pushed: bool,
     /// Color of the back button and bar buttons.
@@ -468,6 +508,9 @@ impl Default for ScreenConfig {
             header_visible: true,
             large_title: false,
             header_transparent: false,
+            header_shadow_visible: true,
+            title_align: HeaderTitleAlign::Left,
+            header_background_on_scroll: false,
             hides_bottom_bar_when_pushed: false,
             tint_color: None,
             background_color: None,
@@ -497,7 +540,7 @@ impl Default for ScreenConfig {
 /// transparent layer over the whole window (no card, scrim, shadow or
 /// background; `presentation` is ignored), and what shows is the app's
 /// popup and backdrop, which the runtime renders inside it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModalConfig {
     /// How it appears.
     pub animation: ModalAnimation,
@@ -525,6 +568,20 @@ pub struct ModalConfig {
     /// window, not the main one). For a window's own root: the window
     /// holding its node. The core works it out from where the node is.
     pub window: NodeId,
+    /// iOS sheets: the heights it rests at (`detents`); empty for the
+    /// system's full height.
+    pub detents: Vec<crate::SheetDetent>,
+    /// iOS sheets: the detent the app keeps it at (`detent`); applied when
+    /// it changes.
+    pub detent: Option<crate::SheetDetent>,
+    /// iOS sheets: the detent it opens at without [`Self::detent`]
+    /// (`defaultDetent`); `None` for the smallest.
+    pub default_detent: Option<crate::SheetDetent>,
+    /// iOS sheets: the system's grabber shows (`grabber`).
+    pub grabber: bool,
+    /// iOS sheets: up to this detent what is behind is not dimmed and
+    /// takes touches (`largestUndimmedDetent`).
+    pub largest_undimmed_detent: Option<crate::SheetDetent>,
 }
 
 impl Default for ModalConfig {
@@ -538,6 +595,11 @@ impl Default for ModalConfig {
             close_on_backdrop_press: true,
             close_on_swipe: true,
             window: crate::ROOT_ID,
+            detents: Vec::new(),
+            detent: None,
+            default_detent: None,
+            grabber: false,
+            largest_undimmed_detent: None,
         }
     }
 }
@@ -574,11 +636,14 @@ pub struct InputConfig {
     pub return_key: ReturnKeyType,
     /// Automatic capitalization.
     pub auto_capitalize: AutoCapitalize,
-    /// Autocorrection.
+    /// The system's corrections: spelling, smart quotes and dashes, text
+    /// replacement.
     pub auto_correct: bool,
     /// Several lines (return inserts a line break).
     pub multiline: bool,
-    /// Maximum length in UTF-16 units.
+    /// The most characters the user's edits leave (`maxLength`), counted
+    /// as Unicode scalar values ([`crate::text_edit::char_len`]); an
+    /// insertion is cut by [`crate::text_edit::clip_chars`].
     pub max_length: Option<u32>,
     /// The user can edit the text.
     pub editable: bool,
@@ -589,8 +654,14 @@ pub struct InputConfig {
     pub submit_behavior: Option<SubmitBehavior>,
     /// What a paste does (`pasteBehavior`).
     pub paste_behavior: PasteBehavior,
+    /// The largest pasted file read, in bytes (`pasteMaxSize`): a larger
+    /// one goes to [`crate::PasteEvent::too_large`] unread. `None`: all.
+    pub paste_max_size: Option<u64>,
     /// Focus once on screen.
     pub auto_focus: bool,
+    /// Select the whole text when the input takes the focus
+    /// (`selectTextOnFocus`).
+    pub select_text_on_focus: bool,
     /// Selection highlight color (on iOS also the caret's, unless
     /// [`InputConfig::caret_color`] is set: UIKit tints both with one).
     pub selection_color: Option<Color>,
@@ -609,10 +680,11 @@ pub struct InputConfig {
     /// A multiline input shows its scroll indicator (`scrollbar`; false
     /// while a built-in bar takes its place).
     pub scrollbar_visible: bool,
-    /// A built-in bar of the app's takes the indicator's place: the
+    /// A bar of the app's follows a multiline input's text (its built-in
+    /// bar, or one the app placed that watches it, `watch_scroll`): the
     /// platform reports how far the text scrolled
-    /// (`EngineControl::input_scroll`) and takes `Command::ScrollTo`.
-    pub replaced: bool,
+    /// (`EngineControl::input_scroll`). Off, it reports nothing.
+    pub report_scroll: bool,
 }
 
 impl InputConfig {
@@ -663,7 +735,9 @@ impl Default for InputConfig {
             blur_on_submit: true,
             submit_behavior: None,
             paste_behavior: PasteBehavior::Insert,
+            paste_max_size: None,
             auto_focus: false,
+            select_text_on_focus: false,
             selection_color: None,
             caret_color: None,
             auto_fill: crate::ops::AutoFill::Default,
@@ -672,7 +746,7 @@ impl Default for InputConfig {
             accessory_id: None,
             accessory: None,
             scrollbar_visible: true,
-            replaced: false,
+            report_scroll: false,
         }
     }
 }
@@ -919,6 +993,17 @@ pub enum MountItem {
         /// The program and its uniforms.
         layer: Option<Arc<crate::shader::ShaderLayer>>,
     },
+    /// The renderer of a GPU view (`None`: none, or a name no UI set
+    /// registered: it draws nothing), sent after its `Create` and when it
+    /// changes. Its own props come as [`MountItem::ComponentProps`] and
+    /// [`MountItem::ComponentPropSlots`], as a native component's
+    /// ([`crate::gpu`]).
+    GpuView {
+        /// The view.
+        id: NodeId,
+        /// What makes its renderer.
+        source: Option<crate::gpu::GpuSource>,
+    },
     /// A shader transition starts: its `value` changed. It comes first in
     /// its batch, so the platform takes the picture of what the view (the
     /// surface, for a screen transition) shows before the batch's other
@@ -1093,6 +1178,7 @@ impl MountItem {
             | M::ScrollContent { id, .. }
             | M::Canvas { id, .. }
             | M::Shader { id, .. }
+            | M::GpuView { id, .. }
             | M::ViewProps { id, .. }
             | M::Input { id, .. }
             | M::InputValue { id, .. }

@@ -16,6 +16,39 @@ track brings the thumb's middle there; it shows while the content scrolls, while
 and fades in and out natively. The look and the timing are the app's: a `Scrollbar` has no colors, sizes or radii of
 its own, and its fades take no time until the app gives them some.
 
+```tsx tabs
+import { mount, Scroll, Text, View, type YNode } from "nsh";
+import { Scrollbar } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  let list: YNode | undefined;
+  return (
+    <View class="relative flex-1">
+      <Scroll ref={list} scrollbar={false} class="flex-1">
+        {Array.from({ length: 60 }, (_, i) => (
+          <Text class="px-4 py-3">{`Message ${i + 1}`}</Text>
+        ))}
+      </Scroll>
+      <Scrollbar
+        scroll={list}
+        mode="hover"
+        motion={{ enter: 300, exit: 500, thumbHoverEntrance: "slideAndFade" }}
+        accessibilityLabel="Messages"
+        class="absolute inset-y-0 right-0 w-4 items-end p-1"
+        thumbClass="w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2 hover:opacity-90 active:w-2 active:opacity-100"
+      />
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{ScrollbarEntrance, ScrollbarMode, ScrollbarMotion, scrollbar, theme};
 use nsh_core::prelude::*;
@@ -58,34 +91,6 @@ fn inbox(rows: impl IntoElement) -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, Scroll, Text, View, type YNode } from "nsh";
-import { Scrollbar } from "nsh/base";
-
-function App() {
-  let list: YNode | undefined;
-  return (
-    <View class="relative flex-1">
-      <Scroll ref={list} scrollbar={false} class="flex-1">
-        {Array.from({ length: 60 }, (_, i) => (
-          <Text class="px-4 py-3">{`Message ${i + 1}`}</Text>
-        ))}
-      </Scroll>
-      <Scrollbar
-        scroll={list}
-        mode="hover"
-        motion={{ enter: 300, exit: 500, thumbHoverEntrance: "slideAndFade" }}
-        accessibilityLabel="Messages"
-        class="absolute inset-y-0 right-0 w-4 items-end p-1"
-        thumbClass="w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2 hover:opacity-90 active:w-2 active:opacity-100"
-      />
-    </View>
-  );
-}
-
-mount(App);
-```
-
 `Scrollbar` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. In Rust, `scrollbar()` makes
 one with a setter per prop (`.scroll(..)`, `.thumb_style(..)`) and the typed style methods for the bar itself; its
 `scroll` takes an `ElementRef` (or a `ScrollbarTarget`).
@@ -96,6 +101,23 @@ Every scroll view and list can draw a `Scrollbar` in place of the platform's ind
 `Scrollbar.setTheme` gives the app's look to the bar of each view whose `scrollbar` is `true`, once, wherever the
 app starts. Each view gets its own bar over its viewport, which stays there as the content scrolls (on the main
 thread, as sticky views do) and draws above the content; it follows, scrolls and fades as a placed `Scrollbar` does.
+
+```tsx tabs
+import { Scrollbar } from "nsh/base";
+
+Scrollbar.setTheme({
+  mode: "hover",
+  motion: { enter: 300, exit: 500 },
+  vertical: {
+    class: "absolute inset-y-0 right-0 w-4 items-end p-1",
+    thumbClass: "w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2",
+  },
+  horizontal: {
+    class: "absolute inset-x-0 bottom-0 h-4 items-end p-1",
+    thumbClass: "h-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:h-2",
+  },
+});
+```
 
 ```rust tabs
 use nsh_base::{ScrollbarLook, ScrollbarMode, ScrollbarTheme, set_scrollbar_theme};
@@ -117,23 +139,6 @@ fn use_app_scrollbars() {
 }
 ```
 
-```tsx tabs
-import { Scrollbar } from "nsh/base";
-
-Scrollbar.setTheme({
-  mode: "hover",
-  motion: { enter: 300, exit: 500 },
-  vertical: {
-    class: "absolute inset-y-0 right-0 w-4 items-end p-1",
-    thumbClass: "w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2",
-  },
-  horizontal: {
-    class: "absolute inset-x-0 bottom-0 h-4 items-end p-1",
-    thumbClass: "h-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:h-2",
-  },
-});
-```
-
 A `ScrollbarTheme` has the props of a bar that are the same for every view, and the look of each axis:
 
 | Field | Type | Default | Description |
@@ -147,7 +152,9 @@ A later `setTheme` restyles the bars, and `Scrollbar.setTheme(null)` gives the v
 view takes a theme of its own as its `scrollbar` prop (`<Scroll scrollbar={{ mode: "always", vertical: { … } }}>`),
 whether or not the app set one; `scrollbar={false}` leaves a view without a bar. A list laid out in its parent's
 viewport (`viewport="parent"`) scrolls with that view and its bar. A multiline `Input` gets the bar of its vertical look
-too, over its text, which it scrolls as the text view's own indicator does.
+too, over its text, which it scrolls as the text view's own indicator does. The bar lies over the whole input, its
+padding included, while the text shows only inside the padding, on every platform. In Rust, `.scrollbar(theme)` takes a
+`ScrollbarTheme` on a scroll view or a multiline input, as `.scrollbar(true)` and `.scrollbar(false)` do.
 
 ## The scroll view it moves
 
@@ -164,6 +171,8 @@ scroll view's edge in a `relative` box around both, or anywhere else on the scre
 - A vertical bar follows a vertical scroll view; `axis="horizontal"` makes a bar for a horizontal one (place it along
   the bottom edge). One bar per axis.
 - Lists work alike: the thumb follows the list's whole length as rows are measured and added.
+- So does a multiline `Input`: turn its own bar off with `scrollbar={false}` and name it in `scroll`; the bar follows its
+  text and scrolls it. The input reports its scrolling only while a bar follows it.
 
 ## When it shows
 
@@ -174,8 +183,9 @@ scroll view's edge in a `relative` box around both, or anywhere else on the scre
 | `"always"` | Always. |
 
 In every mode it shows while its thumb is dragged, and stays `motion.idle` after the last scroll, drag or hover. While
-the content fits the viewport, it stays hidden. Hidden, the bar is at `opacity: 0` and passes presses through to what
-is under it.
+the content fits the viewport, it stays hidden and the whole bar passes pointer events through to the content in
+every mode. A hidden bar has `opacity: 0`; in `"hover"` mode on a desktop, its track receives the pointer whenever
+the content can scroll.
 
 ## Motion
 

@@ -55,6 +55,9 @@ mod split;
 
 /// The packaged page; `{{…}}` are filled in by [`page`].
 const PAGE: &str = include_str!("web/index.html");
+/// The page's own styles, a file of the site so a strict `style-src`
+/// ('self') applies them; `{{colors}}` is filled in by [`page_style`].
+const PAGE_STYLE: &str = include_str!("web/index.css");
 /// The page's scripts: files of their own, so a strict `script-src` allows
 /// them ('self'), the first one a classic script the page runs as it is
 /// parsed.
@@ -104,13 +107,43 @@ pub(crate) fn package(
         );
     }
     let runtime = runtime::package_web()?;
+    // Linked for the app: the parts of `nsh/base`, the standard modules
+    // and the app's own UI sets it does not use are left out.
+    let linkable =
+        fs::read(&runtime.wasm).with_context(|| format!("read {}", runtime.wasm.display()))?;
+    // A runtime whose crates call JS through wasm-bindgen: it runs on the
+    // main module once it is split ([`link`]).
+    let bindgen = crate::bindgen::needs(&linkable)
+        .with_context(|| format!("read {}", runtime.wasm.display()))?
+        .map(|version| BindgenRun::next_to(&runtime.wasm, version))
+        .transpose()?;
+    // `--shared-runtime`: the runtime's shared form, the same bytes for
+    // every app on this NSH version wherever it is packaged, which the
+    // browser downloads once when the apps serve it from one place
+    // (`--asset-url`). nsh's own runtime only: an app with Rust components
+    // or wasm-bindgen glue has one of its own.
+    let shared = options.shared_runtime;
+    if shared && (built.rust_root || bindgen.is_some()) {
+        bail!(
+            "--shared-runtime needs nsh's own runtime: an app with Rust components or wasm-bindgen glue has a runtime of its own"
+        );
+    }
     let dir = options.out.join(name);
     let step = ui::Step::start(format!("packaging {}", ui::path(&dir)));
+
     if dir.exists() {
         fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
     }
     let asset_base = options.asset_url.map(asset_url).transpose()?;
-    let site = Site::new(&dir, asset_base.as_ref().map(|base| base.prefix.clone()))?;
+    // The files' URLs are absolute under `web.base`: the page is served at
+    // every route of the app, with no `<base href>` ([`page`]).
+    let site = Site::new(
+        &dir,
+        asset_base
+            .as_ref()
+            .map(|base| base.prefix.clone())
+            .or_else(|| base.clone()),
+    )?;
     let chunk_sides;
     let js = fs::read_to_string(&runtime.js)
         .with_context(|| format!("read {}", runtime.js.display()))?;
@@ -124,19 +157,19 @@ pub(crate) fn package(
     // shows (the app's code is minified as it is bundled).
     let js = nsh_bundler::minify_module("nsh.js", &js).map_err(anyhow::Error::msg)?;
     let js = site.add("nsh.js", js.as_bytes())?;
-    // Linked for the app: the parts of `nsh/base`, the standard modules
-    // and the app's own UI sets it does not use are left out.
-    let linkable =
-        fs::read(&runtime.wasm).with_context(|| format!("read {}", runtime.wasm.display()))?;
     // The gates the entry needs are linked into `nsh.wasm`; each other one
     // an app's chunks use is a side module of its own, which the page
     // loads before the first chunk that needs it runs (`chunkSides`), after
     // the side modules of the code it shares with other gates (`sides`).
+    // A shared runtime (`--shared-runtime`) links none: every
+    // gate is a side module, the same for every app, and the page loads
+    // those the entry needs before the app starts (`entrySides`).
     let mut sides = serde_json::Map::new();
     let mut published = BTreeSet::new();
+    let entry_sides: Vec<String>;
     // An app with Rust components of its own has a runtime built for it,
     // linkable as nsh's own, with a gate per UI set (`nsh_ui_set_*`).
-    let (linked, has_math, has_emoji) = {
+    let (linked, glue, has_math, has_emoji) = {
         let plan = GatePlan::of(built);
         if let Some(whole) = &plan.whole {
             ui::warn(whole);
@@ -145,17 +178,12 @@ pub(crate) fn package(
         let has_emoji =
             plan.main.iter().any(|g| g == EMOJI_GATE) || plan.lazy().contains(&EMOJI_GATE);
         let exports = prune::exports(&linkable)?;
-        let keep: Vec<&str> = exports
-            .iter()
-            .map(String::as_str)
-            .filter(|name| !is_gate(name) || plan.main.iter().any(|g| g == name))
-            .collect();
-        let lazy: Vec<&str> = plan
-            .lazy()
-            .into_iter()
-            .filter(|gate| exports.iter().any(|e| e == gate))
-            .collect();
-        let split = link(&linkable, runtime.glue.is_some(), &keep, &lazy)?;
+        let (keep, lazy) = if shared {
+            shared_split(&exports)
+        } else {
+            app_split(built, &plan, &linkable, &exports)?
+        };
+        let (split, glue) = link(&linkable, &keep, &lazy, bindgen.as_ref())?;
         for side in &split.sides {
             let file = side_file_name(&side.gates);
             let url = site.add(&format!("{file}.wasm"), &side.bytes)?;
@@ -165,10 +193,11 @@ pub(crate) fn package(
             sides.insert(side.name.clone(), side_entry(side, &url));
         }
         chunk_sides = plan.chunk_sides(&published);
+        entry_sides = plan.entry_sides(&published, built.rust_root);
         // A runtime published whole has the typesetter in its main module.
         let has_math = published.contains(MATH_GATE)
             || (split.sides.is_empty() && exports.iter().any(|e| e == MATH_GATE));
-        (split.main, has_math, has_emoji)
+        (split.main, glue, has_math, has_emoji)
     };
     let wasm = site.add("nsh.wasm", &linked)?;
     // What the runtime fetches when it first needs it: the syntaxes it
@@ -196,29 +225,30 @@ pub(crate) fn package(
     }
     // The wasm-bindgen glue of a runtime whose crates call JS through
     // wasm-bindgen (`crate::bindgen`).
-    let glue = runtime
-        .glue
+    let glue = glue
         .as_deref()
         .map(|path| publish_glue(&site, path))
         .transpose()?;
-    // A Rust app has no code of its own besides its runtime: the page
-    // mounts its root.
-    let code = if built.rust_root {
-        String::new()
-    } else {
-        site.add("app.js", built.code.as_bytes())?
-    };
-    // Chunk id -> URL: the page hands the map to the runtime, which fetches
-    // lazy chunks on demand. Static entry dependencies are staged before startup.
-    let mut chunks = serde_json::Map::new();
-    for chunk in &built.chunks {
-        let stem = chunk.id.strip_suffix(".js").unwrap_or(&chunk.id);
-        let url = site.add(&format!("{stem}.js"), chunk.code.as_bytes())?;
-        chunks.insert(chunk.id.clone(), url.into());
+    if let Some(run) = &bindgen {
+        run.remove_output()?;
     }
+    // A Rust app has no code of its own besides its runtime: the page
+    // mounts its root. Chunk id -> URL: the page hands the map to the
+    // runtime, which fetches lazy chunks on demand. Static entry
+    // dependencies are staged before startup.
+    let modules = if built.rust_root {
+        AppModules::default()
+    } else {
+        publish_modules(&site, &built.code, &built.chunks, built.native_use.as_ref())?
+    };
+    let AppModules {
+        code,
+        chunks,
+        linked,
+    } = modules;
     let mut assets = serde_json::Map::new();
     let mut fonts = Vec::new();
-    for asset in &built.assets {
+    for asset in built.assets_for(Some(nsh_core::platform::Os::Web)) {
         let bytes = fs::read(&asset.source).with_context(|| format!("read {}", asset.path))?;
         let url = site.add(&format!("assets/{}", asset.path), &bytes)?;
         if is_font(&asset.path) {
@@ -267,18 +297,25 @@ pub(crate) fn package(
         app["glue"] = glue.as_str().into();
     }
     app["runtime"] = site.module(&js).into();
-    let import_map = if built.rust_root {
-        None
-    } else {
-        static_imports(&site, &code, &chunks, built.native_use.as_ref())?
-    };
-    if let Some(map) = &import_map {
-        app["importMap"] = map.as_str().into();
+    if linked {
+        app["linked"] = true.into();
     }
+    // Requested with the main module while the page is parsed: the side
+    // modules the entry needs and those they import from.
+    let entry_side_urls = side_urls(&sides, &entry_sides);
+    if !entry_sides.is_empty() {
+        app["entrySides"] = entry_sides.into();
+    }
+    let style = site.add("nsh-page.css", page_style(appearance).as_bytes())?;
     let prefetch = site.add("nsh-prefetch.js", PAGE_PREFETCH.as_bytes())?;
     let start = site.add("nsh-start.js", PAGE_START.as_bytes())?;
     if let Some(history) = config.web.history {
         app["history"] = history.into();
+    }
+    // The site's base, which the app's relative URLs resolve against
+    // (the player's `baseURL`): the page is served at the app's routes.
+    if let Some(base) = &base {
+        app["base"] = base.as_str().into();
     }
     let html = page(&PageParts {
         name,
@@ -287,6 +324,7 @@ pub(crate) fn package(
         icons: &icons,
         runtime: &site.module(&js),
         wasm: &wasm,
+        entry_sides: &entry_side_urls,
         glue: glue.as_deref(),
         code: &code,
         fonts: &fonts
@@ -304,6 +342,7 @@ pub(crate) fn package(
             None => sources,
         })
         .as_deref(),
+        style: &style,
         prefetch: &prefetch,
         start: &start,
     });
@@ -315,24 +354,109 @@ pub(crate) fn package(
         ui::path(&dir),
         ui::dim(format!(", {}", ui::bytes(dir_size(&dir))))
     ));
-    // What a server with a strict policy adds for the app's realm: the
-    // page's own scripts are files ('self').
-    let hash = match &import_map {
-        Some(map) => format!(" '{}'", script_hash(map)),
-        None => String::new(),
-    };
+    // What a server with a strict policy allows: the page's scripts and
+    // styles are files ('self'), and so are a linked app's modules; the
+    // runtime shows in-memory images and `svg()`s in their color as `blob:`
+    // URLs and reads clipboard images as `data:` URIs.
+    let whole = !(linked || built.rust_root);
     ui::detail(format!(
-        "under a Content-Security-Policy it needs script-src 'self' 'wasm-unsafe-eval'{hash}{}",
-        if import_map.is_some() || built.rust_root {
-            ""
+        "under a Content-Security-Policy it needs script-src 'self' 'wasm-unsafe-eval'{}; img-src 'self' blob: data:{}",
+        if whole { " blob: 'unsafe-inline'" } else { "" },
+        if whole {
+            " (script-src: it loads a native module whole)"
         } else {
-            " blob: 'unsafe-inline' (it loads a native module whole)"
+            ""
         }
     ));
     if options.run {
         serve(&dir, base.as_deref().unwrap_or("/"))?;
     }
     Ok(())
+}
+
+/// What a shared runtime (`--shared-runtime`) keeps in its main
+/// module and splits off, whatever the app uses: every export but the
+/// gates, and every gate, in order. The same for every app on one
+/// runtime, so are its modules; the app's own gates are its `entrySides`.
+fn shared_split(exports: &[String]) -> (Vec<&str>, Vec<&str>) {
+    let (mut lazy, keep): (Vec<&str>, Vec<&str>) = exports
+        .iter()
+        .map(String::as_str)
+        .partition(|name| is_gate(name));
+    lazy.sort_unstable();
+    (keep, lazy)
+}
+
+/// What a runtime linked for `built` (not a shared one) by `plan` keeps in
+/// its main module and splits off, of `exports`, those of `linkable`:
+/// every export but the gates, and the gates of `plan.main`; each gate a
+/// chunk loads later is lazy ([`GatePlan::lazy`]).
+///
+/// A Rust app's runtime splits off the gates it loads on demand
+/// ([`rust_on_demand`]) whatever the plan, and leaves out those the app
+/// never needs, with the code only they reach ([`prune::unused_gates`]),
+/// rather than publishing side modules no page loads.
+fn app_split<'a>(
+    built: &Built,
+    plan: &GatePlan,
+    linkable: &[u8],
+    exports: &'a [String],
+) -> anyhow::Result<(Vec<&'a str>, Vec<&'a str>)> {
+    let rust_part = |name: &str| built.rust_root && rust_on_demand(name);
+    let mut keep: Vec<&str> = exports
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !is_gate(name) || (!rust_part(name) && plan.main.iter().any(|g| g == name)))
+        .collect();
+    let mut lazy: Vec<&str> = plan
+        .lazy()
+        .into_iter()
+        .filter_map(|gate| exports.iter().find(|e| *e == gate).map(String::as_str))
+        .collect();
+    lazy.extend(exports.iter().map(String::as_str).filter(|n| rust_part(n)));
+    if built.rust_root {
+        let unused = prune::unused_gates(linkable)?;
+        if !unused.is_empty() {
+            ui::debug(format!(
+                "web runtime: left out the gates the app does not need: {}",
+                unused.join(", ")
+            ));
+            let used = |name: &&str| !unused.iter().any(|u| u == name);
+            keep.retain(used);
+            lazy.retain(used);
+        }
+    }
+    Ok((keep, lazy))
+}
+
+/// The URLs of side modules `names` of the page's `sides`, each after the
+/// side modules it imports from (`needs`), each once.
+fn side_urls(sides: &serde_json::Map<String, serde_json::Value>, names: &[String]) -> Vec<String> {
+    fn visit(
+        sides: &serde_json::Map<String, serde_json::Value>,
+        name: &str,
+        seen: &mut BTreeSet<String>,
+        urls: &mut Vec<String>,
+    ) {
+        if !seen.insert(name.to_owned()) {
+            return;
+        }
+        let Some(side) = sides.get(name) else { return };
+        for need in side["needs"].as_array().into_iter().flatten() {
+            if let Some(need) = need.as_str() {
+                visit(sides, need, seen, urls);
+            }
+        }
+        if let Some(url) = side["url"].as_str() {
+            urls.push(url.to_owned());
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut urls = Vec::new();
+    for name in names {
+        visit(sides, name, &mut seen, &mut urls);
+    }
+    urls
 }
 
 /// The page's entry for side module `side`, published at `url` (its
@@ -342,7 +466,9 @@ pub(crate) fn package(
 /// imported later (`chunkSides`, the page's `prepareChunk`) or the first
 /// formula (`loadData("math")`) needs: every one is `onDemand`, which
 /// `prefetchSides` and `preloadSides` leave alone, and is fetched by the
-/// load that needs it, after the side modules it `needs`.
+/// load that needs it, after the side modules it `needs`. In a shared
+/// runtime the entry's gates are side modules too, which the page loads
+/// before the app starts (`entrySides`).
 fn side_entry(side: &prune::split::Side, url: &str) -> serde_json::Value {
     let mut entry = serde_json::json!({ "url": url, "needs": side.needs, "onDemand": true });
     if let Some(gate) = &side.gate {
@@ -358,32 +484,108 @@ const MATH_GATE: &str = "nsh_feature_math";
 const MATH_FONTS_FILE: &str = "nsh-math.bin";
 /// The gate of `EmojiPicker`.
 const EMOJI_GATE: &str = "nsh_part_emoji_picker";
+/// Whether a Rust app's runtime (`built.rust_root`) publishes gate `name`
+/// as a side module the page loads on demand, whatever the plan: the parts
+/// of `nsh/base` (`nsh_part_*`), whose components the app makes by name
+/// (`ComponentElement::by_name`), so each loads when one first mounts
+/// (what the app makes by type is linked where it is used, in the main
+/// module); and shaders ([`SHADER_GATE`]), whose translation to GLSL ES
+/// (naga) loads when the app first shows one.
+fn rust_on_demand(name: &str) -> bool {
+    name.starts_with("nsh_part_") || name == SHADER_GATE
+}
+
+/// Shaders: the core's compiler of their sources and their translation to
+/// GLSL ES (`nsh-platform-web`'s `shader.rs`).
+const SHADER_GATE: &str = "nsh_feature_shader";
 /// `EmojiPicker`'s emoji, which the page fetches for the first picker.
 const EMOJI_FILE: &str = "nsh-emoji.bin";
 
 /// The modules published for an app from its linkable runtime: the main
-/// module with `keep` and side modules for `lazy` ([`split::split`]). A
-/// runtime wasm-bindgen ran on (`bindgen`) is published whole, every gate
-/// in it: wasm-bindgen rewrites the module and keeps the `linking` and
-/// `reloc.*` sections of the one it read, which no longer describe it.
+/// module with `keep` and side modules for `lazy` ([`split::split`]).
+///
+/// A runtime whose crates call JS through wasm-bindgen (`bindgen`) is split
+/// the same way first: wasm-bindgen rewrites the module it reads and keeps
+/// its `linking` and `reloc.*` sections, which then no longer describe it.
+/// It runs on the main module alone, which keeps what it reads and
+/// rewrites, and must still have what the side modules import from it
+/// ([`split::check_processed`]). Its glue is returned with the modules.
 pub(crate) fn link(
     linkable: &[u8],
-    bindgen: bool,
     keep: &[&str],
     lazy: &[&str],
-) -> anyhow::Result<prune::split::Split> {
-    if bindgen {
-        return Ok(prune::split::Split {
-            main: prune::unlinked(linkable)?,
-            sides: Vec::new(),
-        });
+    bindgen: Option<&BindgenRun>,
+) -> anyhow::Result<(prune::split::Split, Option<PathBuf>)> {
+    let mut split = split::split(linkable, keep, lazy, bindgen.is_some())?;
+    let Some(run) = bindgen else {
+        return Ok((split, None));
+    };
+    let input = run.out.join(format!("{}-split.wasm", run.name));
+    fs::write(&input, &split.main).with_context(|| format!("write {}", input.display()))?;
+    let glue = crate::bindgen::process(&input, &run.version, &run.out, &run.name);
+    let _ = fs::remove_file(&input);
+    let glue = glue?;
+    let output = run.out.join(format!("{}.wasm", run.name));
+    let processed = fs::read(&output).with_context(|| format!("read {}", output.display()));
+    let main = processed.and_then(|processed| {
+        split::check_processed(&split.main, &processed)?;
+        prune::unlinked(&processed)
+    });
+    match main {
+        Ok(main) => split.main = main,
+        Err(error) => {
+            let _ = run.remove_output();
+            return Err(error);
+        }
     }
-    split::split(linkable, keep, lazy)
+    Ok((split, Some(glue)))
+}
+
+/// Where wasm-bindgen runs on a runtime's main module ([`link`]): the
+/// version the runtime records, and the directory and name of its output
+/// (`bindgen::process`).
+pub(crate) struct BindgenRun {
+    version: String,
+    out: PathBuf,
+    name: String,
+}
+
+impl BindgenRun {
+    /// Its output next to the runtime `wasm`, named after it:
+    /// `<runtime>-main.wasm`, `<runtime>-main-bindgen.js`.
+    pub(crate) fn next_to(wasm: &Path, version: String) -> anyhow::Result<Self> {
+        let out = wasm.parent().context("the web runtime has no directory")?;
+        let stem = wasm
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("the web runtime has no name")?;
+        Ok(BindgenRun {
+            version,
+            out: out.to_owned(),
+            name: format!("{stem}-main"),
+        })
+    }
+
+    /// Removes what [`link`] had wasm-bindgen write: the module, the glue
+    /// and its snippets, once the package has them.
+    pub(crate) fn remove_output(&self) -> anyhow::Result<()> {
+        let glue = self.out.join(format!("{}-bindgen.js", self.name));
+        let dir = crate::bindgen::output_dir(&glue);
+        for file in [self.out.join(format!("{}.wasm", self.name)), glue] {
+            if file.exists() {
+                fs::remove_file(&file).with_context(|| format!("remove {}", file.display()))?;
+            }
+        }
+        if dir.exists() {
+            fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
+        }
+        Ok(())
+    }
 }
 
 /// `nsh.json` `web.base`: a path from the host's root, ending in `/` (one
 /// is added), in the form browsers send it: segments that are
-/// [sent as written](is_sent_as_written). The page's `<base href>`, the
+/// [sent as written](is_sent_as_written). The prefix of the page's URLs, the
 /// address `--run` prints and the path [`nsh_dev::SiteServer::start_at`]
 /// matches requests against are then one string, which a browser neither
 /// encodes (`/应用/` is `/%E5%BA%94%E7%94%A8/`) nor normalizes (`/a/%2e/`
@@ -465,59 +667,198 @@ fn native_exports(uses: Option<&nsh_bundler::NativeUse>) -> serde_json::Value {
     out.into()
 }
 
-/// The import map of the app's realm, as the JSON its `<script
-/// type="importmap">` holds (`browser/runtime.js`, `importMap`), with the
-/// facade module of each native module it imports (what the runtime
-/// otherwise makes as `blob:` URLs, `facadeURL`) written as a file: the
-/// same text on every start, so a strict `script-src` allows it by its
-/// hash ([`script_hash`]) and needs no `blob:`. None when the app imports
-/// a native module whole (a namespace, `import()`), whose names only the
-/// runtime knows: the runtime makes the map then.
-fn static_imports(
+/// The app's modules as [`publish_modules`] wrote them.
+#[derive(Default)]
+struct AppModules {
+    /// The entry's URL (empty for a Rust app, which has none).
+    code: String,
+    /// Each chunk's URL by its id.
+    chunks: serde_json::Map<String, serde_json::Value>,
+    /// Whether they import one another and the native modules by their
+    /// files' URLs (the runtime's `linked`).
+    linked: bool,
+}
+
+/// Writes the app's modules: its entry `code` (which chunks import as
+/// `bundle.js`) and its `chunks`. Linked, their static imports name the
+/// files they are published as, the entry and the chunks by relative URLs
+/// and each native module by its facade, a file too ([`facade`]): the
+/// browser resolves them with no import map, an inline script a strict
+/// `script-src` refuses. A module's name carries the digest of everything
+/// it imports, directly or not, so a file keeps its name only while what
+/// it links to does. Not linked when the app imports a native module
+/// whole (a namespace, `import()`), whose names only the runtime knows:
+/// the runtime makes the map and the facades as the app starts.
+fn publish_modules(
     site: &Site,
     code: &str,
-    chunks: &serde_json::Map<String, serde_json::Value>,
+    chunks: &[crate::build::BuiltChunk],
     uses: Option<&nsh_bundler::NativeUse>,
-) -> anyhow::Result<Option<String>> {
-    let Some(uses) = uses else {
-        return Ok(None);
+) -> anyhow::Result<AppModules> {
+    const ENTRY: &str = "bundle.js";
+    // Each native module the app imports by name, by its facade's path.
+    let by_name = uses.filter(|uses| {
+        !uses.computed_import
+            && uses
+                .imports
+                .values()
+                .all(|imported| matches!(imported, nsh_bundler::Imported::Names(_)))
+    });
+    let facades = match by_name {
+        Some(uses) => {
+            let mut facades = BTreeMap::new();
+            for (specifier, imported) in &uses.imports {
+                let nsh_bundler::Imported::Names(names) = imported else {
+                    continue;
+                };
+                let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                let slug: String = specifier
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                    .collect();
+                let path = site.put(
+                    &format!("facades/{slug}.js"),
+                    facade(specifier, &names).as_bytes(),
+                )?;
+                facades.insert(specifier.clone(), path);
+            }
+            Some(facades)
+        }
+        None => None,
     };
-    if uses.computed_import {
-        return Ok(None);
-    }
-    // Keys and values as the realm resolves them: against the page's base,
-    // or the files' own (`--asset-url`).
-    // A file's URL ([`Site::add`]) as a specifier, and a path of the site's.
-    let at = |url: &str| site.module(url);
-    let path = |path: &str| {
-        site.module(&format!(
-            "{}{path}",
-            site.base.as_deref().unwrap_or_default()
-        ))
+    let Some(facades) = facades else {
+        let mut published = serde_json::Map::new();
+        for chunk in chunks {
+            let stem = chunk.id.strip_suffix(".js").unwrap_or(&chunk.id);
+            let url = site.add(&format!("{stem}.js"), chunk.code.as_bytes())?;
+            published.insert(chunk.id.clone(), url.into());
+        }
+        return Ok(AppModules {
+            code: site.add("app.js", code.as_bytes())?,
+            chunks: published,
+            linked: false,
+        });
     };
-    let mut imports = BTreeMap::new();
-    // A chunk imports the entry as `bundle.js`; chunk ids are relative to
-    // the entry.
-    imports.insert(path("bundle.js"), at(code));
-    for (id, url) in chunks {
-        imports.insert(path(id), at(url.as_str().unwrap_or_default()));
+    // The modules by id, chunks' as they import them (`./Screen.js` is
+    // `Screen.js`), and the ids of the modules each imports statically.
+    let mut modules: BTreeMap<String, (&str, String)> = BTreeMap::new();
+    modules.insert(ENTRY.to_owned(), (code, "app.js".to_owned()));
+    for chunk in chunks {
+        let id = chunk.id.trim_start_matches("./");
+        let stem = id.strip_suffix(".js").unwrap_or(id);
+        modules.insert(id.to_owned(), (&chunk.code, format!("{stem}.js")));
     }
-    for (specifier, imported) in &uses.imports {
-        let nsh_bundler::Imported::Names(names) = imported else {
-            return Ok(None);
-        };
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let slug: String = specifier
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect();
-        let url = site.add(
-            &format!("facades/{slug}.js"),
-            facade(specifier, &names).as_bytes(),
-        )?;
-        imports.insert(specifier.clone(), at(&url));
+    let mut imports: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (id, (code, _)) in &modules {
+        let mut found = Vec::new();
+        nsh_bundler::rewrite_imports(id, code, |source| {
+            if let Some(target) = join_path(id, source).filter(|t| modules.contains_key(t)) {
+                found.push(target);
+            }
+            None
+        })
+        .map_err(anyhow::Error::msg)?;
+        imports.insert(id, found);
     }
-    Ok(Some(serde_json::json!({ "imports": imports }).to_string()))
+    // Every module's name, from the digest of the modules it reaches and
+    // the facades.
+    let mut names = BTreeMap::new();
+    for id in modules.keys() {
+        let mut reached = BTreeSet::from([id.as_str()]);
+        let mut queue = vec![id.as_str()];
+        while let Some(next) = queue.pop() {
+            for target in &imports[next] {
+                if reached.insert(target) {
+                    queue.push(target);
+                }
+            }
+        }
+        let mut hasher = Sha256::new();
+        for reached in &reached {
+            hasher.update(reached.as_bytes());
+            hasher.update([0]);
+            hasher.update(modules[*reached].0.as_bytes());
+            hasher.update([0]);
+        }
+        for (specifier, path) in &facades {
+            hasher.update(specifier.as_bytes());
+            hasher.update([0]);
+            hasher.update(path.as_bytes());
+            hasher.update([0]);
+        }
+        names.insert(
+            id.as_str(),
+            with_digest(&modules[id].1, &hex_digest(&hasher.finalize())),
+        );
+    }
+    let mut published = AppModules {
+        linked: true,
+        ..AppModules::default()
+    };
+    for (id, (code, _)) in &modules {
+        let name = &names[id.as_str()];
+        let linked = nsh_bundler::rewrite_imports(id, code, |source| {
+            let target = match join_path(id, source) {
+                Some(target) if modules.contains_key(&target) => &names[target.as_str()],
+                _ => facades.get(source)?,
+            };
+            Some(url_path(&relative_path(name, target)))
+        })
+        .map_err(anyhow::Error::msg)?;
+        site.write(name, linked.as_bytes())?;
+        let url = site.url(name);
+        if id == ENTRY {
+            published.code = url;
+        }
+    }
+    for chunk in chunks {
+        let name = &names[chunk.id.trim_start_matches("./")];
+        published
+            .chunks
+            .insert(chunk.id.clone(), site.url(name).into());
+    }
+    Ok(published)
+}
+
+/// The id of the module `source` names from module `from` (both paths of
+/// the site), or `None` for a source that is not a relative path.
+fn join_path(from: &str, source: &str) -> Option<String> {
+    if !source.starts_with("./") && !source.starts_with("../") {
+        return None;
+    }
+    let mut parts: Vec<&str> = from.split('/').collect();
+    parts.pop();
+    for segment in source.split('/') {
+        match segment {
+            "." | "" => {}
+            ".." => {
+                parts.pop()?;
+            }
+            segment => parts.push(segment),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// The relative URL path of file `to` from file `from` (paths of the
+/// site), as a module imports it: `./x.js`, `../x.js`.
+fn relative_path(from: &str, to: &str) -> String {
+    let mut from: Vec<&str> = from.split('/').collect();
+    from.pop();
+    let to: Vec<&str> = to.split('/').collect();
+    let (dirs, file) = to.split_at(to.len() - 1);
+    let common = from.iter().zip(dirs).take_while(|(a, b)| a == b).count();
+    let mut out = if common == from.len() {
+        "./".to_owned()
+    } else {
+        "../".repeat(from.len() - common)
+    };
+    for part in dirs[common..].iter().chain(file) {
+        out.push_str(part);
+        out.push('/');
+    }
+    out.pop();
+    out
 }
 
 /// The module that stands for native module `specifier`, exporting `names`
@@ -540,17 +881,6 @@ fn facade(specifier: &str, names: &[&str]) -> String {
         );
     }
     out
-}
-
-/// The CSP source that allows an inline script of `text`.
-fn script_hash(text: &str) -> String {
-    use base64::Engine as _;
-    use sha2::Digest as _;
-    let digest = sha2::Sha256::digest(text.as_bytes());
-    format!(
-        "sha256-{}",
-        base64::engine::general_purpose::STANDARD.encode(digest)
-    )
 }
 
 /// Which gates ([`is_gate`]) a runtime published for an app links into its
@@ -660,6 +990,20 @@ impl GatePlan {
             set.insert(MATH_GATE);
         }
         set.into_iter().collect()
+    }
+
+    /// The page's `entrySides`: the gates of `main` that have a side module
+    /// of those `published`, which the page loads before the app starts.
+    /// None but in a shared runtime, whose main module has no gate, and
+    /// none in a Rust app's runtime (`rust_root`): the gates it splits off
+    /// ([`rust_on_demand`]) load when the app first makes a component of
+    /// their part by name or first shows a shader.
+    fn entry_sides(&self, published: &BTreeSet<String>, rust_root: bool) -> Vec<String> {
+        self.main
+            .iter()
+            .filter(|gate| published.contains(*gate) && !(rust_root && rust_on_demand(gate)))
+            .cloned()
+            .collect()
     }
 
     /// The page's map, chunk id -> the side modules (named by their gates)
@@ -1021,7 +1365,11 @@ fn publish_glue(site: &Site, path: &Path) -> anyhow::Result<String> {
 
 /// The first [`DIGEST_LEN`] hex digits of the SHA-256 of `bytes`.
 fn digest(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
+    hex_digest(&Sha256::digest(bytes))
+}
+
+/// The first [`DIGEST_LEN`] hex digits of `digest`, a SHA-256.
+fn hex_digest(digest: &[u8]) -> String {
     let mut hex = String::with_capacity(DIGEST_LEN);
     for byte in digest.iter().take(DIGEST_LEN.div_ceil(2)) {
         let _ = write!(hex, "{byte:02x}");
@@ -1225,8 +1573,9 @@ fn asset_url(given: &str) -> anyhow::Result<AssetUrl> {
 /// A directory files are added to under content-addressed names.
 struct Site {
     dir: PathBuf,
-    /// Where the files are served from (`--asset-url`, ending in `/`), or
-    /// `None`: next to the page.
+    /// Where the files are served from, ending in `/`: `--asset-url`, else
+    /// nsh.json `web.base` (a path from the host's root), or `None`: next
+    /// to the page.
     base: Option<String>,
 }
 
@@ -1240,16 +1589,28 @@ impl Site {
     }
 
     /// Writes `bytes` as `path` with their digest in its name
-    /// ([`hashed_name`]); returns the URL the page names it by: under
-    /// `base`, else relative to the page.
+    /// ([`hashed_name`]); returns the URL the page names it by
+    /// ([`Site::url`]).
     fn add(&self, path: &str, bytes: &[u8]) -> anyhow::Result<String> {
+        Ok(self.url(&self.put(path, bytes)?))
+    }
+
+    /// Writes `bytes` as `path` with their digest in its name
+    /// ([`hashed_name`]); returns that name, a path of the site.
+    fn put(&self, path: &str, bytes: &[u8]) -> anyhow::Result<String> {
         let name = hashed_name(path, bytes);
         self.write(&name, bytes)?;
-        Ok(format!(
+        Ok(name)
+    }
+
+    /// The URL of the site's file `name`: under `base`, else relative to
+    /// the page.
+    fn url(&self, name: &str) -> String {
+        format!(
             "{}{}",
             self.base.as_deref().unwrap_or_default(),
-            url_path(&name)
-        ))
+            url_path(name)
+        )
     }
 
     /// A URL [`Site::add`] gave as a module specifier the page imports: a
@@ -1276,7 +1637,12 @@ impl Site {
 /// extension), the digest being the first [`DIGEST_LEN`] hex digits of
 /// the SHA-256 of `bytes`.
 fn hashed_name(path: &str, bytes: &[u8]) -> String {
-    let hex = digest(bytes);
+    with_digest(path, &digest(bytes))
+}
+
+/// `dir/name.ext` → `dir/name.<hex>.ext` (`name.<hex>` without an
+/// extension).
+fn with_digest(path: &str, hex: &str) -> String {
     let (dir, file) = match path.rsplit_once('/') {
         Some((dir, file)) => (format!("{dir}/"), file),
         None => (String::new(), path),
@@ -1493,12 +1859,16 @@ fn connect_src(
 struct PageParts<'a> {
     name: &'a str,
     appearance: Appearance,
-    /// The page's `<base href>` ([`page_base`]).
+    /// nsh.json `web.base` ([`page_base`]), which the page's own URLs
+    /// (the manifest's) start with.
     base: Option<&'a str>,
     icons: &'a Icons,
     /// The module specifier of `nsh.js`.
     runtime: &'a str,
     wasm: &'a str,
+    /// URLs of the side modules the entry needs (`entrySides`), each after
+    /// those it imports from ([`side_urls`]).
+    entry_sides: &'a [String],
     /// URL of the wasm-bindgen glue, if the runtime has one.
     glue: Option<&'a str>,
     code: &'a str,
@@ -1508,19 +1878,21 @@ struct PageParts<'a> {
     app: &'a serde_json::Value,
     /// The page's `connect-src` ([`connect_src`]).
     connect: Option<&'a str>,
+    /// URL of the page's styles ([`page_style`]).
+    style: &'a str,
     /// URLs of the page's scripts ([`PAGE_PREFETCH`], [`PAGE_START`]).
     prefetch: &'a str,
     start: &'a str,
 }
 
-/// The app's `index.html`.
+/// The app's `index.html`. It holds no inline code or styles and no
+/// `<base href>`, which a strict `style-src`, `script-src` and `base-uri`
+/// refuse: under `web.base` it names every file by an absolute URL, so it
+/// loads at any of the app's paths, and the player takes the base from
+/// the app's JSON (`base`).
 fn page(parts: &PageParts<'_>) -> String {
     let (light, dark) = parts.appearance.colors();
     let mut head = String::new();
-    // First: every relative URL after it resolves against it.
-    if let Some(base) = parts.base {
-        let _ = writeln!(head, "<base href=\"{base}\">");
-    }
     if let Some(sources) = parts.connect {
         let _ = writeln!(
             head,
@@ -1551,7 +1923,8 @@ fn page(parts: &PageParts<'_>) -> String {
     }
     let _ = writeln!(
         head,
-        "<link rel=\"manifest\" href=\"manifest.webmanifest\">"
+        "<link rel=\"manifest\" href=\"{}manifest.webmanifest\">",
+        parts.base.unwrap_or_default()
     );
     if let Some(favicon) = &parts.icons.favicon {
         let _ = writeln!(
@@ -1577,6 +1950,7 @@ fn page(parts: &PageParts<'_>) -> String {
     let urls: Vec<&str> = [parts.wasm, parts.code]
         .into_iter()
         .filter(|url| !url.is_empty())
+        .chain(parts.entry_sides.iter().map(String::as_str))
         .chain(parts.fonts.iter().map(String::as_str))
         .collect();
     let urls = serde_json::json!(urls).to_string().replace("</", "<\\/");
@@ -1587,7 +1961,17 @@ fn page(parts: &PageParts<'_>) -> String {
     );
     // JSON in a script: `</script>` in a string must not end it.
     let app = parts.app.to_string().replace("</", "<\\/");
-    // The page's colors until the app draws (and on its error screen).
+    PAGE.replace("{{title}}", &escape_html(parts.name))
+        .replace("{{head}}", head.trim_end())
+        .replace("{{style}}", parts.style)
+        .replace("{{start}}", parts.start)
+        .replace("{{app}}", &app)
+}
+
+/// The page's styles ([`PAGE_STYLE`]) with its colors until the app draws
+/// (and on its error screen).
+fn page_style(appearance: Appearance) -> String {
+    let (light, dark) = appearance.colors();
     let colors = |background: &str| {
         let text = if background == DARK {
             "#f2f2f7"
@@ -1596,19 +1980,15 @@ fn page(parts: &PageParts<'_>) -> String {
         };
         format!("html, body {{ background: {background}; color: {text}; }}")
     };
-    let colors = match parts.appearance {
+    let colors = match appearance {
         Appearance::System => format!(
-            "  {}\n  @media (prefers-color-scheme: dark) {{ {} }}",
+            "{}\n@media (prefers-color-scheme: dark) {{ {} }}",
             colors(light),
             colors(dark)
         ),
-        Appearance::Light | Appearance::Dark => format!("  {}", colors(light)),
+        Appearance::Light | Appearance::Dark => colors(light),
     };
-    PAGE.replace("{{title}}", &escape_html(parts.name))
-        .replace("{{head}}", head.trim_end())
-        .replace("{{colors}}", &colors)
-        .replace("{{start}}", parts.start)
-        .replace("{{app}}", &app)
+    PAGE_STYLE.replace("{{colors}}", &colors)
 }
 
 fn escape_html(text: &str) -> String {
@@ -1657,6 +2037,66 @@ fn side_file_name(gates: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rust_app_loads_its_parts_and_shaders_on_demand() {
+        assert!(rust_on_demand("nsh_part_rich_editor"));
+        // naga's GLSL ES back end, which an app without shaders never loads
+        // (#3048).
+        assert!(rust_on_demand(SHADER_GATE));
+        assert!(is_gate(SHADER_GATE));
+        // What the engine runs from the start stays in the main module.
+        assert!(!rust_on_demand("nsh_std_zlib"));
+        assert!(!rust_on_demand(&ui_set_gate("app/charts")));
+    }
+
+    #[test]
+    fn a_rust_app_loads_a_part_when_it_first_makes_one_of_its_components() {
+        let marker = nsh_core::element::__private::BY_NAME_MARKER;
+        let wasm = prune::tests::module_named(
+            "nsh_part_plot",
+            &format!("nsh_core::element::component::{marker}"),
+        );
+        let exports = prune::exports(&wasm).unwrap();
+        let built = crate::build::rust_root();
+        // Not known what a Rust app uses: every gate is the entry's.
+        let plan = GatePlan::of(&built);
+        assert!(plan.main.iter().any(|g| g == "nsh_part_plot"));
+        let (keep, lazy) = app_split(&built, &plan, &wasm, &exports).unwrap();
+        assert_eq!(keep, ["a"]);
+        assert_eq!(lazy, ["nsh_part_plot"]);
+        // Its side modules wait for their first use, not for the start.
+        let published = BTreeSet::from(["nsh_part_plot".to_owned(), SHADER_GATE.to_owned()]);
+        assert!(plan.entry_sides(&published, true).is_empty());
+        // Another app's entry gates with side modules (a shared runtime's)
+        // load before it starts.
+        assert_eq!(
+            plan.entry_sides(&published, false),
+            ["nsh_part_plot", SHADER_GATE]
+        );
+    }
+
+    #[test]
+    fn a_rust_app_leaves_out_the_gates_it_never_needs() {
+        // No component made by name. The runtime calls no JS through
+        // wasm-bindgen, which makes no difference.
+        let wasm =
+            prune::tests::module_named("nsh_part_plot", "nsh_core::element::component::missing_x");
+        let exports = prune::exports(&wasm).unwrap();
+        let built = crate::build::rust_root();
+        let plan = GatePlan::of(&built);
+        let (keep, lazy) = app_split(&built, &plan, &wasm, &exports).unwrap();
+        assert_eq!(keep, ["a"]);
+        assert!(lazy.is_empty());
+
+        // Another app's runtime keeps the gates its plan has.
+        let mut tsx = crate::build::rust_root();
+        tsx.rust_root = false;
+        let plan = GatePlan::of(&tsx);
+        let (keep, lazy) = app_split(&tsx, &plan, &wasm, &exports).unwrap();
+        assert_eq!(keep, ["nsh_part_plot", "a"]);
+        assert!(lazy.is_empty());
+    }
 
     #[test]
     fn names_carry_the_digest_of_the_content() {
@@ -1763,80 +2203,172 @@ mod tests {
         assert_eq!(native_exports(Some(&app)), serde_json::json!({}));
     }
 
+    fn chunk(id: &str, code: &str) -> crate::build::BuiltChunk {
+        crate::build::BuiltChunk {
+            id: id.into(),
+            code: code.into(),
+            bytecode: Vec::new(),
+            source_map: None,
+            native_use: None,
+        }
+    }
+
+    /// The sources of the static imports of the module at `path`, a file
+    /// of `dir`, resolved as the browser resolves them: paths of `dir`.
+    fn linked_imports(dir: &Path, path: &str) -> Vec<String> {
+        let code = fs::read_to_string(dir.join(path)).unwrap();
+        let mut sources = Vec::new();
+        nsh_bundler::rewrite_imports(path, &code, |source| {
+            sources.push(source.to_owned());
+            None
+        })
+        .unwrap();
+        sources
+            .iter()
+            .map(|source| {
+                join_path(path, source).unwrap_or_else(|| panic!("{path}: bare {source}"))
+            })
+            .collect()
+    }
+
     /// A strict `script-src` runs an app whose native imports are all by
-    /// name: its realm's import map is fixed text (allowed by its hash) and
-    /// names its facades as files, not `blob:` URLs; one importing a module
-    /// whole leaves the map to the runtime.
+    /// name: its modules import one another and the facades of the native
+    /// modules, files too, by their URLs, so the realm needs no import map
+    /// (inline) and no `blob:` URL. One importing a module whole leaves
+    /// the map to the runtime.
     #[test]
-    fn the_import_map_is_fixed_when_every_native_import_is_by_name() {
+    fn modules_link_to_their_files_when_every_native_import_is_by_name() {
         let dir = std::env::temp_dir().join(format!("nsh-web-imports-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let site = Site::new(&dir, None).unwrap();
-        let mut chunks = serde_json::Map::new();
-        chunks.insert("Later.js".into(), "Later.1.js".into());
+        let entry = "import{View as a}from\"nsh\";import{s}from\"./shared.js\";\
+                     export const e=1;const L=()=>__nsh_import(`Later.js`,[`shared.js`]);";
+        let chunks = |later: &str| {
+            vec![
+                chunk(
+                    "shared.js",
+                    "import{e}from\"./bundle.js\";export const s=e;",
+                ),
+                chunk("Later.js", later),
+                chunk(
+                    "screens/Deep.js",
+                    "import{s}from\"../shared.js\";import{View}from\"nsh\";export{s,View};",
+                ),
+                chunk("leaf.js", "export const l=1;"),
+            ]
+        };
+        let later = "import{s}from\"./shared.js\";import x from\"nsh\";export default [s,x];";
         let mut app = uses(&[
             ("nsh", Some(&["View", "default"])),
             ("nsh/effects", Some(&[])),
         ]);
-        let map = static_imports(&site, "app.1.js", &chunks, Some(&app))
-            .unwrap()
-            .unwrap();
-        let json: serde_json::Value = serde_json::from_str(&map).unwrap();
-        let imports = json["imports"].as_object().unwrap();
-        assert_eq!(imports["./bundle.js"], "./app.1.js");
-        assert_eq!(imports["./Later.js"], "./Later.1.js");
-        let facade = imports["nsh"].as_str().unwrap();
-        assert!(facade.starts_with("./facades/nsh."), "{facade}");
-        let code = fs::read_to_string(dir.join(&facade[2..])).unwrap();
-        assert!(
-            code.contains("let e0=host.get(\"nsh\")[\"View\"];export{e0 as \"View\"};"),
-            "{code}"
-        );
-        assert!(code.contains("export{e1 as \"default\"}"), "{code}");
-        assert!(code.contains(".watch(()=>{e0="), "{code}");
-        assert!(
-            imports["nsh/effects"]
-                .as_str()
-                .unwrap()
-                .starts_with("./facades/nsh-effects.")
-        );
-        // The same app, the same text.
+        let published = publish_modules(&site, entry, &chunks(later), Some(&app)).unwrap();
+        assert!(published.linked);
+        let code = published.code.clone();
+        assert!(code.starts_with("app.") && code.ends_with(".js"), "{code}");
+        let url = |id: &str| published.chunks[id].as_str().unwrap().to_owned();
+        // Every module imports files of the site, at the paths they have.
+        let files = [
+            &code,
+            &url("shared.js"),
+            &url("Later.js"),
+            &url("screens/Deep.js"),
+        ];
+        for file in files {
+            for import in linked_imports(&dir, file) {
+                assert!(dir.join(&import).is_file(), "{file}: {import}");
+            }
+        }
         assert_eq!(
-            static_imports(&site, "app.1.js", &chunks, Some(&app))
-                .unwrap()
-                .unwrap(),
-            map
+            linked_imports(&dir, &code),
+            [
+                linked_imports(&dir, &url("Later.js"))[1].clone(),
+                url("shared.js")
+            ]
         );
-        assert!(script_hash(&map).starts_with("sha256-"));
-        // Files of another origin (`--asset-url`) are named by their URLs.
-        let cdn = Site::new(&dir, Some("https://cdn.example.com/a/".into())).unwrap();
-        let map = static_imports(
-            &cdn,
-            "https://cdn.example.com/a/app.1.js",
-            &serde_json::Map::new(),
-            Some(&app),
-        )
-        .unwrap()
-        .unwrap();
+        assert_eq!(
+            linked_imports(&dir, &url("shared.js")),
+            std::slice::from_ref(&code)
+        );
+        let deep = linked_imports(&dir, &url("screens/Deep.js"));
+        assert_eq!(deep[0], url("shared.js"));
+        assert!(deep[1].starts_with("facades/nsh."), "{deep:?}");
+        let source = fs::read_to_string(dir.join(url("screens/Deep.js"))).unwrap();
+        assert!(source.contains("from\"../shared."), "{source}");
+        let facade = fs::read_to_string(dir.join(&deep[1])).unwrap();
         assert!(
-            map.contains(
-                "\"https://cdn.example.com/a/bundle.js\":\"https://cdn.example.com/a/app.1.js\""
-            ),
-            "{map}"
+            facade.contains("let e0=host.get(\"nsh\")[\"View\"];export{e0 as \"View\"};"),
+            "{facade}"
         );
+        assert!(facade.contains("export{e1 as \"default\"}"), "{facade}");
+        assert!(facade.contains(".watch(()=>{e0="), "{facade}");
+        // Lazy chunks are still loaded by id.
+        let source = fs::read_to_string(dir.join(&code)).unwrap();
+        assert!(
+            source.contains("__nsh_import(`Later.js`,[`shared.js`])"),
+            "{source}"
+        );
+        // The same app, the same names; a module changed renames only the
+        // modules that reach it (`Later.js` is loaded, not imported).
+        let again = publish_modules(&site, entry, &chunks(later), Some(&app)).unwrap();
+        assert_eq!(
+            (&again.code, &again.chunks),
+            (&published.code, &published.chunks)
+        );
+        let changed =
+            publish_modules(&site, entry, &chunks("export default 2;"), Some(&app)).unwrap();
+        assert_eq!(changed.code, published.code);
+        assert_eq!(changed.chunks["shared.js"], published.chunks["shared.js"]);
+        assert_ne!(changed.chunks["Later.js"], published.chunks["Later.js"]);
+        // Files of another origin (`--asset-url`) are named by their URLs
+        // and import one another relatively.
+        let cdn = Site::new(&dir, Some("https://cdn.example.com/a/".into())).unwrap();
+        let on_cdn = publish_modules(&cdn, entry, &chunks(later), Some(&app)).unwrap();
+        assert_eq!(on_cdn.code, format!("https://cdn.example.com/a/{code}"));
+        // A module imported whole: the runtime makes the map.
         app.imports
             .insert("nsh/base".into(), nsh_bundler::Imported::All);
+        let whole = publish_modules(&site, entry, &chunks(later), Some(&app)).unwrap();
+        assert!(!whole.linked);
         assert_eq!(
-            static_imports(&site, "app.1.js", &chunks, Some(&app)).unwrap(),
-            None
+            fs::read_to_string(dir.join(&whole.code)).unwrap(),
+            entry,
+            "kept as bundled"
         );
         app.imports.remove("nsh/base");
         app.computed_import = true;
-        assert_eq!(
-            static_imports(&site, "app.1.js", &chunks, Some(&app)).unwrap(),
-            None
+        assert!(
+            !publish_modules(&site, entry, &chunks(later), Some(&app))
+                .unwrap()
+                .linked
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn relative_paths_are_what_modules_import() {
+        assert_eq!(join_path("a.js", "./b.js").as_deref(), Some("b.js"));
+        assert_eq!(join_path("x/a.js", "../b.js").as_deref(), Some("b.js"));
+        assert_eq!(join_path("x/a.js", "./y/b.js").as_deref(), Some("x/y/b.js"));
+        assert_eq!(join_path("a.js", "../b.js"), None);
+        assert_eq!(join_path("a.js", "nsh"), None);
+        assert_eq!(relative_path("a.1.js", "b.2.js"), "./b.2.js");
+        assert_eq!(relative_path("x/a.1.js", "b.2.js"), "../b.2.js");
+        assert_eq!(
+            relative_path("a.1.js", "facades/nsh.2.js"),
+            "./facades/nsh.2.js"
+        );
+        assert_eq!(relative_path("x/y/a.js", "x/z/b.js"), "../z/b.js");
+        for (from, to) in [
+            ("a.js", "x/y/b.js"),
+            ("x/y/a.js", "b.js"),
+            ("x/a.js", "x/b.js"),
+        ] {
+            assert_eq!(
+                join_path(from, &relative_path(from, to)).as_deref(),
+                Some(to)
+            );
+        }
     }
 
     /// A namespace read by name (`base.EmojiPicker`, so that shells without
@@ -1982,33 +2514,6 @@ mod tests {
     }
 
     #[test]
-    fn a_runtime_wasm_bindgen_ran_on_is_published_whole() {
-        // `run`, a function `() -> ()` that returns at once.
-        let mut module = b"\0asm\x01\0\0\0".to_vec();
-        module.extend([1, 4, 1, 0x60, 0, 0]);
-        module.extend([3, 2, 1, 0]);
-        module.extend([7, 7, 1, 3, b'r', b'u', b'n', 0, 0]);
-        module.extend([10, 4, 1, 2, 0, 0x0b]);
-        // The linker's sections of the module wasm-bindgen read, which it
-        // keeps: their symbol names function 7, which it removed.
-        let mut runtime = module.clone();
-        runtime.extend([0, 19, 7]);
-        runtime.extend(b"linking");
-        runtime.extend([2, 8, 8, 1, 0, 0, 7, 3, b'r', b'u', b'n']);
-        runtime.extend([0, 13, 10]);
-        runtime.extend(b"reloc.CODE");
-        runtime.extend([3, 0]);
-        let error = link(&runtime, false, &["run"], &[]).err().unwrap();
-        assert_eq!(
-            error.to_string(),
-            "a symbol names function 7, which the web runtime does not have"
-        );
-        let published = link(&runtime, true, &["run"], &[]).unwrap();
-        assert_eq!(published.main, module);
-        assert!(published.sides.is_empty());
-    }
-
-    #[test]
     fn a_plan_that_keeps_every_gate_says_why_and_where() {
         let chunk = |id: &str, uses: nsh_bundler::NativeUse| crate::build::BuiltChunk {
             id: id.to_owned(),
@@ -2119,6 +2624,93 @@ mod tests {
         assert_eq!(plan.main, linked_gates(built.native_use.as_ref()));
         built.entry_native_use = None;
         assert!(GatePlan::of(&built).chunks.is_empty());
+    }
+
+    #[test]
+    fn a_shared_runtime_splits_off_every_gate_whatever_the_app_uses() {
+        let exports: Vec<String> = [
+            "nsh_start",
+            "nsh_std_zlib",
+            "nsh_part_menu",
+            "nsh_pump",
+            "nsh_part_core",
+            "nsh_feature_shader",
+            "nsh_set_dark",
+        ]
+        .map(String::from)
+        .to_vec();
+        let (keep, lazy) = shared_split(&exports);
+        // `nsh_set_*` reads like a gate but is not one.
+        assert_eq!(keep, ["nsh_start", "nsh_pump", "nsh_set_dark"]);
+        assert_eq!(
+            lazy,
+            [
+                "nsh_feature_shader",
+                "nsh_part_core",
+                "nsh_part_menu",
+                "nsh_std_zlib"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_entry_side_modules_load_after_what_they_import_each_once() {
+        let sides = serde_json::json!({
+            "nsh_part_core": { "url": "nsh-core.1.wasm", "needs": ["nsh_shared_a"], "gate": "nsh_part_core" },
+            "nsh_part_menu": { "url": "nsh-menu.2.wasm", "needs": ["nsh_shared_a", "nsh_shared_b"], "gate": "nsh_part_menu" },
+            "nsh_shared_a": { "url": "nsh-core~menu.3.wasm", "needs": [] },
+            "nsh_shared_b": { "url": "nsh-menu~overlays.4.wasm", "needs": ["nsh_shared_a"] },
+        });
+        let sides = sides.as_object().unwrap();
+        let names = ["nsh_part_core", "nsh_part_menu", "nsh_part_none"].map(String::from);
+        assert_eq!(
+            side_urls(sides, &names),
+            [
+                "nsh-core~menu.3.wasm",
+                "nsh-core.1.wasm",
+                "nsh-menu~overlays.4.wasm",
+                "nsh-menu.2.wasm"
+            ]
+        );
+        assert!(side_urls(sides, &[]).is_empty());
+    }
+
+    #[test]
+    fn the_page_requests_the_entry_side_modules_with_the_main_module() {
+        let app = serde_json::json!({ "code": "app.1.js", "entrySides": ["nsh_part_core"] });
+        let html = page(&PageParts {
+            name: "Shared",
+            appearance: Appearance::System,
+            base: None,
+            icons: &Icons::default(),
+            runtime: "./nsh.0123456789.js",
+            wasm: "nsh.0123456789.wasm",
+            entry_sides: &[
+                "nsh-core~menu.3.wasm".to_owned(),
+                "nsh-core.1.wasm".to_owned(),
+            ],
+            glue: None,
+            code: "app.1.js",
+            fonts: &[],
+            app: &app,
+            connect: None,
+            style: "nsh-page.1.css",
+            prefetch: "nsh-prefetch.1.js",
+            start: "nsh-start.1.js",
+        });
+        let fetches = html
+            .lines()
+            .find(|line| line.starts_with("<script type=\"application/json\" id=\"nsh-fetch\">"))
+            .unwrap_or_default();
+        assert!(
+            fetches.contains(
+                "[\"nsh.0123456789.wasm\",\"app.1.js\",\"nsh-core~menu.3.wasm\",\"nsh-core.1.wasm\"]"
+            ),
+            "{fetches}"
+        );
+        // The page's script loads them before the app starts.
+        assert!(PAGE_START.contains("player.loadSides(app.entrySides, app.sides)"));
+        assert!(PAGE_START.contains("prefetched:"));
     }
 
     #[test]
@@ -2405,11 +2997,13 @@ mod tests {
             icons: &icons,
             runtime: "./nsh.0123456789.js",
             wasm: "nsh.0123456789.wasm",
+            entry_sides: &[],
             glue,
             code: "app.1.js",
             fonts: &[],
             app: &app,
             connect: None,
+            style: "nsh-page.1.css",
             prefetch: "nsh-prefetch.1.js",
             start: "nsh-start.1.js",
         };
@@ -2555,17 +3149,22 @@ mod tests {
             icons: &Icons::default(),
             runtime: "./nsh.0123456789.js",
             wasm: "nsh.0123456789.wasm",
+            entry_sides: &[],
             glue: None,
             code: "app.1.js",
             fonts: &[],
             app: &serde_json::json!({}),
             connect: None,
+            style: "nsh-page.1.css",
             prefetch: "nsh-prefetch.1.js",
             start: "nsh-start.1.js",
         });
-        // Before the first relative URL (the manifest's).
-        let base = html.find("<base href=\"/apps/counter/\">").unwrap();
-        assert!(base < html.find("manifest.webmanifest").unwrap());
+        // No `<base href>` (a strict `base-uri` refuses it): the page's own
+        // URLs start with the base.
+        assert!(!html.contains("<base"), "{html}");
+        assert!(
+            html.contains("<link rel=\"manifest\" href=\"/apps/counter/manifest.webmanifest\">")
+        );
     }
 
     #[test]
@@ -2578,11 +3177,13 @@ mod tests {
             icons: &Icons::default(),
             runtime: "./nsh.0123456789.js",
             wasm: "nsh.0123456789.wasm",
+            entry_sides: &[],
             glue: None,
             code: "app.1.js",
             fonts: &["assets/f.1.ttf".to_owned()],
             app: &app,
             connect: Some("'self' api.example.com:*"),
+            style: "nsh-page.1.css",
             prefetch: "nsh-prefetch.1.js",
             start: "nsh-start.1.js",
         });
@@ -2607,6 +3208,12 @@ mod tests {
         }
         assert!(html.contains("<script src=\"nsh-prefetch.1.js\"></script>"));
         assert!(html.contains("<script type=\"module\" src=\"nsh-start.1.js\"></script>"));
+        // No inline styles either: a strict `style-src` ('self') styles the
+        // page, whose own rules are a file.
+        assert!(!html.contains("<style"), "{html}");
+        assert!(!html.contains("<base"), "{html}");
+        assert!(!html.contains(" style=\""), "{html}");
+        assert!(html.contains("<link rel=\"stylesheet\" href=\"nsh-page.1.css\">"));
         assert!(PAGE_START.contains("wasm: take(app.wasm)"));
         assert!(!html.contains("rel=\"preload\""));
         assert!(html.contains("media=\"(prefers-color-scheme: dark)\""));
@@ -2615,6 +3222,20 @@ mod tests {
         assert!(html.contains(
             "<meta http-equiv=\"Content-Security-Policy\" content=\"connect-src 'self' api.example.com:*\">"
         ));
+    }
+
+    #[test]
+    fn the_page_styles_follow_the_appearance() {
+        let system = page_style(Appearance::System);
+        assert!(!system.contains("{{"), "{system}");
+        assert!(
+            system.contains("@media (prefers-color-scheme: dark)"),
+            "{system}"
+        );
+        assert!(system.contains("#status"), "{system}");
+        let light = page_style(Appearance::Light);
+        assert!(!light.contains("@media (prefers-color-scheme"), "{light}");
+        assert!(light.contains(&format!("background: {}", Appearance::Light.colors().0)));
     }
 
     #[test]
@@ -2811,18 +3432,6 @@ mod tests {
                 for key in ["runtime", "wasm", "glue", "code", "host"] {
                     urls.extend(strings(&app[key]).filter(|url| !url.is_empty()));
                 }
-                // The realm's import map: its facade modules.
-                if let Some(map) = app["importMap"].as_str() {
-                    let map: serde_json::Value = serde_json::from_str(map).unwrap();
-                    urls.extend(
-                        map["imports"]
-                            .as_object()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|(_, url)| strings(url))
-                            .filter(|url| url.contains("facades/")),
-                    );
-                }
                 for key in ["assets", "data", "chunks"] {
                     urls.extend(
                         app[key]
@@ -2967,7 +3576,8 @@ mod tests {
     fn a_packaged_page_loads_its_files_at_the_apps_paths() {
         let dir = std::env::temp_dir().join(format!("nsh-web-site-paths-{}", std::process::id()));
         // A site as `package` writes it: the page and the files it names,
-        // the runtime importing its browser host, the app importing a chunk.
+        // the runtime importing its browser host, the app importing a chunk
+        // and a native module's facade.
         let files = [
             (
                 "nsh.0123456789.js",
@@ -2980,8 +3590,12 @@ mod tests {
             ("browser.0123456789/dom.js", "export const a = 1;"),
             ("nsh.1111111111.wasm", "wasm"),
             ("nsh-bindgen.2222222222.js", "export {};"),
-            ("app.3333333333.js", "import(\"./chunk-a.aaaaaaaaaa.js\");"),
+            (
+                "app.3333333333.js",
+                "import { View } from \"./facades/nsh.cccccccccc.js\"; import(\"./chunk-a.aaaaaaaaaa.js\");",
+            ),
             ("chunk-a.aaaaaaaaaa.js", "export {};"),
+            ("facades/nsh.cccccccccc.js", "export const View = 1;"),
             ("host.7777777777.js", "export function createHost() {}"),
             ("assets/fonts/Inter.4444444444.ttf", "ttf"),
             ("assets/img/logo.8888888888.png", "png"),
@@ -2990,30 +3604,12 @@ mod tests {
             ("icons/32.5555555555.png", "png"),
             ("icons/180.6666666666.png", "png"),
             ("manifest.webmanifest", "{}"),
+            ("nsh-page.1.css", ""),
             ("nsh-prefetch.1.js", ""),
             ("nsh-start.1.js", ""),
         ];
-        let app = serde_json::json!({
-            "runtime": "./nsh.0123456789.js",
-            "wasm": "nsh.1111111111.wasm",
-            "glue": "nsh-bindgen.2222222222.js",
-            "code": "app.3333333333.js",
-            "host": "host.7777777777.js",
-            "assets": {
-                "fonts/Inter.ttf": "assets/fonts/Inter.4444444444.ttf",
-                "img/logo.png": "assets/img/logo.8888888888.png",
-            },
-            "data": { "syntaxes": "nsh-syntaxes.9999999999.bin" },
-            "fonts": ["fonts/Inter.ttf"],
-            "chunkFonts": {},
-            "chunks": { "./chunk-a.js": "chunk-a.aaaaaaaaaa.js" },
-            "sides": { "plot": { "url": "nsh-side-plot.bbbbbbbbbb.wasm", "needs": [] } },
-        });
-        let icons = Icons {
-            favicon: Some("icons/32.5555555555.png".to_owned()),
-            touch: Some("icons/180.6666666666.png".to_owned()),
-            manifest: Vec::new(),
-        };
+        // The page `package` writes for `web.base` (its files under it, as
+        // `Site::url` names them), or without one.
         let write = |base: Option<&str>| {
             let _ = fs::remove_dir_all(&dir);
             for (path, content) in files {
@@ -3021,20 +3617,49 @@ mod tests {
                 fs::create_dir_all(path.parent().unwrap()).unwrap();
                 fs::write(path, content).unwrap();
             }
+            let at = |path: &str| format!("{}{path}", base.unwrap_or_default());
+            let runtime = match base {
+                Some(_) => at("nsh.0123456789.js"),
+                None => "./nsh.0123456789.js".to_owned(),
+            };
+            let app = serde_json::json!({
+                "runtime": runtime,
+                "wasm": at("nsh.1111111111.wasm"),
+                "glue": at("nsh-bindgen.2222222222.js"),
+                "code": at("app.3333333333.js"),
+                "host": at("host.7777777777.js"),
+                "assets": {
+                    "fonts/Inter.ttf": at("assets/fonts/Inter.4444444444.ttf"),
+                    "img/logo.png": at("assets/img/logo.8888888888.png"),
+                },
+                "data": { "syntaxes": at("nsh-syntaxes.9999999999.bin") },
+                "fonts": ["fonts/Inter.ttf"],
+                "chunkFonts": {},
+                "chunks": { "chunk-a.js": at("chunk-a.aaaaaaaaaa.js") },
+                "sides": { "plot": { "url": at("nsh-side-plot.bbbbbbbbbb.wasm"), "needs": [] } },
+                "linked": true,
+            });
+            let icons = Icons {
+                favicon: Some(at("icons/32.5555555555.png")),
+                touch: Some(at("icons/180.6666666666.png")),
+                manifest: Vec::new(),
+            };
             let page = page(&PageParts {
                 name: "Sports",
                 appearance: Appearance::System,
                 base,
                 icons: &icons,
-                runtime: "./nsh.0123456789.js",
-                wasm: "nsh.1111111111.wasm",
-                glue: Some("nsh-bindgen.2222222222.js"),
-                code: "app.3333333333.js",
-                fonts: &["assets/fonts/Inter.4444444444.ttf".to_owned()],
+                runtime: &runtime,
+                wasm: &at("nsh.1111111111.wasm"),
+                entry_sides: &[],
+                glue: Some(&at("nsh-bindgen.2222222222.js")),
+                code: &at("app.3333333333.js"),
+                fonts: &[at("assets/fonts/Inter.4444444444.ttf")],
                 app: &app,
                 connect: None,
-                prefetch: "nsh-prefetch.1.js",
-                start: "nsh-start.1.js",
+                style: &at("nsh-page.1.css"),
+                prefetch: &at("nsh-prefetch.1.js"),
+                start: &at("nsh-start.1.js"),
             });
             fs::write(dir.join("index.html"), page).unwrap();
         };
@@ -3053,7 +3678,9 @@ mod tests {
             assert!(missing.is_empty(), "{path}: {missing:?}");
         };
         // `web.base`, at the host's root and under a path, one of them
-        // percent-encoded (`/应用/counter/`), as `package` takes it.
+        // percent-encoded (`/应用/counter/`), as `package` takes it: the
+        // page names its files by absolute URLs, with no `<base href>` for
+        // a strict `base-uri` to refuse, and loads them at every path.
         for base in ["/", "/apps/counter", "/%E5%BA%94%E7%94%A8/counter/"] {
             let base: &str = &page_base(Some(base)).unwrap().unwrap();
             write(Some(base));

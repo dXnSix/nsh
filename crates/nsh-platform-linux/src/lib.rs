@@ -24,12 +24,14 @@ mod audio;
 mod canvas;
 mod chrome;
 mod decor;
+mod desktop_file;
 #[cfg(feature = "dev")]
 pub mod dev;
 mod file_drop;
 mod file_requests;
 mod fps;
 mod global_shortcut;
+mod gpu;
 #[cfg(test)]
 mod gtk_test;
 mod image;
@@ -46,9 +48,12 @@ mod navigation;
 mod notifications;
 mod scroll;
 mod selectable_view;
+mod session;
 mod shader;
 // Without GStreamer (the feature `sound`), a stand-in whose loads fail
 // as not supported.
+#[cfg(feature = "sound")]
+mod gst;
 #[cfg_attr(not(feature = "sound"), path = "sound_off.rs")]
 mod sound;
 mod surface;

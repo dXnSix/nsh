@@ -17,27 +17,10 @@ labels, and a cell or a title can be drawn by the app.
 colors, borders and selection feedback through `classes` and `styles`. Rust makes one with
 `nsh_base::data_table()`, TSX with `<DataTable>` from `nsh/base`.
 
-```rust tabs
-use nsh_base::{DataTableColumn, data_table};
-use nsh_core::prelude::*;
-
-fn column(key: &str, title: &str) -> DataTableColumn {
-    let mut column = DataTableColumn::default();
-    column.key = key.into();
-    column.title = Some(title.into());
-    column
-}
-
-fn table() -> impl IntoElement {
-    data_table()
-        .columns(vec![column("name", "Name"), column("city", "City")])
-        .flex_1()
-}
-```
-
 ```tsx tabs
 import { mount } from "nsh";
 import { DataTable, type DataTableColumn } from "nsh/base";
+import { Window } from "nsh/desktop";
 
 const columns: DataTableColumn[] = [
   { key: "name", title: "Name", width: 160, sortable: true },
@@ -55,7 +38,29 @@ function App() {
   return <DataTable columns={columns} data={rows} class="flex-1" />;
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
+```rust tabs
+use nsh_base::{DataTableColumn, data_table};
+use nsh_core::prelude::*;
+
+fn column(key: &str, title: &str) -> DataTableColumn {
+    let mut column = DataTableColumn::default();
+    column.key = key.into();
+    column.title = Some(title.into());
+    column
+}
+
+fn table() -> impl IntoElement {
+    data_table()
+        .columns(vec![column("name", "Name"), column("city", "City")])
+        .flex_1()
+}
 ```
 
 The table fills the box the app gives it (`flex-1`, a height) and scrolls inside: vertically through the rows and
@@ -75,6 +80,8 @@ booleans and strings show as text. Rust gives the rows a field at a time, each o
 | `width` | Its width, in points. Default `120`. |
 | `minWidth`, `maxWidth` | The narrowest and widest a drag or a fit makes it. Default `20` and `1200`. |
 | `fitPadding` | Extra room for the app's padding, icons or badges, added to the widest title or cell text when fitting the column. |
+| `grow` | Its share of the width the columns leave free in the table, added to its width (see [Filling the width](#filling-the-width)). Default none. |
+| `autoFit` | Fits it to its widest text and title once the table first has text for it (see [Filling the width](#filling-the-width)). Default `false`. |
 | `align` | `"start"` (the default), `"center"` or `"end"`, for numbers. Cells and title alike. |
 | `sortable` | Its title has a sort button that asks for a sort (see [Sorting](#sorting)). |
 | `fixed` | Where it stays while the other columns scroll under it: `true` or `"left"` at the left, leading the others; `"right"` at the right, after them (right after the scrolling columns while they fit, at the table's right edge once they overflow it). Fixed columns keep their order. |
@@ -150,10 +157,40 @@ Three switches decide what a press selects, as in gpui-component:
 | `cellSelectable` (default `false`) | A cell; the row header (shown by default with it) selects rows | `{ row, column }` |
 
 With `cellSelectable` and the row header hidden (`rowHeader={false}`), pressing the selected cell again selects its
-row. A press with Shift or the platform's command key held selects a row only while `selectOnModifierPress` (default
-`true`), so an app that keeps its own multi-row selection handles those presses itself: `onRowPress` reports every
-press of the body with its row, the column under the pointer, the clicks in a row and the modifier keys held. A column whose `selectable` is
-`false` selects neither itself nor its cells.
+row. While `selectOnModifierPress` is true (the default), a press with Shift or the platform's command key held
+selects the row, cell or title, as a press without the key does. An app that keeps its own selection of several rows,
+cells or columns sets it false: the table keeps the selection it had, and the press is reported. `onRowPress` reports
+every press of the body, with its row, the column under the pointer, the clicks in a row and the modifier keys held.
+`onColumnPress` reports a press of a title the same way (`{ column, clicks, shift, control, alt, platform }`),
+including a column whose `selectable` is false. The sort button reports `onSortChange`, and a drag that moved the
+column reports `onColumnMove`.
+
+`cellClasses` lists classes for individual cells, each by its data row and its index among `columns` (the same
+numbers `onRowPress` reports), drawn after the part's classes and the column's `cellClass`. The cell's text stays
+the table's. A column the app selected takes its look from that column's `headerClass` and `cellClass`. A column
+whose `selectable` is false selects neither itself nor its cells; a press of its title is still reported.
+
+```tsx
+<DataTable
+  columns={columns.map((column, i) =>
+    pickedColumns.includes(i)
+      ? { ...column, headerClass: "bg-primary/10", cellClass: "bg-primary/10" }
+      : column,
+  )}
+  data={rows}
+  rowSelectable={false}
+  columnSelectable={false}
+  cellSelectable={false}
+  selectOnModifierPress={false}
+  cellClasses={pickedCells.map((cell) => ({ ...cell, class: "bg-primary/15" }))}
+  onRowPress={(event) => pickCell(event)}
+  onColumnPress={(event) => pickColumn(event)}
+  class="flex-1"
+/>
+```
+
+The arrow keys, Escape and `copy()` keep acting on the table's own selection. The app copies a set it keeps from its
+own data.
 
 Rows count from 0 in the data, and a column is its index among `columns`, whatever order the user moved them to.
 `onSelectionChange` reports what the user selected (`null` for nothing). The `selection` prop sets the selection from
@@ -165,6 +202,21 @@ select.
 
 Screen readers get a grid (named by `accessibilityLabel`) of column headers and cells, the selected ones said to be
 selected.
+
+### Dragging a range of cells
+
+Enable both `cellSelectable` and `cellRangeSelectable` to drag a rectangle with the mouse. Hold Shift to extend
+from the previous anchor. The table scrolls when the pointer reaches an edge during a drag.
+`selectOnModifierPress={false}` still leaves modified presses to the app.
+
+`onSelectionChange` and the ref's `selection()` report `{ row, column, range: { start, end, active? } }`.
+The range includes both endpoints, each a zero-based data row and column definition index. The columns between
+them follow their order on screen. `active` defaults to `start`, and the outer `row` and `column` name that
+active cell. Set a range through `selection` or `select()`. Arrow keys move from the active cell, and the copy
+shortcut copies that cell.
+
+Style the range with `selectionFill` and `selectionOutline`. The table uses `rowHeaderHighlighted` and
+`headerCellSelected` on the row and column headers within the range.
 
 ## Keyboard
 
@@ -178,6 +230,7 @@ selection, and Escape gives the keyboard back. Its columns' resize handles take 
 | Tab, Shift+Tab | Move to the next or the previous column. |
 | Page Up, Page Down | Move by a page of rows. |
 | Home, End | Move to the first or the last. |
+| Enter, Return | Activates the focused row (`onRowActivate({ row })`), unless an input or a control inside the table takes the key. |
 | Escape | Clears the selection, then gives the keyboard back. |
 | Copy shortcut | Puts the selection's text on the clipboard (`copy()`). |
 
@@ -211,6 +264,33 @@ reports every step. Pressing the edge twice in a row fits the column to its wide
 the ones fixed at their side. `resizableColumns` and `movableColumns` turn both off for the table, and a column's `resizable` and
 `movable` win over them.
 
+## Filling the width
+
+Columns whose content the app does not know in advance (a query's results, a file's fields) take their width from it
+and from the table. A column with `autoFit` fits its widest text and title, as `fitColumn` does, once the table first
+holds rows with text in it; until then it has its `width`. It fits once per `key`: later data leaves the width as it is, so live
+rows do not move the columns, and a column of a new key fits when its rows come.
+
+While the columns are narrower than the table, the width they leave free goes to the columns with a `grow`, in
+proportion to it, as CSS's `flex-grow`: on top of their width (or the width they fitted), each up to its `maxWidth`.
+The shares follow the table's width; once the columns are wider than the table, none grows and the table scrolls. A
+column the user resizes, or whose width the app sets (`setColumnWidth`, `fitColumn`), keeps that width and no longer
+grows. Growing and fitting by themselves report no `onColumnResize`; `columnWidths()` gives the widths shown.
+
+```tsx
+<DataTable
+  columns={result.columns.map((name, i) => ({
+    key: `${result.id}:${i}`,
+    title: name,
+    align: numeric[i] ? "end" : "start",
+    autoFit: true,
+    grow: numeric[i] ? 0 : 1,
+  }))}
+  data={result.rows}
+  class="flex-1"
+/>
+```
+
 ## Live data
 
 A quote table changes many times a second. The app formats the rows in view and a reach around them (it knows them
@@ -234,7 +314,9 @@ scroll, however long, changes texts and places only.
 
 `renderCell` draws the cells of the app's own where a column is not just text (a badge, a button). It is called for the
 cells in view only, with a `DataTableCell`: `row`, `column`, `key`, `text` (what the table would show) and `selected`.
-The app looks up its own data by `row`. `renderHeaderCell` draws a title across its cell, told a `DataTableHeaderCell`:
+The app looks up its own data by `row`. The views it draws take presses and the pointer as views outside the table do:
+`onPress`, `hover:` classes, `onMouseEnter` / `onMouseMove` / `onMouseLeave`, and with `classes.row` set to `"group"`
+the `group-hover:` classes of the row under the pointer. `renderHeaderCell` draws a title across its cell, told a `DataTableHeaderCell`:
 `column`, `key`, `title`, `sort` (the direction, or none) and `selected`.
 
 ```tsx
@@ -316,7 +398,7 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `headerContent` | The label and sort button's layout row; set their gap here |
 | `headerCellDragging` | The dragged title, after `headerCell` |
 | `headerCellSorted` | The title of the column the table is sorted by, after `headerCell` |
-| `headerCellSelected` | The title of the selected column, after `headerCell` |
+| `headerCellSelected` | The title of the selected column or one within the selected range, after `headerCell` |
 | `sortIndicator` | The sort button of a sortable column |
 | `sortAscending`, `sortDescending` | Its two chevrons; `selected:` applies to the sorted direction |
 | `resizeHandle` | The line at a column's trailing edge that a drag resizes |
@@ -332,6 +414,9 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `cellColumnSelected` | The cells of the selected column, after `cell` |
 | `rowHeader` | The row header cells, the row numbers |
 | `rowHeaderCorner` | The corner above the row headers |
+| `rowHeaderHighlighted` | A row number within the selected range, after `rowHeader` |
+| `selectionFill` | The fill of the selected range, excluding the active cell |
+| `selectionOutline` | The outline of the selected range |
 | `fixedEdge` | The line between the fixed columns and the columns that scroll under them: at the trailing edge of those at the left, the leading edge of those at the right |
 | `empty` | The box of the `empty` slot |
 
@@ -344,6 +429,7 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `rowCount` | `.row_count(..)` | `number` | the rows held | How many rows there are in all. |
 | `dataStart` | `.data_start(..)` | `number` | `0` | The row of the first row of `data`. |
 | `rowClasses` | `.row_classes(..)` | `string[]` | `[]` | Classes of the rows given, by their place in `data`: a row's own look, with no call into JS per row. |
+| `cellClasses` | `.cell_classes(..)` | `DataTableCellClass[]` | `[]` | Classes of single cells, by data row and column index, after the part's and the column's `cellClass`. The cell's text stays the table's. |
 | `rowHeight` | `.row_height(..)` | `number` | `32` | The height of a body row, in points; in a terminal a row is one Cell. |
 | `headerHeight` | `.header_height(..)` | `number` | the row height | The height of a title row; in a terminal a title row is one Cell. |
 | `groups` | `.groups(..)` | `DataTableColumnGroup[][]` | `[]` | Labels above the columns, lowest level first. |
@@ -351,7 +437,8 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `rowSelectable` | `.row_selectable(..)` | `boolean` | `true` | Presses and keys select rows. |
 | `columnSelectable` | `.column_selectable(..)` | `boolean` | `true` | A title's press selects its column, and the horizontal keys move between columns. |
 | `cellSelectable` | `.cell_selectable(..)` | `boolean` | `false` | Presses and keys select cells. |
-| `selectOnModifierPress` | `.select_on_modifier_press(..)` | `boolean` | `true` | A press with Shift or the command key held selects a row. |
+| `cellRangeSelectable` | `.cell_range_selectable(..)` | `boolean` | `false` | With `cellSelectable`, enables mouse range drags and Shift extension. |
+| `selectOnModifierPress` | `.select_on_modifier_press(..)` | `boolean` | `true` | A press with Shift or the command key held selects the row, cell or title. |
 | `selection` | `.selection(..)` | `DataTableSelection` | | What is selected, when the app sets it. |
 | `loopSelection` | `.loop_selection(..)` | `boolean` | `true` | The arrow keys go around the ends. |
 | `accessibilityLabel` | `.accessibility_label(..)` | `string` | none | What screen readers call the table. |
@@ -379,9 +466,11 @@ parts provide the table's structure and alignment; their classes supply the appe
 
 | Event | Rust | Description |
 |---|---|---|
-| `onSelectionChange` | `.on_selection_change(\|selection: &Option<DataTableSelection>\| ..)` | The user changed the selection: `{ selection }`, a `{ row?, column? }` or `null`. |
+| `onSelectionChange` | `.on_selection_change(\|selection: &Option<DataTableSelection>\| ..)` | The user changed the selection: `{ selection }`, a `{ row?, column?, range? }` or `null`. |
 | `onRowPress` | `.on_row_press(\|event: &DataTablePress\| ..)` | A row or cell was pressed: `{ row, column?, clicks, shift, control, alt, platform }`. |
+| `onColumnPress` | `.on_column_press(\|event: &DataTableColumnPress\| ..)` | A title was pressed: `{ column, clicks, shift, control, alt, platform }`. |
 | `onDoublePress` | `.on_double_press(\|target: &DataTableTarget\| ..)` | A row, cell or title was pressed twice: `{ target }`, a `{ row?, column? }`. |
+| `onRowActivate` | `.on_row_activate(\|row: &u32\| ..)` | The focused row was activated (Enter / Return): `{ row }`, the number `onRowPress` reports. |
 | `onContextMenu` | `.on_context_menu(\|event: &DataTableContextMenu\| ..)` | A context menu was asked for: `{ row?, column?, x, y }`, the point in the root view. |
 | `onSortChange` | `.on_sort_change(\|sort: &Option<DataTableSort>\| ..)` | A sort button was pressed: `{ sort }`, the next sort `{ key, direction }` or `null`. |
 | `onColumnResize` | `.on_column_resize(\|key: &SharedString, width: &Points\| ..)` | A column was resized (`{ key, width }`), at every step of a drag and once more when a fit sets it. |

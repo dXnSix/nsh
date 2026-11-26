@@ -6,13 +6,19 @@
 // The page's host (`app.host`, nsh.json `web.host`) answers the app's
 // `nsh/host` calls: its `createHost(player)` runs once the player exists,
 // before the app starts, so no call comes earlier. Its pages and dialogs
-// are browser history entries as nsh.json `web.history` says.
+// are browser history entries as nsh.json `web.history` says. A shared
+// runtime (`nsh package --shared-runtime`) links none of the app's parts of
+// `nsh/base`: the side modules the entry needs (`app.entrySides`, requested
+// with the main module by the head's script) load before the app starts.
 //
-// What it starts is in the page (`#nsh-app`, JSON). Every URL of the app
-// is resolved once against the page's base (its `<base href>`, nsh.json
-// `web.base`, else the page's own URL): the app may move the address to
-// another directory before a chunk's fonts load. The head's script
-// (`prefetch.js`) keyed its requests the same way.
+// What it starts is in the page (`#nsh-app`, JSON). With nsh.json
+// `web.base` its URLs are absolute paths (or the `--asset-url`'s) and the
+// site's base is `app.base`, the player's `baseURL`: the page has no
+// `<base href>`, which a strict `base-uri` refuses, and is served at every
+// route of the app. Without it the URLs are relative to the page. Each is
+// resolved once: the app may move the address to another directory before
+// a chunk's fonts load. The head's script (`prefetch.js`) keyed its
+// requests the same way.
 const app = JSON.parse(document.getElementById("nsh-app").textContent);
 const url = (path) => new URL(path, document.baseURI).href;
 for (const key of ["wasm", "glue", "code", "host"]) if (app[key]) app[key] = url(app[key]);
@@ -67,8 +73,12 @@ try {
       assets: app.assets,
       data: app.data,
       sides: app.sides,
+      // A side module the head's script requested (the entry's).
+      prefetched: (url) => (fetches.has(url) ? take(url) : undefined),
       // nsh.json `web.history`; without it the player's default.
       history: app.history,
+      // nsh.json `web.base`: what the app's relative URLs resolve against.
+      baseURL: app.base,
       readAsset: (uri) => fonts.get(path(uri)) ?? null,
       // The chunk's fonts and the side modules of the runtime it needs.
       prepareChunk: (id) => Promise.all([
@@ -87,6 +97,11 @@ try {
     ...(app.entryChunks ?? []).flatMap(id => (app.chunkFonts[id] ?? []).map(loadFont)),
   ]);
   player = loaded;
+  // While the page's host starts; awaited before the app runs (the empty
+  // `catch` only keeps a failure before then from being logged as
+  // unhandled).
+  const entrySides = player.loadSides(app.entrySides, app.sides);
+  entrySides.catch(() => {});
   // The side modules not `onDemand`, downloaded behind its first
   // screen. `nsh package` marks every one it writes `onDemand` (each is
   // code only a lazy chunk or a feature's first use needs), so a side
@@ -102,8 +117,9 @@ try {
   // `host.params`.
   const served = document.getElementById("nsh-params");
   const params = served ? JSON.parse(served.textContent) : undefined;
+  await entrySides;
   if (app.rust) player.runRust();
-  else await player.runModule(app.code, { capabilities: app.capabilities ?? "", appId: app.id ?? "", chunks: app.chunks, nativeExports: app.nativeExports, importMap: app.importMap, params });
+  else await player.runModule(app.code, { capabilities: app.capabilities ?? "", appId: app.id ?? "", chunks: app.chunks, nativeExports: app.nativeExports, linked: app.linked, params });
   player.preloadSides(app.sides);
 } catch (err) {
   fail("This app could not be loaded.", String(err?.message ?? err));

@@ -84,6 +84,52 @@ roots let you rotate one. `publicKey` makes the app refuse a manifest that `keys
 packages with are fixed when it is built. Only app builds made with this configuration take OTA updates: ship one
 before the first OTA release.
 
+### A feed chosen at run time
+
+Some apps ship one build for several servers, and the user picks the server when they sign in. The app only learns
+the feed's URL then. Let its code name the feed with `"source": "runtime"`:
+
+```json
+{
+  "updater": {
+    "publicKey": "<contents of keys/update.pub>",
+    "packages": {
+      "roots": ["<contents of keys/root.pub>"],
+      "source": "runtime"
+    }
+  }
+}
+```
+
+Then pass the manifest's URL at each check:
+
+```tsx
+import { checkForPackage, downloadPackage } from "nsh/updater";
+
+const url = new URL("/updates/latest.json", serverOrigin).href;
+if (await checkForPackage({ url })) {
+  await downloadPackage(); // the package this check found
+}
+```
+
+The URL is the only thing the code chooses. The keys still come from the app: `publicKey` is required, the manifest
+must be signed with it, and the package must be signed by a key one of the roots certifies. A wrong or hostile server
+can only offer packages that fail these checks. `"github"` and `"url"` become optional. Without them,
+`checkForPackage()` needs `url`, and `checkForUpdate()` rejects: there is no source for a new app.
+
+Feeds must be HTTPS. For a server on a private network without TLS, add `"allowHttp": true` next to `"source"`.
+Plain HTTP keeps the signature checks, but anyone on the network can see the update traffic, and can block it. NSH
+limits what else they can do:
+
+- The manifest's signature, its notes and the package must come from the feed's own origin (scheme, host and port).
+  Redirects from it stay on that origin or go to HTTPS.
+- A package whose build is not newer than the code the app runs is never offered, and the app refuses builds older
+  than one it already accepted ([Rollback protection](#rollback-protection)). Replaying an old, validly signed
+  manifest offers nothing.
+- A feed URL with a user name or password is refused. NSH adds no credentials to update requests.
+
+`allowHttp` applies only to runtime feeds. `"url"`, `"github"` and `"channels"` stay HTTPS.
+
 ### CI secrets
 
 Store the release key, its certificate and the update key as secrets of the repository that publishes the releases:
@@ -166,7 +212,7 @@ jobs:
       # The nsh the apps in the field were built with, such as v0.5.0 (a repository variable); empty: the latest.
       NSH_VERSION: ${{ vars.NSH_VERSION }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install nsh
         run: |
@@ -230,8 +276,8 @@ export async function checkForUpdates() {
       await downloadPackage();
       // iOS and Android: nothing to show, the package runs from the next cold start.
       packageReady.set(canRestart);
-      return;
     }
+    // `shell`: the code is current, only the installed app is behind; offer it quietly.
     appUpdate.set(await checkForUpdate());
   } catch (error) {
     console.warn("update check failed:", error); // the next check tries again
@@ -369,7 +415,8 @@ The error starts with `package refused:` and says why:
 | `it is com.example.other, the app is com.example.notes` | The package is another app's |
 | `the package needs runtime 0.5.0 or newer; this runtime is 0.4.0` | Publish for the older runtime, or ship a new app |
 
-Nothing is left behind, and the app keeps running what it ran.
+A refused package leaves nothing behind and the app keeps running what it ran. An interrupted transfer keeps its
+partial file keyed to the package so the next `downloadPackage()` call resumes where it left off.
 
 ### A package does not run at the next start
 

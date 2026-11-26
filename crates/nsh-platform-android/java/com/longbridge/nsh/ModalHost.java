@@ -10,6 +10,7 @@ import android.os.Build;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -25,6 +26,8 @@ final class ModalHost {
     /** The modal's root view, placed by the core. */
     final Box root;
     private final Container container;
+    /** This dialog window's shortcuts, raw keys, capture rules and Tab traversal. */
+    private final KeyDispatch keys;
     private Dialog dialog;
     int animation; // 0 slide, 1 fade, 2 none
     /** `closeOnEscape`: the back button (Android's Escape) closes it here, then tells JS. */
@@ -44,6 +47,7 @@ final class ModalHost {
         this.id = id;
         root = new Box(context, mounter, id);
         container = new Container(context);
+        keys = new KeyDispatch(mounter, container, id);
         container.content.addView(root);
         mirror(mounter.rtl);
     }
@@ -87,14 +91,64 @@ final class ModalHost {
         return shown() && dialog.isShowing() ? dialog.getWindow() : null;
     }
 
+    /** Holds focus after an input blurs, so this window still receives hardware keys. */
+    void focusRoot() {
+        container.requestFocus();
+    }
+
+    /** Whether `v` is a dialog's root, which holds its window's focus while no node does ({@link #focusRoot}). */
+    static boolean isRoot(View v) {
+        return v instanceof Container;
+    }
+
     void show() {
         if (dialog != null && !closing) return;
         // A dismissal through the shader still running ends first: its
         // window goes and `onDismiss` goes out before this one comes.
         finishChange();
         closing = false;
+        away = false;
+        awayFocus = null;
+        present();
+        Runnable animateIn = () -> {
+            if (animation == 2) {
+                mounter.event(id, Native.SHOW);
+                return;
+            }
+            if (animation == 0) container.setTranslationY(container.getHeight());
+            container.animate().alpha(1).translationY(0).setDuration(300)
+                    .setInterpolator(new DecelerateInterpolator(1.5f))
+                    .setListener(new AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(Animator a) {
+                            container.animate().setListener(null);
+                            mounter.event(id, Native.SHOW);
+                        }
+                    }).start();
+        };
+        if (shaderIn(dialog, animateIn)) return;
+        container.setAlpha(animation == 1 ? 0 : 1);
+        container.post(animateIn);
+    }
+
+    /** Makes the dialog window and shows the content in it, without an animation. */
+    private void present() {
         Context context = mounter.context;
-        dialog = new Dialog(context, android.R.style.Theme_DeviceDefault_Light_NoActionBar);
+        dialog = new Dialog(context, android.R.style.Theme_DeviceDefault_Light_NoActionBar) {
+            /**
+             * Android 13's dialog registers this as an {@code OnBackInvokedCallback}
+             * of the default priority as it shows, after (so above) the
+             * modal's own, and the window hands it every back press: key,
+             * button and gesture. From Android 14 it is the system fallback,
+             * under the modal's, and is not reached. Not cancelable, the
+             * dialog would drop the press: it goes back as the modal's does.
+             */
+            @Override
+            @SuppressWarnings("deprecation")
+            public void onBackPressed() {
+                backPressed();
+            }
+        };
         if (container.getParent() instanceof ViewGroup) ((ViewGroup) container.getParent()).removeView(container);
         dialog.setContentView(container);
         Window window = dialog.getWindow();
@@ -116,38 +170,73 @@ final class ModalHost {
         // No background of NSH's own: the app's popup (and backdrop) has its look.
         container.setBackgroundColor(0);
         dialog.setCancelable(false);
-        dialog.setOnKeyListener((d, keyCode, event) -> {
-            if (keyCode == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) {
-                backPressed();
-                return true;
-            }
-            return keyCode == KeyEvent.KEYCODE_BACK;
-        });
+        backKeyDown = false;
+        dialog.setOnKeyListener((d, keyCode, event) -> backKey(event));
         if (Build.VERSION.SDK_INT >= 33) {
             dialog.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::backPressed);
         }
         dialog.show();
+        // The dialog's own root takes the fallback focus (its id is the modal's).
+        if (!container.hasFocus()) container.requestFocus();
+        container.post(() -> {
+            if (closing || dialog == null) return;
+            if (container.findFocus() == null) container.requestFocus();
+        });
         matchSystemBars(window);
-        Runnable animateIn = () -> {
-            if (animation == 2) {
-                mounter.event(id, Native.SHOW);
-                return;
-            }
-            if (animation == 0) container.setTranslationY(container.getHeight());
-            container.animate().alpha(1).translationY(0).setDuration(300)
-                    .setInterpolator(new DecelerateInterpolator(1.5f))
-                    .setListener(new AnimatorListenerAdapter() {
-                        @Override
-                        public void onAnimationEnd(Animator a) {
-                            container.animate().setListener(null);
-                            mounter.event(id, Native.SHOW);
-                        }
-                    }).start();
-        };
-        if (shaderIn(dialog, animateIn)) return;
-        container.setAlpha(animation == 1 ? 0 : 1);
-        container.post(animateIn);
+    }
+
+    /**
+     * The dialog window went with the activity ({@link Mounter#leaveWindows}), the modal still shown: the activity
+     * made again shows it again ({@link #enterWindow}).
+     */
+    private boolean away;
+    /** The view focused in the dialog as it went. */
+    private View awayFocus;
+
+    /**
+     * The activity goes for a configuration change: the dialog window, which is the activity's, goes now, its content
+     * kept as it is for the one made again ({@link #enterWindow}). A presentation or dismissal under way ends first,
+     * with its event.
+     */
+    void leaveWindow() {
+        if (dialog == null) return;
+        finishChange();
+        // Ends its own animation where it is going: `onShow` goes out, or the dismissed dialog goes.
+        container.animate().cancel();
+        if (dialog == null || closing) return;
+        container.setAlpha(1);
+        container.setTranslationY(0);
+        awayFocus = container.findFocus();
+        keys.focusLost();
+        if (mounter.handle() != 0) Native.keyReset(mounter.handle());
+        Dialog d = dialog;
+        dialog = null;
+        away = true;
+        d.dismiss();
+        if (container.getParent() instanceof ViewGroup) ((ViewGroup) container.getParent()).removeView(container);
+    }
+
+    /** Shows the dialog again over the activity made again ({@link #leaveWindow}), its focus where it was. */
+    void enterWindow() {
+        if (!away) return;
+        away = false;
+        present();
+        View focus = awayFocus;
+        awayFocus = null;
+        if (focus != null && focus != container && isAncestor(container, focus)) focus.requestFocus();
+    }
+
+    /** The view focused in the dialog, else null. */
+    View focus() {
+        return container.findFocus();
+    }
+
+    private static boolean isAncestor(View ancestor, View view) {
+        for (android.view.ViewParent p = view.getParent(); p != null; p = p.getParent()) {
+            if (p == ancestor) return true;
+        }
+        return false;
     }
 
     /**
@@ -218,6 +307,13 @@ final class ModalHost {
         if (dialog != null && !closing) SystemUi.statusBar(dialog.getWindow(), style, hidden, night);
     }
 
+    /** The dialog's bar icons as the activity's again (they changed with the appearance), then its status bar. */
+    void systemBars(int style, boolean hidden, boolean night) {
+        if (dialog == null || closing) return;
+        matchSystemBars(dialog.getWindow());
+        statusBar(style, hidden, night);
+    }
+
     /** The dialog's bar icons as the activity's. */
     @SuppressWarnings("deprecation")
     private void matchSystemBars(Window window) {
@@ -238,6 +334,31 @@ final class ModalHost {
         }
     }
 
+    /** The back key's press came down to this dialog (its release goes back). */
+    private boolean backKeyDown;
+
+    /**
+     * The back key, as the dialog's window hands it to its key listener: the
+     * dialog takes every Back event, and a press goes back on its release.
+     * With an {@code OnBackInvokedCallback} in effect the window turns that
+     * release into the callback ({@link #backPressed}, through the dialog's
+     * own {@code onBackPressed} on Android 13), and Android 15 QPR1
+     * to 16 still send the key-up after it, marked cancelled: only a key-up
+     * whose down came here and that is not cancelled goes back, so one
+     * press is reported once, as {@code NshView} does for the activity.
+     */
+    private boolean backKey(KeyEvent e) {
+        if (e.getKeyCode() != KeyEvent.KEYCODE_BACK) return false;
+        if (e.getAction() == KeyEvent.ACTION_DOWN) {
+            if (e.getRepeatCount() == 0) backKeyDown = true;
+        } else if (e.getAction() == KeyEvent.ACTION_UP) {
+            boolean press = backKeyDown && !e.isCanceled();
+            backKeyDown = false;
+            if (press) backPressed();
+        }
+        return true;
+    }
+
     /**
      * The back button, Android's Escape. Answered from `closeOnEscape`, not
      * by asking JS: close here (reported as `RequestClose` with reason
@@ -245,6 +366,7 @@ final class ModalHost {
      * decides).
      */
     void backPressed() {
+        backKeyDown = false;
         if (closing) return;
         mounter.requestClose(id, "cancel");
         if (closeOnEscape) {
@@ -259,8 +381,13 @@ final class ModalHost {
         // dialog shows and `onShow` goes out before it goes.
         finishChange();
         closing = true;
+        keys.focusLost();
+        if (mounter.handle() != 0) Native.keyReset(mounter.handle());
         // Its keyboard hides with it, not once the dialog's window is gone.
         mounter.hideKeyboardIn(container);
+        // The inset this window reported goes back to the activity, which
+        // learns about its own keyboard again the next time it shows one.
+        mounter.host.keyboardFromModal(0);
         Dialog d = dialog;
         Runnable done = () -> {
             d.dismiss();
@@ -315,6 +442,10 @@ final class ModalHost {
 
         Container(Context context) {
             super(context);
+            setFocusable(true);
+            setFocusableInTouchMode(true);
+            setDescendantFocusability(FOCUS_BEFORE_DESCENDANTS);
+            if (Build.VERSION.SDK_INT >= 26) setDefaultFocusHighlightEnabled(false);
             touches = new TouchTracker(mounter, this);
             mounter.touchTrackers.add(touches);
             // The core places the root (`Box.place`) inside it.
@@ -343,6 +474,50 @@ final class ModalHost {
             boolean handled = super.dispatchTouchEvent(t) || tracking;
             if (t != e) t.recycle();
             return handled;
+        }
+
+        @Override
+        public boolean dispatchKeyEvent(KeyEvent e) {
+            return keys.dispatchKeyEvent(e) || super.dispatchKeyEvent(e);
+        }
+
+        @Override
+        public boolean dispatchKeyShortcutEvent(KeyEvent e) {
+            return keys.dispatchKeyShortcutEvent(e) || super.dispatchKeyShortcutEvent(e);
+        }
+
+        @Override
+        public void onWindowFocusChanged(boolean hasWindowFocus) {
+            super.onWindowFocusChanged(hasWindowFocus);
+            if (!hasWindowFocus) {
+                keys.focusLost();
+                if (mounter.handle() != 0) Native.keyReset(mounter.handle());
+            } else if (findFocus() == null) {
+                requestFocus();
+            }
+        }
+
+        /**
+         * A tap clears a focus not focusable in touch mode and leaves the
+         * dialog's window without one; the first key after it leaves touch
+         * mode, and this takes the focus back before `ViewRootImpl` would
+         * pick a default one and consume the key ({@code NshView}'s
+         * listener, for its window), so an arrow reaches {@link KeyDispatch}.
+         */
+        private final ViewTreeObserver.OnTouchModeChangeListener keyboardFocus = inTouchMode -> {
+            if (!inTouchMode && hasWindowFocus() && getRootView().findFocus() == null) requestFocus();
+        };
+
+        @Override
+        protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            getViewTreeObserver().addOnTouchModeChangeListener(keyboardFocus);
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            getViewTreeObserver().removeOnTouchModeChangeListener(keyboardFocus);
+            super.onDetachedFromWindow();
         }
 
         /** Holds the root where the content starts (below the status bar unless translucent). */
@@ -375,17 +550,43 @@ final class ModalHost {
 
         @Override
         public WindowInsets onApplyWindowInsets(WindowInsets insets) {
-            report();
-            if (Build.VERSION.SDK_INT >= 30) {
-                int ime = insets.getInsets(WindowInsets.Type.ime()).bottom;
-                if (ime != keyboard) {
-                    keyboard = ime;
-                    int[] at = new int[2];
-                    getLocationOnScreen(at);
-                    mounter.keyboard(ime > 0 ? at[1] + getHeight() - ime : Integer.MAX_VALUE);
-                }
+            int ime = keyboardHeight(insets);
+            if (ime != keyboard) {
+                keyboard = ime;
+                int[] at = new int[2];
+                getLocationOnScreen(at);
+                mounter.keyboard(ime > 0 ? at[1] + getHeight() - ime : Integer.MAX_VALUE);
+                // A dialog is its own window, so the activity's keyboard-inset
+                // env never sees this keyboard: the app inside the dialog reads
+                // `env(keyboard-inset-height)` as zero and lays its fields out
+                // under the keys. Report it from the window that actually holds
+                // the focus, then let go of the report when the dialog closes.
+                mounter.host.keyboardFromModal(ime);
+                // Shrink / grow the modal's layout area above the IME (see report).
+                requestLayout();
             }
+            report();
             return super.onApplyWindowInsets(insets);
+        }
+
+        /**
+         * How far the software keyboard reaches into this dialog. Below
+         * Android 11 it shares the bottom system inset with the navigation
+         * bar (same split as {@link NshView}).
+         */
+        private int keyboardHeight(WindowInsets insets) {
+            if (insets == null) return 0;
+            if (Build.VERSION.SDK_INT >= 30) {
+                return insets.getInsets(WindowInsets.Type.ime()).bottom;
+            }
+            int bottom = insets.getSystemWindowInsetBottom();
+            int navigation = navigationBarHeight();
+            return bottom > navigation ? bottom : 0;
+        }
+
+        private int navigationBarHeight() {
+            int res = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+            return res == 0 ? 0 : getResources().getDimensionPixelSize(res);
         }
 
         private void report() {
@@ -403,11 +604,19 @@ final class ModalHost {
                     right = insets.getSystemWindowInsetRight();
                     bottom = insets.getSystemWindowInsetBottom();
                     left = insets.getSystemWindowInsetLeft();
+                    // Below Android 11 the keyboard shares the bottom inset with
+                    // the navigation bar: keep only the bar as a safe area.
+                    int navigation = navigationBarHeight();
+                    if (bottom > navigation) bottom = navigation;
                 }
             }
             int below = statusBar();
             top = Math.max(0, top - below);
-            int[] now = {getWidth(), getHeight() - below, top, right, bottom, left};
+            // The root keeps the window's whole height: the keyboard is the
+            // app's to lay out around, through `env(keyboard-inset-height)`
+            // (reported by `keyboardFromModal`). Shrinking here as well would
+            // lift everything that already pads for the keyboard a second time.
+            int[] now = {getWidth(), Math.max(0, getHeight() - below), top, right, bottom, left};
             if (now[0] == 0 || java.util.Arrays.equals(now, reported)) return;
             reported = now;
             float d = mounter.density;

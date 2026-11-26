@@ -35,8 +35,11 @@ There the environment's `ctrl_for_command` is set, and labels show such shortcut
 (`Keystroke::pressed`: `keymap.label`, `Command`'s hints, the menus' right column).
 Every mode is restored on exit, on errors, on a panic and on a stop signal, the kitty flags popped first.
 When the terminal reports focus coming back, the host turns bracketed paste, focus reports and mouse capture on
-again (another program in the same terminal may have turned them off) and the next frame repaints every Cell;
-losing focus cancels a held pointer and a scroll bar drag. The host collects what ratatui writes for a frame
+again (another program in the same terminal may have turned them off), pushes the kitty keyboard flags again
+if losing focus popped them — and only sets them (`CSI = flags u`) if their level is still held, so focus
+moving back and forth never stacks levels — and repaints every Cell in the next frame; losing focus pops the
+kitty flags, so focus moving away gives the terminal back the level the host pushed, and cancels a held pointer
+and a scroll bar drag. The host collects what ratatui writes for a frame
 and writes it between frames as one synchronized update (`?2026h` … `?2026l`), so the terminal never shows half
 a frame; a frame that changes no Cell (only the cursor commands of the frame before) writes nothing at all. Inside
 tmux (`TMUX` set) the markers are written only when tmux reported mode 2026 to DECRQM.
@@ -101,8 +104,8 @@ the value at the field's end, its caret's Cell, the suffix as wide as the widest
 last blank Cell is the band's end). With `controlsRight`, `NumberInput` sets them side by side in a terminal, the
 decrement first.
 
-Tab always moves the focus on in a terminal: a component that takes Tab for itself elsewhere (a `DataTable`'s Tab
-moving its selection, as gpui-component's) leaves it to the focus there and moves with the arrows.
+A component that takes Tab for itself on the desktops keeps it in a terminal: a `DataTable`'s Tab moves its selection,
+as gpui-component's, and Escape (with nothing selected) gives up the keyboard so Tab moves the focus on.
 
 A primary press gives the focus to what it went down on as it comes up (while it is held the view shows the press):
 the focusable view under the pointer, or the nearest one around it (a card around the text pressed), and Tab goes
@@ -316,7 +319,13 @@ compared side by side with the others. Its layout and colors' meanings are the g
 
 `AppOptions` supplies the point scale, appearance/background, limits, UI sets, cache, storage, assets, clipboard
 and host channel. `TerminalCapabilities` carries the terminal's background scheme, its default background and
-foreground colors and its color depth (`ColorDepth`); the standalone host fills them from its startup query. Embedding defaults to bounded limits; the Development host explicitly selects standalone limits.
+foreground colors, its color depth (`ColorDepth`), how it shows pictures (`Graphics`) and its Cell's size in pixels;
+the standalone host fills them from its startup query. That query also asks for the kitty graphics protocol (a
+one-pixel `a=q` query, which stores nothing) and `CSI 16 t`; an `OK` answer in a terminal known to draw Unicode
+placeholders (`TERM` naming kitty or Ghostty, `TERM_PROGRAM=ghostty`, `KITTY_WINDOW_ID`) selects
+`Graphics::KittyPlaceholders`. Others that answer (WezTerm, Konsole) place images by cursor only, and tmux does not
+pass the query through: they get half blocks. Without a `CSI 16 t` answer the Cell's pixels come from the window's
+size (`TIOCGWINSZ`), else they are guessed from the Cell's proportion. Embedding defaults to bounded limits; the Development host explicitly selects standalone limits.
 `register_component` creates per-node widgets with ordered property updates, commands and buffer rendering;
 reserved `nsh/` names are rejected. Native component input, sizing and richer context belong to the native
 component ticket. The Release runner is a separate slice.
@@ -364,7 +373,8 @@ prefix holding only its focus ring) keeps none of its margins (`shows_nothing`).
 
 `CellTextEngine` counts Unicode display width: wide characters take two Cells and grapheme clusters stay whole.
 Ordinary text occupies one row at any font size. Inline attachments reserve their width in whole Cells
-and grow the line to hold their height; baseline, text-top, text-bottom and middle alignment use Cell font metrics.
+and grow the line to hold their height; baseline, text-top, text-bottom and middle alignment use Cell font metrics,
+an attachment's rows split at the row line nearest its baseline (a one-row view centered on the text adds no row).
 Their child views draw and receive input in the reserved space, and attachments removed by truncation stay hidden.
 Wrapping prefers spaces after content, then breaks inside a word. Leading indentation stays with the first part
 of the word instead of becoming a separate whitespace-only row. Explicit newlines
@@ -423,7 +433,9 @@ draws, in order:
    surfaces an anchored overlay's box is then raised and a modal's stays base;
 2. with surfaces, its fill as a band over its whole frame (below). A face is a line or a fill, never both: a
    filled box has no border Cells, at every color depth (the layout never depends on it: at 16 colors the box is
-   laid out as with surfaces, a small one's fill in the standard colors), and a fill inside a frame (an
+   laid out as with surfaces, a small one's fill in the standard colors), nor on the user's hand: a box is laid out
+   by the fill it rests with (`Node::resting_fill`), so a row's hover or press band keeps its line and moves nothing,
+   and a fill inside a frame (an
    inset palette in a padded card) is laid out against the frame's line, across its padding (`band_reach`), its
    rows' text in the column where the frame's other content (a caption under it) starts. A popup's panel (the
    first face in an anchored overlay: a popover, a hover card, a menu, a tooltip; the overlay itself when the app
@@ -480,19 +492,46 @@ mean that): with surfaces its fill is its own color blended over its ground, at 
 the Cells of its tracks are such views, inside the control that takes the press, so hover and focus bands leave
 the color alone. A run with its own background (a
 highlight, inline code) is a band the same way. A text field without a
-line or a fill of its own is a raised band (a search field); an input group, a one-row box of an opaque fill
+line or a fill of its own is a raised band (a search field), and so is a one-row select trigger (a combobox holding
+no field), so it reads as one to press; an input group, a one-row box of an opaque fill
 holding a field with something beside it (a prefix or suffix, chips, a clear button, a chevron), is that band as
 a whole, the field raised with it rather than a step of its own (`input_group`). Bandless, a fill is the standard
 colors' (above).
 
 A view's gradient over no fill of its own is a fill of its first stop, a band as any fill is.
 
+**Images** (`image.rs`) load through the core's shared loader and decoded images (`docs/dev/images.md`), first
+frame only (the terminal runs with reduced motion), decoded at the size their content box needs at the terminal's
+Cell pixels and loaded again when the box outgrows it; `onLoadStart`, `onLoad`, `onError` and `onLoadEnd` are
+dispatched after the frame that saw them (a transparent image with Cells loads as a drawn one does, so an avatar's
+picture, transparent until its `onLoad`, shows; `image::prepare`), and `Command::ImageInfo` (`Image.getSize`, `Image.prefetch`) is answered
+from the header, as Linux answers it. An image of one side and an `aspectRatio` takes the other from it in the
+terminal layout, loaded or not (a photo filling its tile's width has its rows before its natural size is known). The picture is fitted into the box with `ResizeMode::fit` and the
+`objectPosition`, resampled premultiplied (no dark fringes), `tintColor` painted through its alpha. How it shows
+depends on `TerminalCapabilities::graphics`:
+
+- `Graphics::Blocks` (the default): each Cell is `▀`, its foreground the top pixel and its background the bottom
+  one, at the terminal's depth; a transparent half is `▄` / `▀` over the surface, a translucent one mixed into the
+  surface's color (the terminal's background on the page). Below 256 colors the box shows the image's label in
+  brackets, dim (`render.rs` `stand_in`).
+- `Graphics::KittyPlaceholders` (24-bit color only): the fitted picture, `cols × cell width` by `rows × cell
+  height` pixels (`cell_pixels`, at most 2048 a side), is PNG-encoded and transmitted once as a virtual placement
+  (`ESC _ G a=T,U=1,f=100,q=2,i=ID,c=…,r=…`, base64 in 4096-byte chunks). Each Cell of the box is U+10EEEE with its
+  row and column as kitty's combining marks (`DIACRITICS`) and the 24-bit image id as its foreground, so clipping,
+  scrolling, overlays and ratatui's diff work on plain Cells; a final pass (`Loader::finish`) restores the id color
+  and clears attributes a later pass (a band, reverse video) set on a placeholder still showing. The commands go to
+  `perf::Output::graphics`, which `MeasuredBackend` writes ahead of the next frame's first Cell, as it wraps links. A
+  placement whose key (picture, Cells, mode, position, tint, Cell pixels) changes, or whose view goes, queues
+  `a=d,d=I` for its id.
+
+A control whose content is a picture shows its label until the picture has loaded (`draws`).
+
 **Nothing is drawn** for radii other than a border's corners, shadows,
 outlines and focus rings, opacity, filters, blend modes, backdrop effects, transforms other than translation
-(rounded to Cells), icons, images, videos, web views and native views without a terminal rendering: the
-terminal cannot show them well, so they are left out rather than imitated (the core gives icon-sized images, videos,
-web views, shaders and canvases no Cells; larger ones keep their box, which the painter leaves blank, fill included,
-so the labels around them keep their places; the mounter logs each unsupported kind once). A view that is invisible, concealed (a screen under the top one)
+(rounded to Cells), icons, videos, web views and native views without a terminal rendering: the
+terminal cannot show them well, so they are left out rather than imitated (the core gives icon-sized videos,
+web views, shaders and canvases no Cells; larger videos and web views keep their box, which the painter leaves blank,
+fill included, so the labels around them keep their places; the mounter logs each unsupported kind once). A view that is invisible, concealed (a screen under the top one)
 or nearly transparent (opacity under 0.03) draws nothing. Cells keep the terminal's default foreground and
 background (`Color::Reset`) unless something below sets them.
 
@@ -524,10 +563,12 @@ own background, so what its children filled stays, and it is at least one step a
 - a selected or current item (a toggle that is on included) is a select band and bold, never the accent; one
   whose every glyph is in a hue of the app's (a pagination's current dot in the accent) is only bold, its color
   telling it apart already; a
-  focused control (a button, a row, a tab) is the accent band, its text in the terminal's background color, bold
+  focused control (a button, a row, a tab) is the accent band (only when the keys moved the focus, as CSS's
+  `:focus-visible`: a control the pointer pressed shows no focus until the next key, a field always does), its text in the terminal's background color, bold
   when it is also selected, so focus is the accent and on or chosen a gray step wherever they meet; a focused
-  container three or more rows tall shows its line in the focus color (without a line, a hover band and an accent
-`▎` rail down its leading column); a focused
+  container three or more rows tall shows its line in the focus color; without a line, one that takes presses (a card
+  that is a button) has an accent `▎` rail down its leading column and no band, and a pane the keys move within (a
+  sidebar's list, an editor) no mark of its own, what is focused in it (its highlighted item, the caret) showing it; a focused
   text field shows its line in the focus color and the caret; one whose box has no room for its line (one row tall)
   is a hover band with an accent underline along its row instead, a step alone being too faint to find; a framed box of any
   size (a one-time code's cell) shows focus with its line alone; a focused control whose Cells are all its
@@ -561,7 +602,10 @@ own background, so what its children filled stays, and it is at least one step a
   the box it splits: in the frame's color (a popup's line color in a popup), lit only in its accent, its box's
   fill (the app's line color on a hairline) no band; where it ends on another line (a frame's side, another
   divider) the two are joined, `├ ┤ ┬ ┴ ┼` (`render::join_lines`), and so are the ends of a box's lone line across
-  (a search field's rule under it, a footer's over it), in a modal too;
+  (a search field's rule under it, a footer's over it), in a modal too. Only a divider that splits its box from
+  side to side joins: each of its ends meets a line of the innermost box around it that draws lines, or that
+  box's edge; one that stops short at either end (a separator in one row of a wrapped toolbar) joins neither,
+  nor does a line inside a control or a picture (a slider's track, a color slider's thumb), which is no divider;
 - a framed box that is itself the focused stop, or the part showing its control's focus (a one-time code's next
   cell), shows its line in the accent (blue), bold: the line glyphs of the sides that draw one, never a text on
   the box's row (a sidebar's first row under only its right line); so does a pane holding the focus, the
@@ -602,8 +646,8 @@ its frame shows (a popover by the screen's edge); a box across the whole screen 
 tall) stays docked to the edge it is flush with, its frame's side there off the screen (`Core::framed_within`). A
 dropdown's list (a select's, a combobox's, a date picker's calendar: `popup::dropdown`) is at least as wide as its
 trigger less two Cells, so its frame, lines included, runs from the trigger's first column to its last, whichever edge the
-app aligns it on. A word behind the box that it or its frame cuts is
-left out whole, no half of it glued to the frame; a run longer than 12 Cells (a URL, a path) keeps the part that
+app aligns it on. A word behind the box that it or its frame cuts, or that touches
+its line, is left out whole, no half of it glued to the frame (a word a blank Cell or a line away stays); a run longer than 12 Cells (a URL, a path) keeps the part that
 shows, ending in `…` by the frame. A fill the frame cuts goes with its words the same way when it is one row of a
 band of its own up to 12 Cells past the frame (a badge, a chip); a taller band (a panel's) goes on past it. A modal shows the page behind it as it is: a terminal
 has no scrim, so nothing is faded or dimmed, and the app's backdrop (a translucent fill of a modal's layer across
@@ -646,7 +690,8 @@ What the system draws on other platforms is drawn in the same look (`dialog.rs`,
   first and a sheet last; focus starts on the default button. Tab and the arrows move between buttons, Enter and
   Space choose, Escape chooses cancel or dismisses a cancelable dialog; a press on a button chooses it, one
   outside dismisses a cancelable dialog. The answer is the `dialog` event with the dialog's `id` and the button's
-  `index` (-1 when dismissed). While a dialog is shown it takes every key and press, and nothing behind it is hit.
+  `index` (-1 when dismissed); an alert's `input` has no text field here yet, so the answer has no `value`. While a
+  dialog is shown it takes every key and press, and nothing behind it is hit.
 - **Context menus** (`Menu.popup`, `DesktopCommand::PopupMenu`): a box at the pointer's Cell (or the app's point),
   above the pointer or moved left where it has no room, on the raised surface of an anchored popup with the
   popover's rounded line, no backdrop. One row per item: the label from the first Cell inside the line (a role's own
@@ -739,7 +784,9 @@ update its axis, extent and behavior data. `ScrollTo` from the core, including a
 resolved `scrollToEnd`, moves immediately within the content limits in this reduced-motion slice. `ScrollBy`
 applies the core's anchoring delta without clamping it. After applying pending batches, the surface reports each
 changed scroll view's final offset and applied-command count to the engine, which delivers scroll events and
-updates its view of the content. Keyboard movement reveals the focused control in its surrounding Scroll,
+updates its view of the content. `StickyCells` replaces a scroll view's sticky set; each frame a cell is drawn
+shifted by `ScrollState::sticky_shifts_with` (its animated offset read from the graph) wherever it sits under the
+scroll view, and the sticky cells draw and take the pointer after the other children, in children order. Keyboard movement reveals the focused control in its surrounding Scroll,
 innermost first. A reveal leaves a fully visible target in place. When vertical scrolling is needed, it centers
 the target in the viewport, clamped to the content limits, keeping it away from app overlays at the edges.
 Horizontal reveals and targets too large to center retain the core's reveal margin (16 points, capped at a
@@ -870,7 +917,9 @@ revealing it requires scrolling, and leaves fully visible controls in place (see
 focus leaves a control for none (Esc out of a field, an editor's included), the next Tab or Shift+Tab continues
 from that control rather than from the ends. A text field narrower than a Cell (an editor's sink at its caret)
 is still a stop, and while it has the focus the terminal's cursor (Bar) is at its origin Cell
-(`Keyboard::cursor`): an `Editor` and a `RichEditor` keep their sink at the caret and draw no caret of their own.
+(`Keyboard::cursor`): an `Editor` and a `RichEditor` keep their sink at the caret and draw no caret of their own,
+and a `Terminal`'s sink at its cursor is the one stop of the terminal (its box only focuses the sink when pressed).
+These sinks are opaque in a terminal: a view at 0.02 opacity would be left out of the geometry and the stops.
 A text's links that are stops (`TextLink::focus_stop`: a `TextView`'s, a nested `<Text onPress>`) are stops
 right after their text, in text order, a link inside another after the one around it (`render.rs` records each
 with its Cells as `Mounter::spans`, `keyboard::Span`): the focused one's characters are reversed, it reports
@@ -899,6 +948,54 @@ again. Legacy terminal presses are independent actions: Ctrl+I/Tab, Ctrl+M/Enter
 indistinguishable, and a terminal may consume Ctrl+S/Ctrl+Q for flow control (the host's raw mode turns
 the tty's own flow control off). With the kitty keyboard protocol the standalone host negotiates, those pairs
 arrive apart. Editing uses the keys below while a field is focused.
+
+### Raw key events and capture
+
+A focused custom view can hear the keys themselves, not only the app's shortcuts: `on_key_down` and `on_key_up`
+(a Rust view's `Interactive::on_key_down` / `on_key_up`, a TSX view's `onKeyDown` / `onKeyUp`) report a
+`KeyEvent`. `key_event.rs` names the key as the other platforms do: a character exactly as the terminal
+reports it (its case and the layout's Shift are the source's), a named key by its DOM spelling (`ArrowLeft`
+where the keymap says `Left`; `PageUp`, `F5`), and a key no shortcut names (`Shift`, `CapsLock`, a media
+key) by the terminal's name — `Unidentified` for one it has none for. `code` is always `""`: a terminal
+reports no hardware key identity, and the host never derives one from the character or the key's name.
+`repeat` marks the terminal's auto-repeats. `default_prevented` is the mounted capture policy's decision for
+this one transition.
+
+The app's shortcuts and its menus' are matched first, as on the desktops; the raw transition follows, before the
+terminal's defaults (Tab's traversal, Return and Space pressing, Escape going back, scrolling). A transition is
+reported once, on the focused view (or the text view of a focused link): the engine bubbles it to the enabled
+ancestors that listen, in this surface's window — a dialog (`Modal`, `nsh_base::dialog()`) is the keyboard
+boundary, as a window is on the desktops, and so is a sheet (`nsh_base::sheet()`), a dialog on every platform. A
+portaled `Overlay` is mounted in a root view, but its logical parent is the view that declared it: interest and
+capture follow that logical parent (the core's `ViewProps::key_parent`), as the engine's bubbling does, so a
+portal's keys reach its declaring view's listeners and capture rules and not another portal's. A release reaches the view that has the focus when it arrives; a terminal cannot pair it with a
+press that went to another view.
+
+`capture_keys` (`KeyCapture`: none, all, or a list of shortcuts) is read from the mounted props of the focused
+view and its enabled ancestors before the defaults run. A captured key still reaches the listeners, marked
+`default_prevented: true`, and runs no default; a view that only listens takes nothing from what the key does.
+The rule is matched against the canonical shortcut keystroke (`shift+tab`, `a`), with the app's existing
+vocabulary, and `all` captures keys no shortcut can name too. It is re-read on every transition, so mounting or
+unmounting a rule applies at once. A native control keeps its own keys: while a text field or the Minibuffer has
+the keys, views hear no raw transitions, and a capture around the field cannot intercept what is typed into it.
+
+What a `KeyEvent` can say follows the input source. A plain terminal, or a legacy one, sends presses: a press
+is a key down, and the host invents no release, repeat or physical code for it. A release and an auto-repeat
+are sent only by a source that reports event types: the kitty keyboard protocol, which the standalone host
+negotiates, and Windows' console input, which crossterm reads with kinds. The kitty flags add releases and
+auto-repeats for the keys the terminal sends as escape codes — the functional keys and those with modifiers; a
+plain text key stays text, so its release or repeat arrives only where the terminal reports it anyway. That is
+deliberate: kitty's "report all keys as escape codes" flag (8) would give text keys repeats and releases too,
+but it also stops the terminal sending their text at all; the text is only reportable through a CSI-u event's
+associated-text field (flag 16), which crossterm drops, so composed input (dead keys, IME, an AltGr character)
+would be lost or arrive as the base key's character. The same flag is why Enter, Tab and Backspace carry no
+release here: the protocol leaves them in their legacy bytes, which a shell needs, unless every key is
+escape-coded. Full key events for plain text need a parser that reads that field; until there is one, typing
+stays as the terminals send it. With `REPORT_ALTERNATE_KEYS`, crossterm reports a shifted key as the character
+the user's layout types and clears Shift from that event's modifiers: `key` is that character (the DOM's key for
+the press), while the Key scheme's canonical keystroke still matches `shift+…` shortcuts. A modifier key
+arrives only when the terminal reports it (the flags pushed leave out kitty's "all keys as escape codes"), and
+then as `Shift`, `Control`, `Alt` or `Meta`; keypad, CapsLock and NumLock state is not part of a `KeyEvent`.
 
 ## The Minibuffer
 
@@ -1042,7 +1139,8 @@ those operations and projects text to Cells. `InputValue` updates are accepted o
 least the local count; an equal value preserves the selection and undo history. Every local edit reports one
 `ChangeText` with the new count, including when the app has no change listener. Selection events use UTF-16
 positions; Cell columns and model byte offsets are never used as event offsets. Typed insertions and Backspace
-report `KeyPress`; Enter reports it before `SubmitEditing`. Focus changes use the shared keyboard Focus/Blur and
+report `KeyPress`; Enter reports it before `SubmitEditing`, and Esc / C-g report `Escape` before the field loses
+the focus, as on the desktops. Focus changes use the shared keyboard Focus/Blur and
 tracked-state path. `autoFocus`, `focus()`, `blur()` and `setSelection` use the same field state.
 
 Tab / Shift+Tab enter and leave fields. C-n/C-p and Up/Down traverse controls in single-line fields; in multiline
@@ -1095,7 +1193,7 @@ standalone host draws as a steady bar; elsewhere it is `Default`, the user's own
 through the ordinary key/paste path.
 
 Bracketed paste is one model insertion and one ChangeText event; it is clipped by the core's
-UTF-16 `maxLength`. The core's `pasted` helper normalizes CRLF and single-line line breaks. `Paste` is reported
+`maxLength`, which counts characters. The core's `pasted` helper normalizes CRLF and single-line line breaks. `Paste` is reported
 before insertion, and `pasteBehavior="report"` reports without insertion.
 
 Fields share the exact `ClipboardBackend` passed to their engine, including the test agent's isolated clipboard.
@@ -1125,7 +1223,9 @@ permit clipboard writes; `nsh test` uses memory and never writes to the machine'
 | Borders | Box drawing on each side wider than zero, one Cell, dim (an accent color kept), rounded corners where a radius is set, dashed and dotted lines |
 | Outlines and focus rings | Left out; focus shows as described in "Drawing" |
 | Box shadows | Left out |
-| Images, videos, web views, shaders and canvases | At most 48 × 48 points (icons): left out, laid out as `display: none` by the terminal layout (no Cells, frame or hits, their margins and gaps gone). Larger: their box kept and left blank, so the content around them keeps its place; larger canvases are drawn |
+| Images | Every size keeps its box and is drawn (below) |
+| Videos, web views, shaders and canvases | At most 48 × 48 points (icons): left out, laid out as `display: none` by the terminal layout (no Cells, frame or hits, their margins and gaps gone). Larger: canvases drawn; videos, web views and shaders keep their box blank, so the content around them keeps its place |
+| Images | Kitty graphics Unicode placeholders at the terminal's pixels in kitty and Ghostty (24-bit color); elsewhere `▀` half blocks, two pixels a Cell, at 256 colors or more; blank below. Resize modes, `objectPosition` and `tintColor` applied; the first frame of an animation; blur, placeholders and fades left out |
 | Scroll bars | A one-Cell track `│` (dim) and thumb `┃` on the inner edge of an overflowing scroll view, unless hidden |
 | Anchored overlays | Snapped outside the anchor's Cell rect on the core-resolved placement side; cleared and framed, the label as title |
 | Gaps between texts | Positive point gaps between one-line sibling texts or canvas text runs retain at least one Cell; zero gaps keep adjacent text |
@@ -1197,13 +1297,16 @@ tests cover focus marks, backward focus-within transitions, projected value/disa
 Slider keys. The palette module checks colors as meanings at each depth (accents by hue, dim
 secondary text, the light and dark pages), translucent text and opacity, text attributes and gradients; the
 painting module checks borders (dim or accented sides, dashed, dotted, single sides), that shadows, outlines and
-rings draw nothing, scroll bars, that images keep their box blank and icons are left out, icon buttons labeled, tiny and round boxes without borders and empty ones as their outline,
+rings draw nothing, scroll bars, that icons are left out, icon buttons labeled, tiny and round boxes without borders and empty ones as their outline,
 clipping to the parent's content box with an ellipsis, selected bands, focus and disabled marks, overlays cleared
 and framed, unchanged frames and invisible views; `dialog.rs`'s unit tests check alerts' button order, keys,
 presses and drawing, `menu.rs`'s a context menu's placement, keys and presses. The menu bar module checks the
 application menu's row above the app (and none without one), F10 and the arrows between titles and menus, the roles
 left out, shortcuts at the right, initials, Escape, presses and hover on titles and an item's shortcut with the bar
 closed. These tests do not exercise hover or Slider drags yet.
+The image module draws a picture in half blocks and checks its colors and `onLoad` size, the kitty transmission,
+placeholders and the deletion when the view goes, an image that fails, and `Image.getSize`; `image.rs`'s unit tests
+check fitting, tint, chunking and the placeholder's width.
 The search fixture searches forward and backward through a Scroll's rows and checks the Minibuffer row before,
 during and after the search.
 The animation module at the AppView seam checks completion, cancellation, active-frame and idle scheduling,

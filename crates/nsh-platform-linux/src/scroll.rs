@@ -74,6 +74,11 @@ impl ScrollHost for Host<'_> {
         self.surface.control(|c| c.scroll(id, offset, applied));
     }
 
+    fn key_scrolled(&self, key_move: KeyMove) {
+        let id = self.view.id();
+        self.surface.control(|c| c.key_scrolled(id, key_move));
+    }
+
     fn moved(&self, offset: Point<Points>) {
         self.view.queue_allocate();
         self.view.queue_draw();
@@ -461,6 +466,26 @@ pub(crate) fn wheel_begin(surface: &Rc<Surface>, view: &NshView) {
 /// it is a mouse wheel, which settles when idle.
 pub(crate) fn wheel(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32) {
     shared::wheel(&Host::new(surface, view), point(Points(dx), Points(dy)));
+}
+
+/// A mouse wheel's notch of `(dx, dy)` points, `line` points a line along
+/// each axis: in the view's own lines (`wheelLineHeight`), and gliding on
+/// a `smoothWheel` view unless the system reduces motion. `None` once it
+/// glides, else the notch for the platform's own wheel to take.
+pub(crate) fn wheel_notch(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    dx: f32,
+    dy: f32,
+    line: Point<Points>,
+) -> Option<(f32, f32)> {
+    let host = Host::new(surface, view);
+    let d = shared::wheel_line(&host, point(Points(dx), Points(dy)), line);
+    if !surface.environment.get().reduce_motion && shared::smooth_wheel(&host) {
+        shared::wheel_smooth(&host, d);
+        return None;
+    }
+    Some((d.x.0, d.y.0))
 }
 
 /// The touchpad gesture ended with velocity `(vx, vy)` points per second

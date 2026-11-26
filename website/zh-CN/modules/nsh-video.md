@@ -28,6 +28,7 @@ interface VideoProps extends Omit<ViewProps, "children">, VideoHostProps {
 
 ```tsx
 import { mount, signal, Text, Video, type VideoRef, View } from "nsh";
+import { Window } from "nsh/desktop";
 
 function Player() {
   const paused = signal(true);
@@ -54,7 +55,11 @@ function Player() {
   );
 }
 
-mount(Player);
+mount(() => (
+  <Window id="main">
+    <Player />
+  </Window>
+));
 ```
 
 ## 属性
@@ -64,6 +69,7 @@ mount(Player);
 | 属性 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `src` | `string` | （必填） | 视频的 URL。 |
+| `poster` | `string` | | 视频加载时显示的图片，直到第一帧就绪。 |
 | `paused` | `boolean` | `false` | 暂停播放。 |
 | `muted` | `boolean` | `false` | 静音。 |
 | `volume` | `number` | `1` | 0..1。 |

@@ -14,6 +14,30 @@ events with no JavaScript, and what screen readers get: an image labelled with t
 app's: an `Avatar` has no size, shape, colors or font of its own. An `AvatarGroup` shows the first few avatars of a
 row and an overflow that stands for the others ("+5").
 
+```tsx tabs
+import { mount } from "nsh";
+import { Avatar } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  return (
+    <Avatar
+      src="https://example.com/ada.png"
+      name="Ada Lovelace"
+      class="size-10"
+      imageClass="rounded-full"
+      fallbackClass="items-center justify-center rounded-full bg-muted text-sm text-muted-foreground"
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{avatar, theme};
 use nsh_core::prelude::*;
@@ -33,25 +57,6 @@ fn author(name: &'static str, picture: &'static str) -> impl IntoElement {
                 .text_sm()
         })
 }
-```
-
-```tsx tabs
-import { mount } from "nsh";
-import { Avatar } from "nsh/base";
-
-function App() {
-  return (
-    <Avatar
-      src="https://example.com/ada.png"
-      name="Ada Lovelace"
-      class="size-10"
-      imageClass="rounded-full"
-      fallbackClass="items-center justify-center rounded-full bg-muted text-sm text-muted-foreground"
-    />
-  );
-}
-
-mount(App);
 ```
 
 `Avatar` and `AvatarGroup` come from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. In Rust,

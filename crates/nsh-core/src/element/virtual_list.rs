@@ -93,6 +93,18 @@ pub trait ListLayout: Sized {
         })
     }
 
+    /// With [`Self::follow_end`]: an end that moves away by a large step at
+    /// once (a card or chart appearing in the last row) is followed by an
+    /// animated scroll whose target keeps up with the end, rather than a
+    /// jump; small steps (text streaming in) follow at once either way
+    /// (TS: `maintainVisibleContentPosition={{ animated: true }}`). Off by
+    /// default.
+    fn follow_end_animated(self, animated: impl IntoReactive<bool>) -> Self {
+        self.layout(animated, |c, animated| {
+            c.follow_end_animated = Some(animated)
+        })
+    }
+
     /// Where the list rests (TS: `alignment`): [`ListAlignment::Bottom`]
     /// opens at the end and stays there as the content grows, the rows in
     /// reading order (a chat, GPUI's `ListAlignment::Bottom`). Rows keep
@@ -338,7 +350,7 @@ impl VirtualList {
     pub fn bind_sticky_header_offset(mut self, value: &impl super::Animated) -> Self {
         if let Some(node) = value.animated_node().live() {
             super::host::set(&mut self.0, Prop::StickyOffsetNode(Some(node.id())));
-            self.0.attrs.bound.push(node);
+            self.0.attrs.rare_mut().bound.push(node);
         }
         self
     }
@@ -540,24 +552,6 @@ impl Accessible for VirtualList {}
 impl Interactive for VirtualList {}
 impl super::Scrollable for VirtualList {}
 
-/// How the rows changed from `old` to `new` keys: `(at, removed,
-/// inserted)` by the common start and end (as `List` does), `None` when
-/// they are the same.
-pub(crate) fn splice(old: &[u64], new: &[u64]) -> Option<(u32, u32, u32)> {
-    let max = old.len().min(new.len());
-    let start = old.iter().zip(new).take_while(|(a, b)| a == b).count();
-    let end = old[start..]
-        .iter()
-        .rev()
-        .zip(new[start..].iter().rev())
-        .take(max - start)
-        .take_while(|(a, b)| a == b)
-        .count();
-    let removed = old.len() - start - end;
-    let inserted = new.len() - start - end;
-    (removed > 0 || inserted > 0).then_some((start as u32, removed as u32, inserted as u32))
-}
-
 #[cfg(test)]
 mod tests {
     use super::ViewableItems;
@@ -577,15 +571,5 @@ mod tests {
         };
         assert_eq!(none.indices().count(), 0);
         assert_eq!(none.changed().collect::<Vec<_>>(), [(0, false), (1, false)]);
-    }
-
-    #[test]
-    fn splices_keep_the_common_ends() {
-        use super::splice;
-        assert_eq!(splice(&[1, 2, 3], &[1, 2, 3]), None);
-        assert_eq!(splice(&[1, 2, 3], &[0, 1, 2, 3]), Some((0, 0, 1)));
-        assert_eq!(splice(&[1, 2, 3], &[1, 3]), Some((1, 1, 0)));
-        assert_eq!(splice(&[1, 2, 3], &[1, 2, 3, 4]), Some((3, 0, 1)));
-        assert_eq!(splice(&[1, 1], &[1]), Some((1, 1, 0)));
     }
 }

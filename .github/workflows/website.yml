@@ -93,7 +93,7 @@ jobs:
       deployment: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # The releases' tags and content (`website/scripts/versions.js`).
           fetch-depth: 0
@@ -133,8 +133,14 @@ jobs:
       - name: Test viewport dialogs across iframe boundaries
         run: node --test crates/nsh-platform-web/web/viewport-browser.test.mjs
 
+      - name: Test apps' realms when the page moves its player
+        run: node --test crates/nsh-platform-web/web/realm-browser.test.mjs
+
       - name: Test touch drags handed from zoomable views in a browser
         run: node --test crates/nsh-platform-web/web/touch-browser.test.mjs
+
+      - name: Test files dragged into a browser
+        run: node --test crates/nsh-platform-web/web/file-drop-browser.test.mjs
 
       - name: Test svg() currentColor in a browser
         run: node --test crates/nsh-platform-web/web/svg-browser.test.mjs
@@ -146,6 +152,9 @@ jobs:
       # Chrome on Linux draws them (the file's first test).
       - name: Test emoji measurement against what Chrome draws
         run: node --test --test-name-pattern emoji crates/nsh-platform-web/web/text-browser.test.mjs
+
+      - name: Test the web crate on the host
+        run: cargo test -p nsh-platform-web
 
       - name: Check the generated classic browser bootstrap
         run: cargo run -p nsh-bundler --example browser_bootstrap -- --check
@@ -197,7 +206,7 @@ jobs:
 
       # The published site requires the catalog (NSH_REQUIRE_SHOWCASES).
       - name: Check out the App Stories catalog
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: longbridge/nsh-showcases
           ref: main

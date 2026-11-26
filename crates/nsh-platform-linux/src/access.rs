@@ -795,6 +795,7 @@ fn role_for(a: &Accessibility, kind: ViewKind, pressable: bool) -> Gtk {
         Role::Button | Role::ImageButton | Role::KeyboardKey => Gtk::Button,
         Role::Link => Gtk::Link,
         Role::Search => Gtk::SearchBox,
+        Role::Textbox => Gtk::TextBox,
         Role::Image => Gtk::Img,
         Role::Text => Gtk::Label,
         Role::Adjustable => Gtk::Slider,
@@ -837,6 +838,7 @@ fn role_for(a: &Accessibility, kind: ViewKind, pressable: bool) -> Gtk {
         Role::TreeItem => Gtk::TreeItem,
         Role::Dialog => Gtk::Dialog,
         Role::AlertDialog => Gtk::AlertDialog,
+        Role::TabPanel => Gtk::TabPanel,
     }
 }
 
@@ -1222,6 +1224,7 @@ mod tests {
                 }],
                 cancelable: false,
                 sheet,
+                input: None,
             })),
         );
     }
@@ -2274,11 +2277,21 @@ mod tests {
                         .is_some()
                 );
                 click(editor.compute_point(&surface.root, &center).unwrap());
-                assert!(
-                    events.lock().unwrap().is_empty(),
-                    "the hosted editor does not dispatch Press: {:?}",
-                    *events.lock().unwrap()
+                // The input hears its own press, and GTK still edits.
+                let editor_press = events.lock().unwrap().clone();
+                assert_eq!(
+                    editor_press
+                        .iter()
+                        .map(|(kind, _)| *kind)
+                        .collect::<Vec<_>>(),
+                    [EventKind::PressDown, EventKind::PressUp, EventKind::Press],
+                    "the input hears its press"
                 );
+                assert!(matches!(
+                    editor_press.last(),
+                    Some((_, EventPayload::Press(press))) if press.clicks == 1
+                ));
+                events.lock().unwrap().clear();
                 assert!(crate::synth::focused_text(&window).is_some());
                 crate::synth::type_text(&window, "native");
                 let editable = editor.downcast::<gtk::Editable>().unwrap();
@@ -2538,6 +2551,7 @@ mod tests {
             (Role::Tab, Gtk::Tab),
             (Role::Tablist, Gtk::TabList),
             (Role::Search, Gtk::SearchBox),
+            (Role::Textbox, Gtk::TextBox),
             (Role::Progressbar, Gtk::ProgressBar),
             (Role::List, Gtk::List),
             (Role::Listbox, Gtk::ListBox),
@@ -2576,6 +2590,7 @@ mod tests {
             (Role::MenuItemRadio, Gtk::MenuItemRadio),
             (Role::Dialog, Gtk::Dialog),
             (Role::AlertDialog, Gtk::AlertDialog),
+            (Role::TabPanel, Gtk::TabPanel),
         ] {
             assert_eq!(
                 role_for(&with_role(role), ViewKind::View, false),

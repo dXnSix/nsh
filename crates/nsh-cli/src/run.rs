@@ -61,6 +61,21 @@ impl Target {
         }
     }
 
+    /// The operating system the app runs on, as `platform.os` names it:
+    /// Mac Catalyst's is iOS, a GPUI or terminal host's this machine's.
+    pub(crate) fn os(self) -> nsh_core::platform::Os {
+        use nsh_core::platform::Os;
+        match self {
+            Target::Catalyst | Target::Ios => Os::Ios,
+            Target::Android => Os::Android,
+            Target::Linux => Os::Linux,
+            Target::Macos => Os::MacOs,
+            Target::Windows => Os::Windows,
+            Target::Web => Os::Web,
+            Target::Gpui | Target::Tui => Target::native().os(),
+        }
+    }
+
     pub(crate) fn platform(self) -> crate::runtime::Platform {
         match self {
             Target::Catalyst => crate::runtime::Platform::MacCatalyst,
@@ -100,6 +115,10 @@ pub(crate) struct HostWindow<'a> {
     pub(crate) size: Option<&'a str>,
     /// The display the window opens on, from 1 (the primary display).
     pub(crate) display: Option<usize>,
+    /// Never the active app (`--background`): the window shows, the
+    /// keyboard stays with the app the user types in, as `nsh test` runs
+    /// its apps.
+    pub(crate) background: bool,
 }
 
 impl HostWindow<'_> {
@@ -133,10 +152,16 @@ impl HostWindow<'_> {
                 "--window-size needs a desktop host (--target macos, linux, windows or gpui) and a TSX entry"
             );
         }
+        if self.background && (!crate::test_host::runs_in_background(target) || rust_root) {
+            bail!(
+                "--background needs a desktop host (--target macos, linux, windows or gpui) and a TSX entry"
+            );
+        }
         Ok(())
     }
 
-    /// The arguments of the size and the display, for a desktop host.
+    /// The arguments of the size, the display and the background, for a
+    /// desktop host.
     fn args(&self) -> Vec<String> {
         let mut args = Vec::new();
         if let Some(size) = self.size {
@@ -147,8 +172,27 @@ impl HostWindow<'_> {
             // One-based, as the host counts them.
             args.extend(["--display".to_owned(), display.to_string()]);
         }
+        if self.background {
+            // The host the tests run in takes it too (`test_host.rs`).
+            args.push("--background".to_owned());
+        }
         args
     }
+}
+
+fn validate_listen(listen: crate::dev::Listen, target: Target) -> anyhow::Result<()> {
+    if target == Target::Android
+        && !matches!(
+            listen.host,
+            std::net::Ipv4Addr::UNSPECIFIED | std::net::Ipv4Addr::LOCALHOST
+        )
+    {
+        bail!(
+            "--host {} is not supported with --target android: adb reverse forwards the device's 127.0.0.1 to this machine's 127.0.0.1, so use 127.0.0.1 or 0.0.0.0",
+            listen.host
+        );
+    }
+    Ok(())
 }
 
 /// Starts a dev session and runs the app in a development host, which
@@ -182,6 +226,7 @@ pub(crate) fn run(
         );
     }
     window.check(target, crate::rust_app::is_root(entry))?;
+    validate_listen(listen, target)?;
     if matches!(
         target,
         Target::Macos | Target::Linux | Target::Windows | Target::Gpui
@@ -193,10 +238,9 @@ pub(crate) fn run(
         // package: a debug host measures debug code.
         crate::rust_app::set_release_hosts();
     }
-    let work = dunce::canonicalize(entry)?
-        .parent()
-        .context("entry has no directory")?
-        .join(".nsh");
+    // The app's directory: its `nsh.json`'s, which may be above the entry
+    // (`"entry"`).
+    let work = nsh_bundler::app_dir::app_dir_of(&dunce::canonicalize(entry)?).join(".nsh");
     if target == Target::Tui {
         return run_tui(
             entry,
@@ -215,7 +259,7 @@ pub(crate) fn run(
         return run_rust_app(entry, listen, target, device, &work);
     }
     if target == Target::Android {
-        return run_android(entry, listen, release, limits, &work, trace);
+        return run_android(entry, listen, release, limits, &work, trace, device);
     }
     if target == Target::Web {
         return run_web(entry, listen, release, limits);
@@ -249,7 +293,8 @@ pub(crate) fn run(
     }
     match target {
         Target::Catalyst => {
-            let app = package_catalyst(&work, &host)?;
+            let config = crate::package::read_config(entry)?;
+            let app = package_catalyst(&work, &host, &config)?;
             let exe = app.join("Contents/MacOS/nsh-ios-host");
             // Its own output (AppKit's notes) is kept for when it fails.
             let mut command = Command::new(&exe);
@@ -264,11 +309,13 @@ pub(crate) fn run(
         // Run in place: unlike Catalyst's, the GTK host needs no app
         // bundle around it.
         Target::Linux => {
+            let id = crate::package::app_id(entry)?;
+            dev_desktop_entry(&id, &host);
             let mut command = Command::new(&host);
             command.env("NSH_DEV_APP_DIR", work.parent().expect("source directory"));
             command
                 .args(&args)
-                .args(["--app-id", &crate::package::app_id(entry)?])
+                .args(["--app-id", &id])
                 .args(window.args());
             let schemes = crate::package::read_config(entry)?.schemes;
             if !schemes.is_empty() {
@@ -293,7 +340,7 @@ pub(crate) fn run(
                 .args(&args)
                 .args(["--name", name, "--app-id", &id])
                 .args(["-ApplePersistenceIgnoreState", "YES"])
-                .args(config.macos.host_args())
+                .args(config.macos_host_args())
                 .args(window.args());
             run_local(&session, &mut command, "the macOS host")
         }
@@ -319,14 +366,15 @@ pub(crate) fn run(
             run_local(&session, &mut command, "the GPUI host")
         }
         Target::Ios => {
-            let app = package_ios(&work, &host)?;
+            let config = crate::package::read_config(entry)?;
+            let app = package_ios(&work, &host, &config)?;
             let udid = udid.expect("the simulator is picked before the session");
             let step = ui::Step::start("installing the development host in the simulator");
             simctl(&["install", &udid, &app.to_string_lossy()])?;
             step.finish();
             let mut launch = vec!["launch", "--terminate-running-process", &udid, BUNDLE_ID];
             launch.extend(args.iter().map(String::as_str));
-            let env = simctl_app_env(&crate::package::read_config(entry)?);
+            let env = simctl_app_env(&config);
             let step = ui::Step::start("launching the development host");
             simctl_with_env(&launch, &env)?;
             step.finish();
@@ -359,6 +407,49 @@ fn run_web(
     let session = DevSession::start(entry, listen, release, limits)?;
     session.print_web_url();
     session.watch(|| Ok(false))
+}
+
+/// The desktop portal (xdg-desktop-portal 1.19+) only serves an app
+/// outside a sandbox when an `<id>.desktop` entry names it: without one,
+/// global shortcuts (and the portal's other per-app services) are refused
+/// with "App info not found". A package installs its entry; a run in place
+/// gets a hidden one in `$XDG_DATA_HOME/applications`, written once and
+/// left there (`NoDisplay`, so no launcher lists it). An entry the app or
+/// the user installed is never touched.
+fn dev_desktop_entry(id: &str, exec: &Path) {
+    let Some(dir) = std::env::var_os("XDG_DATA_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+    else {
+        return;
+    };
+    if let Err(e) = write_dev_desktop_entry(&dir.join("applications"), id, exec) {
+        ui::warn(format!(
+            "could not write {id}.desktop for the desktop portal ({e}): global shortcuts may not register"
+        ));
+    }
+}
+
+const DEV_DESKTOP_MARK: &str = "X-NSH-Development=true";
+
+fn write_dev_desktop_entry(dir: &Path, id: &str, exec: &Path) -> anyhow::Result<()> {
+    let path = dir.join(format!("{id}.desktop"));
+    if let Ok(existing) = fs::read_to_string(&path)
+        && !existing.contains(DEV_DESKTOP_MARK)
+    {
+        return Ok(());
+    }
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName={id}\nExec={}\nStartupWMClass={id}\nTerminal=false\nNoDisplay=true\n{DEV_DESKTOP_MARK}\n",
+        exec.display()
+    );
+    if fs::read_to_string(&path).ok().as_deref() == Some(entry.as_str()) {
+        return Ok(());
+    }
+    fs::create_dir_all(dir)?;
+    fs::write(&path, entry)?;
+    Ok(())
 }
 
 /// Runs a Rust app (`nsh.json` `"root"`): its own runner, with no JS
@@ -399,6 +490,13 @@ fn run_rust_app(
         }
         // A menu bar app on macOS (the other runners leave it).
         config.macos.add_to_app_json(&mut info);
+        // The runner runs in place, outside an app bundle: the Dock shows
+        // the app's icon only when the runner is given it.
+        if target == Target::Macos
+            && let Some(icon) = config.icon(crate::package::PackageTarget::Macos)
+        {
+            info["icon"] = icon.to_string_lossy().as_ref().into();
+        }
         config.add_file_types_to_app_json(&mut info);
         // The main window's launch options, as a package's `app.json`.
         if let Some(window) = &config.window {
@@ -413,6 +511,9 @@ fn run_rust_app(
             let runner = crate::runtime::file(target.platform(), false)?;
             let dir = run.join("run/nsh");
             resources(&dir)?;
+            if target == Target::Linux {
+                dev_desktop_entry(&id, &runner);
+            }
             let mut command = Command::new(&runner);
             command.env("NSH_APP_DIR", &dir);
             if cfg!(target_os = "macos") {
@@ -427,7 +528,7 @@ fn run_rust_app(
         }
         Target::Catalyst => {
             let runner = crate::runtime::file(Platform::MacCatalyst, false)?;
-            let bundle = package_catalyst(&run.join("catalyst"), &runner)?;
+            let bundle = package_catalyst(&run.join("catalyst"), &runner, &config)?;
             let macos = bundle.join("Contents/MacOS");
             // The iOS runner looks next to itself.
             resources(&macos.join("nsh"))?;
@@ -475,14 +576,11 @@ fn run_rust_app(
         Target::Android => {
             use crate::android;
             let sdk = android::Sdk::find()?;
-            let serial = android::device(&sdk)?;
+            let serial = android::device(&sdk, device)?;
             let env = android_app_env(&config);
             let out = run.join("android");
             // The device's ABI alone: each one is a build of the app's crate.
-            let abi = android::device_abis(&sdk, &serial)?
-                .into_iter()
-                .find(|abi| android::ABIS.contains(&abi.as_str()))
-                .with_context(|| format!("{serial} runs none of {}", android::ABIS.join(", ")))?;
+            let abi = android::preferred_abi(&serial, &android::device_abis(&sdk, &serial)?)?;
             package_for_run(
                 &entry,
                 crate::package::PackageTarget::Android,
@@ -492,9 +590,9 @@ fn run_rust_app(
             )?;
             let apk = out.join(format!("{name}.apk"));
             let step = ui::Step::start(format!("installing {id} on {serial}"));
-            android::adb(&sdk, &serial, &["install", "-r", &apk.to_string_lossy()])?;
+            android::install(&sdk, &serial, &apk, &id, &["-r"], android::AppData::Kept)?;
             let activity = format!("{id}/com.longbridge.nsh.AppActivity");
-            let mut start = vec!["shell", "am", "start", "-S", "-n", activity.as_str()];
+            let mut start = android::dev_start(&activity);
             start.extend(env.iter().map(String::as_str));
             android::adb(&sdk, &serial, &start)?;
             step.done(format!("launched {id} on {serial}"));
@@ -528,13 +626,15 @@ fn package_for_run(
         out,
         config,
         sign: None,
-        profile: None,
+        profiles: &[],
         keystore: None,
         abis,
         format: crate::android::Format::Apk,
         arch: None,
         run: false,
+        device: None,
         asset_url: None,
+        shared_runtime: false,
         development: true,
     })
 }
@@ -764,8 +864,8 @@ impl Drop for KillOnClose {
 }
 
 /// Starts a dev session, builds and installs the Android dev host (when
-/// it changed), forwards the dev server port to the device and starts the
-/// host.
+/// it changed) on `device` ([`crate::android::device`]), forwards the dev
+/// server port to the device and starts the host.
 fn run_android(
     entry: &Path,
     listen: crate::dev::Listen,
@@ -773,29 +873,35 @@ fn run_android(
     limits: Option<HostLimits>,
     work: &Path,
     trace: bool,
+    device: Option<&str>,
 ) -> anyhow::Result<()> {
     use crate::android;
     let sdk = android::Sdk::find()?;
-    let serial = android::device(&sdk)?;
+    let serial = android::device(&sdk, device)?;
     // As on iOS: the host of a previous session must not connect first.
     let _ = android::adb(&sdk, &serial, &["shell", "am", "force-stop", BUNDLE_ID]);
     let session = DevSession::start(entry, listen, release, limits)?;
-    install_android_host(&sdk, &serial, work, &crate::runtime::android(true, &[])?)?;
-    // The device reaches the dev server on its own 127.0.0.1, until the
-    // run ends.
+    let abis = android::dev_abis(&sdk, &serial)?;
+    let runtime = crate::runtime::android(true, &abis)?;
+    let config = crate::package::read_config(entry)?.android;
+    install_android_host(
+        &sdk,
+        &serial,
+        work,
+        &runtime,
+        &abis,
+        Some(&AppLibraries {
+            libraries: &config.libraries,
+            placeholders: &config.manifest_placeholders,
+            target_sdk: config.target_sdk()?,
+        }),
+    )?;
+    // The device reaches the dev server on its own 127.0.0.1 through
+    // `adb reverse`, until the run ends.
     let _reverse = android::Reverse::add(&sdk, &serial, session.port())?;
-    let url = session.local_url();
-    let mut start = vec![
-        "shell",
-        "am",
-        "start",
-        "-S",
-        "-n",
-        "com.longbridge.nsh.host/com.longbridge.nsh.DevActivity",
-        "--es",
-        "url",
-        &url,
-    ];
+    let url = session.loopback_url();
+    let mut start = android::dev_start("com.longbridge.nsh.host/com.longbridge.nsh.DevActivity");
+    start.extend(["--es", "url", &url]);
     if trace {
         start.extend(["--ez", "trace", "true"]);
     }
@@ -809,14 +915,30 @@ fn run_android(
     result
 }
 
+/// What one app gives the Android development host it runs in.
+pub(crate) struct AppLibraries<'a> {
+    /// `nsh.json` `android.libraries`, which go before its crates'.
+    pub(crate) libraries: &'a [crate::android::Library],
+    /// `nsh.json` `android.manifestPlaceholders`.
+    pub(crate) placeholders: &'a std::collections::BTreeMap<String, String>,
+    /// `nsh.json` `android.targetSdk`: the host compiles against it when it
+    /// is newer than its own.
+    pub(crate) target_sdk: u32,
+}
+
 /// Builds the Android development host (when its runtime changed) into
 /// `work` and installs it on device `serial` (when the device does not have
-/// this build).
+/// this build). It takes the runtime's libraries for `abis` (empty: every
+/// one the runtime has), the Java libraries of the app's `nsh.json`
+/// (`app`; `None` for the shared test host, which runs many apps) before
+/// its crates'.
 pub(crate) fn install_android_host(
     sdk: &crate::android::Sdk,
     serial: &str,
     work: &Path,
     runtime: &Path,
+    abis: &[String],
+    app: Option<&AppLibraries<'_>>,
 ) -> anyhow::Result<()> {
     use crate::android::{self, Apk, Signing};
     let apk_path = work.join("android/NshDev.apk");
@@ -827,7 +949,51 @@ pub(crate) fn install_android_host(
     // device replaces what this app installed. The device's install time
     // tells whether the host there is still the one this app installed.
     let installed = work.join("android/installed");
-    let version = runtime_version(runtime)?;
+    // What the app's crates declare for the manifest (the apps they start,
+    // their components) and the Java libraries they list: part of the
+    // build, as the runtime is.
+    let meta = crate::module_meta::for_dev_host(
+        "aarch64-linux-android",
+        crate::module_meta::Platform::Android,
+    );
+    let mut version = runtime_version(runtime, abis)?;
+    for line in meta
+        .android_permissions
+        .iter()
+        .chain(&meta.android_queries)
+        .chain(&meta.android_application)
+    {
+        version.push('\n');
+        version.push_str(line);
+    }
+    // A library's contents, not its time: a rebuilt jar that is the same
+    // keeps the host. Their order and crates settle which of two AARs'
+    // resources of one name the host takes.
+    let mut libraries = app.map(|app| app.libraries.to_vec()).unwrap_or_default();
+    for library in &meta.android_libraries {
+        if !libraries.iter().any(|have| have.path == library.path) {
+            libraries.push(library.clone());
+        }
+    }
+    for library in &libraries {
+        let sha256 = android::file_sha256(&library.path).unwrap_or_default();
+        version.push_str(&format!("\n{} {sha256}", library.path.display()));
+        if let Some(owner) = &library.owner {
+            version.push_str(&format!(" ({owner})"));
+        }
+    }
+    // The platform the host compiles against: the app's, when newer, which
+    // its libraries may need (`minCompileSdk`).
+    let target_sdk = app.map_or(android::DEFAULT_TARGET_SDK, |app| {
+        app.target_sdk.max(android::DEFAULT_TARGET_SDK)
+    });
+    if target_sdk != android::DEFAULT_TARGET_SDK {
+        version.push_str(&format!("\ntargetSdk {target_sdk}"));
+    }
+    let placeholders = app.map(|app| app.placeholders);
+    for (name, value) in placeholders.into_iter().flatten() {
+        version.push_str(&format!("\n${{{name}}}={value}"));
+    }
     let built =
         apk_path.exists() && fs::read_to_string(&stamp).ok().as_deref() == Some(version.as_str());
     if !built {
@@ -839,7 +1005,7 @@ pub(crate) fn install_android_host(
                 label: APP_NAME,
                 version_name: "0.1.0",
                 version_code: 1,
-                target_sdk: android::DEFAULT_TARGET_SDK,
+                target_sdk,
                 activity: "com.longbridge.nsh.DevActivity",
                 dev: true,
                 cleartext: true,
@@ -847,13 +1013,25 @@ pub(crate) fn install_android_host(
                 // The host runs any app: its pages may capture media.
                 microphone: true,
                 camera: true,
+                libraries: &libraries,
+                library_cache: &work.join("android/libraries"),
+                manifest_placeholders: placeholders,
+                permissions: &meta.android_permissions,
+                queries: &meta.android_queries,
+                application: &meta.android_application,
                 schemes: &[],
+                share_mime_types: &[],
+                links: &[],
                 rust: false,
                 dark: false,
+                fixed_appearance: false,
                 runtime,
-                abis: &[],
+                abis,
                 icon: None,
+                launch_screen: None,
                 assets: Vec::new(),
+                sounds: Vec::new(),
+                res: None,
                 signing: Signing::Debug,
             },
             &apk_path,
@@ -868,10 +1046,15 @@ pub(crate) fn install_android_host(
     let current = fs::read_to_string(&installed).ok();
     if current.is_none() || current != on_device(sdk) {
         let step = ui::Step::start(format!("installing it on {serial}"));
-        android::adb(
+        // The host keeps only what apps under test and in development
+        // write, which they start without again.
+        android::install(
             sdk,
             serial,
-            &["install", "-r", "-t", &apk_path.to_string_lossy()],
+            &apk_path,
+            BUNDLE_ID,
+            &["-r", "-t"],
+            android::AppData::Disposable,
         )?;
         step.done(format!(
             "installed the Android development host on {serial}"
@@ -897,11 +1080,20 @@ fn installed_host(sdk: &crate::android::Sdk, serial: &str) -> Option<String> {
 }
 
 /// Identifies a runtime build: the sizes and times of its files.
-fn runtime_version(runtime: &Path) -> anyhow::Result<String> {
+fn runtime_version(runtime: &Path, abis: &[String]) -> anyhow::Result<String> {
     let mut parts = Vec::new();
     let mut files = vec![runtime.join("classes.dex")];
     for entry in fs::read_dir(runtime.join("lib"))? {
-        files.push(entry?.path().join("libnsh.so"));
+        let dir = entry?.path();
+        // Libraries of other ABIs left from earlier runs are not in the APK.
+        if !abis.is_empty()
+            && !dir
+                .file_name()
+                .is_some_and(|abi| abis.iter().any(|a| a.as_str() == abi))
+        {
+            continue;
+        }
+        files.push(dir.join("libnsh.so"));
     }
     for file in files {
         if let Ok(meta) = fs::metadata(&file) {
@@ -916,26 +1108,93 @@ fn runtime_version(runtime: &Path) -> anyhow::Result<String> {
     Ok(parts.join("\n"))
 }
 
-/// Creates (or refreshes) `<work>/NshDev.app` around the host binary.
-fn package_catalyst(work: &Path, host: &Path) -> anyhow::Result<PathBuf> {
+/// Creates (or refreshes) `<work>/NshDev.app` around the host binary, with
+/// the languages of the app whose `nsh.json` is `config` (`locales`,
+/// `ios.infoPlistStrings`).
+fn package_catalyst(
+    work: &Path,
+    host: &Path,
+    config: &crate::package::AppConfig,
+) -> anyhow::Result<PathBuf> {
     let app = work.join(format!("{APP_NAME}.app"));
     let contents = app.join("Contents");
     let macos = contents.join("MacOS");
     fs::create_dir_all(&macos)?;
-    fs::write(contents.join("Info.plist"), info_plist(Target::Catalyst))?;
+    let meta = crate::module_meta::for_dev_host(
+        crate::runtime::MAC_CATALYST_TRIPLE,
+        crate::module_meta::Platform::Ios,
+    );
+    let strings = dev_host_strings(config, &meta)?;
+    let localized = localized_files(&strings);
+    fs::write(
+        contents.join("Info.plist"),
+        with_crates_info(info_plist(Target::Catalyst), &meta, config, &strings)?,
+    )?;
+    crate::apple::write_localized_info(&contents.join("Resources"), &localized)?;
     install_binary(host, &macos.join("nsh-ios-host"))?;
     Ok(app)
 }
 
 /// Creates (or refreshes) `<work>/ios/NshDev.app`, a flat iOS app bundle,
-/// signed ad hoc (the simulator requires a signature).
-pub(crate) fn package_ios(work: &Path, host: &Path) -> anyhow::Result<PathBuf> {
+/// signed ad hoc (the simulator requires a signature), with the languages
+/// of the app whose `nsh.json` is `config`, as [`package_catalyst`], and its
+/// `ios.entitlements` and `ios.extensions`.
+pub(crate) fn package_ios(
+    work: &Path,
+    host: &Path,
+    config: &crate::package::AppConfig,
+) -> anyhow::Result<PathBuf> {
     let app = work.join("ios").join(format!("{APP_NAME}.app"));
     fs::create_dir_all(&app)?;
-    fs::write(app.join("Info.plist"), info_plist(Target::Ios))?;
-    if install_binary(host, &app.join("nsh-ios-host"))? || !app.join("_CodeSignature").exists() {
-        let status = Command::new("codesign")
-            .args(["--force", "--sign", "-", "--timestamp=none"])
+    // The signature seals the Info.plist and the other languages' strings
+    // too: one changed (the app's crates declare other keys, the app
+    // translates them anew) is signed again, as a new binary is.
+    let plist = app.join("Info.plist");
+    let meta = crate::module_meta::for_dev_host(
+        crate::runtime::IOS_SIMULATOR_TRIPLE,
+        crate::module_meta::Platform::Ios,
+    );
+    let strings = dev_host_strings(config, &meta)?;
+    let localized = localized_files(&strings);
+    let info = with_crates_info(info_plist(Target::Ios), &meta, config, &strings)?;
+    let info_changed = fs::read_to_string(&plist).ok().as_deref() != Some(info.as_str());
+    if info_changed {
+        fs::write(&plist, &info)?;
+    }
+    let strings_changed = crate::apple::write_localized_info(&app, &localized)?;
+    let installed = install_binary(host, &app.join("nsh-ios-host"))?;
+    let (extensions, extensions_changed) = dev_host_extensions(config, &app, &info)?;
+    // The app's entitlements, as its simulator package has them: an app
+    // group the host shares with the app's extensions, for one.
+    let entitlements = config.ios.entitlements(crate::apple::ApplePlatform::Ios)?;
+    let entitlements_file = work.join("ios").join(format!("{APP_NAME}.entitlements"));
+    let entitlements_changed = if entitlements.is_empty() {
+        fs::remove_file(&entitlements_file).is_ok()
+    } else {
+        let mut xml = Vec::new();
+        plist::Value::Dictionary(entitlements).to_writer_xml(&mut xml)?;
+        let changed = fs::read(&entitlements_file).ok() != Some(xml.clone());
+        if changed {
+            fs::write(&entitlements_file, &xml)?;
+        }
+        changed
+    };
+    if installed
+        || info_changed
+        || strings_changed
+        || extensions_changed
+        || entitlements_changed
+        || !app.join("_CodeSignature").exists()
+    {
+        // The app's signature seals its extensions': they
+        // are signed first.
+        crate::app_extensions::sign_ad_hoc(&extensions, &work.join("ios"))?;
+        let mut codesign = Command::new("codesign");
+        codesign.args(["--force", "--sign", "-", "--timestamp=none"]);
+        if entitlements_file.exists() {
+            codesign.arg("--entitlements").arg(&entitlements_file);
+        }
+        let status = codesign
             .arg(&app)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -946,6 +1205,36 @@ pub(crate) fn package_ios(work: &Path, host: &Path) -> anyhow::Result<PathBuf> {
         }
     }
     Ok(app)
+}
+
+/// The app's extensions (`nsh.json` `ios.extensions`, `config`) copied into
+/// the development host `app` (whose `Info.plist` is `info`) afresh, under
+/// the host's identifier: iOS installs an extension only under its
+/// containing app's, and the host runs any app. Returns them, to sign, and
+/// whether `PlugIns/` changed (it had or has some).
+fn dev_host_extensions(
+    config: &crate::package::AppConfig,
+    app: &Path,
+    info: &str,
+) -> anyhow::Result<(Vec<crate::app_extensions::Embedded>, bool)> {
+    let plugins = app.join("PlugIns");
+    let had = plugins.exists();
+    if had {
+        fs::remove_dir_all(&plugins).with_context(|| format!("remove {}", plugins.display()))?;
+    }
+    if config.ios.extensions.is_empty() {
+        return Ok((Vec::new(), had));
+    }
+    let app_id = config.id.as_deref().context(
+        "nsh.json ios.extensions need the app's \"id\", which their identifiers start with",
+    )?;
+    let mut info = plist::Value::from_reader_xml(info.as_bytes())?
+        .into_dictionary()
+        .context("the host's Info.plist is a dictionary")?;
+    info.insert("CFBundleIdentifier".to_owned(), app_id.into());
+    let extensions =
+        crate::app_extensions::embed(&config.ios.extensions, app, &info, true, Some(BUNDLE_ID))?;
+    Ok((extensions, true))
 }
 
 /// Copies the host binary if it changed. Returns true if it did.
@@ -1216,6 +1505,90 @@ fn show_simulators(window: SimulatorWindow) {
     ui::warn("no Simulator or DeviceHub app found: the simulator runs without a window");
 }
 
+/// The development host's `Info.plist` strings, by language: the app's
+/// (`config`'s `ios.infoPlistStrings`) over those its crates declare
+/// (`meta`) for the app's languages, as packages take them
+/// ([`crate::module_meta::ModuleMeta::crate_strings`]). The host is not the
+/// app's package: its `Info.plist` is its own, so a translated key it has
+/// no value of is left to the package to refuse
+/// ([`crate::apple::localized_info`]).
+fn dev_host_strings(
+    config: &crate::package::AppConfig,
+    meta: &crate::module_meta::ModuleMeta,
+) -> anyhow::Result<serde_json::Map<String, serde_json::Value>> {
+    let mut strings = config.ios.info_plist_strings.clone();
+    crate::module_meta::add_strings(
+        &mut strings,
+        &meta.crate_strings(config, crate::apple::ApplePlatform::Ios),
+    );
+    // Checked as `nsh.json`'s are.
+    crate::apple::AppleConfig {
+        info_plist_strings: strings.clone(),
+        ..Default::default()
+    }
+    .info_plist_strings(crate::apple::ApplePlatform::Ios)?;
+    Ok(strings)
+}
+
+/// The `InfoPlist.strings` files of `strings` (checked by
+/// [`dev_host_strings`]), by language: none of a language without text.
+fn localized_files(
+    strings: &serde_json::Map<String, serde_json::Value>,
+) -> std::collections::BTreeMap<String, String> {
+    strings
+        .iter()
+        .filter_map(|(language, texts)| {
+            let texts: std::collections::BTreeMap<String, String> = texts
+                .as_object()?
+                .iter()
+                .filter_map(|(key, text)| Some((key.clone(), text.as_str()?.to_owned())))
+                .collect();
+            (!texts.is_empty()).then(|| (language.clone(), crate::apple::strings_file(&texts)))
+        })
+        .collect()
+}
+
+/// The development host's `Info.plist` with the keys the app's crates
+/// declare (`meta`, [`crate::module_meta`]) that it does not set, and the
+/// app's languages declared as its packages declare them: its `locales`
+/// (`config`) and those its `Info.plist` strings (`strings`) have text in
+/// ([`crate::package::bundle_languages`]).
+fn with_crates_info(
+    plist: String,
+    meta: &crate::module_meta::ModuleMeta,
+    config: &crate::package::AppConfig,
+    strings: &serde_json::Map<String, serde_json::Value>,
+) -> anyhow::Result<String> {
+    let languages = crate::package::bundle_languages(&config.localizations, strings);
+    if meta.ios_info.is_empty() && languages.is_empty() {
+        return Ok(plist);
+    }
+    let crates = crate::apple::AppleConfig {
+        info_plist: meta.ios_info.clone(),
+        ..Default::default()
+    }
+    .info_plist(crate::apple::ApplePlatform::Ios)?;
+    let mut value = plist::Value::from_reader_xml(plist.as_bytes())?;
+    let dict = value
+        .as_dictionary_mut()
+        .context("the host's Info.plist is a dictionary")?;
+    for (key, value) in crates {
+        if !dict.contains_key(&key) {
+            dict.insert(key, value);
+        }
+    }
+    if !languages.is_empty() {
+        dict.insert("CFBundleDevelopmentRegion".into(), "en".into());
+        dict.insert(
+            "CFBundleLocalizations".into(),
+            plist::Value::Array(languages.into_iter().map(plist::Value::String).collect()),
+        );
+    }
+    let mut out = Vec::new();
+    value.to_writer_xml(&mut out)?;
+    Ok(String::from_utf8(out)?)
+}
+
 fn info_plist(target: Target) -> String {
     let platform = match target {
         // 6 = Mac idiom ("Optimize for Mac"): 1:1 points instead of the 77%
@@ -1241,13 +1614,12 @@ fn info_plist(target: Target) -> String {
              <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>"
         }
     };
-    // The host runs any app: it may recognize speech and its pages may
-    // capture media.
-    let usage = crate::package::USAGE_DESCRIPTIONS
+    // The host runs any app: its pages may capture media. What the app's
+    // crates use (`nsh-extra`'s `speech`) they declare
+    // (`with_crates_info`).
+    let usage = crate::package::WEB_MEDIA_USAGE_DESCRIPTIONS
         .iter()
-        .copied()
-        .chain([crate::package::WEB_MEDIA_USAGE_DESCRIPTIONS[1]].map(|(_, key, text)| (key, text)))
-        .map(|(key, text)| format!("<key>{key}</key><string>{text}</string>"))
+        .map(|(_, key, text)| format!("<key>{key}</key><string>{text}</string>"))
         .collect::<Vec<_>>()
         .join("\n    ");
     format!(
@@ -1272,6 +1644,34 @@ fn info_plist(target: Target) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dev_desktop_entry_never_replaces_an_installed_one() {
+        let dir = std::env::temp_dir().join(format!("nsh-dev-desktop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("com.example.a.desktop");
+        super::write_dev_desktop_entry(&dir, "com.example.a", std::path::Path::new("/x/host"))
+            .unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.contains("NoDisplay=true") && written.contains("Exec=/x/host"));
+        // Rewritten for a new host.
+        super::write_dev_desktop_entry(&dir, "com.example.a", std::path::Path::new("/y/host"))
+            .unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("Exec=/y/host")
+        );
+        // The app's installed entry stays.
+        std::fs::write(&path, "[Desktop Entry]\nName=A\n").unwrap();
+        super::write_dev_desktop_entry(&dir, "com.example.a", std::path::Path::new("/y/host"))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[Desktop Entry]\nName=A\n"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     use clap::ValueEnum as _;
 
     use super::{
@@ -1437,6 +1837,37 @@ mod tests {
         assert_eq!(network, [Target::Ios, Target::Android, Target::Web]);
     }
 
+    /// The OS whose nshm a target links (`nsh.json` `"targets"`): Catalyst
+    /// runs the iOS backend, GPUI and the terminal this machine's.
+    #[test]
+    fn targets_run_on_the_os_platform_os_names() {
+        use nsh_core::platform::Os;
+        assert_eq!(Target::Catalyst.os(), Os::Ios);
+        assert_eq!(Target::Ios.os(), Os::Ios);
+        assert_eq!(Target::Web.os(), Os::Web);
+        assert_eq!(Target::Gpui.os(), Target::native().os());
+        assert_eq!(Target::Tui.os(), Target::native().os());
+    }
+
+    #[test]
+    fn android_rejects_bind_hosts_that_adb_reverse_cannot_reach() {
+        use std::net::Ipv4Addr;
+
+        let listen = |host| crate::dev::Listen { port: 8790, host };
+        assert!(super::validate_listen(listen(Ipv4Addr::UNSPECIFIED), Target::Android).is_ok());
+        assert!(super::validate_listen(listen(Ipv4Addr::LOCALHOST), Target::Android).is_ok());
+        assert!(
+            super::validate_listen(listen(Ipv4Addr::new(192, 168, 1, 20)), Target::Android)
+                .is_err()
+        );
+        assert!(
+            super::validate_listen(listen(Ipv4Addr::new(127, 0, 0, 2)), Target::Android).is_err()
+        );
+        assert!(
+            super::validate_listen(listen(Ipv4Addr::new(192, 168, 1, 20)), Target::Web).is_ok()
+        );
+    }
+
     /// `--window-size` reaches every desktop host; GPUI runs no app of
     /// Rust only.
     #[test]
@@ -1482,6 +1913,24 @@ mod tests {
         assert_eq!(placed.args(), ["--display", "2"]);
     }
 
+    /// `--background` reaches the desktop hosts that run tests in the
+    /// background, for a TSX entry.
+    #[test]
+    fn the_desktop_hosts_run_in_the_background() {
+        let background = HostWindow {
+            background: true,
+            ..HostWindow::default()
+        };
+        for target in [Target::Macos, Target::Linux, Target::Windows, Target::Gpui] {
+            assert!(background.check(target, false).is_ok(), "{target:?}");
+        }
+        assert!(background.check(Target::Macos, true).is_err());
+        for target in [Target::Catalyst, Target::Ios, Target::Android, Target::Web] {
+            assert!(background.check(target, false).is_err(), "{target:?}");
+        }
+        assert_eq!(background.args(), ["--background"]);
+    }
+
     /// The desktop hosts get each app's own id, so each keeps its own data.
     #[test]
     fn hosts_get_the_apps_id() {
@@ -1508,5 +1957,63 @@ mod tests {
         let target = Target::from_str("gpui", false).unwrap();
         assert_eq!(target, Target::Gpui);
         assert_eq!(target.platform().binary(false), "nsh-gpui-host");
+    }
+
+    /// The development host declares the app's languages as its packages
+    /// do (`locales` and those its strings have text in), and takes the
+    /// crates' translations for those languages only.
+    #[test]
+    fn dev_hosts_declare_the_apps_languages() {
+        let mut config: crate::package::AppConfig = serde_json::from_value(serde_json::json!({
+            "ios": { "infoPlistStrings": {
+                "zh-Hans": { "NSCameraUsageDescription": "用相机拍照。" },
+                "ko": {}
+            } }
+        }))
+        .unwrap();
+        config.localizations = vec!["ja".into()];
+        let mut meta = crate::module_meta::ModuleMeta::default();
+        for (language, text) in [("ja", "カメラ。"), ("de", "Kamera."), ("zh-Hans", "相机。")]
+        {
+            meta.ios_strings.insert(
+                language.into(),
+                serde_json::json!({ "NSCameraUsageDescription": text }),
+            );
+        }
+        let strings = super::dev_host_strings(&config, &meta).unwrap();
+        let files = super::localized_files(&strings);
+        assert_eq!(
+            files.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["ja", "zh-Hans"]
+        );
+        // The app's own text wins over the crate's.
+        assert_eq!(
+            files["zh-Hans"],
+            "\"NSCameraUsageDescription\" = \"用相机拍照。\";\n"
+        );
+        let info =
+            super::with_crates_info(super::info_plist(Target::Ios), &meta, &config, &strings)
+                .unwrap();
+        let info = plist::Value::from_reader_xml(info.as_bytes()).unwrap();
+        let languages: Vec<&str> = info.as_dictionary().unwrap()["CFBundleLocalizations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(plist::Value::as_string)
+            .collect();
+        assert_eq!(languages, ["en", "ja", "zh-Hans"]);
+        // An app without languages leaves the host's Info.plist as it is.
+        let plain = crate::package::AppConfig::default();
+        let none = crate::module_meta::ModuleMeta::default();
+        assert_eq!(
+            super::with_crates_info(
+                super::info_plist(Target::Ios),
+                &none,
+                &plain,
+                &Default::default()
+            )
+            .unwrap(),
+            super::info_plist(Target::Ios)
+        );
     }
 }

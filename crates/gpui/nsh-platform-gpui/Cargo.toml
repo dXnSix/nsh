@@ -16,8 +16,11 @@ default = ["js", "webview", "shader", "editor", "emoji-picker", "highlight", "ma
 # JS apps (bundles, signed packages); without it, the library only runs a
 # Rust app and links no QuickJS.
 js = ["nsh-engine/js-core"]
-# Development support: dev server client, log forwarding, error overlay.
-dev = ["js", "shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term", "zlib", "crypto", "websocket", "updater", "svg", "net", "dep:nsh-dev", "dep:nsh-testing"]
+# Development support: dev server client, log forwarding, error overlay, test
+# agent. It leaves the optional parts as the build has them, so an embedding
+# app's development build runs its apps with the parts of its release build. A
+# development host that runs any app turns the parts on itself.
+dev = ["js", "dep:nsh-dev", "dep:nsh-testing"]
 # Shaders (`Shader`, `ShaderEffect`, `ShaderTransition`, the shader transitions
 # of pages and dialogs), on naga and wgpu. Without it they draw nothing.
 shader = ["nsh-engine/shader"]
@@ -70,7 +73,7 @@ log.workspace = true
 
 # Empty off the desktop (like the other platform crates off their targets).
 [target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dependencies]
-nsh-core.workspace = true
+nsh-core = { workspace = true, features = ["animation"] }
 nsh-engine.workspace = true
 nsh-base.workspace = true
 gpui.workspace = true
@@ -80,7 +83,9 @@ rustc-hash.workspace = true
 tiny-skia.workspace = true
 fontdb.workspace = true
 serde_json.workspace = true
-ttf-parser.workspace = true
+# San Francisco (macOS's UI font) varies each glyph by more tuples than
+# ttf-parser keeps on the stack: without the heap its outlines are not read.
+ttf-parser = { workspace = true, features = ["gvar-alloc"] }
 unicode-bidi.workspace = true
 unicode-linebreak.workspace = true
 anyhow.workspace = true
@@ -133,3 +138,4 @@ windows-sys.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "macos", windows))'.dev-dependencies]
 nsh-bundler.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
+accesskit_consumer.workspace = true

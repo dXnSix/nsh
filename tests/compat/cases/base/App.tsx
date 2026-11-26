@@ -3,6 +3,7 @@
 // `id:case-<case>` (a one-point view over the corner, out of the layout);
 // the steps after it are that case's.
 import { type JSX, View, mount, signal } from "nsh";
+import { Window } from "nsh/desktop";
 import BaseStatusBar from "./base-status-bar";
 import BaseAccordion from "./base-accordion";
 import BaseAlertDialog from "./base-alert-dialog";
@@ -16,9 +17,16 @@ import BaseCollapsibleReveal from "./base-collapsible-reveal";
 import BaseDialog from "./base-dialog";
 import BaseDialogBackdrop from "./base-dialog-backdrop";
 import BaseDataTable from "./base-data-table";
+import BaseDataTableActivate from "./base-data-table-activate";
+import BaseDataTableFitGrow from "./base-data-table-fit-grow";
 import BaseDiff from "./base-diff";
 import BaseDock from "./base-dock";
+import BaseDockTabScroll from "./base-dock-tab-scroll";
+import BaseDockRenderHandle from "./base-dock-render-handle";
+import BaseDockToolbar from "./base-dock-toolbar";
+import BaseSplitView from "./base-split-view";
 import BaseEditor from "./base-editor";
+import BaseEditorFonts from "./base-editor-fonts";
 import BaseHoverCard from "./base-hover-card";
 import BaseLink from "./base-link";
 import BaseNavPage from "./base-nav-page";
@@ -37,8 +45,14 @@ import BaseTerminal from "./base-terminal";
 import BaseTable from "./base-table";
 import BaseRadio from "./base-radio";
 import BaseResizable from "./base-resizable";
+import BaseRichEditorContentSize from "./base-rich-editor-content-size";
 import BaseRichEditorExtensions from "./base-rich-editor-extensions";
+import BaseRichEditorAccessory from "./base-rich-editor-accessory";
+import BaseRichEditorComposition from "./base-rich-editor-composition";
 import BaseRichEditorKit from "./base-rich-editor-kit";
+import BaseRichEditorPasteHooks from "./base-rich-editor-paste-hooks";
+import BaseRichEditorReadonlyInput from "./base-rich-editor-readonly-input";
+import BaseRichEditorNodeView from "./base-rich-editor-node-view";
 import BaseRichEditorSession from "./base-rich-editor-session";
 import BaseRichEditorTables from "./base-rich-editor-tables";
 import BaseRichEditorView from "./base-rich-editor-view";
@@ -53,11 +67,15 @@ import BaseSelectableView from "./base-selectable-view";
 import BaseSlider from "./base-slider";
 import BaseSwitch from "./base-switch";
 import BaseTabs from "./base-tabs";
+import BaseTabsOrientation from "./base-tabs-orientation";
 import BaseTextView from "./base-text-view";
+import BaseTimeField from "./base-time-field";
 import BaseToast from "./base-toast";
 import BaseToggle from "./base-toggle";
+import BaseTitleBar from "./base-title-bar";
 import BaseToolbar from "./base-toolbar";
 import BaseTree from "./base-tree";
+import BaseTreeSlots from "./base-tree-slots";
 import BaseToken from "./base-token";
 import BaseSetTheme from "./base-set-theme";
 import BaseTransitionShader from "./base-transition-shader";
@@ -72,9 +90,16 @@ const cases: Record<string, () => JSX.Element> = {
   "base-dialog": BaseDialog,
   "base-dialog-backdrop": BaseDialogBackdrop,
   "base-data-table": BaseDataTable,
+  "base-data-table-activate": BaseDataTableActivate,
+  "base-data-table-fit-grow": BaseDataTableFitGrow,
   "base-diff": BaseDiff,
   "base-dock": BaseDock,
+  "base-dock-tab-scroll": BaseDockTabScroll,
+  "base-dock-render-handle": BaseDockRenderHandle,
+  "base-dock-toolbar": BaseDockToolbar,
+  "base-split-view": BaseSplitView,
   "base-editor": BaseEditor,
+  "base-editor-fonts": BaseEditorFonts,
   "base-hover-card": BaseHoverCard,
   "base-link": BaseLink,
   "base-nav-page": BaseNavPage,
@@ -94,15 +119,24 @@ const cases: Record<string, () => JSX.Element> = {
   "base-checkbox": BaseCheckbox,
   "base-radio": BaseRadio,
   "base-resizable": BaseResizable,
+  "base-rich-editor-content-size": BaseRichEditorContentSize,
   "base-rich-editor-extensions": BaseRichEditorExtensions,
+  "base-rich-editor-composition": BaseRichEditorComposition,
+  "base-rich-editor-accessory": BaseRichEditorAccessory,
   "base-rich-editor-kit": BaseRichEditorKit,
+  "base-rich-editor-paste-hooks": BaseRichEditorPasteHooks,
+  "base-rich-editor-readonly-input": BaseRichEditorReadonlyInput,
+  "base-rich-editor-node-view": BaseRichEditorNodeView,
   "base-rich-editor-session": BaseRichEditorSession,
   "base-rich-editor-view": BaseRichEditorView,
   "base-rich-editor-tables": BaseRichEditorTables,
   "base-tabs": BaseTabs,
+  "base-tabs-orientation": BaseTabsOrientation,
   "base-toggle": BaseToggle,
+  "base-title-bar": BaseTitleBar,
   "base-toolbar": BaseToolbar,
   "base-tree": BaseTree,
+  "base-tree-slots": BaseTreeSlots,
   "base-collapsible": BaseCollapsible,
   "base-color-picker": BaseColorPicker,
   "base-collapsible-reveal": BaseCollapsibleReveal,
@@ -117,6 +151,7 @@ const cases: Record<string, () => JSX.Element> = {
   "base-select": BaseSelect,
   "base-slider": BaseSlider,
   "base-table": BaseTable,
+  "base-time-field": BaseTimeField,
   "base-toast": BaseToast,
   "base-token": BaseToken,
   "base-set-theme": BaseSetTheme,
@@ -124,7 +159,7 @@ const cases: Record<string, () => JSX.Element> = {
 };
 const shown = signal("");
 
-mount(() => (
+mount(() => <Window id="main">{() => (
   <>
     {() => {
       const Case = cases[shown()];
@@ -136,4 +171,4 @@ mount(() => (
       ))}
     </View>
   </>
-));
+)}</Window>);

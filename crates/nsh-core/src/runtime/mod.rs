@@ -1,7 +1,8 @@
 //! The runtime's modules written in Rust: `nsh/android`'s `BackHandler`,
+//! `nsh/mobile`'s `AppSettings`,
 //! `nsh/accessibility`'s commands, `nsh/device`'s `openUrl`, `nsh`'s
-//! `Image` and `WebView` functions, all of `nsh/clipboard`, `nsh/picker`, `nsh`'s
-//! `Speech`, `UrlScheme`, `setFpsEnabled` and `nsh/storage`,
+//! `Image` and `WebView` functions, all of `nsh/clipboard`, `nsh/picker`, `nsh`'s `Share`,
+//! `UrlScheme`, `setFpsEnabled` and `nsh/storage`,
 //! `nsh/desktop`'s `Application`, the surface-independent `os` metadata,
 //! `net`'s sockets, `websocket`'s connections, `fs/promises`' files and
 //! `nsh/host`'s calls. Their JS face is made
@@ -15,6 +16,7 @@ use crate::element::Registry;
 
 mod accessibility;
 mod android;
+mod app_settings;
 mod audio;
 mod clipboard;
 mod desktop;
@@ -30,14 +32,18 @@ mod notifications;
 mod os;
 mod picker;
 mod process;
-mod speech;
+mod share;
 mod storage;
 mod updater;
 mod url_scheme;
 mod websocket;
 mod webview;
 
-pub use updater::{PackageVersion, UpdaterHost, UpdaterSink};
+pub use fs::grant_user_files;
+pub use updater::{
+    PackageVersion, UpdatePrompt, UpdatePromptOptions, UpdaterHost, UpdaterSink, prompt_for_update,
+    set_update_presenter,
+};
 
 /// The [`crate::element::Quotas`] kind WebSockets count under: the `websocket`
 /// module's connections and the global `WebSocket`'s (`nsh-js`) share
@@ -62,7 +68,7 @@ pub fn registries() -> &'static [Registry] {
             .module::<accessibility::Accessibility>()
             .module::<clipboard::Clipboard>()
             .module::<picker::Picker>()
-            .module::<speech::Speech>()
+            .module::<share::Share>()
             .class::<audio::Sound>()
             .class::<audio::AudioPlayer>()
             .module::<notifications::Notifications>()
@@ -77,8 +83,11 @@ pub fn registries() -> &'static [Registry] {
         mobile
             .register::<crate::mobile::TabBar>()
             .register::<crate::mobile::SegmentedControl>()
+            .register::<crate::mobile::Switch>()
+            .register::<crate::mobile::DateTimePicker>()
             .module::<android::BackHandler>()
-            .module::<haptics::Haptics>();
+            .module::<haptics::Haptics>()
+            .module::<app_settings::AppSettings>();
         let mut os = Registry::runtime("os");
         os.module::<os::Os>();
         let mut process = Registry::runtime("process");

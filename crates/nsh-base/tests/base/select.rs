@@ -14,7 +14,6 @@ use std::{
 use nsh_base::{SelectEntry, SelectEvent, SelectItem, select};
 use nsh_core::{
     AccessibilityRole, AccessibilityState, Bounds, Command, MountItem, NodeId, Size, ViewProps,
-    element::Root,
     platform::{Idiom, Os},
     prelude::*,
 };
@@ -43,6 +42,11 @@ struct HarnessProps {
     /// The app's trigger says its content is invalid, and that it is
     /// busy, at first; F6 toggles `invalid`.
     invalid: bool,
+    /// The app's `cover`, unless left to the platform.
+    cover: Option<bool>,
+    /// The app binds Space (`space` in the log), taking it over a control
+    /// a pointer focused when true (`OverFocused::Pointer`).
+    space: Option<bool>,
 }
 
 fn fruits() -> Vec<SelectItem> {
@@ -76,6 +80,8 @@ fn props(items: Vec<SelectItem>) -> HarnessProps {
         default_open: false,
         cleanable: false,
         invalid: false,
+        cover: None,
+        space: None,
     }
 }
 
@@ -92,10 +98,25 @@ fn Harness(props: HarnessProps) -> impl IntoElement {
     let push = move |s: String| log.update(|l| l.push(s));
     let items = signal(props.items.clone());
     let invalid = signal(props.invalid);
+    let searchable = signal(props.searchable);
+    on_key("f7", move |_| searchable.update(|s| *s = !*s));
     // Only the trigger that starts invalid is busy too, so that the other
     // tests' trigger carries no state of the app's.
     let busy = props.invalid;
     on_key("f6", move |_| invalid.update(|i| *i = !*i));
+    if let Some(over) = props.space {
+        let over_focused = if over {
+            nsh_core::keymap::OverFocused::Pointer
+        } else {
+            nsh_core::keymap::OverFocused::Never
+        };
+        let options = KeyOptions {
+            when: nsh_core::keymap::When::NotEditing,
+            over_focused,
+            ..Default::default()
+        };
+        on_key_with("space", options, move |_| push("space".into()));
+    }
     on_key("f5", move |_| {
         items.set(vec![
             SelectItem::new("kiwi", "Kiwi"),
@@ -105,7 +126,7 @@ fn Harness(props: HarnessProps) -> impl IntoElement {
     let follow = props.follow;
     let mut el = select()
         .items(items)
-        .searchable(props.searchable)
+        .searchable(searchable)
         .disabled(props.disabled)
         .default_open(props.default_open)
         .search_placeholder("Search")
@@ -155,6 +176,9 @@ fn Harness(props: HarnessProps) -> impl IntoElement {
     }
     if props.controlled_open {
         el = el.open(move || Some(open.get()));
+    }
+    if let Some(cover) = props.cover {
+        el = el.cover(cover);
     }
     view()
         .pt(px(100.0))
@@ -331,7 +355,9 @@ fn reading_active_descendants(props: HarnessProps) -> App {
 fn start_env(props: HarnessProps, set: impl FnOnce(&mut nsh_core::platform::Environment)) -> App {
     let mut config = EngineConfig {
         viewport: Size::new(px(390.0), px(844.0)),
-        ..EngineConfig::new(Root::new::<Harness>(move || props.clone()))
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<Harness>(move || {
+            props.clone()
+        }))
     };
     set(&mut config.environment);
     let mut app = Headless::start(config).expect("the engine starts");
@@ -669,7 +695,78 @@ fn escape_cancels_and_gives_the_trigger_the_keyboard_back() {
 
 #[test]
 fn choosing_gives_the_trigger_the_keyboard_back() {
+    // The trigger had the keyboard (Tab) when the list opened.
+    let mut app = focused(props(fruits()));
+    let trigger = app.id("role:combobox");
+    app.open_list();
+    app.press("role:option[Carrot]").unwrap();
+    app.gone("role:listbox");
+    assert!(app.sent(trigger, &Command::Focus));
+}
+
+#[test]
+fn choosing_in_a_list_a_press_opened_leaves_the_trigger_without_the_keyboard() {
+    // A press opened it with nothing focused: the trigger never had the
+    // keyboard, so Space and Return stay the app's shortcuts.
     let mut app = desktop(props(fruits()));
+    let trigger = app.id("role:combobox");
+    app.open_list();
+    app.press("role:option[Carrot]").unwrap();
+    app.gone("role:listbox");
+    assert!(!app.sent(trigger, &Command::Focus));
+}
+
+#[test]
+fn on_windows_an_app_binding_over_a_pointers_focus_takes_space_from_the_trigger() {
+    for over in [false, true] {
+        let mut p = props(fruits());
+        p.space = Some(over);
+        let mut app = start_on(p, Os::Windows, Idiom::Desktop, false);
+        // Chosen with the pointer, the trigger has the focus back.
+        app.open_list();
+        app.press("role:option[Carrot]").unwrap();
+        app.gone("role:listbox");
+        app.key("space");
+        if over {
+            // The pointer's focus: the app's Space takes the key.
+            app.log_ends("space");
+            assert!(!app.shows("role:listbox"), "the list stays closed");
+        } else {
+            // Without the option the trigger's Space opens it again.
+            app.wait_for("role:listbox").unwrap();
+            assert!(!app.log().ends_with("space"), "{}", app.log());
+        }
+        // Opened with the pointer, closed with Escape: still the pointer's.
+        if over {
+            app.open_list();
+            app.key("escape");
+            app.gone("role:listbox");
+            app.key("space");
+            app.log_ends("openChange:false:Cancel close space");
+            assert!(!app.shows("role:listbox"), "the list stays closed");
+        }
+    }
+}
+
+#[test]
+fn an_app_binding_over_a_pointers_focus_leaves_space_to_a_trigger_the_keyboard_focused() {
+    for os in [Os::Windows, Os::MacOs] {
+        let mut p = props(fruits());
+        p.space = Some(true);
+        let mut app = start_on(p, os, Idiom::Desktop, false);
+        // Tab gives the trigger the focus: Space opens the list.
+        app.key("tab");
+        app.key("space");
+        app.wait_for("role:listbox")
+            .unwrap_or_else(|e| panic!("{os:?}: {e}"));
+        assert!(!app.log().contains("space"), "{os:?}: {}", app.log());
+    }
+}
+
+#[test]
+fn on_windows_choosing_in_a_list_a_press_opened_gives_the_trigger_the_keyboard() {
+    // A press focuses a button there, as native buttons do.
+    let mut app = start_on(props(fruits()), Os::Windows, Idiom::Desktop, false);
     let trigger = app.id("role:combobox");
     app.open_list();
     app.press("role:option[Carrot]").unwrap();
@@ -707,6 +804,11 @@ fn tab_closes_it_and_the_focus_moves_on() {
             !app.sent(trigger, &Command::Focus),
             "searchable {searchable}: the focus is not taken back"
         );
+        if searchable {
+            // The search field had the keyboard (`autoFocus`): Tab left
+            // it, not the trigger.
+            continue;
+        }
         // It went on: the trigger's keys open nothing.
         app.key("down");
         app.wait(Duration::from_millis(100)).unwrap();
@@ -784,6 +886,38 @@ fn the_pointer_highlights_only_when_it_moves_and_a_press_chooses() {
 }
 
 // 6. Search.
+
+#[test]
+fn turning_searchable_off_while_open_drops_the_query() {
+    let mut app = desktop(HarnessProps {
+        searchable: true,
+        ..props(fruits())
+    });
+    app.open_list();
+    app.type_text("Search", "ric").unwrap();
+    app.see_row(">Rice");
+    assert!(!app.shows("Apple"));
+    // The field goes away with the list still open: every item again.
+    app.key("f7");
+    app.gone("id:food-search");
+    app.wait_for("role:listbox").unwrap();
+    app.see("Apple");
+    app.see("Rice");
+    // Searchable again: the field starts empty, and still filters.
+    app.key("f7");
+    app.wait_for("id:food-search").unwrap();
+    app.see("Apple");
+    app.type_text("Search", "cel").unwrap();
+    app.see_row(">Celery");
+    assert!(!app.shows("Apple"));
+    // Off while closed, then reopened: every item.
+    app.key("escape");
+    app.gone("role:listbox");
+    app.key("f7");
+    app.open_list();
+    app.see("Apple");
+    app.see("Celery");
+}
 
 #[test]
 fn search_filters_the_items_and_their_sections() {
@@ -966,7 +1100,21 @@ fn on_the_desktops_the_popup_is_at_the_trigger_as_wide_and_within_the_window() {
     let trigger = app.role_id(AccessibilityRole::Combobox);
     let seen = app.seen.lock().unwrap();
     let popup = seen.parents[&list];
-    assert!(seen.roots.contains(&popup), "an overlay of the root view");
+    // An overlay is placed at its window's root view, not inside the trigger
+    // it belongs to (the app root is the window here).
+    let mut node = popup;
+    let mut at_root = seen.roots.contains(&popup);
+    while !at_root {
+        let Some(&parent) = seen.parents.get(&node) else {
+            break;
+        };
+        if seen.roots.contains(&parent) {
+            at_root = true;
+            break;
+        }
+        node = parent;
+    }
+    assert!(at_root, "an overlay of its window's root view");
     let frame = seen.frames[&popup];
     // Below the trigger (its 160 × 30 view at 40, 100), at its start.
     assert_eq!(frame.origin.x, px(40.0));
@@ -1023,6 +1171,46 @@ fn on_windows_and_linux_the_list_drops_below_the_trigger() {
         assert_eq!(frame.origin.y, px(130.0), "{os:?}: {frame:?}");
         assert_eq!(frame.size.width, px(160.0), "{os:?}: {frame:?}");
     }
+}
+
+#[test]
+fn without_cover_the_list_drops_below_the_trigger_on_macos() {
+    let chosen = HarnessProps {
+        value: Some("carrot".into()),
+        cover: Some(false),
+        ..props(fruits())
+    };
+    let frame = popup_frame_on(Os::MacOs, chosen);
+    // Below the trigger (its 160 × 30 view at 40, 100), at its start, as
+    // wide, although an item is chosen: as on the other desktops.
+    assert_eq!(frame.origin.x, px(40.0), "{frame:?}");
+    assert_eq!(frame.origin.y, px(130.0), "{frame:?}");
+    assert_eq!(frame.size.width, px(160.0), "{frame:?}");
+}
+
+#[test]
+fn with_cover_the_chosen_item_opens_over_the_trigger_on_every_desktop() {
+    for os in [Os::Windows, Os::Linux, Os::Web] {
+        let chosen = HarnessProps {
+            value: Some("carrot".into()),
+            cover: Some(true),
+            ..props(fruits())
+        };
+        let frame = popup_frame_on(os, chosen);
+        // Carrot's row lies over the trigger (at 100), the rows above it
+        // above the trigger, as on macOS.
+        assert!(frame.origin.y < px(100.0), "{os:?}: {frame:?}");
+        assert_eq!(frame.origin.x, px(40.0), "{os:?}");
+    }
+    // With nothing chosen there is no row to lay over it: below.
+    let frame = popup_frame_on(
+        Os::Windows,
+        HarnessProps {
+            cover: Some(true),
+            ..props(fruits())
+        },
+    );
+    assert_eq!(frame.origin.y, px(130.0), "{frame:?}");
 }
 
 // 10. Accessibility.
@@ -1371,7 +1559,10 @@ fn cost_of(items: usize, steps: &dyn Fn(&mut Headless)) -> Cost {
     let run = new_run();
     let mut config = EngineConfig {
         viewport: Size::new(px(390.0), px(844.0)),
-        ..EngineConfig::new(Root::new::<Long>(move || LongProps { items, run }))
+        ..EngineConfig::new(nsh_testing::windowed_root_with::<Long>(move || LongProps {
+            items,
+            run,
+        }))
     };
     config.environment.os = Os::MacOs;
     let mut app = Headless::start(config).unwrap();

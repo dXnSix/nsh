@@ -1,6 +1,6 @@
 ---
 title: Images and assets
-description: Showing images in Rust and TSX - the app's assets and @2x files, SVG images, remote URLs, resize modes, placeholders, blur, tint, load events, and reading an image's size or prefetching it.
+description: Showing images in TSX and Rust - the app's assets and @2x files, SVG images, remote URLs, resize modes, placeholders, blur, tint, load events, and reading an image's size or prefetching it.
 order: 36
 group: ui
 ---
@@ -9,19 +9,19 @@ group: ui
 
 The image element (`image(..)` in Rust, `<Image>` in TSX) shows a bitmap or an SVG drawing: a file shipped with the app, or an image downloaded from a URL. Images are read and decoded off the main thread, downsampled to the size the view shows them at, and cached; the main thread only displays the decoded result.
 
-```rust tabs
-const LOGO: ImageAsset = asset!("logo@2x.png");
-
-image(LOGO)
-image("https://picsum.photos/seed/nsh/600/400").w_full().h(px(200.0)).rounded(px(12.0))
-```
-
 ```tsx tabs
 import { Image } from "nsh";
 import logo from "./assets/logo@2x.png";
 
 <Image src={logo} />
 <Image src="https://picsum.photos/seed/nsh/600/400" style={{ width: "100%", height: 200, borderRadius: 12 }} />
+```
+
+```rust tabs
+const LOGO: ImageAsset = asset!("logo@2x.png");
+
+image(LOGO)
+image("https://picsum.photos/seed/nsh/600/400").w_full().h(px(200.0)).rounded(px(12.0))
 ```
 
 The element's props are listed on [image](../elements/image.md).
@@ -40,6 +40,8 @@ fn native(registry: &mut Registry) {
     registry.assets(assets!());
 }
 ```
+
+`registry.assets(..)` ships the files with every package. A file only some platforms read, such as data the web downloads on demand while desktop and mobile compile it in, goes in with `registry.assets_for(&[Os::Web], assets!())`: only the packages of the listed platforms copy it (`nsh_core::platform::Os`: `Web`, `Ios`, `Android`, `MacOs`, `Linux`, `Windows`). Read it on the other targets and it is not there; `nsh run` serves every file.
 
 ```tsx tabs
 import logo from "./assets/logo@2x.png";
@@ -69,16 +71,16 @@ assets/
 └── logo@3x.png    192×192
 ```
 
-```rust tabs
-const LOGO: ImageAsset = asset!("logo.png");
-
-// LOGO.size: 64 × 64 points, LOGO.scales: [1.0, 2.0, 3.0]
-```
-
 ```tsx tabs
 import logo from "./assets/logo.png";
 
 logo; // { url: "asset:/assets/logo.png", size: { width: 64, height: 64 }, scales: [1, 2, 3] }
+```
+
+```rust tabs
+const LOGO: ImageAsset = asset!("logo.png");
+
+// LOGO.size: 64 × 64 points, LOGO.scales: [1.0, 2.0, 3.0]
 ```
 
 - `asset!` and the bundler look for `@1.5x`, `@2x`, `@3x` and `@4x` siblings of an image named without a suffix. `scales` lists them, with 1 for the named file; an image without siblings has no scales (in TSX it imports as `{ url, size }`). The bundler ships the siblings it finds, and `assets!()` ships the whole directory.
@@ -121,11 +123,25 @@ let page: Arc<[u8]> = render_page(); // 1192 × 1684 pixels
 image(ImageSrc::rgba(1192, 1684, page)).w_full()
 ```
 
-The image lays out at `width` × `height` points, as a `data:` image does; style it to size it. Each buffer is an image of its own: give the view a new source for a new frame, and the caches drop the old one once no view shows it. Windows, macOS, Linux and GPUI draw the pixels as they are; iOS, Android and the browser load images from encoded bytes, so there the buffer becomes an uncompressed PNG the first time it is shown (a copy, no compression). TSX has `Blob` URLs for bytes it holds.
+The image lays out at `width` × `height` points by default, as a `data:` image does. For a buffer drawn at another pixel density, give its source a natural size in points with `ImageSrc::size`:
+
+```rust
+let pixels = vec![7u8; 200 * 100 * 4]; // 200 × 100 pixels drawn at 2×
+let src = ImageSrc::rgba(200, 100, pixels).size(Size::new(px(100.0), px(50.0)));
+view().items_start().child(image(src)) // 100 × 50 points
+```
+
+The natural size sets the intrinsic layout when the element's style leaves a dimension unset. Setting just a width or height keeps its aspect ratio; setting both sizes the box. The buffer keeps its original pixel dimensions and bytes, and `onLoad` reports its pixel dimensions.
+
+Each buffer is an image of its own: give the view a new source for a new frame, and the caches drop the old one once no view shows it. Windows, macOS, Linux and GPUI draw the pixels as they are; iOS, Android and the browser load images from encoded bytes, so there the buffer becomes an uncompressed PNG the first time it is shown (a copy, no compression). TSX has `Blob` URLs for bytes it holds.
 
 ## Remote images
 
 Give the element a URL: a string in Rust (a closure for one that changes), a URL string in TSX:
+
+```tsx tabs
+<Image src={user().avatarUrl} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: "#eaeef2" }} />
+```
 
 ```rust tabs
 image(move || user.with(|u| u.avatar_url.clone()))
@@ -134,15 +150,11 @@ image(move || user.with(|u| u.avatar_url.clone()))
     .bg(rgb(0xeaeef2))
 ```
 
-```tsx tabs
-<Image src={user().avatarUrl} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: "#eaeef2" }} />
-```
-
 - **Give remote images a size.** Their size is unknown until they load, so without a width and height (or one of them and an aspect ratio) they collapse to no height.
 - **A background color** shows while the image loads, or use a placeholder (below).
 - Downloads are shared: several views showing the same URL download it once, also when they decode it at different sizes. A download nobody waits for any more is cancelled.
 - Decoded images are cached in memory (the cache is purged under memory pressure), keyed by URL, decode size and blur radius.
-- When the app declares [capabilities](./sandbox-and-capabilities.md), the image's host must be allowed under `network`; a refused image fails with its error event. A local file (an absolute path or a `file:` URL, as `onFileDrop`, the clipboard and `import.meta.url` give on the desktops) needs an `fs.read` root that holds it, and loads only on the desktops.
+- When the app declares [capabilities](./sandbox-and-capabilities.md), the image's host must be allowed under `network`; a refused image fails with its error event. A local file (an absolute path or a `file:` URL, as `onFileDrop`, the clipboard and `import.meta.url` give on the desktops) needs an `fs.read` root that holds it, and loads on every native platform.
 
 ### Kept on disk
 
@@ -208,12 +220,12 @@ The `objectFit` style, CSS's `object-fit` (`.object_fit(..)` in Rust), decides h
 | `"none"` (`ResizeMode::Center`) | Natural size, placed at `objectPosition` (centered by default) |
 | `"scale-down"` (`ResizeMode::ScaleDown`) | Natural size, shrunk to fit where larger |
 
-```rust tabs
-image(photo).object_fit(ResizeMode::Contain).size(px(140.0)).bg(rgb(0xeaeef2))
-```
-
 ```tsx tabs
 <Image src={photo} style={{ width: 140, height: 140, objectFit: "contain", backgroundColor: "#eaeef2" }} />
+```
+
+```rust tabs
+image(photo).object_fit(ResizeMode::Contain).size(px(140.0)).bg(rgb(0xeaeef2))
 ```
 
 The Tailwind classes `object-cover`, `object-contain`, `object-fill`, `object-none` and `object-scale-down` set the same style.
@@ -222,12 +234,12 @@ The Tailwind classes `object-cover`, `object-contain`, `object-fill`, `object-no
 
 Where the sized image sits in its box is the `objectPosition` style (`.object_position(..)` and `.object_top()`, ... in Rust), CSS's `object-position`: the center by default. A covering image is cropped around it, a contained one moves within its bands. It takes keywords (`"top"`, `"left bottom"`), percentages and lengths (`"25% 75%"`, `"10px 0"`) and edges with offsets (`"right 10px bottom 20%"`). A tall photo in a chat bubble shows its top this way:
 
-```rust tabs
-image(photo).object_fit(ResizeMode::Cover).object_top().w(px(220.0)).h(px(160.0)).rounded(px(16.0))
-```
-
 ```tsx tabs
 <Image src={photo} style={{ width: 220, height: 160, borderRadius: 16, objectPosition: "top" }} />
+```
+
+```rust tabs
+image(photo).object_fit(ResizeMode::Cover).object_top().w(px(220.0)).h(px(160.0)).rounded(px(16.0))
 ```
 
 The Tailwind classes are Tailwind's: `object-top`, `object-bottom`, `object-left`, `object-right`, `object-center`, `object-top-left`, `object-top-right`, `object-bottom-left`, `object-bottom-right` and arbitrary values (`object-[25%_75%]`).
@@ -236,23 +248,23 @@ The Tailwind classes are Tailwind's: `object-top`, `object-bottom`, `object-left
 
 Images are views: they take corner radii (also per corner), borders, shadows, opacity and transforms. Corners clip the image.
 
-```rust tabs
-image(avatar).size(px(90.0)).rounded(px(45.0)).border(px(3.0)).border_color(rgb(0x8250df))
-```
-
 ```tsx tabs
 <Image src={avatar} style={{ width: 90, height: 90, borderRadius: 45, borderWidth: 3, borderColor: "#8250df" }} />
+```
+
+```rust tabs
+image(avatar).size(px(90.0)).rounded(px(45.0)).border(px(3.0)).border_color(rgb(0x8250df))
 ```
 
 - **Tint** (`.tint_color(..)` in Rust, the `tintColor` style in TSX) recolors the image's opaque pixels: use it for one-color icons that follow the theme.
 - **Filters** (`.grayscale(..)`, `.sepia(..)`, `.blur(..)`; `filter` in TSX) apply to images on both platforms ([Filters](./styling.md#filters-and-blending)).
 
-```rust tabs
-image(ICON).size(px(24.0)).tint_color(AdaptiveColor::rgb(0x0969da, 0x58a6ff))
-```
-
 ```tsx tabs
 <Image src={icon} style={{ width: 24, height: 24, tintColor: active() ? "#0969da" : "#6e7781" }} />
+```
+
+```rust tabs
+image(ICON).size(px(24.0)).tint_color(AdaptiveColor::rgb(0x0969da, 0x58a6ff))
 ```
 
 ## Placeholders, fading and blur
@@ -263,15 +275,6 @@ image(ICON).size(px(24.0)).tint_color(AdaptiveColor::rgb(0x0969da, 0x58a6ff))
 | `fadeDuration` | `.fade_duration(ms)` | Milliseconds the loaded image fades in over. Default 0 on iOS, 300 on Android |
 | `blurRadius` | `.blur_radius(px(..))` | Blurs the image by this radius in points, applied once when decoding |
 
-```rust tabs
-image(move || format!("https://picsum.photos/seed/{}/300/300", id.get()))
-    .placeholder(PLACEHOLDER)
-    .fade_duration(250.0)
-    .size(px(100.0))
-    .rounded(px(12.0))
-image(cover).blur_radius(px(16.0)).absolute().inset_0()
-```
-
 ```tsx tabs
 <Image
   src={`https://picsum.photos/seed/${id()}/300/300`}
@@ -280,6 +283,15 @@ image(cover).blur_radius(px(16.0)).absolute().inset_0()
   style={{ width: 100, height: 100, borderRadius: 12 }}
 />
 <Image src={cover} blurRadius={16} style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0 }} />
+```
+
+```rust tabs
+image(move || format!("https://picsum.photos/seed/{}/300/300", id.get()))
+    .placeholder(PLACEHOLDER)
+    .fade_duration(250.0)
+    .size(px(100.0))
+    .rounded(px(12.0))
+image(cover).blur_radius(px(16.0)).absolute().inset_0()
 ```
 
 ## Animated images
@@ -296,16 +308,6 @@ Animated GIF, WebP and APNG files play automatically, as assets or from URLs. Th
 | `onError` | `.on_error(..)` | `{ message }` (a `&str` in Rust) | Loading or decoding failed |
 | `onLoadEnd` | `.on_load_end(..)` | | After `onLoad` or `onError` |
 
-```rust tabs
-let status = signal(SharedString::from("loading…"));
-
-image(url)
-    .on_load(move |size: &Size<DevicePixels>| status.set(format!("{}×{}", size.width.0, size.height.0).into()))
-    .on_error(move |message: &str| status.set(message.to_owned().into()))
-    .w(px(90.0))
-    .h(px(60.0))
-```
-
 ```tsx tabs
 const status = signal("loading…");
 
@@ -317,6 +319,16 @@ const status = signal("loading…");
 />
 ```
 
+```rust tabs
+let status = signal(SharedString::from("loading…"));
+
+image(url)
+    .on_load(move |size: &Size<DevicePixels>| status.set(format!("{}×{}", size.width.0, size.height.0).into()))
+    .on_error(move |message: &str| status.set(message.to_owned().into()))
+    .w(px(90.0))
+    .h(px(60.0))
+```
+
 The load event reports the source image's size, not the size it was decoded at.
 
 An image with [pixel-density variants](#pixel-densities) loads one of its files, and the load event reports that file's pixels: 192×192 for `logo@3x.png` on a 3× screen, where `Image.getSize(logo)` resolves with the imported file's 64×64. When the pixel ratio changes and the image loads another variant, that load reports its events too: `onLoadStart`, then `onLoad` with the new file's size (or `onError`), then `onLoadEnd`.
@@ -325,6 +337,13 @@ An image with [pixel-density variants](#pixel-densities) loads one of its files,
 
 Images that are not on screen can be measured and loaded ahead: `image_size(..)` and `prefetch_image(..)` in Rust, `Image.getSize` and `Image.prefetch` (on the same `Image` that renders the element) in TSX:
 
+```tsx tabs
+import { Image } from "nsh";
+
+const size = await Image.getSize("https://example.com/photo.jpg");   // { width, height } in pixels
+await Image.prefetch("https://example.com/next.jpg");                // once the bytes are in memory
+```
+
 ```rust tabs
 spawn(async move {
     // Ok(ImageSize { width, height }), in pixels.
@@ -332,13 +351,6 @@ spawn(async move {
     // Ok(()) once the bytes are in memory.
     let loaded = prefetch_image("https://example.com/next.jpg").await;
 });
-```
-
-```tsx tabs
-import { Image } from "nsh";
-
-const size = await Image.getSize("https://example.com/photo.jpg");   // { width, height } in pixels
-await Image.prefetch("https://example.com/next.jpg");                // once the bytes are in memory
 ```
 
 | Rust | TSX | Returns |
@@ -350,6 +362,14 @@ In TSX, `src` is a URL string or an imported image. For an imported image with [
 
 A common use is sizing a remote image by its aspect ratio:
 
+```tsx tabs
+function RemoteImage(props: { url: string }) {
+  const ratio = signal(1);
+  Image.getSize(props.url).then((s) => ratio.set(s.width / s.height));
+  return <Image src={props.url} style={{ width: "100%", aspectRatio: ratio() }} />;
+}
+```
+
 ```rust tabs
 fn remote_image(url: &'static str) -> impl IntoElement {
     let ratio = signal(1.0_f32);
@@ -359,14 +379,6 @@ fn remote_image(url: &'static str) -> impl IntoElement {
         }
     });
     image(url).w_full().aspect_ratio(ratio)
-}
-```
-
-```tsx tabs
-function RemoteImage(props: { url: string }) {
-  const ratio = signal(1);
-  Image.getSize(props.url).then((s) => ratio.set(s.width / s.height));
-  return <Image src={props.url} style={{ width: "100%", aspectRatio: ratio() }} />;
 }
 ```
 
@@ -398,6 +410,12 @@ A `.json` imported with `?url` stays a file the app reads when it needs it, inst
 
 `fetch` reads a file the app ships by its `asset:/` URL, in TSX and in Rust alike, on every platform. An imported image carries its URL (`url`), a Rust crate's files have theirs from `asset!` (`FileAsset::uri`) and `assets!()`:
 
+```tsx tabs
+import flag from "./images/flag.png";
+
+const bytes = await (await fetch(flag.url)).bytes();
+```
+
 ```rust tabs
 const GREETING: FileAsset = asset!("locales/en.txt");
 
@@ -412,12 +430,6 @@ fn Greeting() -> impl IntoElement {
     });
     text(move || greeting.get())
 }
-```
-
-```tsx tabs
-import flag from "./images/flag.png";
-
-const bytes = await (await fetch(flag.url)).bytes();
 ```
 
 The engine reads the file from the app's files off its thread (from the dev server during `nsh run`), with no capability needed: they are the app's own. A web app downloads what the page did not preload from where it serves its assets. The response is `200` with the file's bytes, its `Content-Length` and the `Content-Type` its extension gives (`image/png`, `application/json`, ...), and its `url` is the `asset:/` URL asked for, without its fragment, however the file arrived; a file the app does not ship rejects as a network error that names it. The URL names the file by its path inside the app's files, on every platform alike: the scheme reads in any case, as URLs' schemes do, and a query or a fragment leaves the file the same (`asset:/locales/en.json?v=2` reads `locales/en.json`). The request reads the file with `GET` (or `HEAD`): a URL whose path leaves the app's files (`..`, an absolute path) and a request with another method reject the same way, before anything is read or downloaded.

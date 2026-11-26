@@ -116,6 +116,50 @@ test('emoji are measured as wide as the DOM draws them on a 2x screen', { skip: 
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+// A hinted font rounds its advances to device pixels: at a pixel ratio of
+// 1.25 or 1.5 the DOM draws it narrower or wider than canvas measures it at
+// 1 (NSimSun, Chrome's `monospace` on Chinese Windows, at 13px: 6.5 against
+// 7 per character), and runs laid out at canvas widths stand apart.
+// `measureWidth` measures at the ratio's size and scales back.
+for (const ratio of ['1.25', '1.5']) {
+  test(`text is measured as wide as the DOM draws it at a pixel ratio of ${ratio}`, { skip: !chromium }, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nsh-text-ratio-'));
+    try {
+      const source = await readFile(new URL('./nsh.js', import.meta.url), 'utf8');
+      const module = 'data:text/javascript;base64,' + Buffer.from(source + '\nexport { measureWidth };').toString('base64');
+      await writeFile(join(dir, 'index.html'), `<!doctype html><meta charset="utf-8"><body><script type="module">
+        import { measureWidth } from '${module}';
+        try {
+          const canvas = document.createElement('canvas').getContext('2d');
+          const drawn = (font, text) => {
+            const run = document.createElement('span');
+            run.style.cssText = 'position:absolute;white-space:pre;font:' + font;
+            run.textContent = text;
+            document.body.append(run);
+            const width = run.getBoundingClientRect().width;
+            run.remove();
+            return width;
+          };
+          for (const family of ['ui-monospace, monospace', 'NSimSun, monospace', 'sans-serif'])
+            for (let size = 11; size <= 20; size++)
+              for (const text of ['eymap. On your com', '大家好，这是中文']) {
+                const font = '400 ' + size + 'px ' + family;
+                const measured = measureWidth(canvas, font, text);
+                if (Math.abs(measured - drawn(font, text)) > 0.05) throw Error(font + ' ' + text + ': measured ' + measured + ', drawn ' + drawn(font, text));
+              }
+          document.body.dataset.result = 'passed';
+        } catch (e) { document.body.dataset.result = 'failed: ' + e.message; }
+      </script>`);
+      const html = execFileSync(chromium, ['--headless', '--no-sandbox', '--disable-dev-shm-usage',
+        '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--virtual-time-budget=1000',
+        '--force-device-scale-factor=' + ratio,
+        '--user-data-dir=' + join(dir, 'profile'), '--dump-dom', pathToFileURL(join(dir, 'index.html')).href],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000, maxBuffer: 1024 * 1024 });
+      assert.equal(html.match(/data-result="([^"]*)"/)?.[1], 'passed');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+}
+
 test('cluster boxes follow bidi reordering and preserve measurement styles', { skip: !chromium }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'nsh-text-bidi-'));
   try {
@@ -153,15 +197,19 @@ test('a link stays in its run, drawn in its text\'s bidi order', { skip: !chromi
   const dir = await mkdtemp(join(tmpdir(), 'nsh-text-link-'));
   try {
     const source = await readFile(new URL('./nsh.js', import.meta.url), 'utf8');
-    const module = 'data:text/javascript;base64,' + Buffer.from(source + '\nexport { fillRun };').toString('base64');
+    const module = 'data:text/javascript;base64,' + Buffer.from(source + '\nexport { fillRun, KEYFRAMES };').toString('base64');
     await writeFile(join(dir, 'index.html'), `<!doctype html><meta charset="utf-8"><body><script type="module">
-      import { fillRun } from '${module}';
+      import { fillRun, KEYFRAMES } from '${module}';
       try {
+        // The runtime's rules: how the a of a link of text looks.
+        const style = document.createElement('style');
+        style.textContent = KEYFRAMES;
+        document.head.append(style);
         const near = (a,b,what) => { if (Math.abs(a-b)>0.5) throw Error(what+': '+a+' != '+b); };
-        const run = (parts) => {
+        const run = (parts, address = null) => {
           const el = document.createElement('span');
-          el.style.cssText = 'position:absolute;left:0;top:0;white-space:pre;font:400 20px Arial';
-          fillRun(el, 'אב גד', parts, [{ node: 3 }]);
+          el.style.cssText = 'position:absolute;left:0;top:0;white-space:pre;font:400 20px Arial;color:rgb(10, 20, 30)';
+          fillRun(el, 'אב גד', parts, [{ node: 3, events: new Set(['onPress']), address }]);
           document.body.append(el);
           return el;
         };
@@ -172,16 +220,25 @@ test('a link stays in its run, drawn in its text\'s bidi order', { skip: !chromi
           return r.getBoundingClientRect();
         };
         // The same text without a link, and with its second word one,
-        // styled as the rest (one run).
+        // styled as the rest (one run): a span, or an a where it goes
+        // somewhere a browser opens.
         const plain = run(null);
-        const linked = run([[3, 5, 0]]);
-        const link = linked.querySelector('span');
-        if (link?._link?.node !== 3 || link.textContent !== 'גד') throw Error('the link has no span of its own');
-        near(linked.getBoundingClientRect().width, plain.getBoundingClientRect().width, 'run width');
-        near(link.getBoundingClientRect().left, box(plain, 3, 5).left, 'link left');
-        near(link.getBoundingClientRect().width, box(plain, 3, 5).width, 'link width');
-        // Right to left: the second word is drawn left of the first.
-        if (!(link.getBoundingClientRect().right <= box(plain, 0, 2).left + 0.5)) throw Error('the words are not right to left');
+        for (const [tag, address] of [['span', null], ['a', 'https://example.com/guide']]) {
+          const linked = run([[3, 5, 0]], address);
+          const link = linked.querySelector(tag);
+          if (link?._link?.node !== 3 || link.textContent !== 'גד') throw Error(tag + ': the link has no element of its own');
+          if (link.getAttribute('href') !== address) throw Error(tag + ': href ' + link.getAttribute('href'));
+          near(linked.getBoundingClientRect().width, plain.getBoundingClientRect().width, tag + ' run width');
+          near(link.getBoundingClientRect().left, box(plain, 3, 5).left, tag + ' link left');
+          near(link.getBoundingClientRect().width, box(plain, 3, 5).width, tag + ' link width');
+          // Right to left: the second word is drawn left of the first.
+          if (!(link.getBoundingClientRect().right <= box(plain, 0, 2).left + 0.5)) throw Error(tag + ': the words are not right to left');
+          // The run's color and decoration, none of the browser's link
+          // blue or underline.
+          const drawn = getComputedStyle(link);
+          if (drawn.color !== 'rgb(10, 20, 30)') throw Error(tag + ': color ' + drawn.color);
+          if (drawn.textDecorationLine !== 'none') throw Error(tag + ': decoration ' + drawn.textDecorationLine);
+        }
         document.body.dataset.result = 'passed';
       } catch(e) { document.body.dataset.result = 'failed: '+e.message; }
     </script>`);
@@ -294,6 +351,152 @@ test('the characters lines broke at stand between the runs, read but never drawn
         runs[0][6] = null;
         player.updateRuns(el, 0, 0, runs, [{}], null, null);
         if (el.textContent !== 'it nowbrings\\nmore') throw Error('dropped: ' + JSON.stringify(el.textContent));
+        document.body.dataset.result = 'passed';
+      } catch (e) { document.body.dataset.result = 'failed: ' + e.message; }
+    </script>`);
+    const html = execFileSync(chromium, ['--headless', '--no-sandbox', '--disable-dev-shm-usage',
+      '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--virtual-time-budget=1000',
+      '--user-data-dir=' + join(dir, 'profile'), '--dump-dom', pathToFileURL(join(dir, 'index.html')).href],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000, maxBuffer: 1024 * 1024 });
+    assert.equal(html.match(/data-result="([^"]*)"/)?.[1], 'passed');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a text streamed in keeps the spans and breaks of the lines it already had', { skip: !chromium }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nsh-text-stream-'));
+  try {
+    const source = await readFile(new URL('./nsh.js', import.meta.url), 'utf8');
+    const module = 'data:text/javascript;base64,' + Buffer.from(source + '\nexport { Player };').toString('base64');
+    await writeFile(join(dir, 'index.html'), `<!doctype html><meta charset="utf-8">
+    <body><script type="module">
+      import { Player } from '${module}';
+      try {
+        const player = Object.create(Player.prototype);
+        player.styleClass = () => '';
+        const el = document.createElement('div');
+        el._animation = {};
+        el.style.cssText = 'position:absolute;left:0;top:0;font:400 20px Arial';
+        document.body.append(el);
+        // [x, y, text, style, start, parts, after]: one run per line, each
+        // line but the last broken at the space it ate.
+        const lines = (...texts) => texts.map((text, i) => [0, 24 * i, text, 0, 0, null, i < texts.length - 1 ? ' ' : null]);
+        player.replaceRuns(el, 0, 0, lines('one two', 'three'), [{}], null, null);
+        const [first, firstBreak] = el.childNodes;
+        let added = 0, removed = 0;
+        new MutationObserver((records) => {
+          for (const r of records) { added += r.addedNodes.length; removed += r.removedNodes.length; }
+        }).observe(el, { childList: true });
+        const settle = () => new Promise((resolve) => setTimeout(resolve));
+        // The last line grows, then a line is added: only the new line's
+        // span and the break before it come.
+        if (!player.updateRuns(el, 0, 0, lines('one two', 'three four'), [{}], null, null)) throw Error('made again');
+        if (!player.updateRuns(el, 0, 0, lines('one two', 'three four', 'five'), [{}], null, null)) throw Error('made again with a line more');
+        await settle();
+        if (el.textContent !== 'one two three four five') throw Error('textContent: ' + JSON.stringify(el.textContent));
+        if (el.childNodes[0] !== first || el.childNodes[1] !== firstBreak) throw Error('the first line was made again');
+        if (added !== 2 || removed !== 0) throw Error('nodes added ' + added + ', removed ' + removed);
+        const third = el.querySelectorAll(':scope > .nsh-run')[2];
+        if (third.style.top !== '48px' || third.className !== 'nsh-run') throw Error('the new line: ' + third.outerHTML);
+        // A line less: its span and the break before it go.
+        added = removed = 0;
+        if (!player.updateRuns(el, 0, 0, lines('one two', 'three four'), [{}], null, null)) throw Error('made again with a line less');
+        await settle();
+        if (el.textContent !== 'one two three four') throw Error('shrunk: ' + JSON.stringify(el.textContent));
+        if (added !== 0 || removed !== 2) throw Error('shrinking added ' + added + ', removed ' + removed);
+        document.body.dataset.result = 'passed';
+      } catch (e) { document.body.dataset.result = 'failed: ' + e.message; }
+    </script>`);
+    const html = execFileSync(chromium, ['--headless', '--no-sandbox', '--disable-dev-shm-usage',
+      '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--virtual-time-budget=1000',
+      '--user-data-dir=' + join(dir, 'profile'), '--dump-dom', pathToFileURL(join(dir, 'index.html')).href],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000, maxBuffer: 1024 * 1024 });
+    assert.equal(html.match(/data-result="([^"]*)"/)?.[1], 'passed');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a run in a taller line gets a line box that tall around the same baseline', { skip: !chromium }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nsh-text-line-box-'));
+  try {
+    const source = await readFile(new URL('./nsh.js', import.meta.url), 'utf8');
+    const module = 'data:text/javascript;base64,' + Buffer.from(source + '\nexport { Player, defineClass };').toString('base64');
+    await writeFile(join(dir, 'index.html'), `<!doctype html><meta charset="utf-8"><style>body { margin:0; } .nsh-run { position:absolute; white-space:pre; }</style><script type="module">
+      import { Player, defineClass } from '${module}';
+      try {
+        // A run style as the engine writes it: the font with its own line height.
+        defineClass('nsh-test-run', 'font: 400 20px / 23px Arial;');
+        const player = Object.create(Player.prototype);
+        player.styleClass = () => 'nsh-test-run';
+        player.metricsCache = new Map();
+        player.measure = document.createElement('canvas').getContext('2d');
+        const el = document.createElement('div');
+        el._animation = {};
+        el.style.cssText = 'position:absolute;left:0;top:0';
+        document.body.append(el);
+        const baseline = (span) => {
+          const mark = document.createElement('i');
+          mark.style.cssText = 'display:inline-block;width:0;height:0;vertical-align:baseline';
+          span.append(mark);
+          const y = mark.getBoundingClientRect().top;
+          mark.remove();
+          return y;
+        };
+        // [x, y, text, style, start, parts, after, lineHeight]
+        player.replaceRuns(el, 0, 0, [[0, 10, 'Hg', 0, 0, null, null]], [{}], null, null);
+        let span = el.querySelector('.nsh-run');
+        const own = baseline(span), ownHeight = span.getBoundingClientRect().height;
+        if (span.style.lineHeight) throw Error('a run of its own height got ' + span.style.lineHeight);
+        for (const height of [40, 33.75, 18]) {
+          player.replaceRuns(el, 0, 0, [[0, 10, 'Hg', 0, 0, null, null, height]], [{}], null, null);
+          span = el.querySelector('.nsh-run');
+          if (span.getBoundingClientRect().height !== height) throw Error(height + ': box ' + span.getBoundingClientRect().height);
+          if (baseline(span) !== own) throw Error(height + ': baseline ' + baseline(span) + ', not ' + own);
+        }
+        // Updated in place: back to its own height, then into a taller line.
+        if (!player.updateRuns(el, 0, 0, [[0, 10, 'Hg', 0, 0, null, null]], [{}], null, null)) throw Error('made again');
+        if (span.style.lineHeight || span.getBoundingClientRect().height !== ownHeight || baseline(span) !== own) throw Error('not its own again: ' + span.outerHTML);
+        if (!player.updateRuns(el, 0, 0, [[0, 10, 'Hg', 0, 0, null, null, 40]], [{}], null, null)) throw Error('made again');
+        if (span.getBoundingClientRect().height !== 40 || baseline(span) !== own) throw Error('updated: ' + span.outerHTML);
+        document.body.dataset.result = 'passed';
+      } catch (e) { document.body.dataset.result = 'failed: ' + e.message; }
+    </script>`);
+    const html = execFileSync(chromium, ['--headless', '--no-sandbox', '--disable-dev-shm-usage',
+      '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--virtual-time-budget=1000',
+      '--user-data-dir=' + join(dir, 'profile'), '--dump-dom', pathToFileURL(join(dir, 'index.html')).href],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000, maxBuffer: 1024 * 1024 });
+    assert.equal(html.match(/data-result="([^"]*)"/)?.[1], 'passed');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('letter-spacing advances DOM runs once per grapheme cluster', { skip: !chromium }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'nsh-text-cluster-spacing-'));
+  try {
+    const source = await readFile(new URL('./nsh.js', import.meta.url), 'utf8');
+    const module = 'data:text/javascript;base64,' + Buffer.from(source + '\nexport { measureNumericText, textClusterBoxes };').toString('base64');
+    await writeFile(join(dir, 'index.html'), `<!doctype html><meta charset="utf-8"><body><script type="module">
+      import { measureNumericText, textClusterBoxes } from '${module}';
+      try {
+        const font = '400 20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        const near = (a, b, what) => { if (Math.abs(a - b) > 0.25) throw Error(what + ': ' + a + ' != ' + b); };
+        const domWidth = (text, spacing) => {
+          const span = document.createElement('span');
+          span.style.cssText = 'position:absolute;left:0;top:0;white-space:pre;font:' + font + ';letter-spacing:' + spacing + 'px';
+          span.textContent = text;
+          document.body.append(span);
+          const w = span.getBoundingClientRect().width;
+          span.remove();
+          return w;
+        };
+        const seg = new Intl.Segmenter();
+        for (const text of ['👨‍👩‍👧‍👦', '👍🏻', '🇨🇳', 'cafe\\u0301', 'か\\u3099', '…', '👨‍👩‍👧‍👦after']) {
+          const clusters = [...seg.segment(text)].length;
+          const base = measureNumericText(font, 'normal', text);
+          const spaced = domWidth(text, 10);
+          near(spaced - base, clusters * 10, text);
+        }
+        // A following span shifts by 1 * spacing after a 7-scalar ZWJ emoji, not 7 * spacing.
+        const familyBase = measureNumericText(font, 'normal', '👨‍👩‍👧‍👦');
+        const box = textClusterBoxes(font, 'normal', 10, '👨‍👩‍👧‍👦after', [[0, 11], [11, 16]]);
+        near(box[1][0], familyBase + 10, 'second span start');
         document.body.dataset.result = 'passed';
       } catch (e) { document.body.dataset.result = 'failed: ' + e.message; }
     </script>`);

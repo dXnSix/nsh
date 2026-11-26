@@ -113,6 +113,10 @@ enum Drag {
     Word(usize, usize),
     /// Whole lines, from the line triple-clicked.
     Line(usize, usize),
+    /// The whole text, selected by the press that focused a field that
+    /// selects on focus (`selectTextOnFocus`); dragging away from where it
+    /// was pressed (the offset) selects characters from there instead.
+    All(usize),
 }
 
 /// The text input `view` holds now (`None`: it is no input).
@@ -166,8 +170,9 @@ pub(crate) struct InputState {
     /// Scroll offset of the text: horizontal for one line, vertical for
     /// several.
     scroll: Cell<f32>,
-    /// The scroll of several lines as last reported to a built-in bar
-    /// (`InputConfig::replaced`): offset, text height, width, viewport
+    reveal_on_layout: Cell<bool>,
+    /// The scroll of several lines as last reported to a bar of the app's
+    /// (`InputConfig::report_scroll`): offset, text height, width, viewport
     /// height. `None` until reported (again).
     reported_scroll: Cell<Option<(f32, f32, f32, f32)>>,
     /// The x the caret keeps while it moves up and down lines.
@@ -203,6 +208,7 @@ impl InputState {
             active: Cell::new(true),
             caret_on: Cell::new(true),
             scroll: Cell::new(0.0),
+            reveal_on_layout: Cell::new(false),
             reported_scroll: Cell::new(None),
             goal_x: Cell::new(None),
             drag: Cell::new(None),
@@ -294,6 +300,9 @@ impl InputState {
             align,
             None,
         ));
+        if self.reveal_on_layout.replace(false) {
+            self.reveal_in(&layout);
+        }
         *self.layout.borrow_mut() = Some(layout.clone());
         Some(layout)
     }
@@ -378,7 +387,12 @@ impl InputState {
 
     /// Scrolls so that the caret shows.
     fn reveal(&self) {
-        let Some(layout) = self.layout() else { return };
+        if let Some(layout) = self.layout() {
+            self.reveal_in(&layout);
+        }
+    }
+
+    fn reveal_in(&self, layout: &Layout) {
         let pos = self.model.borrow().display_caret(self.secure());
         let (x, y, h) = layout.caret(pos);
         let (w, height) = self.size.get();
@@ -400,17 +414,17 @@ impl InputState {
         };
         self.scroll.set(scroll);
         // Clamped to the text.
-        self.origin(&layout);
+        self.origin(layout);
     }
 
     /// Reports how far several lines scrolled, the text's height and the
-    /// viewport's to the built-in bar that takes the place of an
-    /// indicator (`InputConfig::replaced`), when any of them changed since
+    /// viewport's to a bar of the app's that follows them
+    /// (`InputConfig::report_scroll`), when any of them changed since
     /// last reported. Called with the clamped scroll ([`InputState::origin`]).
     fn report_scroll(&self, layout: &Layout) {
         {
             let config = self.config.borrow();
-            if !config.replaced || !config.multiline {
+            if !config.report_scroll || !config.multiline {
                 return;
             }
         }
@@ -751,6 +765,9 @@ fn set_focus(surface: &Rc<Surface>, view: Option<&NshView>) {
     set_changing(surface, true);
     if old.as_ref() != view {
         move_focus(surface, view, old.as_ref());
+        if let Some(view) = view {
+            select_on_focus(surface, view);
+        }
         // The new field's value may still be on its way from the engine,
         // after what the old one reported. Text typed now waits for it.
         if view.is_some() {
@@ -763,6 +780,21 @@ fn set_focus(surface: &Rc<Surface>, view: Option<&NshView>) {
     }
     set_changing(surface, false);
     flush_pending(surface);
+}
+
+/// `selectTextOnFocus`: the field that just took the focus selects its
+/// whole text, decided here as the focus arrives rather than by JS, and
+/// before text typed meanwhile is given to it (which then replaces it).
+fn select_on_focus(surface: &Surface, view: &NshView) {
+    let Some(input) = input_of(view) else {
+        return;
+    };
+    if !input.focused.get() || !input.config.borrow().select_text_on_focus {
+        return;
+    }
+    input.model.borrow_mut().select_all();
+    input.goal_x.set(None);
+    after_edit(surface, view, &input, false);
 }
 
 fn set_changing(surface: &Surface, changing: bool) {
@@ -900,6 +932,7 @@ pub(crate) fn removing(surface: &Surface, view: &NshView) {
                 input.drag.set(None);
                 input.model.borrow_mut().composition = None;
                 input.relayout();
+                report_composition(surface, &field, &input);
             }
             FOCUS.with(|f| {
                 if let Some(f) = f.borrow_mut().get_mut(&surface.key()) {
@@ -1558,7 +1591,13 @@ fn after_edit(surface: &Surface, view: &NshView, input: &InputState, changed: bo
         );
     }
     input.wake_caret();
-    input.reveal();
+    if changed && !input.multiline() {
+        // Shape the new line when a draw, hit test or caret observer needs it.
+        // Several edits can arrive before any of them reads the layout.
+        input.reveal_on_layout.set(true);
+    } else {
+        input.reveal();
+    }
     report_selection(surface, view, input);
     view.changed();
 }
@@ -1640,6 +1679,7 @@ pub(crate) fn config(surface: &Rc<Surface>, view: &NshView, config: &InputConfig
         }
         input.placeholder.borrow_mut().take();
         if config.multiline != input.multiline() {
+            input.reveal_on_layout.set(false);
             input.scroll.set(0.0);
         }
     }
@@ -1654,10 +1694,10 @@ pub(crate) fn config(surface: &Rc<Surface>, view: &NshView, config: &InputConfig
         auto_focus(surface, view);
     }
     place(view, &input);
-    // A built-in bar (newly) taking the indicator's place hears where the
-    // text is now, once placed (else on the first draw).
+    // A bar of the app's (newly) following the text hears where it is
+    // now, once placed (else on the first draw).
     input.reported_scroll.set(None);
-    if config.replaced
+    if config.report_scroll
         && config.multiline
         && let Some(layout) = input.layout()
     {
@@ -1882,12 +1922,30 @@ pub(crate) fn pointer(surface: &Rc<Surface>, view: &NshView, event: &ItemPointer
                 // the input method on a press).
                 ime::unmark_text(surface);
             }
+            // A plain click that focuses a field selecting on focus keeps
+            // the whole text `set_focus` selected; Shift-clicks, multiple
+            // clicks and clicks in the focused field select as usual.
+            let keep_all = !input.focused.get()
+                && event.clicks <= 1
+                && !event.modifiers.shift
+                && input.config.borrow().select_text_on_focus;
+            // A Shift-press that focuses the field extends the selection
+            // the field kept rather than the one focusing selects.
+            let kept = (event.modifiers.shift && !input.focused.get()).then(|| {
+                let model = input.model.borrow();
+                let ((start, end), caret) = (model.selection(), model.caret());
+                (if caret == start { end } else { start }, caret)
+            });
             set_focus(surface, Some(view));
+            if let Some((anchor, caret)) = kept {
+                input.model.borrow_mut().select(anchor, caret);
+            }
             let at = input.hit(x, y);
             let secure = input.secure();
             let drag = {
                 let mut model = input.model.borrow_mut();
                 match event.clicks {
+                    0 | 1 if keep_all && input.focused.get() => Drag::All(at),
                     0 | 1 => {
                         model.move_to(at, event.modifiers.shift);
                         Drag::Char
@@ -1923,6 +1981,15 @@ pub(crate) fn pointer(surface: &Rc<Surface>, view: &NshView, event: &ItemPointer
             {
                 let mut model = input.model.borrow_mut();
                 match drag {
+                    Drag::All(from) => {
+                        // Until the pointer leaves the offset it pressed,
+                        // the whole text stays selected.
+                        if at == from {
+                            return true;
+                        }
+                        model.select(from, at);
+                        input.drag.set(Some(Drag::Char));
+                    }
                     Drag::Char => model.move_to(at, true),
                     Drag::Word(s, e) | Drag::Line(s, e) => {
                         let (ws, we) = match drag {
@@ -1944,6 +2011,20 @@ pub(crate) fn pointer(surface: &Rc<Surface>, view: &NshView, event: &ItemPointer
         PointerKind::Up | PointerKind::Cancel => input.drag.take().is_some(),
         PointerKind::Leave => false,
     }
+}
+
+/// Whether a multiline field can move in the requested direction.
+/// Target selection must not move the text before the gesture is latched.
+pub(crate) fn can_scroll(view: &NshView, dy: f32) -> bool {
+    let Some(input) = input_of(view).filter(|input| input.multiline()) else {
+        return false;
+    };
+    let Some(layout) = input.layout() else {
+        return false;
+    };
+    let max = (layout.height - input.size.get().1).max(0.0);
+    let before = input.scroll.get().clamp(0.0, max);
+    (before + dy).clamp(0.0, max) != before
 }
 
 /// A wheel over input `view`: scrolls the lines of a multiline field that
@@ -2369,24 +2450,50 @@ fn paste(surface: &Surface, view: &NshView) {
             return;
         };
         let text = item.as_ref().and_then(|item| item.text());
-        if view.state().events.contains(EventKind::Paste) {
-            surface.event(
-                view.id(),
-                EventKind::Paste,
-                EventPayload::Paste(Box::new(pasted_content(text.clone(), item))),
-            );
-        }
-        if input.config.borrow().paste_behavior != nsh_core::PasteBehavior::Insert {
-            return;
-        }
-        let Some(text) = text else {
-            return;
-        };
-        let text = pasted(&text, input.multiline());
-        if !text.is_empty() {
-            insert(&surface, &view, &input, &text, false);
-        }
+        paste_content(&surface, &view, &input, pasted_content(text, item));
     });
+}
+
+/// Pastes `paste` into `view` as the user's paste of it does: reports it
+/// (`onPaste`) if the app listens, then inserts its text as
+/// `pasteBehavior` says.
+fn paste_content(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    input: &InputState,
+    paste: nsh_core::PasteEvent,
+) {
+    let text = paste.text.clone();
+    if view.state().events.contains(EventKind::Paste) {
+        surface.event(
+            view.id(),
+            EventKind::Paste,
+            EventPayload::Paste(Box::new(paste)),
+        );
+    }
+    if input.config.borrow().paste_behavior != nsh_core::PasteBehavior::Insert {
+        return;
+    }
+    let text = pasted(&text, input.multiline());
+    if !text.is_empty() {
+        insert(surface, view, input, &text, false);
+    }
+}
+
+/// The test agent's paste of `content` into the focused input, without
+/// the system's clipboard.
+#[cfg(feature = "dev")]
+pub(crate) fn paste_focused(
+    surface: &Rc<Surface>,
+    content: nsh_core::PasteEvent,
+) -> Result<(), String> {
+    let view = focused(surface).ok_or("no focused input to paste into")?;
+    let input = input_of(&view).ok_or("the focused view is no input")?;
+    if !input.config.borrow().editable {
+        return Err("the focused input is read-only".into());
+    }
+    paste_content(surface, &view, &input, content);
+    Ok(())
 }
 
 /// What clipboard `item` holds, for `onPaste`: `text`, its images and its
@@ -2553,6 +2660,211 @@ mod blink {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_a_composing_field_reports_the_end_without_committing() {
+        let surface = Surface::new(nsh_engine::Environment::default());
+        let field = NshView::new(4, nsh_core::ViewKind::Input);
+        field.insert_before(&surface.root, None);
+        focus_for_test(&surface, &field);
+        ime::replace_and_mark_text_in_range(&surface, None, "ni", None);
+        let input = input_of(&field).unwrap();
+        assert_eq!(input.composed.borrow().as_deref(), Some("ni"));
+
+        removing(&surface, &field);
+
+        assert!(input.composed.borrow().is_none());
+        assert!(input.model.borrow().text().is_empty());
+        assert!(focused(&surface).is_none());
+        surface_stopped(surface.key());
+    }
+
+    /// Use a cached layout so routing tests need neither a window nor fonts.
+    fn scrolling_field() -> (Rc<Surface>, NshView, Rc<InputState>, NshView) {
+        let surface = Surface::new(nsh_engine::Environment::default());
+        surface.root.state_mut().frame = crate::geom::rect(0.0, 0.0, 400.0, 400.0);
+        let outer = NshView::new(2, nsh_core::ViewKind::Scroll);
+        outer.state_mut().frame = crate::geom::rect(0.0, 0.0, 400.0, 400.0);
+        {
+            let mut state = outer.state_mut();
+            let scroll = state.scroll.as_mut().unwrap();
+            scroll.content = nsh_core::geometry::size(Points(400.0), Points(2000.0));
+            scroll.behavior.enabled = true;
+        }
+        outer.insert_before(&surface.root, None);
+        let field = NshView::new(4, nsh_core::ViewKind::Input);
+        field.state_mut().frame = crate::geom::rect(0.0, 0.0, 200.0, 100.0);
+        field.insert_before(&outer, None);
+        let input = Rc::new(InputState::new(0, 4, None));
+        input.config.borrow_mut().multiline = true;
+        input.size.set((200.0, 100.0));
+        *input.layout.borrow_mut() = Some(Rc::new(Layout {
+            lines: vec![],
+            glyphs: vec![],
+            size: 14.0,
+            width: 200.0,
+            height: 500.0,
+        }));
+        field.state_mut().input = Some(input.clone());
+        (surface, field, input, outer)
+    }
+
+    fn scroll_event(x: f32, dy: f32, time: f64, precise: bool) -> crate::input::WheelEvent {
+        crate::input::WheelEvent {
+            x,
+            y: 50.0,
+            dx: 0.0,
+            dy,
+            time,
+            precise,
+            modifiers: Modifiers::default(),
+        }
+    }
+
+    fn outer_offset(outer: &NshView) -> f32 {
+        outer.state().scroll.as_ref().unwrap().y.0
+    }
+
+    #[test]
+    fn multiline_touchpad_keeps_the_field_through_edges_and_momentum() {
+        use crate::input::{GesturePhase::*, touchpad};
+        let (surface, _, input, outer) = scrolling_field();
+        // Resting fingers hold the field until movement selects its axis.
+        touchpad(&surface, scroll_event(50.0, 0.0, 1.0, true), Began);
+        touchpad(&surface, scroll_event(50.0, 30.0, 1.016, true), Moved);
+        assert_eq!(input.scroll.get(), 30.0);
+        // Moving the pointer outside the field does not retarget the gesture.
+        touchpad(&surface, scroll_event(300.0, 500.0, 1.032, true), Moved);
+        assert_eq!(input.scroll.get(), 400.0);
+        touchpad(&surface, scroll_event(300.0, 0.0, 1.040, true), Ended);
+        touchpad(&surface, scroll_event(300.0, 20.0, 1.056, true), Moved);
+        assert_eq!(outer_offset(&outer), 0.0);
+        // Native inertia really moves the text, rather than being swallowed.
+        touchpad(&surface, scroll_event(300.0, -15.0, 1.072, true), Moved);
+        assert_eq!(input.scroll.get(), 385.0);
+        touchpad(&surface, scroll_event(300.0, 10.0, 2.0, true), Moved);
+        assert_eq!(outer_offset(&outer), 10.0);
+    }
+
+    #[test]
+    fn multiline_wheel_latches_until_idle_and_falls_through_at_an_initial_edge() {
+        let (surface, _, input, outer) = scrolling_field();
+        crate::input::wheel(&surface, scroll_event(50.0, 500.0, 1.0, false));
+        assert_eq!(input.scroll.get(), 400.0);
+        crate::input::wheel(&surface, scroll_event(300.0, 20.0, 1.016, false));
+        assert_eq!(outer_offset(&outer), 0.0);
+        crate::input::wheel(&surface, scroll_event(50.0, 20.0, 2.0, false));
+        assert!(outer_offset(&outer) > 0.0);
+    }
+
+    #[test]
+    fn multiline_touchpad_does_not_steal_an_outer_gesture() {
+        use crate::input::{GesturePhase::*, touchpad};
+        let (surface, _, input, outer) = scrolling_field();
+        touchpad(&surface, scroll_event(300.0, 10.0, 1.0, true), Began);
+        touchpad(&surface, scroll_event(50.0, 10.0, 1.016, true), Moved);
+        assert_eq!(input.scroll.get(), 0.0);
+        assert_eq!(outer_offset(&outer), 20.0);
+    }
+
+    #[test]
+    fn multiline_touchpad_new_begin_and_cancel_release_the_field() {
+        use crate::input::{GesturePhase::*, touchpad};
+        for end in [Ended, Cancelled] {
+            let (surface, _, input, outer) = scrolling_field();
+            touchpad(&surface, scroll_event(50.0, 10.0, 1.0, true), Began);
+            touchpad(&surface, scroll_event(50.0, 0.0, 1.016, true), end);
+            let next = if end == Cancelled { Moved } else { Began };
+            touchpad(&surface, scroll_event(300.0, 10.0, 1.032, true), next);
+            assert_eq!(input.scroll.get(), 10.0);
+            assert_eq!(outer_offset(&outer), 10.0);
+        }
+    }
+
+    #[test]
+    fn multiline_phaseless_pixels_scroll_and_do_not_leak_at_the_edge() {
+        use crate::input::{GesturePhase::Moved, touchpad};
+        let (surface, _, input, outer) = scrolling_field();
+        touchpad(&surface, scroll_event(50.0, 500.0, 1.0, true), Moved);
+        touchpad(&surface, scroll_event(50.0, 20.0, 1.016, true), Moved);
+        assert_eq!(input.scroll.get(), 400.0);
+        assert_eq!(outer_offset(&outer), 0.0);
+        touchpad(&surface, scroll_event(50.0, 20.0, 2.0, true), Moved);
+        assert_eq!(outer_offset(&outer), 20.0);
+    }
+
+    #[test]
+    fn single_line_and_fitting_fields_leave_scroll_to_the_parent() {
+        use crate::input::{GesturePhase::Began, touchpad};
+        for multiline in [true, false] {
+            let (surface, _, input, outer) = scrolling_field();
+            input.config.borrow_mut().multiline = multiline;
+            if multiline {
+                input.size.set((200.0, 600.0));
+            }
+            touchpad(&surface, scroll_event(50.0, 20.0, 1.0, true), Began);
+            assert_eq!(input.scroll.get(), 0.0);
+            assert_eq!(outer_offset(&outer), 20.0);
+        }
+    }
+
+    #[test]
+    fn multiline_scroll_respects_horizontal_and_shift_wheels() {
+        for precise in [true, false] {
+            let (surface, _, input, outer) = scrolling_field();
+            {
+                let mut state = outer.state_mut();
+                let scroll = state.scroll.as_mut().unwrap();
+                scroll.horizontal = true;
+                scroll.content = nsh_core::geometry::size(Points(2000.0), Points(400.0));
+            }
+            let mut event = scroll_event(50.0, 20.0, 1.0, precise);
+            if precise {
+                event.dx = 30.0;
+                crate::input::touchpad(&surface, event, crate::input::GesturePhase::Began);
+            } else {
+                event.modifiers.shift = true;
+                crate::input::wheel(&surface, event);
+            }
+            assert_eq!(input.scroll.get(), 0.0);
+            assert!(outer.state().scroll.as_ref().unwrap().x.0 > 0.0);
+        }
+    }
+
+    #[test]
+    fn multiline_top_edge_can_start_on_the_parent() {
+        let (surface, field, input, outer) = scrolling_field();
+        // Put the parent partway down and keep the field under the pointer.
+        outer.state_mut().scroll.as_mut().unwrap().y = Points(100.0);
+        field.state_mut().frame.origin.y = Points(100.0);
+        crate::input::touchpad(
+            &surface,
+            scroll_event(50.0, -20.0, 1.0, true),
+            crate::input::GesturePhase::Began,
+        );
+        assert_eq!(input.scroll.get(), 0.0);
+        assert_eq!(outer_offset(&outer), 80.0);
+    }
+
+    #[test]
+    fn multiline_standalone_field_handles_resting_fingers_and_pixels() {
+        use crate::input::{GesturePhase::*, touchpad};
+        let (surface, field, input, outer) = scrolling_field();
+        field.insert_before(&surface.root, None);
+        // The field is a sibling, not inside the scroll view.
+        assert!(touchpad(
+            &surface,
+            scroll_event(50.0, 0.0, 1.0, true),
+            Began
+        ));
+        assert!(touchpad(
+            &surface,
+            scroll_event(50.0, 20.0, 1.016, true),
+            Moved
+        ));
+        assert_eq!(input.scroll.get(), 20.0);
+        assert_eq!(outer_offset(&outer), 0.0);
+    }
 
     #[test]
     fn alignment() {

@@ -3,20 +3,23 @@
 // `id:case-<case>` (a one-point view over the corner, out of the layout);
 // the steps after it are that case's.
 import { type JSX, View, mount, signal } from "nsh";
+import { Window } from "nsh/desktop";
 import BaseDialogAndroid from "./base-dialog-android";
+import BaseSplitViewAndroid from "./base-split-view-android";
 import ModClipboardAndroid from "./mod-clipboard-android";
 import PropsPlatformAndroid from "./props-platform-android";
 import PropsViewAndroid from "./props-view-android";
 
 const cases: Record<string, () => JSX.Element> = {
   "base-dialog-android": BaseDialogAndroid,
+  "base-split-view-android": BaseSplitViewAndroid,
   "mod-clipboard-android": ModClipboardAndroid,
   "props-platform-android": PropsPlatformAndroid,
   "props-view-android": PropsViewAndroid,
 };
 const shown = signal("");
 
-mount(() => (
+mount(() => <Window id="main">{() => (
   <>
     {() => {
       const Case = cases[shown()];
@@ -28,4 +31,4 @@ mount(() => (
       ))}
     </View>
   </>
-));
+)}</Window>);

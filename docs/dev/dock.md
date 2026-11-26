@@ -1,10 +1,11 @@
 # Dock and Resizable
 
 `nsh/base`'s dockable workspace (`DockArea`) and the resizable splits it is built from (`ResizablePanelGroup`,
-`ResizablePanel`), in `crates/nsh-base/src/dock/` and `crates/nsh-base/src/resizable/`. Both are ports of
+`ResizablePanel`), in `crates/nsh-base/src/dock/` and `crates/nsh-base/src/resizable/`, and `SplitView`, whose columns
+are the area's outside iOS ("SplitView" below). Both are ports of
 `gpui-base`'s (`gpui-kit/crates/base/src/dock/`, `resizable/`): the same vocabulary, the same layout algebra, the same
 persisted format, with NSH's component model in place of GPUI entities and renderer traits. The user-facing pages are
-`website/elements/dock.md` and `website/elements/resizable.md`; how each module works inside is in its `//!` docs
+`website/elements/dock.md`, `website/elements/resizable.md` and `website/elements/split-view.md`; how each module works inside is in its `//!` docs
 (`dock/mod.rs` is the long version of this page's first half).
 
 ## Layers
@@ -81,7 +82,7 @@ is an entity the dock holds, and reconciliation against the `NodeId` cache keeps
 tab groups are rendered by the area for each `NodeId` and the panels by the app for each `PanelId`, and both survive
 every edit that keeps them.
 
-The other parts the app draws are render props as well (`renderTab` and `renderDragPreview` with a `DockTab`,
+The other parts the app draws are render props as well (`renderTab`, `renderDragPreview` and `renderToolbar` (the toolbar at the end of a group's tab bar, for its displayed tab) with a `DockTab`,
 `renderDropIndicator` with a `DockDropIndicator`, `renderDock` with a `DockInfo`, `renderEmpty`), and every part
 takes `<part>Class` / `<part>Style` (group, tab bar, tab, content, drop indicator, handle, handle thumb, dock, and
 compact's drawer, sheet and backdrop). The drop indicator moves natively: when its target changes the area asks for a
@@ -96,8 +97,14 @@ A tab claims the touches of a gesture with the core's responder (`tab_group.rs`)
 platform: a press from a pointer (a mouse, a trackpad, a pen hovering: anything that hovered the tab before pressing
 it), and every press on the desktop OSes (a touchscreen laptop's finger too), drags once it moves `DRAG_SLOP` (4
 points) from where it went down; a finger's press on iOS and Android only after a long press armed it, so a swipe
-over the tabs scrolls them. An iPad with a trackpad, or a phone-width browser window driven by a mouse, drags as a
-desktop does. The grant starts the drag: every group's tab bar, tabs and content frame are measured in the root
+over the tabs scrolls them: a bar's tabs are a row in a horizontal scroll view (`tab_group.rs` `tab_strip`), and the
+tab that becomes the displayed one reveals itself there. An iPad with a trackpad, or a phone-width browser window driven by a mouse, drags as a
+desktop does. In a terminal a tab also claims with `TouchClaim::on_pan`, and only there: a terminal's pointer scrolls a
+scroll view by dragging it and would take the tabs' before the `claim_touches(on_move)` above is answered, so the
+platform has to recognize the drag itself. The desktops' pointers do not drag a scroll view, so they keep the one
+claim; with the pan claim there too, a tab's drag as the compat scripts report it (`touch start` / `touch move`) no
+longer reaches the tab's responder.
+The grant starts the drag: every group's tab bar, tabs and content frame are measured in the root
 view's coordinates in one task, answered with the next commit. Each move resolves the target from those bounds: over
 a tab bar, the slot between the tabs the pointer is past (counted without the dragged tab); over a content frame, its
 middle merges and its outer 35% on each side splits (`split_placement_at`), except back onto its own group when that would change
@@ -219,10 +226,57 @@ panel where it was, and the app persists one layout.
   stop of the keyboard focus whose arrows along its axis move it one Cell, each step one drag (`resize_handle.rs`
   `terminal_band`).
 
+## SplitView
+
+`nsh/base`'s `SplitView` (`crates/nsh-base/src/split_view.rs`, its module doc the long version) is two or three columns
+of the app's `NavStack`s: `sidebar`, an optional `content` and `detail` (slots), with `columnVisibility` (`automatic`,
+`all`, `doubleColumn`, `detailOnly`, SwiftUI's `NavigationSplitViewVisibility`) and `onColumnVisibilityChange`. The value
+is controlled as `Sheet`'s `open` is: the component keeps its own without one, and a change the app does not take
+is shown again once the app has answered (`after_answer`), except under `automatic`, which keeps what the user
+shows. Where the room is compact one column shows, the first the visibility shows (`automatic` the sidebar):
+`ColumnVisibility::compact_column`.
+
+- **iOS and Mac Catalyst**: a `UISplitViewController` (`crates/nsh-platform-ios/src/split.rs`), the native component
+  `SPLIT_VIEW_COMPONENT` (`nsh/split-view`). The view renders one wrapper per column, in column order, each placing
+  its slot, and the component's container after them, on top; the mounter finds each column's stack in its wrapper
+  (`Mounter::split_column_stacks`) and gives the stack's `UINavigationController` to the split as the column's
+  (`StackHost::join_split`; the stack no longer contains itself). The wrappers show nothing: they lay each stack out
+  at the size the split gives its column, which the backend reports (`layout`, from the navigation controllers'
+  layout passes). The app's visibility is the preferred display mode (`split::display_mode`, by the split's own
+  behavior: tile, overlay, displace); a display mode the user or the system shows instead is reported
+  (`columnVisibilityChange`), not the system's while the window turns or is resized under `automatic`, and the
+  component's `revision` shows the app's value again (`showColumn` / `hideColumn` where the preferred mode did not
+  change). Collapsed, the split shows its compact column: a navigation controller of the split's
+  (`SplitHost::compact`, a `StackHost` whose callbacks the mounter routes by the split's id) holding the columns'
+  pages in order, as far as the visibility goes (`split::compact_columns`); the columns' controllers are emptied
+  (`StackHost::detach_screens`) and given their pages back when it expands. A page pushed on any column goes onto
+  the compact stack (a collapsed column's dirty stack reconciles its split's), a page the user leaves that is not
+  its stack's first is that stack's native pop (`Dismiss`), and going back from a column's first page reports the
+  column now on top (`compactColumnChange`), whose stack keeps its pages. The system's own `UISplitViewController`
+  collapse is not used: it would move the stacks' controllers between navigation controllers behind the mounter's
+  back. `nsh/mobile`'s `TabBar` follows the pages the split shows as it follows a stack's in the split's place
+  (`split::bar_role`): looked for from the split's view, hidden while a page of any expanded column (or of the
+  compact stack, collapsed) has `hidesBottomBarWhenPushed`.
+- **Elsewhere**: the dock area's code (`dock::area_view`, an `AreaCx` made with events of the split's own and
+  `resizable` off: its docks have no handle, and its splits provide `ShowHandles(false)` to the group they make,
+  which then places no handles, nothing a pointer drags or a screen reader adjusts; the group provides handles again
+  to its panels' content), rendered in the split's own view so the slots it
+  places in the panels are its own. The full layout is the sidebar in the left dock and the content and the detail
+  splitting the center, at fixed widths (`SIDEBAR_WIDTH`, `CONTENT_WIDTH`: iPadOS's defaults); the compact one is
+  one tab group of every column, showing the first the visibility shows; no tab bar shows. The split passes the
+  area its `compact`: the window's horizontal size class (`horizontal_size_class()`, below 600 points of its width),
+  not the area's own width, as UIKit collapses a split by its size class, so the app decides what a selection does
+  by the same value on every platform. The two layouts are made once with their ids (`Layouts`), so a change of what
+  shows keeps every group, and every column stays placed in both presentations, so a column's stack keeps its pages
+  and their state. Nothing the user does there changes what shows: the app steps between columns (a back button in
+  a column's header, `BackHandler`).
+
 ## Accessibility
 
 A group's tab bar has the `"tablist"` role and its tabs the `"tab"` role with their selected state, as `Tab` /
-`Tabs`. A resizable group's handles (the dock's splits too) are `adjustable` elements labeled by the app, valued with
+`Tabs`. Its content frame (the compact center's too) has the `"tabpanel"` role, and every tab of the bar names it
+with `accessibility_controls`: the frame shows the selected tab's panel and hides the others, so one panel element
+per group stands for them all (`tab_group.rs`). A resizable group's handles (the dock's splits too) are `adjustable` elements labeled by the app, valued with
 the size of the panel before them in its range, with the `increment` / `decrement` actions (VoiceOver's swipes,
 TalkBack's volume keys) moving them 10 points as a drag would. Keyboards do not move them: the core reports keys
 only to inputs and the surface's bindings, and no event says a view other than an input took the focus

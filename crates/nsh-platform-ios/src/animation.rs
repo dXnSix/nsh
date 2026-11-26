@@ -74,11 +74,11 @@ impl Animator {
     }
 
     /// Advances to the display link's target time. Returns true if values
-    /// changed.
+    /// changed. Only display frames tick it ([`Graph::tick_frame`]).
     pub(crate) fn tick(&mut self) -> bool {
         let changed = self
             .graph
-            .tick(self.link.targetTimestamp(), &mut self.finished);
+            .tick_frame(self.link.targetTimestamp(), &mut self.finished);
         self.update_link();
         changed
     }
@@ -110,8 +110,8 @@ impl Animator {
     }
 }
 
-/// A paused display link calling `frame:` on `target`, unpaused for one
-/// frame when JS calls `requestAnimationFrame`.
+/// A paused display link calling `frame:` on `target` for JS frame requests
+/// and for rechecking a backdrop blocked by a finite native animation.
 pub(crate) fn frame_link(target: &EventTarget) -> Retained<CADisplayLink> {
     // SAFETY: `frame:` is implemented by `EventTarget`, which outlives the
     // link (the mounter invalidates it when dropped).

@@ -9,27 +9,17 @@ demo: el-safe-area
 # Safe area
 
 The safe area keeps content clear of the notch or Dynamic Island, the status bar, the home indicator, a navigation
-header and the Mac Catalyst title bar. Any view pads itself by it with CSS's `env()`:
+header, the Mac Catalyst title bar and the window controls of an iPad app in a window (on iPadOS 26 and later, the
+leading inset of a windowed app is as wide as those controls). Any view pads itself by it with CSS's `env()`:
 `env(safe-area-inset-top)`, `env(safe-area-inset-right)`, `env(safe-area-inset-bottom)` and
 `env(safe-area-inset-left)`, in its padding or margin. They are the insets of the root view the node renders in:
 inside a [NavPage](./nav-stack.md) the insets below the page's header, inside a [Dialog](./dialog.md) the dialog's
 insets, and elsewhere the surface's safe area. In a browser the page is the root, and the variables are the browser's
 own.
 
-```rust tabs
-use nsh_core::prelude::*;
-
-fn app() -> impl IntoElement {
-    view()
-        .flex_1()
-        .bg(rgb(0xfff8c5))
-        .p_safe_area()
-        .child(text("Clear of the notch").text_2xl().font_weight(FontWeight::BOLD))
-}
-```
-
 ```tsx tabs
 import { mount, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
 
 function App() {
   return (
@@ -48,7 +38,23 @@ function App() {
   );
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
+```rust tabs
+use nsh_core::prelude::*;
+
+fn app() -> impl IntoElement {
+    view()
+        .flex_1()
+        .bg(rgb(0xfff8c5))
+        .p_safe_area()
+        .child(text("Clear of the notch").text_2xl().font_weight(FontWeight::BOLD))
+}
 ```
 
 The background color fills the whole area, including the area behind the status bar, and the content starts below
@@ -77,17 +83,17 @@ In Rust the `Styled` methods set them: `.p_safe_area()`, `.px_safe_area()`, `.py
 
 Pad only the edges that need it, for example when a tab bar or a bottom bar of your own handles the bottom inset:
 
+```tsx tabs
+<View class="flex-1 pt-[env(safe-area-inset-top)] px-[calc(env(safe-area-inset-left)+16px)]">
+  …
+</View>
+```
+
 ```rust tabs
 view()
     .flex_1()
     .pt_safe_area()
     .px_safe_area()
-```
-
-```tsx tabs
-<View class="flex-1 pt-[env(safe-area-inset-top)] px-[calc(env(safe-area-inset-left)+16px)]">
-  …
-</View>
 ```
 
 ## Where to use it
@@ -111,18 +117,6 @@ example on rotation.
 | `safeArea()` | `safe_area()` | The surface's safe area: the parts clear of system UI (notch, home indicator, title bar). |
 | `safeAreaInsets()` | `cx.insets()` | The insets where the component renders: the nearest page's (below its header), the nearest dialog's, or else the surface's safe area. These are the values of the `safe-area-inset-*` variables. In TSX, call it in a component; it returns an accessor. A Rust component of your crate reads them with `cx.insets()`. |
 
-```rust tabs
-use nsh_core::prelude::*;
-
-fn bottom_bar() -> impl IntoElement {
-    view()
-        .flex_row()
-        .p_2()
-        .pb(move || if safe_area().bottom > Points::ZERO { px(4.0) } else { px(8.0) })
-        .child(text("Bottom bar"))
-}
-```
-
 ```tsx tabs
 import { Text, View, safeArea } from "nsh";
 
@@ -133,6 +127,18 @@ function BottomBar() {
       <Text>Bottom bar</Text>
     </View>
   );
+}
+```
+
+```rust tabs
+use nsh_core::prelude::*;
+
+fn bottom_bar() -> impl IntoElement {
+    view()
+        .flex_row()
+        .p_2()
+        .pb(move || if safe_area().bottom > Points::ZERO { px(4.0) } else { px(8.0) })
+        .child(text("Bottom bar"))
 }
 ```
 

@@ -16,6 +16,7 @@ mod commands;
 mod extension_api;
 mod extensions;
 mod json;
+mod node_views;
 mod plugins;
 mod tables;
 
@@ -29,7 +30,8 @@ use nsh_core::{
 
 pub(crate) use self::{
     commands::{RichCommand, RichCommandName, RichFormat},
-    plugins::{RichEditorPlugin, RichPluginSpec},
+    json::SliceJson,
+    plugins::{RichClipboardContent, RichEditorPlugin, RichPluginSpec, paste_hooks},
 };
 use self::{
     commands::{doc_of, fragment_of, resolve_with},
@@ -126,6 +128,7 @@ pub(crate) fn register(registry: &mut Registry) {
         .class::<RichSchema>()
         .class::<RichEditorSession>()
         .class::<RichEditorPlugin>()
+        .class::<node_views::RichNodeViewProps>()
         .module::<RichEditorApi>()
         .module::<tables::RichTableApi>();
     extension_api::register(registry);
@@ -407,7 +410,43 @@ const MAX_PENDING: usize = 32;
 
 static NEXT_TR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// What the `RichEditorSession`s of one editor share besides the
+/// session: the schema, named commands, `dispatchTransaction` and the
+/// transactions handed to it.
+pub(crate) struct SessionParts {
+    schema: Schema,
+    commands: Arc<CommandRegistry>,
+    hooks: Arc<HookRef>,
+    pending: Arc<std::sync::Mutex<Vec<(u64, Transaction)>>>,
+}
+
 impl RichEditorSession {
+    /// The parts another handle of this editor shares.
+    fn parts(&self) -> SessionParts {
+        SessionParts {
+            schema: self.schema.clone(),
+            commands: self.commands.clone(),
+            hooks: self.hooks.clone(),
+            pending: self.pending.clone(),
+        }
+    }
+
+    /// Another handle of the editor of `parts` over `session` (with its
+    /// own listeners).
+    fn of_parts(parts: &SessionParts, session: EditorSession) -> Self {
+        Self {
+            session: session.clone(),
+            schema: parts.schema.clone(),
+            commands: parts.commands.clone(),
+            hooks: parts.hooks.clone(),
+            pending: parts.pending.clone(),
+            subscriptions: std::rc::Rc::new(Subscriptions {
+                session,
+                ids: std::cell::RefCell::default(),
+            }),
+        }
+    }
+
     fn over(session: EditorSession, schema: Schema) -> Self {
         Self {
             session: session.clone(),
@@ -672,7 +711,7 @@ impl RichEditorSession {
     /// The caret's box `{ x, y, width, height }` at `pos` in page
     /// coordinates (the root view's, as `onHoverMove`'s `pagePosition` and
     /// a responder's `pageX` / `pageY`; ProseMirror's `coordsAtPos` in the
-    /// window's), or `null` before the pointer has been over the editor.
+    /// window's), or `null` before the mounted view measures its placement.
     /// Throws a `RangeError` for a position outside the document.
     pub(crate) fn page_coords_at_pos(&self, pos: usize) -> Result<Option<JsonValue>, JsError> {
         self.check_pos("pageCoordsAtPos", pos)?;
@@ -691,7 +730,7 @@ impl RichEditorSession {
 
     /// The box `{ x, y, width, height }` of the block starting at `pos` in
     /// page coordinates (ProseMirror's `nodeDOM(pos)` measured in the
-    /// window's), or `null` before the pointer has been over the editor.
+    /// window's), or `null` before the mounted view measures its placement.
     /// Throws a `RangeError` for a position outside the document.
     pub(crate) fn page_node_rect(&self, pos: usize) -> Result<Option<JsonValue>, JsError> {
         self.check_pos("pageNodeRect", pos)?;
@@ -706,8 +745,9 @@ impl RichEditorSession {
             .pos_at_page_coords(nsh_core::prelude::point(px(x), px(y)))
     }
 
-    /// The box around the selection, in points of the content box of the
-    /// view showing the editor, or `null`.
+    /// The box around the selection (a node selection's: its node's box),
+    /// in points of the content box of the view showing the editor, or
+    /// `null`.
     pub(crate) fn selection_rect(&self) -> Option<JsonValue> {
         self.session.selection_rect().map(|b| rect_json(&b))
     }
@@ -876,7 +916,10 @@ impl RichEditorSession {
     }
 
     /// Inserts `content` (a string in `format`, plain text by default, or
-    /// JSON) over the selection.
+    /// JSON) over the selection. Plain text, Markdown and JSON open at their
+    /// edges and fit the insertion point, joining the text around the caret
+    /// when those edges are inline; an HTML string follows Tiptap's
+    /// `insertContent`.
     pub(crate) fn insert_content(
         this: Instance<Self>,
         content: Content,
@@ -894,6 +937,28 @@ impl RichEditorSession {
                 ..RichCommand::default()
             },
         )
+    }
+
+    /// Pastes `html` at the selection as a paste of it would go in
+    /// (ProseMirror's `pasteHTML`): read by the schema's parse rules for a
+    /// paste and fitted to the selection, then through the editor's own
+    /// paste steps (links, character limits). What a `handlePaste` calls
+    /// with HTML it cleaned up; the plugins' `transformPasted` and
+    /// `handlePaste` are not asked again. Whether it pasted: HTML that
+    /// parses to nothing, or HTML into a code block, pastes nothing.
+    #[allow(non_snake_case)]
+    pub(crate) fn pasteHTML(&self, html: String) -> bool {
+        let _guard = CallGuard::enter();
+        self.session.paste_html(&html)
+    }
+
+    /// Pastes `text` at the selection as a paste of plain text would go in
+    /// (ProseMirror's `pasteText`): a paragraph per line, through the
+    /// editor's own paste steps; the plugins' `transformPasted` and
+    /// `handlePaste` are not asked again. Whether it pasted.
+    pub(crate) fn paste_text(&self, text: String) -> bool {
+        let _guard = CallGuard::enter();
+        self.session.paste_text(&text)
     }
 
     /// The document as JSON (ProseMirror's shape), named as Tiptap's
@@ -1104,6 +1169,19 @@ impl RichEditorApi {
         if let Some(manager) = &manager {
             editor.commands = manager.commands().clone();
         }
+        if let Some(entries) = &options.extensions {
+            let views = extension_api::node_views_of(entries, &editor.schema)?;
+            if !views.is_empty() {
+                let mut node_views = NodeViews::new();
+                for (name, func, extension) in views {
+                    node_views.insert(
+                        name,
+                        Arc::new(node_views::JsNodeView::new(func, extension, editor.parts())),
+                    );
+                }
+                editor.session.set_node_views(node_views);
+            }
+        }
         if options.editable == Some(false) {
             editor.session.set_editable(false);
         }
@@ -1205,7 +1283,10 @@ impl RichEditorApi {
     }
 
     /// Inserts `content` (a string in `format`, plain text by default, or
-    /// JSON) over the selection.
+    /// JSON) over the selection. Plain text, Markdown and JSON open at their
+    /// edges and fit the insertion point, joining the text around the caret
+    /// when those edges are inline; an HTML string follows Tiptap's
+    /// `insertContent`.
     pub(crate) fn insert_content(content: Content, format: Option<RichFormat>) -> RichCommand {
         RichCommand {
             command: RichCommandName::InsertContent,
@@ -1755,6 +1836,31 @@ mod tests {
         assert!(names.contains(&"getHTML"), "{names:?}");
     }
 
+    /// A whole document keeps its own attributes, as Tiptap's
+    /// `createDocument` does, given as JSON or as a JSON string: an app's
+    /// top node may hold some (a note's frontmatter).
+    #[test]
+    fn a_document_keeps_its_attributes() {
+        let schema = crate::rich_editor::model::SchemaSpec::from_json(&json!({
+            "nodes": [
+                ["doc", { "content": "paragraph+", "attrs": { "front": { "default": null } } }],
+                ["paragraph", { "content": "text*" }],
+                ["text", {}]
+            ]
+        }))
+        .unwrap();
+        let json = json!({
+            "type": "doc",
+            "attrs": { "front": "tags: [a]" },
+            "content": [{ "type": "paragraph" }]
+        });
+        let doc = doc_of(&schema, &Content::Json(json.clone()), None).unwrap();
+        assert_eq!(doc.attrs().get("front"), Some(&json!("tags: [a]")));
+        let text = Content::Text(json.to_string());
+        let doc = doc_of(&schema, &text, Some(RichFormat::Json)).unwrap();
+        assert_eq!(doc.attrs().get("front"), Some(&json!("tags: [a]")));
+    }
+
     fn editor(markdown: &str) -> EditorSession {
         let schema = starter::schema();
         let doc = doc_of(
@@ -1775,6 +1881,43 @@ mod tests {
     fn run(session: &EditorSession, command: RichCommand) -> bool {
         let schema = session.state().schema().clone();
         session.run(&resolve(&command, &schema).unwrap())
+    }
+
+    fn markdown_of(session: &EditorSession) -> String {
+        serialize(session.state().doc(), RichFormat::Markdown).unwrap()
+    }
+
+    #[test]
+    fn paste_html_fits_html_to_the_selection_as_a_paste() {
+        let session = editor("Hello");
+        let end = session.state().doc().content().size() - 1;
+        let select = RichCommand {
+            command: RichCommandName::SetTextSelection,
+            pos: Some(end),
+            ..RichCommand::default()
+        };
+        assert!(run(&session, select));
+        // One paragraph pasted into one is its text: the paste's rules
+        // close nothing a paste would not.
+        assert!(session.paste_html("<p>, <strong>world</strong></p>"));
+        assert_eq!(markdown_of(&session).trim(), "Hello, **world**");
+        // HTML of nothing pastes nothing.
+        assert!(!session.paste_html("<!-- nothing -->"));
+        assert_eq!(markdown_of(&session).trim(), "Hello, **world**");
+        // One undo step, as a paste is.
+        assert!(run(&session, RichCommand::plain(RichCommandName::Undo)));
+        assert_eq!(markdown_of(&session).trim(), "Hello");
+    }
+
+    #[test]
+    fn paste_text_pastes_plain_text_a_paragraph_per_line() {
+        let session = editor("");
+        assert!(session.paste_text("**one**\ntwo"));
+        // A paste: its rules apply (StarterKit's bold); a line a paragraph.
+        assert_eq!(markdown_of(&session).trim(), "**one**\n\ntwo");
+        let text = serialize(session.state().doc(), RichFormat::Text).unwrap();
+        assert_eq!(text.trim(), "one\ntwo");
+        assert!(!session.paste_text(""));
     }
 
     #[test]

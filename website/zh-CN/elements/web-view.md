@@ -10,22 +10,6 @@ demo: el-web-view
 
 web view 在应用内显示一个网页，或你传入的一段 HTML：iOS 和 Mac Catalyst 上是 WKWebView，Android 上是 `android.webkit.WebView`。由于 NSH 用原生视图渲染，web view 和其他视图一样处在布局中，与周围视图按顺序排列。Rust 用 `web_view(url)` 或 `web_view_html(html, base_url)` 创建，TSX 用从 `nsh` 导入的 `<WebView>`。
 
-```rust tabs
-use nsh_core::prelude::*;
-
-fn browser() -> impl IntoElement {
-    let title = signal(SharedString::from("加载中…"));
-    view()
-        .flex_1()
-        .child(text(title).number_of_lines(1))
-        .child(
-            web_view("https://example.com")
-                .flex_1()
-                .on_navigation_state_change(move |e: &WebNavigation| title.set(e.title.clone().into())),
-        )
-}
-```
-
 ```tsx tabs
 import { signal, Text, View, WebView, type WebViewNavigation } from "nsh";
 
@@ -44,6 +28,22 @@ function Browser() {
 }
 ```
 
+```rust tabs
+use nsh_core::prelude::*;
+
+fn browser() -> impl IntoElement {
+    let title = signal(SharedString::from("加载中…"));
+    view()
+        .flex_1()
+        .child(text(title).number_of_lines(1))
+        .child(
+            web_view("https://example.com")
+                .flex_1()
+                .on_navigation_state_change(move |e: &WebNavigation| title.set(e.title.clone().into())),
+        )
+}
+```
+
 在 TSX 中 web view 接受 `src` 和 `html` 二者之一（参见 [WebView API](../modules/nsh-webview.md)）。[Web view 与视频指南](../docs/web-view-and-video.md)介绍了通信模式和能力声明。
 
 ## 属性
@@ -55,12 +55,14 @@ web view 接受 [view](./view.md) 的属性（它没有子元素），另外还�
 | `src` | `web_view(url)` | `string` | | 要显示的页面的 URL。 |
 | `html` | `web_view_html(html, base_url)`、`.html(html, base_url)` | `string` | | 内联 HTML，代替 `src` 显示。 |
 | `baseUrl` | `web_view_html` / `.html` 的 `base_url` | `string` | | `html` 中相对链接的解析基准。它需要与该地址的页面相同的授权（`webview.hosts`）；未授权时 HTML 不带基准 URL 加载，`onError` 报告 `ERR_ACCESS_DENIED`。 |
+| `allowOrigin` | `.allow_origin(..)` | `string` | | 除 `webview.hosts` 之外，这个网页视图还可以显示和导航到的一个源，用于应用运行时才知道的源（例如用户填写的服务器）：`scheme://host[:port]`，`http` 或 `https`，精确匹配（相同的 scheme、主机和端口，不包括子域名）。需要在 [`capabilities.webview`](../docs/sandbox-and-capabilities.md#webview) 中声明 `"runtimeOrigin": true`；其他值会被拒绝并给出提示。与 `src` 在同一次渲染中设置时，对这个 `src` 生效；之后再改，从下一次导航开始生效。其他网页视图和页面打开的窗口都没有它。 |
 | `injectedJavaScript` | `.injected_java_script(..)` | `string` | | 每个页面加载完成后执行。 |
 | `injectedJavaScriptBeforeContentLoaded` | `.injected_java_script_before_content(..)` | `string` | | 在每个页面自身的脚本之前执行。 |
 | `userAgent` | `.user_agent(..)` | `string` | | 浏览器的 user agent 字符串。 |
 | `javaScriptEnabled` | `.java_script_enabled(..)` | `boolean` | `true` | 页面可以运行脚本。 |
-| `scrollable` | `.scrollable(..)` | `boolean` | `true` | 用户可以滚动页面。 |
+| `scrollable` | `.scrollable(..)` | `boolean` | `true` | 用户可以滚动页面。关闭时页面仍会收到触摸，它自己的拖动处理（滑块、拖拽排序）照常工作，脚本也仍可滚动它。 |
 | `incognito` | `.incognito(bool)` | `boolean` | `false` | 页面的网站数据（cookie、存储、缓存）只与网页视图同存亡，与应用的数据分开；Android 上网页视图加载时不使用 HTTP 缓存、不保存表单数据（见[网站数据](../docs/web-view-and-video.md#网站数据)）。在网页视图创建时读取。 |
+| `zoomable` | `.zoomable(bool)` | `boolean` | `false` | 用户可以双指缩放页面，也可以超出页面 viewport 的缩放限制：Android 上是内置缩放（不显示缩放按钮），iOS 上忽略 viewport 的缩放限制，macOS 上是放大。关闭时保持各平台自己的行为（Android 和 macOS 不缩放，iOS 在 viewport 允许的范围内缩放，Windows 可以缩放）。在网页视图创建时读取。 |
 
 | `ios` 键 | Rust | 类型 | 说明 |
 |---|---|---|---|
@@ -79,19 +81,26 @@ web view 接受 [view](./view.md) 的属性（它没有子元素），另外还�
 | `onError` | `.on_error` | `{ message, code? }`（`&str`，即消息） | 加载失败；页面、`html` 或 `baseUrl` 不在应用的能力范围内时 `code` 为 `"ERR_ACCESS_DENIED"`，平台无法显示网页视图时为 `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"`（Rust 中也可用 `.on_unavailable`，参数为消息），页面的进程结束时为 `"ERR_NSH_WEBVIEW_TERMINATED"`，直到 `reload()`、`load()` 或新的来源（Rust 中也可用 `.on_process_terminated`）。 |
 | `onNavigationStateChange` | `.on_navigation_state_change` | `WebViewNavigation` | URL、标题、加载状态或历史记录发生变化。 |
 | `onMessage` | `.on_message` | `{ data: string }`（`&str`） | 页面调用了 `window.nsh.postMessage(data)`。 |
-| `onDownload` | `.on_download` | `WebViewDownload`（`WebDownload`） | 桌面下载开始、完成或失败。 |
+| `onDownload` | `.on_download` | `WebViewDownload`（`WebDownload`） | 下载开始、完成、失败或取消。 |
 
 `WebViewNavigation` 为 `{ url, title, loading, canGoBack, canGoForward }`；Rust 中为 `WebNavigation`，字段是 `url`、`title`、`loading`、`can_go_back` 和 `can_go_forward`。
 
 `WebView.available()`（Rust 为 `web_view_available()`）得到网页视图在当前环境下能否显示页面：平台没有网页引擎，或应用的能力未授予 `webview` 时为 `false`（见[没有网页引擎时](../docs/web-view-and-video.md#没有网页引擎时)）。
 
-`WebViewDownload` 为 `{ state, id, url, filename, path, bytes?, message? }`：`state` 为 `"started"`、`"finished"`（带文件大小 `bytes`）或 `"failed"`（带原因 `message`）。设置了 `onDownload` 后，页面下载的内容（附件、web view 不显示的类型、`download` 链接）保存在应用数据目录的 `downloads/<id>/<filename>`，即 `path` 所指的位置，应用用 `fs/promises` 读取。
+iOS、macOS、Linux 和 Windows 支持原生下载决策及应用数据目录中的下载文件。
 
-在 macOS、Windows 和 Linux 上，添加监听器后，`webview` 能力允许加载的任何页面都可以自动保存下载文件。应用负责管理存储空间，并在使用完毕后删除 `downloads/` 中已完成的文件。移除 web view 会取消正在进行的下载，并删除其未完成的目录。下载通过 `onDownload` 报告；导航转为下载时，`onError` 只报告实际的导航失败。文件名会移除控制字符、路径分隔符和双向格式控制符；过长的名称会缩短到 200 字节，并保留能容纳的扩展名。Windows 还会拒绝保留设备名（`CON`、`NUL`、`PRN`、`AUX`、`COM1`-`COM9`、`LPT1`-`LPT9`、其上标形式，以及 `CONIN$`/`CONOUT$`）和结尾的点或空格。
+`WebViewDownload` 为 `{ state, id, url, filename, path, bytes?, message?, source, code?, reason? }`。`state` 为 `"started"`、`"finished"`、`"failed"` 或 `"cancelled"`。`"finished"` 表示文件已经发布到 `path`，`bytes` 是文件大小。失败包含诊断信息 `message`，以及可用时的稳定错误码 `code`。取消的 `reason` 为 `"app"`、`"timeout"`、`"teardown"` 或 `"noListener"`。
+
+`source` 描述数据来源：`"transfer"` 表示浏览器持有的原始下载，`"request"` 表示 NSH 持有的请求，`"none"` 表示浏览器报告下载时已经释放响应；`"page"` 保留给页面提供的数据。来源说明该次传输的数据归属，各引擎产生的来源类型由其实际能力决定。
+移除全部下载监听器会以 `reason: "noListener"` 取消进行中的下载，WebView 本身保持挂载。
+
+设置 `onDownload` 后，NSH 持有数据的下载保存在应用数据目录的 `downloads/<id>/<filename>`，即 `path` 所指的位置，应用用 `fs/promises` 读取。应用负责存储预算和已完成文件的清理。移除 web view 会停止其活动下载，停写后清理专属临时输出；已发布的文件属于应用。文件名会处理路径分隔符、控制字符、双向格式字符、长度以及目标平台的保留名称。下载结果通过 `onDownload` 报告，导航错误通过 `onError` 报告。
 
 ### Rust 中指定下载目的地
 
-Rust 宿主通过监听下载来决定其去向。注册 `.on_download_pending(..)` 本身就是选择手动处理：有了该监听器，平台会推迟每个下载，在应用接受目的地或取消之前不写入任何内容；没有它则采用上面的自动行为。监听器收到 `WebDownloadPending`，其 `id`、`url` 和 `filename` 与之后的 `on_download` 生命周期一致；它的 `accept` 和 `cancel` 只作用于该下载（克隆共享同一决策，句柄无法触及其他视图）。
+Rust 宿主通过 `.on_download_pending(..)` 选择手动决策，否则采用上面的自动行为。`WebDownloadPending` 包含 `id`、`url`、`filename`、`source`，以及可选的 `mime_type`、`bytes`、`method`。元数据可以未知；仅凭 URL 无法确定产生该下载的请求方法。
+
+事件携带私有决策句柄。克隆指向同一个下载，修改公开元数据不会改变操作对象。其固有方法 `accept(destination)` 和 `cancel()` 返回可等待的决策结果。`WebDownload` 事件也提供固有的 `cancel()` 方法，用于取消活动传输。
 
 ```rust
 use nsh_core::prelude::*;
@@ -100,18 +109,21 @@ use nsh_core::webview::{DownloadDestination, WebDownloadPending};
 web_view("https://example.com").on_download_pending(|event: &WebDownloadPending| {
     let (event, path) = (event.clone(), std::env::temp_dir().join("report.pdf"));
     spawn(async move {
-        // `PathBuf` 拒绝已有文件；`DownloadDestination` 可显式启用覆盖。
         let destination = DownloadDestination::new(path).overwrite(false);
         if let Err(error) = event.accept(destination).await {
-            log::warn!("下载目的地被拒绝：{error}");
+            log::warn!("download destination refused: {error}");
         }
     });
 });
 ```
 
-`accept` 在平台接受目的地时完成，而不是传输完成时（传输过程由 `on_download` 报告 `started`、`finished` 或 `failed`）。目的地必须是绝对路径且父目录存在；除非 `overwrite(true)`，已有文件会被拒绝。接受后的传输先写目的地旁的专属暂存文件，完成时才发布，因此失败、取消和拆卸只删除该暂存文件，永不删除已有或已完成的文件。`cancel()` 在接受前（不写入任何内容）和接受后传输期间均可用。应用一直不回答的决策会在有限等待后取消；未知、重复或已完成的决策返回错误，不会影响其他下载。只有桌面平台报告待处理的下载；其他平台不会绕过应用的选择。`WebDownloadPending::default()` 不是来自事件，它的 `accept` 和 `cancel` 会明确返回错误，而不是猜测某个下载。
+`accept` 在传输后端接受输出位置时完成；文件的最终结果由 `on_download` 报告。目的地必须是绝对路径、指向文件，且父目录存在。默认拒绝已有条目，包括传输期间由其他操作创建的条目。`overwrite(true)` 只允许在成功发布时替换。传输写入目的地旁的私有暂存目录，失败和取消保留已有目标文件。
 
-注册该监听器本身就是全部选择：没有单独的下载行为属性。在无法推迟下载的平台上，页面保持惰性，而不是自动下载：核心挂载空文档，禁用脚本、注入脚本和导航，报告错误，并拒绝 `load`、`reload`、后退/前进、`injectJavaScript` 与脚本求值（求值以错误结束）。移除监听器后，页面和自动下载都会恢复。
+`cancel()` 可用于待处理或活动下载，等待停写并清理专属输出。未回答的下载决策在 60 秒后过期，命令回复有独立的 30 秒期限。迟到、重复、跨视图和未绑定的决策不会影响其他传输。`WebDownloadPending::default()` 没有关联的下载，决策方法返回错误。
+
+已经释放的响应以 `ERR_NSH_DOWNLOAD_DISCARDED` 报告，而不是自动重新请求。
+
+任意宿主路径和待处理决策属于 Rust 宿主 API；TSX 观察共同的 `onDownload` 生命周期。在提供保存路径选择器的平台上，应用可以先选择路径，再调用 `accept`。
 
 ## ref 方法
 
@@ -127,6 +139,29 @@ web_view("https://example.com").on_download_pending(|event: &WebDownloadPending|
 ## 通信
 
 应用和页面之间交换的是字符串。页面通过 `window.nsh.postMessage(data)` 发送；应用通过 ref 的 `postMessage(data)`（Rust 中为 `post_message(..)`）发送。结构化数据请用 JSON。
+
+```tsx tabs
+import { signal, Text, View, WebView, type WebViewRef } from "nsh";
+
+const page = `<!doctype html>
+<meta name="viewport" content="width=device-width">
+<button onclick="window.nsh.postMessage('来自页面的问候')">发给应用</button>
+<p id="got"></p>
+<script>
+  window.addEventListener("message", (e) => { document.getElementById("got").textContent = e.data; });
+</script>`;
+
+function Bridge() {
+  const message = signal("");
+  let web!: WebViewRef;
+  return (
+    <View style={{ gap: 12 }}>
+      <WebView ref={web} html={page} style={{ height: 200 }} onMessage={(e) => message.set(e.data)} />
+      <Text onPress={() => web.postMessage("来自应用的问候")}>发给页面 · 收到：{message()}</Text>
+    </View>
+  );
+}
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -157,32 +192,16 @@ fn bridge() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { signal, Text, View, WebView, type WebViewRef } from "nsh";
-
-const page = `<!doctype html>
-<meta name="viewport" content="width=device-width">
-<button onclick="window.nsh.postMessage('来自页面的问候')">发给应用</button>
-<p id="got"></p>
-<script>
-  window.addEventListener("message", (e) => { document.getElementById("got").textContent = e.data; });
-</script>`;
-
-function Bridge() {
-  const message = signal("");
-  let web!: WebViewRef;
-  return (
-    <View style={{ gap: 12 }}>
-      <WebView ref={web} html={page} style={{ height: 200 }} onMessage={(e) => message.set(e.data)} />
-      <Text onPress={() => web.postMessage("来自应用的问候")}>发给页面 · 收到：{message()}</Text>
-    </View>
-  );
-}
-```
-
 ## 能力声明
 
 应用在 `nsh.json` 中声明了[能力](../docs/sandbox-and-capabilities.md)时，web view 显示和跳转到 `webview` 下列出的主机。指向其他主机的 `src`，或未声明 `webview` 的应用中的 `html`，显示为空视图；指向其他主机的 `baseUrl` 会被丢弃，HTML 不带它加载；跳到其他主机的顶层导航（用户点击的链接）会在原生侧取消。每种情况都会触发 `onError`，其 `code` 为 `"ERR_ACCESS_DENIED"`。
+
+页面自己的 `blob:` URL（`URL.createObjectURL`、`<a download>` 链接）按它内嵌的源计算：该源被授予时可以显示和下载，
+不透明 `blob:null/…` 则会被拒绝。
+
+来自主机的下载只有在响应来自被授予的主机时才会被保存（在 iOS、macOS 和 Linux 上指经过所有重定向之后）；否则
+`onDownload` 报告 `failed`，`code` 为 `"ERR_ACCESS_DENIED"`。在 iOS 和 macOS 上，指向未被授予的主机的重定向在发出请求
+之前就会被取消。页面自身内容（`data:` 和 `blob:` URL）的下载不来自任何主机，照常保存。
 
 ```json
 {

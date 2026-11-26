@@ -4,8 +4,9 @@
 //! The app's shortcuts (`nsh/keymap`) take it first, as the platforms'
 //! keymaps do: the newest binding of the keystroke that fires where the
 //! focus is reports `onKeyCommand`; Return and Space on a focused control
-//! fire only the focus' own bindings (`KeyOptions::for_focus`), else they
-//! press the control. Then, on Linux (the simulated backend whose raw path
+//! (in the newest modal over its window, if one shows) fire only the
+//! focus' own bindings (`KeyOptions::for_focus`), else they press the
+//! control. Then, on Linux (the simulated backend whose raw path
 //! delivers input), a view that has the keyboard focus hears the press
 //! (its `on_key_down` and its ancestors'), the capture rule of it or of an
 //! enabled view around it deciding whether the platform keeps it
@@ -26,7 +27,7 @@ use nsh_core::{
     desktop::{MenuItem, Shortcut},
     element::SharedString,
     geometry::Points,
-    keymap::{self, KeyMatch, Keystroke},
+    keymap::{self, KeyFocus, KeyMatch, Keystroke},
     platform::Os,
     tailwind::state::FOCUSED,
 };
@@ -69,7 +70,8 @@ impl Headless {
     /// The app's shortcuts take the key first (`onKeyCommand`), as the
     /// platforms' keymaps do: those of the focused window and those of no
     /// window, and one that passes the key through lets it go on. Return and
-    /// Space on a focused control fire only the focus' own bindings
+    /// Space on a focused control (in the newest modal over its window, if
+    /// one shows) fire only the focus' own bindings
     /// (`KeyOptions::for_focus`), else they press the control. Then, on
     /// Linux, a view that has the keyboard focus (`focusable(true)`) hears
     /// the press, and so do its ancestors (`on_key_down`); a capture rule of
@@ -108,17 +110,30 @@ impl Headless {
     /// Sends key `keys` without settling, except a Back transition must
     /// finish before its release is reported. True ends a typed-ahead batch
     /// after that Back transition; the caller settles the remaining events.
-    fn send_key(&mut self, keys: &str) -> Result<bool, String> {
+    pub(super) fn send_key(&mut self, keys: &str) -> Result<bool, String> {
         self.input_with(nsh_core::platform::InputModality::Keyboard);
         let stroke = Keystroke::parse(keys, self.environment.os).map_err(|e| e.to_string())?;
-        let editing = self.screen.focused().is_some();
+        // A text input the newest modal over its window covers (the app
+        // left the focus under a dialog where the platform does not move it
+        // into the modal) edits nothing: the modal's window has the keys,
+        // as on Android, whose dialog is a window of its own, so Escape
+        // reaches the dialog instead of the input under it.
+        let input = self
+            .screen
+            .focused()
+            .filter(|&view| self.screen.in_focus_scope(view));
+        let editing = input.is_some();
         // The control with the keyboard focus, which Return and Space press
         // (a stop that takes no presses, a `focusable` chart, hears its keys
-        // through the keymap only).
-        let control = self
-            .screen
-            .key_focus()
-            .filter(|&view| !editing && self.screen.hears(view, EventKind::Press));
+        // through the keymap only). Only one in the newest modal over its
+        // window counts, as on macOS: a focus the app left under a dialog
+        // leaves the keys to the bindings (Linux and the web never let it
+        // go there).
+        let control = self.screen.key_focus().filter(|&view| {
+            !editing
+                && self.screen.hears(view, EventKind::Press)
+                && self.screen.in_focus_scope(view)
+        });
         // The window the key is pressed in: the focused one, as the
         // desktops match their bindings.
         let window = self
@@ -131,8 +146,18 @@ impl Headless {
         // desktops match them. Return and Space on a focused control fire
         // only the focus' own bindings. A binding that passes the key
         // through leaves it to the view and the defaults below.
+        // A focus the newest modal covers (a popup gave it back to its
+        // trigger under a dialog) has no keys of its own, as on macOS.
+        let mut focus = KeyFocus::default();
+        focus.editing = editing;
+        focus.control = control.is_some();
+        focus.covered = self
+            .screen
+            .focused()
+            .or(self.screen.key_focus())
+            .is_some_and(|view| !self.screen.in_focus_scope(view));
         let found = match self.screen.keymap() {
-            Some(keymap) => keymap.find_at(window, stroke, editing, control.is_some(), false),
+            Some(keymap) => keymap.find_with(window, stroke, focus, false),
             None => KeyMatch::None,
         };
         if let Some(id) = found.fired() {
@@ -154,7 +179,7 @@ impl Headless {
         // focused when the source reports them; the simulator moves the
         // focus between them as a Tab or a dialog can.
         let mut raw = false;
-        let captured = if !editing
+        let captured = if self.screen.focused().is_none()
             && self.delivers_raw_input()
             && let Some(view) = self.screen.key_focus()
             && self.screen.accepts_key_focus(view)
@@ -231,10 +256,10 @@ impl Headless {
                     break 'defaults;
                 }
                 // Shift+F10 asks the focused view for its context menu
-                // where views take the keyboard focus and the key is the
-                // platform's: the web and Linux (macOS has no such key;
-                // Windows focuses fields only). The nearest view around it
-                // listening hears `onContextMenu`, with no pointer, at its
+                // where the platform reads the key on a view: the web and
+                // Linux (macOS has no such key; Windows asks through UI
+                // Automation only). The nearest view around it listening
+                // hears `onContextMenu`, with no pointer, at its
                 // bottom-start corner; a focused input keeps the key for
                 // its own edit menu.
                 if matches!(self.environment.os, Os::Web | Os::Linux)
@@ -251,7 +276,13 @@ impl Headless {
                     self.tab(m.shift);
                     break 'defaults;
                 }
-                if let Some(input) = self.screen.focused() {
+                if let Some(input) = input {
+                    // Select All (Cmd+A on Apple, Ctrl+A elsewhere) selects
+                    // the whole text, as the platforms' fields do.
+                    if Keystroke::parse("mod+a", self.environment.os).is_ok_and(|a| a == stroke) {
+                        self.select_all(input);
+                        break 'defaults;
+                    }
                     let multiline = self.screen.input(input).is_some_and(|i| i.config.multiline);
                     match stroke.key {
                         keymap::Key::Enter
@@ -325,11 +356,15 @@ impl Headless {
             && self.environment.idiom != nsh_core::platform::Idiom::Terminal
     }
 
-    /// Whether Tab stops at views (not only inputs), as on macOS, the web,
-    /// Linux and in a terminal (the other platforms move it between fields only).
+    /// Whether Tab stops at views (not only inputs), as on the desktops
+    /// (macOS, Windows, Linux), the web and in a terminal: a view that takes
+    /// presses or is `focusable` is a stop beside the fields. iOS and
+    /// Android move it between fields only.
     fn tabs_to_views(&self) -> bool {
-        matches!(self.environment.os, Os::MacOs | Os::Web | Os::Linux)
-            || self.environment.idiom == nsh_core::platform::Idiom::Terminal
+        matches!(
+            self.environment.os,
+            Os::MacOs | Os::Windows | Os::Linux | Os::Web
+        ) || self.environment.idiom == nsh_core::platform::Idiom::Terminal
     }
 
     /// Tab (`back`: Shift+Tab): the keyboard focus moves to the next stop
@@ -339,9 +374,14 @@ impl Headless {
     /// platforms keep it there.
     fn tab(&mut self, back: bool) {
         let current = self.screen.focused().or(self.screen.key_focus());
-        let window = current.map_or(ROOT_ID, |id| self.screen.window_of(id));
         let mut stops = self.screen.tab_stops();
-        if let Some(scope) = self.screen.focus_scope(window) {
+        // A modal that took the focus leaves none: Tab goes to its stops,
+        // the ones it keeps the keyboard to, still.
+        let scope = match current {
+            Some(id) => self.screen.focus_scope(self.screen.window_of(id)),
+            None => self.screen.newest_modal(),
+        };
+        if let Some(scope) = scope {
             stops.retain(|&id| self.screen.within(id, scope));
         }
         let at = current.and_then(|id| stops.iter().position(|s| *s == id));
@@ -426,6 +466,18 @@ impl Headless {
         }
     }
 
+    /// The keyboard focus on a stack's page that no longer shows (a newer
+    /// page covers it, a back popped it) leaves it, as the platforms hand it
+    /// to the window before they hide or take away the page: the view
+    /// hears its blur and loses its `focus:` state, and with it what the
+    /// focus showed (a tooltip). Nothing gets it instead.
+    pub(super) fn leave_covered_pages(&mut self) {
+        let current = self.screen.focused().or(self.screen.key_focus());
+        if current.is_some_and(|id| self.screen.on_covered_page(id)) {
+            self.move_focus(None);
+        }
+    }
+
     /// The scroll views around `id`, which the keyboard focus reached,
     /// scroll so that it shows, innermost first, as the platforms scroll
     /// them for a focus Tab moves (at once here: no animation).
@@ -491,6 +543,7 @@ impl Headless {
         }
         if let Some(new) = to {
             self.send(new, EventKind::Focus, EventPayload::None);
+            self.select_on_focus(new);
         }
     }
 
@@ -522,6 +575,7 @@ impl Headless {
                     self.send(key, EventKind::Blur, EventPayload::None);
                 }
                 self.send(new, EventKind::Focus, EventPayload::None);
+                self.select_on_focus(new);
             }
         }
         if !self.tabs_to_views() {
@@ -571,7 +625,13 @@ impl Headless {
         let Some(input) = self.screen.input_mut(id) else {
             return;
         };
-        if input.text.pop().is_none() {
+        // A whole selected text is deleted.
+        if std::mem::take(&mut input.selected_all) {
+            if input.text.is_empty() {
+                return;
+            }
+            input.text.clear();
+        } else if input.text.pop().is_none() {
             return;
         }
         input.count += 1;

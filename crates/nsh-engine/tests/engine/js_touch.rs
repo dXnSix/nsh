@@ -102,7 +102,7 @@ fn start_app(name: &str, app: &str) -> (Engine, Receiver<MountBatch>) {
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
-        data_dir: None,
+        support_dir: None,
         cache: nsh_engine::CacheOptions::off(),
         storage: None,
         clock: Default::default(),
@@ -111,10 +111,10 @@ fn start_app(name: &str, app: &str) -> (Engine, Receiver<MountBatch>) {
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
+        data_dir: None,
     };
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
@@ -133,6 +133,7 @@ fn touch(
     EventPayload::Touch(Box::new(TouchEvent {
         phase,
         timestamp: t,
+        modifiers: Default::default(),
         activated,
         points: vec![TouchPoint {
             id: 1,
@@ -146,6 +147,12 @@ fn touch(
             location: nsh_core::geometry::point(px(x), px(y)),
             changed: true,
             pointer_type: nsh_core::PointerType::Touch,
+            pressure: 0.5,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            coalesced: Vec::new(),
+            eraser: false,
+            barrel: false,
         }],
     }))
 }
@@ -276,7 +283,8 @@ fn a_pan_handler_set_to_undefined_turns_the_pan_off() {
             .unwrap_or_else(|| panic!("{wanted} is mounted"))
     };
     let (zoom, viewer) = (id("zoom"), id("viewer"));
-    let pans = |events: EventMask| Candidate::pan(&GestureValues::default(), events).is_some();
+    let pans =
+        |events: EventMask| Candidate::pan(&GestureValues::default(), events, None).is_some();
     let events = first
         .items
         .iter()

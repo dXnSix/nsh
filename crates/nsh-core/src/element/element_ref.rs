@@ -106,7 +106,8 @@ impl FollowTarget {
 /// An element another one names for assistive technologies
 /// ([`crate::AccessibilityProp::ActiveDescendant`],
 /// [`crate::AccessibilityProp::Controls`],
-/// [`crate::AccessibilityProp::DescribedBy`]): a node JS passes (a `ref`),
+/// [`crate::AccessibilityProp::DescribedBy`]) or as the scroll view it
+/// floats over ([`ScrollEdgeTarget`]): a node JS passes (a `ref`),
 /// or whatever element carries a Rust [`ElementRef`], looked up as the
 /// core commits, so the element may be rendered after the one naming it
 /// (a list's row made as the list lays out).
@@ -122,6 +123,44 @@ pub(crate) enum Named {
     Ref(RefTarget),
 }
 
+/// A Rust ref, as the element carrying it (a component's prop that names
+/// an element, set from Rust: `Some(error_line)`).
+impl From<ElementRef> for Option<ElementTarget> {
+    fn from(element: ElementRef) -> Self {
+        element.element_target()
+    }
+}
+
+/// `ViewRef`: a node JS passes (a `ref`), as a component's prop that names
+/// an element.
+impl super::JsValue for ElementTarget {
+    fn ts_type(_types: &mut super::TsTypes) -> String {
+        "ViewRef".into()
+    }
+
+    fn from_js(value: super::JsIn<'_>) -> Result<Self, super::PropError> {
+        value
+            .host()
+            .node(value.raw())
+            .map(Self::of_node)
+            .ok_or_else(|| value.expected("a node"))
+    }
+
+    /// The node's JS object (`null` while none carries it).
+    fn to_js<'a>(
+        &self,
+        host: &'a dyn super::JsHost,
+    ) -> Result<super::JsOwned<'a>, super::PropError> {
+        Ok(super::JsOwned::new(
+            host,
+            match self.node() {
+                Some(node) => host.node_value(node),
+                None => host.null(),
+            },
+        ))
+    }
+}
+
 impl ElementTarget {
     /// Node `node` (JS's ref).
     pub(crate) fn of_node(node: NodeId) -> Self {
@@ -133,6 +172,26 @@ impl ElementTarget {
         match &self.0 {
             Named::Node(node) => Some(*node),
             Named::Ref(target) => Some(target.0.node.get()).filter(|&n| n != 0),
+        }
+    }
+}
+
+/// The scroll view a view floats over and the edge of it the view sits
+/// at ([`crate::Prop::ScrollEdgeElement`], `ios={{ scrollEdgeElement }}`).
+/// The scroll view is looked up as the core commits, as an
+/// [`ElementTarget`] is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScrollEdgeTarget {
+    pub(crate) scroll_view: ElementTarget,
+    pub(crate) edge: crate::ScrollEdge,
+}
+
+impl ScrollEdgeTarget {
+    /// Scroll view `scroll_view` (JS's ref), at `edge`.
+    pub(crate) fn of_node(scroll_view: NodeId, edge: crate::ScrollEdge) -> Self {
+        Self {
+            scroll_view: ElementTarget::of_node(scroll_view),
+            edge,
         }
     }
 }
@@ -188,6 +247,36 @@ impl ElementRef {
         self.send(Command::Focus);
     }
 
+    /// [`Self::focus`] as `from` closes, given way to any other move of the
+    /// focus out of `from` in the same commit (a `focus()` from Rust or
+    /// JS): a popup closing gives the keyboard focus back to its trigger,
+    /// but not over the focus the choice that closed it moved elsewhere (an
+    /// item that starts editing a field). A move inside `from` does not
+    /// count: it is going, and keys typed ahead (Down, then Return) move
+    /// the focus to the item they choose in the commit that closes it. The
+    /// last one asked for in a commit is the one that counts.
+    ///
+    /// On macOS and iOS, a popup opened by a pointer ([`Self::focus_back_origin`] called on
+    /// this element as it opened) gives the focus back where it was when
+    /// it opened instead, or takes it off the popup when nothing had it:
+    /// a pointer's press leaves the keyboard focus where it is, so the
+    /// trigger it pressed never had it.
+    #[doc(hidden)]
+    pub fn focus_back(&self, from: ElementRef) {
+        let from = from.node();
+        self.reach(|to, executor| executor.act(Action::FocusBack { to, from }));
+    }
+
+    /// A popup that gives the keyboard focus back to the element
+    /// ([`Self::focus_back`]) opens: the core notes the focus and whether
+    /// a pointer opened it, so a popup opened by the keyboard gives the
+    /// focus back to its trigger and, on macOS and iOS, one opened by a
+    /// pointer gives it back where it was.
+    #[doc(hidden)]
+    pub fn focus_back_origin(&self) {
+        self.reach(|to, executor| executor.act(Action::FocusOrigin { to }));
+    }
+
     /// Ends the press going on in the element (or inside it) without its
     /// release: no `on_press_up` or `on_press` follow, and its `active:`
     /// styles reset (`nsh-base`'s context menu opened by a held finger).
@@ -200,6 +289,14 @@ impl ElementRef {
     /// takes presses.
     pub fn blur(&self) {
         self.send(Command::Blur);
+    }
+
+    /// Clears the selection of a selectable view the element is, is inside
+    /// or holds (TS: `ref.clearSelection()`): its texts lose the highlight
+    /// and the selectable view hears `on_text_selection_change` with
+    /// nothing selected.
+    pub fn clear_selection(&self) {
+        self.send(Command::ClearSelection);
     }
 
     /// Moves the screen reader's focus to the element (TS:
@@ -454,8 +551,8 @@ impl ElementRef {
     /// view took it. For a component whose own hit layer lies over content
     /// the app renders (a table's cells): that content's pressable views
     /// get the presses on them. The element's own `pointerEvents` do not
-    /// count; hover and press states stay the hit layer's. Await it in a
-    /// task.
+    /// count; press states stay the hit layer's, hovers are passed on with
+    /// [`Self::hover_at`]. Await it in a task.
     pub fn press_at(&self, press: crate::PressEvent) -> Answer<bool> {
         let (answer, slot) = Answer::new();
         let pending = slot.clone();
@@ -466,6 +563,21 @@ impl ElementRef {
             slot.borrow_mut().deliver(false);
         }
         answer
+    }
+
+    /// Passes a pointer on into the element, as [`Self::press_at`] does a
+    /// press: the views in it under `mouse.page_position` (in its root
+    /// view, as a pointer's) and the views around them up to the element
+    /// are hovered, with the layout of the last commit. Their `hover:`
+    /// classes and the `group-hover:` classes inside them apply, and those
+    /// that listen hear `onMouseEnter` / `onMouseLeave` as the views under
+    /// the pointer change and `onMouseMove` on each call. `None`: the
+    /// pointer left the element. For a component whose own hit layer lies
+    /// over content the app renders (a table's cells), from the hit layer's
+    /// `onMouseMove` and `onMouseLeave`. The element's own `pointerEvents`
+    /// do not count.
+    pub fn hover_at(&self, mouse: Option<crate::MouseEvent>) {
+        self.reach(|node, executor| executor.act(Action::HoverAt(node, mouse)));
     }
 
     /// How long the element's transitions run (`transition*`: the
@@ -483,6 +595,24 @@ impl ElementRef {
             .is_none()
         {
             slot.borrow_mut().deliver(std::time::Duration::ZERO);
+        }
+        answer
+    }
+
+    /// The text the element shows (the DOM's `textContent`): the texts
+    /// inside it in tree order, joined, with the commit this call goes out
+    /// with, so a text changed before it counts. What `display: none`
+    /// hides is left out; empty when no rendered element carries the ref.
+    /// For a component that matches its content's words (a menu's
+    /// typeahead). Await it in a task.
+    pub fn text_content(&self) -> Answer<String> {
+        let (answer, slot) = Answer::new();
+        let pending = slot.clone();
+        if self
+            .reach(|node, executor| executor.act(Action::TextContent(node, pending)))
+            .is_none()
+        {
+            slot.borrow_mut().deliver(String::new());
         }
         answer
     }

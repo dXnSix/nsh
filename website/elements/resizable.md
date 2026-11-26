@@ -14,6 +14,36 @@ which runs natively frame by frame, how the room is shared, the resize cursor an
 The look is the app's: a handle is a band with no line, color or grip of its own, and what it draws is the app's
 indicator; the panels are the app's views.
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { ResizablePanel, ResizablePanelGroup } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const sidebar = signal(240);
+  return (
+    <ResizablePanelGroup
+      axis="horizontal"
+      handleClass="bg-border group-hover:bg-ring group-active:bg-primary"
+      handleAccessibilityLabel="Resize the sidebar"
+    >
+      <ResizablePanel size={sidebar()} minSize={160} maxSize={480} onResize={({ size }) => sidebar.set(size)} class="p-4">
+        <Text class="text-muted-foreground">Files</Text>
+      </ResizablePanel>
+      <ResizablePanel class="p-4">
+        <Text class="text-foreground">Editor</Text>
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{h_resizable, resizable_panel, theme};
 use nsh_core::prelude::*;
@@ -36,31 +66,6 @@ fn workspace() -> impl IntoElement {
                 .child(text("Editor").text_color(move || theme().foreground())),
         )
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { ResizablePanel, ResizablePanelGroup } from "nsh/base";
-
-function App() {
-  const sidebar = signal(240);
-  return (
-    <ResizablePanelGroup
-      axis="horizontal"
-      handleClass="bg-border group-hover:bg-ring group-active:bg-primary"
-      handleAccessibilityLabel="Resize the sidebar"
-    >
-      <ResizablePanel size={sidebar()} minSize={160} maxSize={480} onResize={({ size }) => sidebar.set(size)} class="p-4">
-        <Text class="text-muted-foreground">Files</Text>
-      </ResizablePanel>
-      <ResizablePanel class="p-4">
-        <Text class="text-foreground">Editor</Text>
-      </ResizablePanel>
-    </ResizablePanelGroup>
-  );
-}
-
-mount(App);
 ```
 
 `ResizablePanelGroup` and `ResizablePanel` come from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in

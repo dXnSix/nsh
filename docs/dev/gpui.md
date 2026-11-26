@@ -4,11 +4,25 @@
 its workspace), on macOS, Windows and Linux alike. Its purpose is embedding: an `AppView` is a GPUI view, so GPUI and
 GPUI Kit apps (`gpui_component`) show NSH modules anywhere in their element tree. Standalone apps run and are packaged
 with each OS's own backend (AppKit, Win32, GTK 4). `crates/gpui/nsh-gpui-host` is the development host (`nsh run
---target gpui`): it shows a TSX app in a GPUI window as the apps that embed it show it, with hot reload, and takes
+--target gpui`): it runs a TSX app in GPUI with hot reload and takes
 the steps of `nsh test --target gpui` for checking the backend. The crate started as a port of the Windows backend (`windows.md`): one
 retained view per node, NSH draws every view itself, and the input, scrolling, transition, keymap and editing logic is
 the Windows backend's, platform-free. Only drawing, text, the main-thread queue, events and the window are GPUI's.
 User-facing page: `website/docs/gpui.md`.
+
+Set `AppOptions::inline_root` to `true` when calling `AppView::new` to render a plain JS root (`mount(App)`) in the
+hosting view, as in `examples/embed-gpui`. The option is independent of `AppView::own_window` and the order in which
+it and `AppView::load` are called. It only suppresses the implicit first window: the desktop OS and idiom are unchanged,
+and explicit `<Window>` and `Window.open` windows remain separate native windows. The `tests::windows` suite checks the
+host's content height and window count with and without the opt-in, in both call orders. The offscreen render tests
+(`tests/render/main.rs`) opt in because they capture the embedding view.
+
+**Standalone window model v2: not migrated.** GPUI still uses the old host window rather than a hidden app host in
+`open_app_window` and `nsh run --target gpui`. On Linux GPUI shows that window as it opens, so a launch shows an empty
+host before the app's `<Window>` windows. Both `open_app_window` and `run_app` ignore `AppOptions::inline_root`: a plain
+JS root keeps the implicit first window (`window-model.md`), which the backend opens separately. `tests::windows`
+checks this using `open_app_window`. `tests::standalone_windows` is still ignored: it assumes the old host is the app's
+window for title, sizing and focus. This backend is 待平台验证; the rest of this page describes the code as it is.
 
 Every area of the other desktop backends is ported; "Not implemented, or different" lists where GPUI's primitives make
 it draw or behave differently.
@@ -61,10 +75,13 @@ cargo build -p nsh-gpui-host                      # ../../target/debug/nsh-gpui-
 
 The GPUI host is built for the machine itself, so the CLI finds it in `target/<profile>` and builds it first
 in a checkout; `cargo xtask dist` puts it in `dist/nsh/runtime/gpui/` on each of the three OSes (`tooling.md`,
-`embedding.md`). CI: `.github/workflows/gpui.yml` (Ubuntu 24.04, macOS 15 and Windows: clippy with `-D warnings` and
-tests of the GPUI workspace; on Linux clippy of `examples/embed-gpui` too), run when `crates/gpui` or the example
-changes and daily, which catches what changes to the crates it shares with the main workspace (`nsh-core`,
-`nsh-engine`, ...) break.
+`embedding.md`), built `--locked` as all of xtask's task builds are, so it fails while `crates/gpui/Cargo.lock`
+misses a change to the crates the GPUI workspace shares with the main one (a build there without `--locked` updates
+it): a change to those crates' dependencies commits the GPUI workspace's refreshed lock too. CI:
+`.github/workflows/gpui.yml` (Ubuntu 24.04, macOS 15 and Windows: clippy with `-D warnings`, `--locked`, and tests
+of the GPUI workspace; on Linux clippy of `examples/embed-gpui` too), run when `crates/gpui` or the example changes
+and daily, which catches what changes to the crates it shares with the main workspace (`nsh-core`, `nsh-engine`,
+...) break, a lock left behind included.
 
 Features:
 
@@ -73,7 +90,7 @@ Features:
 | `js` (default) | JS apps; without it the crate only runs Rust apps and links no QuickJS | yes |
 | `webview` (default) | web views with wry (`native/web.rs`; GTK 3 and WebKitGTK on Linux) | yes |
 | `video` | videos with GStreamer (`native/video.rs`); without it a video is a placeholder that reports `onError` | Linux |
-| `dev` | the dev server client, log forwarding, the error overlay (`dev.rs`) | yes |
+| `dev` | the dev server client, log forwarding, the error overlay, the test agent (`dev.rs`, `agent.rs`); the optional parts stay as the build has them, so an embedding app's development build runs apps with its release's parts (`nsh-gpui-host` lists every part itself) | yes |
 | `shot` | screenshots on macOS and Windows (`nsh test --target gpui`'s) through GPUI's `test-support` (`Window::render_to_image`); the tests in windows of GPUI's test platform (`tests.rs`) | macOS, Windows |
 | `runtime-shaders` | GPUI's Metal shaders compiled when the app starts, not by the build (`gpui_platform/runtime_shaders`): builds on a Mac without the Metal Toolchain; nothing elsewhere | the CLI's, where `xcrun metal` fails; never the distribution's |
 
@@ -100,7 +117,7 @@ import -window root -display :170 whole.png        # the display, if the window'
   backing pixmap and reads that with `GetImage`. A covering window cannot replace the captured pixels. The screenshot
   connection releases the pixmap and its redirection on drop, including on errors. Resizing is safe because each shot
   names the pixmap after drawing.
-- Linux's GPUI Fast 0.1.13 window does not implement `render_to_image`; its renderer and scene are private, so NSH
+- Linux's GPUI Fast 0.1.14 window does not implement `render_to_image`; its renderer and scene are private, so NSH
   cannot use the macOS / Windows offscreen path. Pure Wayland screenshots remain unsupported; use an isolated Xvfb
   or Xwayland `-shm` display. The X server must support Composite; capture reports an error otherwise. This captures
   X11 child windows (including embedded web views), rather than only GPUI's scene.
@@ -116,6 +133,42 @@ import -window root -display :170 whole.png        # the display, if the window'
 
 A fully covering window does not change the gallery capture: `app.screenshot` while covered is byte-identical to its unobscured capture.
 
+### Checking the accessibility tree on Linux
+
+AccessKit's AT-SPI adapter attaches when the session's AT-SPI bus is enabled, and from then on checks every tree GPUI
+hands it: one it refuses (a node no node has as a child, a node two have) panics, and the host exits with status
+101, whether or not a client asks for the tree. Run the host with the bus enabled on a display and a session bus of
+their own, so the desktop's stay as they are:
+
+```sh
+xvfb-run -a dbus-run-session -- sh -c '
+  unset WAYLAND_DISPLAY
+  gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus \
+    --method org.freedesktop.DBus.Properties.Set org.a11y.Status IsEnabled "<true>"
+  /usr/lib/at-spi2-registryd &
+  cd examples/embed-gpui && RUST_LOG=warn,gpui::window=info cargo run'
+```
+
+- `gpui::window` logs "Accessibility activated" once the adapter is attached.
+- The registry is started by hand (`/usr/libexec/at-spi2-registryd` on some distributions): this session bus has no
+  systemd to activate it, and without it the adapter does not attach.
+- The first frame is built whole. The frames after it are the ones GPUI Fast draws again from the last one, and they
+  need something in the window to change: press its controls from an AT-SPI client, which also reads the tree as a
+  screen reader does (Python's `gi.repository.Atspi`: the application under `Atspi.get_desktop(0)`, then an
+  element's `get_action_iface().do_action(0)`).
+
+The `render` test binary runs pixel checks without writing screenshots by default. Set `NSH_RENDER_OUTPUT_DIR`
+to also save `embedding-light.png` and `embedding-dark.png`: real NSH text with no color of its own, plus
+explicitly muted text, under a host's light/dark theme. For example, from the repository root (add
+`runtime-shaders` on a Mac without the Metal Toolchain):
+
+```sh
+NSH_RENDER_OUTPUT_DIR=/tmp/nsh-embedding cargo test --manifest-path crates/gpui/Cargo.toml -p nsh-platform-gpui --no-default-features --features js,shot,svg --test render
+```
+
+These fixtures disable disk caches and use inert storage. They wait for the app's layout acknowledgement on
+the same GPUI queue as its commit before drawing the screenshots; the deadline only guards against a hang.
+
 ## Architecture
 
 - **One element per surface.** A surface (`surface.rs`) is drawn by one GPUI element, `render::SurfaceElement`, which
@@ -124,6 +177,13 @@ A fully covering window does not change the gallery capture: `app.screenshot` wh
   the content clipped to the bounds (text, image, canvas), the children (clipped when the view clips), the hosted
   items (`view::Hosted`: text editors, alerts) and the scroll indicator, then the border. Each node is an
   `NshView` (`view.rs`), a retained view the core placed at its frame, as on Windows.
+- **Accessibility and native components.** While an assistive technology is attached, the surface element's node
+  gets the views' nodes as synthetic children (`access::synthetic`), and a native component's elements push their
+  own nodes under it as the surface element prepaints them. The surface's node keeps both (`access::Built::adopt`):
+  the views' nodes, the focus proxy in the place of the element it stands for, then the native components' roots.
+  Every node of a frame needs exactly one parent: AccessKit's adapter panics on a tree with a node no node has as a
+  child, or one two nodes have, and the host exits with it. A frame GPUI Fast draws again from the last one keeps
+  that hierarchy from 0.1.14 on, the lowest version the backend builds with.
 - **`DrawCx`** (`render.rs`) is the drawing state GPUI does not keep: GPUI paints primitives (quads, paths, glyphs,
   images) in window coordinates (logical pixels, which are NSH's points) with no world transform and no group
   opacity, so `DrawCx` keeps the current transform (`geom::Mat4`) and applies opacity and color filters
@@ -194,15 +254,16 @@ A fully covering window does not change the gallery capture: `app.screenshot` wh
   dispatches the key on the window's thread before its own default (and before the app's key engine hands the
   notification to JS and Rust callbacks), so the value is observable state for that transition, never a
   synchronous veto the UI thread waits for.
-- **Embedding**: `AppView` (`app.rs`) is one surface as a GPUI view: `cx.new(|cx| AppView::new(options, window,
-  cx))`, then `load(App::Js(bundle))` or `load(App::Rust(root))`; it renders a `SurfaceElement` and is `Focusable`.
+- **Embedding**: `AppView` (`app.rs`) is one surface as a GPUI view: `cx.new(|cx| AppView::new(options, window, cx))`,
+  with `options.inline_root = true` for an inline plain JS root, then `load(App::Js(bundle))` or `load(App::Rust(root))`.
+  The view renders a `SurfaceElement` and is `Focusable`.
   `open_app_window` opens one in a window of a running GPUI app; `run_app` runs one app on its own, as the development
   host does (one `AppView` filling a window, the process quits when the last window closes). A host that opens the
   window itself (its bounds, a GPUI Kit `Root` around the view) calls `AppView::own_window` in the window's build
-  closure, best with the window opened with `titlebar_options`: the app's title, title bar, application menu and window
-  operations then act on that window, as on `open_app_window`'s. `AppView::on_close_request` hands the owned window's
-  quit and close requests (the reserved quit key, Ctrl+W, the `quit` and `close` roles, `Application.quit()`, `WindowRef.close()`, the close
-  button) to the host, which quits or closes when it is ready (after saving, say); `Application.restart()` does
+  closure, best with the window opened with `titlebar_options`: the view supplies the chrome and reserved keys, but
+  inline JS does not control the host window. `AppView::on_close_request` hands the owned window's quit and close
+  requests (the reserved quit key, Ctrl+W, the `quit` and `close` roles, `Application.quit()`, the close button) to
+  the host, which quits or closes when it is ready (after saving, say); `Application.restart()` does
   nothing here, restarting is the host's, and so is opening at login (`Application.launchAtLogin()` reads
   `false`: `EngineConfig::login_item` stays `None`). `AssetBase::Directories` looks
   `asset:/` paths up in several directories in order (the app's files, then the host's). `register_component`
@@ -215,6 +276,18 @@ A fully covering window does not change the gallery capture: `app.screenshot` wh
   are opened with `inactive_frame_interval: None` (GPUI draws unfocused windows at 30 fps by default); a host must set
   it in its own `WindowOptions` too. Embedding in a GPUI Kit app (one GPUI, focus and Tab, overlays, themes, frame
   rate): `embedding.md` "GPUI and GPUI Kit apps", `examples/embed-gpui`.
+
+`AppView::content_height()` reads the bottom edge of the logical root's in-flow children in surface points
+(`None` without laid-out in-flow content). Detached layout roots such as overlays and modals, as well as fixed
+or absolutely positioned children, do not contribute. Core reads the settled frames used by `on_layout`.
+GPUI opts in through `MountSink::needs_content_height`; the engine sends the height with mount items, or on
+its own with an empty batch when only the height changes, through `MountSink::submit_with_content_height`.
+GPUI applies the batch and caches its height together before its normal flush notifies Rust host observers.
+Read the getter again in the view's GPUI observer. When the host owns the app, its root's `.on_layout(..)`
+can report its frame directly; there is no parallel TSX getter. This is current layout, not an intrinsic-size
+pass: viewport-relative heights and flex growth still use the host's viewport.
+With host tokens, the synthetic root supplies `text-foreground` for text inheritance and keeps its viewport
+layout when tokens are cleared, reinstalled or switched between light and dark.
 
 ## How each area maps to GPUI
 
@@ -232,11 +305,11 @@ A fully covering window does not change the gallery capture: `app.screenshot` wh
 | Focus traversal | `input.rs`, `key_focus.rs` | Tab visits enabled custom view stops as well as fields and embedded native components; the current custom stop participates in forward and reverse traversal. A captured Tab stays put; past the edge, Tab returns to the embedding window. A pointer press focuses an explicitly `focusable` custom view or ancestor, while fields and native components retain their input ownership |
 | Text inputs | `text_input.rs` | The editor shared with the Windows backend (`nsh_core::text_edit`), laid out with GPUI's text system and hosted in the input's view; text arrives through GPUI's input handler (`Window::handle_input`, the `AppView` as `EntityInputHandler`), IME compositions underlined at the caret and the candidate window placed with `bounds_for_range`; the composition stays out of the text until it is committed (`onChangeText` then), `onCompositionChange` reports its start, changes and end (after the committed text's `onChangeText`), and a `value` JS sets while it is in progress is held and applied when it ends, unless the user's commit made it stale; the caret blinks on a timer while its field has the focus of an active window that is presented (a minimized or suspended window keeps the field, its caret still), and on Linux stays shown after 18 blinks (GTK's `gtk-cursor-blink-timeout` of 10 s) until the next edit, caret move or focus change; Cmd on macOS where Ctrl is used elsewhere |
 | Navigation, dialogs | `navigation.rs` | As on Windows (the decisions in `nsh_core::navigation`): pages slide in and out; NSH draws no header, a page's `header` (the app's view) is placed at its top by the core, full width, with the content below; back natively (Escape, Alt+Left, Cmd+[ on macOS, Browser Back, the mouse's back button: `onBackPress` when the app listens, then a pop unless `popOnBack` is false); dialogs are transparent layers over the window showing only the app's popup and backdrop (`presentation` is ignored). GPUI has no offscreen pictures, so a departing page or dialog keeps its views (their detaching deferred) in a layer drawn moving out |
-| Alerts (`AlertDialog`) | `system.rs` | Drawn in the surface as items the root hosts (the Windows backend's content dialogs), so they stay with an embedded surface and never block the main loop |
+| Alerts (`AlertDialog`) | `system.rs` | Drawn in the surface as items the root hosts (the Windows backend's content dialogs), so they stay with an embedded surface and never block the main loop. No text field yet: an alert's `input` is left out and its answer has no `value`. |
 | Video | `native/video.rs` | Feature `video` (Linux): GStreamer `playbin` with an `appsink` of BGRA frames, each frame a `RenderImage` painted as view content (clipped, transformed at its bounds, covered like any view); `controls` draws NSH's own bar |
 | Web views | `native/web.rs` | Feature `webview`: wry. Linux: WebKitGTK 4.1 on GTK 3 (X11 only: GPUI must run on X11 or Xwayland) in a GPUI Fast native composition surface (an X11 child window) sized to the visible part of its view, GTK's loop pumped from GPUI's; macOS / Windows: wry's `WKWebView` / WebView2 child at the view's box |
 | Native components | `native.rs` | `AppView::register_component`; a component renders any GPUI or GPUI Kit element, laid out and prepainted at its box every frame, clipped to its clipping ancestors, painted where the tree draws its box; its hitboxes take the pointer there (`embedding.md`) |
-| Accessibility | `access.rs` | AccessKit nodes in GPUI's accessibility tree (NSAccessibility, UI Automation, AT-SPI through AccessKit's adapters), rebuilt while an assistive technology is attached: the views as synthetic children of the surface element, folded as on Windows and Linux (`accessibilityElementsHidden`, `visibility: hidden` and screens below the top hide a subtree, its texts naming nothing), with roles, names, states, values and actions, a scroll view's content and a list's cells in its parent's viewport (`ViewProps::screen_order`) in the order they are on screen (as Tab: a list's recycled cells are not in their rows' order); the accessibility focus is a real element tracking the view's focus handle; announcements are live nodes |
+| Accessibility | `access.rs` | AccessKit nodes in GPUI's accessibility tree (NSAccessibility, UI Automation, AT-SPI through AccessKit's adapters), rebuilt while an assistive technology is attached: the views as synthetic children of the surface element, folded as on Windows and Linux (`accessibilityElementsHidden`, `visibility: hidden` and screens below the top hide a subtree, its texts naming nothing), with roles, names, states, values and actions, a scroll view's content and a list's cells in its parent's viewport (`ViewProps::screen_order`) in the order they are on screen (as Tab: a list's recycled cells are not in their rows' order); the accessibility focus is a real element tracking the view's focus handle; native components' own nodes stay under the surface's node, after the views'; announcements are live nodes |
 | Environment | `system.rs` | Color scheme from the app or the window's appearance (`observe_window_appearance`); locale, font scale, reduce motion, right to left, screen reader and OS version read as each native backend reads them (the settings portal and AT-SPI over D-Bus on Linux, `zbus`); pixel ratio the window's scale factor; safe area and keyboard height 0. The app's state (`lifecycle()`) from the window's activation and visibility (`observe_window_activation`, `observe_window_visibility`): `background` while the surface's window is not presented (`WindowVisibility::Hidden`), `active` while one of the windows showing a surface is the active one, `inactive` otherwise. The preferred languages (`localeSettings()`'s `languages`): `GetUserPreferredUILanguages` on Windows, `CFLocaleCopyPreferredLanguages` on macOS, gettext's `LANGUAGE` / `LC_ALL` / `LC_MESSAGES` / `LANG` with their fallbacks on Linux. The regional preferences (`localeSettings()`'s `hourCycle` and the like), over the region's (`LocaleSettings::parse`): on macOS the hours of `CFDateFormatterCreateDateFormatFromTemplate`'s `j` format, `CFCalendar`'s first weekday, `kCFLocaleMeasurementSystem` and the `AppleTemperatureUnit` preference; on Windows the regional format's `LOCALE_STIMEFORMAT`, `LOCALE_IFIRSTDAYOFWEEK` and `LOCALE_IMEASURE`; on Linux the regions of `LC_TIME` (times, weeks) and `LC_MEASUREMENT` (units), with the settings portal's `clock-format` (`org.gnome.desktop.interface`, live) over the hour cycle. The time zone (`localeSettings()`'s `timeZone`) as the native backends name it: on Windows the setting's zone (`GetDynamicTimeZoneInformation`) by its IANA name from the ICU Windows ships (loaded at run time), elsewhere the zone `TZ` names when it names one (`GMT`, `Europe/Berlin`; a POSIX rule such as `JST-9` names none: `TimeZone::posix`), else the zone `/etc/localtime` links to (else `/etc/timezone`); read again whenever a window becomes the active one (GPUI reports no change of it). |
 | Window chrome (`nsh/desktop`) | `chrome.rs` | Windows open with a transparent title bar (macOS, Windows) so both styles can be drawn later: a title row drawn above the app, or the hidden style with the traffic lights / caption buttons over the app (`WindowControlArea` on Windows); Linux uses the window manager's decorations, or client-side ones when asked and granted. The application menu is GPUI's native menu bar on macOS, a menu bar drawn above the app elsewhere (always, or with `Menu.setMenuBar("autoHide")` only after Alt alone, and while one of its menus is open); its shortcuts are matched on key downs after `nsh`'s bindings and before the focused field (`chrome::shortcut`), except an item whose `when` leaves the field the key (`MenuAction::fires_while_editing`); context menus are popups drawn over the window with keyboard access. A menu item's `icon` (`menus.rs`: not the bar's titles) draws in those rows, in a column of its own that moves a level's labels; it loads when its level first shows and comes in with a redraw, an SVG painted in the row's text color and a bitmap as it is. GPUI's native menu bar on macOS shows none, as `gpui::MenuItem` has no image |
 | Clipboard | `system.rs` | GPUI's (`write_to_clipboard` / `read_from_clipboard`): text, `ClipboardEntry::Image` (a format other than PNG, JPEG, GIF, BMP or WebP, such as TIFF, is made PNG on a worker thread) and `ExternalPaths` (files). GPUI reads one kind per item, preferring files, then text, then images, so an item with text and an image (a browser's copied image with its address) gives the text |
@@ -338,7 +411,7 @@ and Windows.
   logged once) and may need `WEBKIT_DISABLE_DMABUF_RENDERER=1`; on macOS and Windows clipping ancestors do not cut
   them. `baseUrl` for HTML, `scrollable` and `allowsBackForwardNavigationGestures` are not supported; failed
   loads report no `onError` on macOS and Windows.
-- **Accessibility** (AccessKit 0.24, as GPUI Fast 0.1.13 uses it): the adapters pass on only `Click`, `Focus`,
+- **Accessibility** (AccessKit 0.24, as GPUI Fast 0.1.14 uses it): the adapters pass on only `Click`, `Focus`,
   `SetValue` and `ScrollIntoView` everywhere, `Increment` / `Decrement` on macOS and `Expand` / `Collapse` on
   Windows; custom actions, `ShowContextMenu` and scroll actions are in the nodes but not called yet.
 - **Text inputs**: input accessory views are never shown (no software keyboard).
@@ -382,18 +455,20 @@ and Windows.
 
 ### Windows
 
-The main window is the one the surface fills (`chrome.rs`): the window protocol's attributes and requests on the
-root node act on it when the surface is standalone (`open_app_window`, `run_app`, `AppView::own_window`); an
-embedded view leaves its host's window alone. Runners read the app's `window` options (`bundle.main_window`) before
-they open it, so its first frame has them, and open it where it was kept with `restoreBounds`. With `defaultVisible:
-false` they open it with GPUI's `show` and `focus` off, and `run_app` leaves the app inactive; GPUI applies a mode
-as it opens a window, which would show it, so a hidden window opens in the normal mode and takes the mode it opens in
-(`Chrome::opening_mode`) as the app first shows or focuses it, unless the app set a mode or placement of its own
-before. The main window's state
+GPUI has not been migrated to the hidden host: the host window is still the one the surface fills (`chrome.rs`), and
+this section describes that old model. The window protocol's attributes and requests on the root node act on it when
+the surface is standalone (`open_app_window`, `run_app`, `AppView::own_window`); an embedded view leaves its host's
+window alone. Runners read the app's `window` options (`bundle.main_window`) before they open it, so its first frame
+has them, and open it where it was kept with `restoreBounds`. They open it with GPUI's `show` and `focus` off, as the
+shared launch policy reports the host hidden (`defaultVisible` no longer selects it), and `run_app` leaves the app
+inactive; GPUI applies a mode as it opens a window, which would
+show it, so a hidden window opens in the normal mode and takes the mode it opens in (`Chrome::opening_mode`) as the
+app first shows or focuses it, unless the app set a mode or placement of its own before. The main window's state
 reads its visibility from the native window (`native::visible`) and is reported after each request on it too, as a
 hidden window draws no frame. The development host opens its window hidden until the first app came (`dev.rs`,
-`DevSession::held`), then shows it unless the app's `defaultVisible` says hidden, at the host's size and in the
-normal mode, as every app's window (the other launch options apply where a runner opens the window); an error shows
+`DevSession::held`) and, on macOS and Windows, keeps it hidden with the app, as the shared launch policy reports the
+host hidden (`defaultVisible` no longer shows it), at the host's size and in the normal mode, as every app's window
+(the other launch options apply where a runner opens the window); an error shows
 it while it is hidden (held, or hidden by the app: a tray app whose startup failed), so it is seen. GPUI shows a
 window as it opens on Linux, so there the main window shows. On macOS a window with a parent is AppKit's child window
 of it (`native::set_parent`), which AppKit orders in with it: a panel or dialog of a hidden main window shows the
@@ -415,7 +490,9 @@ buttons and the frame's edges.
 Window and display rectangles mean what they do on the other desktop backends: points from the primary display's
 top left corner. GPUI measures them from each display's own corner on macOS, so `window/screen.rs` converts what is
 reported and opens a window at a point on the display holding it; native moves wait until the GPUI update that asks
-for them ends, as the system reports a move to GPUI while it makes it.
+for them ends, as the system reports a move to GPUI while it makes it. On macOS a display also carries its notch as
+a cutout, read from the display's `NSScreen` (`window/native.rs`) and computed by `nsh_core::desktop::notch`, as the
+AppKit backend computes it.
 
 What GPUI and the window managers leave out: Linux windows are placed by the window manager (no positions, levels,
 workspaces, taskbar, shadow, color scheme, content protection, maximum size or aspect ratio; a window shows as it

@@ -180,7 +180,7 @@ fn node_sources(text: &str) -> Vec<String> {
     let tree = super::tree(&Parser::new(), text, true);
     assert_eq!(tree.source, text);
     let mut out = Vec::new();
-    let mut stack = vec![&tree.root];
+    let mut stack: Vec<&mdast::Node> = vec![&tree.root];
     while let Some(node) = stack.pop() {
         let position = node.position().expect("a position");
         for point in [&position.start, &position.end] {
@@ -493,6 +493,58 @@ fn links_images_and_references() {
             link("mailto:x@y.com", vec![t("x@y.com")]),
             t(" [none]"),
         ])]
+    );
+}
+
+#[test]
+fn links_and_images_can_be_left_out() {
+    let source = "[a](https://a.com) [b][ref] ![i](i.png) [![linked](i.png)](https://x.y) <a href=\"https://h.dev\">**html**</a> <img src=\"x.png\" alt=\"Alt\">\n\n[ref]: https://ref.dev";
+    let parser = Parser::new().options(MarkdownOptions {
+        links: false,
+        images: false,
+        ..options()
+    });
+    // A link is its text, an image its `alt` text; what is around them
+    // stays as it is.
+    assert_eq!(
+        parser.markdown(source).blocks,
+        vec![p(vec![
+            t("a b i linked "),
+            strong(vec![t("html")]),
+            t(" Alt"),
+        ])]
+    );
+}
+
+#[test]
+fn images_off_keeps_their_links() {
+    let parser = Parser::new().options(MarkdownOptions {
+        images: false,
+        ..options()
+    });
+    assert_eq!(
+        parser.markdown("[![alt](i.png)](https://x.y)").blocks,
+        vec![p(vec![link("https://x.y", vec![t("alt")])])]
+    );
+    // A reference image too.
+    assert_eq!(
+        parser.markdown("![r][img]\n\n[img]: r.png").blocks,
+        vec![p(vec![t("r")])]
+    );
+}
+
+#[test]
+fn links_off_keeps_their_images() {
+    let parser = Parser::new().options(MarkdownOptions {
+        links: false,
+        ..options()
+    });
+    assert_eq!(
+        parser.markdown("[![alt](i.png)](https://x.y)").blocks,
+        vec![p(vec![Inline::Image(Image {
+            alt: "alt".into(),
+            ..Image::new("i.png")
+        })])]
     );
 }
 
@@ -1217,6 +1269,40 @@ fn streamed_reference_brackets_and_unknown_tags_stay_text() {
     assert_eq!(blocks("<foo> x"), vec![p(vec![t("<foo> x")])]);
 }
 
+#[test]
+fn streamed_closers_brackets_and_task_boxes_show_no_markers() {
+    // Every prefix of a streamed reply: a closer typed in part, a label
+    // whose `(` has not arrived and a task box alone never show their
+    // markers as text.
+    for source in [
+        "Some **bold** and *it* and __b__ and ~~del~~ end",
+        "See [the docs](https://example.com) and ![alt](a.png) end",
+    ] {
+        for (prefix, doc) in streamed_prefixes(source) {
+            let text = doc.plain_text();
+            assert!(
+                !text.contains(['*', '_', '~', '[', ']']),
+                "{prefix:?}: {text:?}"
+            );
+        }
+    }
+    for (prefix, doc) in streamed_prefixes("Run ``a`b`` now") {
+        let debug = format!("{:?}", doc.blocks);
+        assert!(!debug.contains("``"), "{prefix:?}: {debug}");
+    }
+    for (prefix, doc) in streamed_prefixes("- [x] done\n- [ ] todo\n\n1. [X] one") {
+        let text = doc.plain_text();
+        assert!(!text.contains(['[', ']']), "{prefix:?}: {text:?}");
+        let (mut items, mut code) = (Vec::new(), Vec::new());
+        walk(&doc.blocks, &mut items, &mut code);
+        assert!(
+            items.iter().all(|item| item.checked.is_some()),
+            "{prefix:?}: {:?}",
+            doc.blocks
+        );
+    }
+}
+
 /// Every prefix of `source` (at each character), as a streamed reply
 /// shows it.
 fn streamed_prefixes(source: &str) -> impl Iterator<Item = (&str, Document)> {
@@ -1435,6 +1521,25 @@ fn never_panics() {
     }
 }
 
+/// Thousands of nested quotes and lists (a degenerate reply) are read on a
+/// thread of a common stack size: what is past the depth read is gathered
+/// as text without recursion.
+#[test]
+fn deep_nesting_past_the_bound_is_read_as_text() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            // 5000 levels, a list in a quote in each: gathered recursively,
+            // their text ran the stack out (lists alone do too, but
+            // `markdown-rs` takes seconds to parse them this deep).
+            let doc = md(&format!("{}deep", "> - ".repeat(2_500)));
+            assert!(format!("{doc:?}").contains("deep"));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn a_long_reply_parses_quickly() {
     let chunk = "## Section\n\nSome **bold** text with `code`, a [link](https://example.com) and $x^2$.\n\n- item one\n- item two with *emphasis*\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> [!NOTE]\n> A note.\n\n";
@@ -1617,5 +1722,30 @@ fn inline_html_formatting_holds_markdown() {
     assert_eq!(
         blocks("<code>*x*</code>"),
         vec![p(vec![Inline::Code { code: "*x*".into() }])]
+    );
+}
+
+#[test]
+fn inline_html_text_colors_hold_markdown() {
+    // A colored span or font keeps its color around the Markdown in it.
+    assert_eq!(
+        blocks(r#"a <span style="color: #e54545">**b** c</span> <font color="blue">d</font>"#),
+        vec![p(vec![
+            t("a "),
+            Inline::TextStyle {
+                content: vec![strong(vec![t("b")]), t(" c")],
+                color: Some("#e54545".into()),
+            },
+            t(" "),
+            Inline::TextStyle {
+                content: vec![t("d")],
+                color: Some("blue".into()),
+            },
+        ])]
+    );
+    // A span without a color is its content, read as HTML, as before.
+    assert_eq!(
+        blocks(r#"a <span class="x">**b**</span>"#),
+        vec![p(vec![t("a **b**")])]
     );
 }

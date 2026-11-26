@@ -11,6 +11,25 @@ demo: el-input
 EditText on Android. Typing, the caret, selection, autocorrection and autofill are the platform's own. Rust makes one
 with `nsh_base::input()`, TSX with `<Input>` from `nsh/base`.
 
+```tsx tabs
+import { signal } from "nsh";
+import { Input } from "nsh/base";
+
+function NameField() {
+  const name = signal("");
+  return (
+    <Input
+      value={name()}
+      onChange={({ value }) => name.set(value)}
+      placeholder="Your name"
+      autoCapitalize="words"
+      returnKeyType="done"
+      style={{ fontSize: 16, padding: 12, borderWidth: 1, borderColor: "#d0d7de", borderRadius: 8 }}
+    />
+  );
+}
+```
+
 ```rust tabs
 use nsh_base::input;
 use nsh_core::prelude::*;
@@ -28,25 +47,6 @@ fn name_field() -> impl IntoElement {
         .border_1()
         .border_color(rgb(0xd0d7de))
         .rounded(px(8.0))
-}
-```
-
-```tsx tabs
-import { signal } from "nsh";
-import { Input } from "nsh/base";
-
-function NameField() {
-  const name = signal("");
-  return (
-    <Input
-      value={name()}
-      onChange={({ value }) => name.set(value)}
-      placeholder="Your name"
-      autoCapitalize="words"
-      returnKeyType="done"
-      style={{ fontSize: 16, padding: 12, borderWidth: 1, borderColor: "#d0d7de", borderRadius: 8 }}
-    />
-  );
 }
 ```
 
@@ -76,9 +76,9 @@ view styles apply):
 | `value` | `.value(..)` | `string` | | The text, controlled by the app. |
 | `defaultValue` | `.default_value(..)` | `string` | | The initial text. |
 | `placeholder` | `.placeholder(..)` | `string` | | Shown while the input is empty. |
-| `multiline` | `.multiline(..)` | `boolean` | `false` | Several lines; return inserts a line break unless `submitBehavior` says otherwise. |
+| `multiline` | `.multiline(..)` | `boolean` | `false` | Several lines; return inserts a line break unless `submitBehavior` says otherwise. The text scrolls inside the padding: lines scrolled past it never show in the padding or under the border. |
 | `scrollbar` | `.scrollbar(..)` | `boolean \| ScrollbarTheme` | `true` | A multiline input's scroll bar: the platform's indicator, or the app's built-in bar once it set one ([Scrollbar](./scrollbar.md#built-in-bars)); an object is a theme of its own, `false` none. |
-| `maxLength` | `.max_length(..)` | `number` | | The most characters the user can enter. A longer paste goes in cut to what fits, as in a browser. |
+| `maxLength` | `.max_length(..)` | `number` | | The most characters the user can enter, counted as Unicode code points on every platform: an emoji such as 😀 or a rare CJK character counts once. A longer paste goes in cut to what fits, as in a browser, never inside a character such as an emoji with its skin tone. |
 | `readonly` | `.readonly(..)` | `boolean` | `false` | The user can select and copy the text but not change it. |
 | `masked` | `.masked(..)` | `boolean` | `false` | The text is hidden (passwords). |
 | `allowFontScaling` | | `boolean` | `true` | Follow the system text size. |
@@ -91,11 +91,13 @@ view styles apply):
 | `keyboardType` | `.keyboard_type(KeyboardType::Email)` | `"default" \| "number-pad" \| "decimal-pad" \| "numeric" \| "numbers-and-punctuation" \| "email-address" \| "phone-pad" \| "url"` | `"default"` | The keyboard layout ([the values](../docs/forms-and-keyboard.md#keyboards-and-autofill); `numbers-and-punctuation` has a minus sign on iOS). |
 | `returnKeyType` | `.return_key_type(ReturnKeyType::Next)` | `"default" \| "done" \| "go" \| "next" \| "search" \| "send"` | `"default"` | The label of the return key. |
 | `autoCapitalize` | `.auto_capitalize(AutoCapitalize::None)` | `"none" \| "sentences" \| "words" \| "characters"` | `"sentences"` | Automatic capitalization. |
-| `autoCorrect` | `.auto_correct(..)` | `boolean` | `true` | The system's corrections. |
+| `autoCorrect` | `.auto_correct(..)` | `boolean` | `true` | The system's corrections: spelling and, on iOS and macOS, smart quotes, dashes and text replacement. Turn it off for code and identifiers. |
 | `autoComplete` | `.auto_fill(AutoFill::OneTimeCode)` | `AutoComplete \| TextContentType` | | What the input holds, for autofill on iOS, Android and the web: `"username"`, `"current-password"`, `"new-password"`, `"one-time-code"`, `"email"`, `"tel"`, `"postal-code"`, `"cc-number"`, `"off"`, … |
 | `pasteBehavior` | `.paste_behavior(PasteBehavior::Report)` | `"insert" \| "report"` | `"insert"` | What a paste does: `"insert"` inserts the pasted text, `"report"` inserts nothing, for the app to handle what `onPaste` reports. Images and files are never inserted. |
+| `pasteMaxSize` | `.paste_max_size(20 << 20)` | `number` | every file read | The largest pasted file read, in bytes. A larger one reaches `onPaste` in `tooLarge` with its name, type and size only; iOS, Android and the web check the size before copying the bytes ([forms and keyboard](../docs/forms-and-keyboard.md#pasting-images-and-files)). |
 | `submitBehavior` | `.submit_behavior(SubmitBehavior::Submit)` | `"submit" \| "blurAndSubmit" \| "newline"` | `"blurAndSubmit"` (single line), `"newline"` (multiline) | What return does: `"submit"` reports `onSubmit` and keeps the focus, `"blurAndSubmit"` also unfocuses, `"newline"` inserts a line break (multiline; a single line submits). A multiline input that submits still takes line breaks from Shift+Return or Option / Alt+Return on hardware keyboards. `"submit"` keeps the keyboard up (e.g. to send several messages). |
 | `autoFocus` | `.auto_focus(..)` | `boolean` | `false` | Focused when it appears. |
+| `selectTextOnFocus` | `.select_text_on_focus(..)` | `boolean` | `false` | Selects the whole text when the input takes the focus (a click, Tab, `focus()`, `autoFocus`); a drag, a Shift-click or a double click keeps the user's selection. |
 
 ### Caret and selection
 
@@ -118,6 +120,11 @@ methods in Rust (UIKit tints the caret and the selection with one color, the car
 | `caretColor` | `.caret_color(..)` | `caret-*` | The caret's color. |
 | `selectionColor` | `.selection_color(..)` | `selection:text-*` | The selection highlight's color. |
 
+```tsx tabs
+<Input placeholder="Search" class="text-zinc-900 placeholder:text-zinc-400 selection:text-blue-600" />
+<Input placeholder="Search" style={{ placeholderColor: "#9ca3af", caretColor: "#2563eb", selectionColor: "#93c5fd" }} />
+```
+
 ```rust tabs
 input()
     .placeholder("Search")
@@ -125,11 +132,6 @@ input()
     .placeholder_color(rgb(0x9ca3af))
     .caret_color(rgb(0x2563eb))
     .selection_color(rgb(0x93c5fd))
-```
-
-```tsx tabs
-<Input placeholder="Search" class="text-zinc-900 placeholder:text-zinc-400 selection:text-blue-600" />
-<Input placeholder="Search" style={{ placeholderColor: "#9ca3af", caretColor: "#2563eb", selectionColor: "#93c5fd" }} />
 ```
 
 ### iOS
@@ -140,14 +142,14 @@ input()
 | `inputAccessoryViewID` | `.input_accessory(id)` | `string` | The `nativeID` of an `InputAccessoryView` ([`InputAccessoryView`](../modules/nsh-mobile.md#inputaccessoryview)) shown over the keyboard while the input has focus. |
 | `keyboardAppearance` | `.keyboard_appearance(KeyboardAppearance::Dark)` | `"default" \| "light" \| "dark"` | The keyboard's look; `"default"` follows the system's appearance. Android's keyboards follow the system's theme. |
 
+```tsx tabs
+<Input autoComplete="one-time-code" keyboardType="number-pad" ios={{ textContentType: "oneTimeCode" }} />
+```
+
 ```rust tabs
 use nsh_core::element::AutoFill;
 
 input().auto_fill(AutoFill::OneTimeCode).keyboard_type(KeyboardType::Number)
-```
-
-```tsx tabs
-<Input autoComplete="one-time-code" keyboardType="number-pad" ios={{ textContentType: "oneTimeCode" }} />
 ```
 
 ## Events
@@ -158,13 +160,22 @@ input().auto_fill(AutoFill::OneTimeCode).keyboard_type(KeyboardType::Number)
 | `onSubmit` | `.on_submit(\|text: &str\| ..)` | `{ text }` | The return key was pressed in an input that submits (single line, or `submitBehavior` `"submit"` / `"blurAndSubmit"`). |
 | `onFocus` / `onBlur` | `.on_focus` / `.on_blur` | none | The input gained / lost focus. |
 | `onSelectionChange` | `.on_selection_change(\|s: &Selection\| ..)` | `{ start, end }` | The caret or selection moved (UTF-16 units). |
-| `onPaste` | `.on_paste(\|e: &PasteEvent\| ..)` | `{ text, html, files, uris }` | The user pasted: the text, its formatting as HTML (Linux, web), images (a screenshot) as `File`s, local files' `file:` URLs. Before the `onChange` of the text it inserts ([forms and keyboard](../docs/forms-and-keyboard.md#pasting-images-and-files)). |
+| `onPaste` | `.on_paste(\|e: &PasteEvent\| ..)` | `{ text, html, files, tooLarge, uris }` | The user pasted: the text, its formatting as HTML (Linux, web), images (a screenshot) as `File`s, files larger than `pasteMaxSize` by name, type and size (`tooLarge`), local files' `file:` URLs. Before the `onChange` of the text it inserts ([forms and keyboard](../docs/forms-and-keyboard.md#pasting-images-and-files)). |
 | `onCaretMove` | `.on_caret_move(\|e: &CaretEvent\| ..)` | `{ bounds, pageBounds }` | The caret moved, with the selection or as the text scrolled or wrapped: `bounds` is where it is in the input, `pageBounds` in the window, an `Overlay`'s `anchor` ([forms and keyboard](../docs/forms-and-keyboard.md#the-caret)). |
 | `onKeyPress` | `.on_key_press(\|key: &str\| ..)` | `{ key }` | Before the text changes: `key` is the typed text, `"Backspace"` or `"Enter"`. |
 | `onContentSizeChange` | `.on_content_size_change(\|size: &Size<Points>\| ..)` | `{ size }` | The size of the text changed (at the input's width when multiline), as it is typed; an empty input reports one empty line, whatever its placeholder. |
 | `onCompositionChange` | `.on_composition_change(\|e: &Composition\| ..)` | `{ composing, text }` | An input method's composition started, changed or ended: `text` is what is being composed (pinyin before a character is chosen, kana before conversion), `""` once it ends. The committed text reaches `onChange` before the end. |
 
 A multiline input that grows with its text:
+
+```tsx tabs
+const height = signal(40);
+<Input
+  multiline
+  onContentSizeChange={({ size }) => height.set(Math.min(120, Math.max(40, size.height + 16)))}
+  style={{ height: height(), paddingHorizontal: 12, paddingVertical: 8 }}
+/>;
+```
 
 ```rust tabs
 let height = signal(px(40.0));
@@ -179,15 +190,6 @@ input()
     .py_2()
 ```
 
-```tsx tabs
-const height = signal(40);
-<Input
-  multiline
-  onContentSizeChange={({ size }) => height.set(Math.min(120, Math.max(40, size.height + 16)))}
-  style={{ height: height(), paddingHorizontal: 12, paddingVertical: 8 }}
-/>;
-```
-
 ## Ref methods
 
 | Method | Rust | Description |
@@ -195,9 +197,17 @@ const height = signal(40);
 | `focus()` | `focus()` | Focuses the input and shows the keyboard. |
 | `blur()` | `blur()` | Unfocuses it. |
 | `setSelection(start, end?)` | `set_selection(start, end)` | Selects `start..end` (UTF-16 units); a caret when they are equal. |
-| `insertText(text)` | `insert_text(text)` | Inserts `text` in place of the selection as the user's edit: `maxLength` and the line rules apply, `onChange` reports it, and it is one step of the input's undo history. Linux, the web and headless tests only; other platforms do nothing yet and log a warning. |
+| `insertText(text)` | `insert_text(text)` | Inserts `text` in place of the selection as the user's edit: `maxLength` and the line rules apply, `onChange` reports it, and it is one step of the input's undo history. iOS, macOS, Linux, the web and headless tests; other platforms do nothing yet and log a warning. |
 
 Moving focus to the next field on return:
+
+```tsx tabs
+let password!: InputRef;
+<>
+  <Input returnKeyType="next" onSubmit={() => password.focus()} />
+  <Input ref={password} masked autoComplete="current-password" />
+</>;
+```
 
 ```rust tabs
 use nsh_core::element::AutoFill;
@@ -207,14 +217,6 @@ let password = element_ref();
 view()
     .child(input().return_key_type(ReturnKeyType::Next).on_submit(move |_: &str| password.focus()))
     .child(input().element_ref(&password).masked(true).auto_fill(AutoFill::Password))
-```
-
-```tsx tabs
-let password!: InputRef;
-<>
-  <Input returnKeyType="next" onSubmit={() => password.focus()} />
-  <Input ref={password} masked autoComplete="current-password" />
-</>;
 ```
 
 `Keyboard.dismiss()` from `nsh` (`dismiss_keyboard()` in Rust) hides the keyboard whichever input has it.

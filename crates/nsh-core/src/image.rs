@@ -28,6 +28,9 @@ use std::{
 use rustc_hash::FxHashMap;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "animation")]
+pub mod animation;
+#[cfg(not(target_arch = "wasm32"))]
 mod cache;
 #[cfg(not(target_arch = "wasm32"))]
 pub use cache::{CacheHeaders, DEFAULT_DISK_CACHE_SIZE, DiskCache, Fetched, Lookup, Validators};
@@ -477,7 +480,11 @@ mod tests {
         assert_ne!(src.uri, again.uri);
         assert!(src.uri.starts_with("data:image/png;nsh-key="));
         assert_eq!(src.size, Some((3.0, 2.0)));
-        let data = src.data.clone().unwrap();
+        let sized = src.clone().size(crate::geometry::size_pt(1.5, 1.0));
+        assert_eq!(sized.size, Some((1.5, 1.0)));
+        assert_eq!(sized.uri, src.uri);
+        assert_eq!(sized.data, src.data);
+        let data = sized.data.clone().unwrap();
         let (w, h, rgba) = data.rgba().unwrap();
         assert_eq!((w, h), (3, 2));
         assert!(std::ptr::eq(rgba, &*pixels));

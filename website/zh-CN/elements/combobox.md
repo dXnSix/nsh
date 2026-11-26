@@ -14,6 +14,53 @@ demo: el-combobox
 
 组合框负责行为：值（应用的，或它自己的）、展开状态、键盘、搜索、分组、高亮的行，以及屏幕阅读器听到的内容。在 `multiple` 时，一次选择会把该条目加入或移出值，列表保持打开，所以可以一次选好多个。外观由应用决定：应用为字段、弹出层、列表、行、分组标题、输入框和底部区域设置样式，或者自己绘制行。
 
+```tsx tabs
+import { mount, signal, Text, View } from "nsh";
+import { Combobox } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+const TAGS = [
+  { value: "bug", title: "Bug" },
+  { value: "design", title: "Design" },
+  { value: "docs", title: "Docs" },
+  { value: "perf", title: "Performance" },
+  { value: "security", title: "Security" },
+];
+
+function App() {
+  const tags = signal<string[]>([]);
+  return (
+    <Combobox
+      items={TAGS}
+      multiple
+      placeholder={tags().length ? `${tags().length} tags` : "Add tags"}
+      value={tags()}
+      onChange={({ value }) => tags.set(value)}
+      accessibilityLabel="Tags"
+      offset={4}
+      popupClass="rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
+      backdropClass="bg-black/40"
+      class="h-9 w-48 flex-row items-center rounded-md border border-input px-3"
+      inputClass="flex-1 text-sm placeholder:text-muted-foreground"
+      itemClass="group rounded-md px-2 py-1.5 text-sm focus:bg-accent focus:text-accent-foreground"
+      triggerButton={<Text class="px-1 text-muted-foreground">⌄</Text>}
+      renderItem={(item) => (
+        <View class="flex-row justify-between">
+          <Text>{item.title}</Text>
+          <Text class="opacity-0 group-selected:opacity-100">✓</Text>
+        </View>
+      )}
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{SelectEntry, SelectItem, combobox, theme};
 use nsh_core::prelude::*;
@@ -67,48 +114,6 @@ fn tag_picker() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, signal, Text, View } from "nsh";
-import { Combobox } from "nsh/base";
-
-const TAGS = [
-  { value: "bug", title: "Bug" },
-  { value: "design", title: "Design" },
-  { value: "docs", title: "Docs" },
-  { value: "perf", title: "Performance" },
-  { value: "security", title: "Security" },
-];
-
-function App() {
-  const tags = signal<string[]>([]);
-  return (
-    <Combobox
-      items={TAGS}
-      multiple
-      placeholder={tags().length ? `${tags().length} tags` : "Add tags"}
-      value={tags()}
-      onChange={({ value }) => tags.set(value)}
-      accessibilityLabel="Tags"
-      offset={4}
-      popupClass="rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
-      backdropClass="bg-black/40"
-      class="h-9 w-48 flex-row items-center rounded-md border border-input px-3"
-      inputClass="flex-1 text-sm placeholder:text-muted-foreground"
-      itemClass="group rounded-md px-2 py-1.5 text-sm focus:bg-accent focus:text-accent-foreground"
-      triggerButton={<Text class="px-1 text-muted-foreground">⌄</Text>}
-      renderItem={(item) => (
-        <View class="flex-row justify-between">
-          <Text>{item.title}</Text>
-          <Text class="opacity-0 group-selected:opacity-100">✓</Text>
-        </View>
-      )}
-    />
-  );
-}
-
-mount(App);
-```
-
 `Combobox` 来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate。在 Rust 中，`combobox()` 创建一个组合框，每个属性有一个设置方法（`.items(..)`、`.value(..)`、`.multiple(..)`），每个事件有一个监听方法（`.on_change(..)`）。它的条目与 `Select` 的相同：`SelectItem::new(value, title)`，可以用 `.disabled(..)` 和 `.group(..)`，分组方式也和选择框一样（见[条目](./select.md#items)）。
 
 <a id="value"></a>
@@ -146,7 +151,7 @@ mount(App);
 
 ## 出现与离开
 
-在桌面平台上，弹出层像 [Popover](./popover.md#entrance-and-exit) 一样随你的过渡出现和离开：`popupStartingClass` 是它第一帧的外观，`popupClass` 里的 `transition-*` 类把它过渡到自己的外观；`popupEndingClass` 是关闭后的外观，在这些过渡播放期间它会保留、不接受按压，随后触发 `onClose`。关闭时键盘焦点就回到输入框。在离开途中再次打开时，它从当前状态回到自己的外观。`popupStartingStyle` 和 `popupEndingStyle` 以内联样式做同样的事。用户要求减少动态效果时，它立即出现、立即离开；触摸屏上的 sheet 自带滑入和滑出的动作。
+在桌面平台上，弹出层像 [Popover](./popover.md#entrance-and-exit) 一样随你的过渡出现和离开：`popupStartingClass` 是它第一帧的外观，`popupClass` 里的 `transition-*` 类把它过渡到自己的外观；`popupEndingClass` 是关闭后的外观，在这些过渡播放期间它会保留、不接受按压，随后触发 `onClose`。关闭时键盘焦点就回到输入框，除非选择的 `onChange` 把焦点移到了别的视图（比如表单的下一个输入框），那样焦点就留在那里。在离开途中再次打开时，它从当前状态回到自己的外观。`popupStartingStyle` 和 `popupEndingStyle` 以内联样式做同样的事。用户要求减少动态效果时，它立即出现、立即离开；触摸屏上的 sheet 自带滑入和滑出的动作。
 
 ```tsx
 <Combobox
@@ -236,7 +241,7 @@ mount(App);
 
 ## 键盘
 
-输入框保持焦点时，按键与选择框的相同（见[键盘](./select.md#keyboard)），区别在于：字母和数字输入到输入框中并筛选列表，而不是输入跳转；Down 和 Up 打开关闭着的列表；在 `multiple` 时，Return 切换高亮的条目并保持列表打开；Mac 上的 Cmd+Return（其他平台为 Ctrl+Return）关闭列表并确认。Tab 和 Shift+Tab 关闭打开的列表，焦点移到下一个或上一个控件。在桌面平台上列表以其他方式关闭时，焦点留在输入框。
+输入框保持焦点时，按键与选择框的相同（见[键盘](./select.md#keyboard)），区别在于：字母和数字输入到输入框中并筛选列表，而不是输入跳转；Down 和 Up 打开关闭着的列表；在 `multiple` 时，Return 切换高亮的条目并保持列表打开；Mac 上的 Cmd+Return（其他平台为 Ctrl+Return）关闭列表并确认。Tab 和 Shift+Tab 关闭打开的列表，焦点移到下一个或上一个控件。在桌面平台上列表以其他方式关闭时，焦点留在输入框，除非选择的 `onChange` 把它移到了别的视图。
 
 <a id="accessibility"></a>
 

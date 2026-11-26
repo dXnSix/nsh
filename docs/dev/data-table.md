@@ -29,7 +29,9 @@ The table is a body, a hit layer over it and a header (`view.rs`), from the bott
   rows only) and the scrolling columns between them (which move both ways). Those fixed at the end stand right after
   the scrolling columns while these fit, at the view's end once they overflow it (`Columns::end_left`, as CSS's
   `sticky`). The cells a scroll needs come with the next commit, which moves the body with them;
-- the *hit layer* over it is a vertical scroll view of a horizontal one of an empty box of the content's size. The
+- the *hit layer* over it is a vertical scroll view of a horizontal one of an empty box of the content's size (no
+  shorter than the viewport, so the columns scroll from below the last row, and from the body of a table with no rows; over what the app put in the `empty` slot, which lies above the layer, a wheel
+  moves the columns from the slot's box). The
   platforms scroll it as they scroll any scroll view (inertia, scroll bars, wheel, touch), and its box takes presses,
   hovers and the context menu. It draws nothing but its scroll bars (the platform's indicator, or the built-in
   `Scrollbar` of the app's theme, both the scroll view's own), which lie over the rows' backgrounds this way: with
@@ -39,9 +41,14 @@ The table is a body, a hit layer over it and a header (`view.rs`), from the bott
 A press on a cell `renderCell` draws is passed on into it first (`Dt::press_with`): the cell's view, registered by
 row and column (`CustomCells`), gets `ElementRef::press_at` with the press, and the core presses the innermost view of
 the app's there that hears presses, with the commit's layout (`Core::press_target`). Only when none takes it does the
-press select and report `onRowPress`. That view gets `onPress`, not hover or press states: the pointer stays on the hit
-layer. Headless tests press a view that takes no pointer (the body's) where it is, through the hit layer, as a pointer
-would (`Screen::routed_press`).
+press select and report `onRowPress`. That view gets `onPress`, not press states: the pointer stays on the hit layer.
+The pointer moving over the body is passed on the same way (`Dt::hover_at`): the cell under it gets
+`ElementRef::hover_at`, and the core hovers the app's views there with the last layout (`Core::pass_hovers`), so their
+`hover:` classes apply and they hear `onMouseEnter`, `onMouseMove` and `onMouseLeave`; the cell it left, or the hit
+layer's `onMouseLeave`, gets `hover_at(None)`. The hovered row's views in every region are projected hovered
+(`project_hovered`), so with `classes.row: "group"` the `group-hover:` classes of every cell in it apply. Headless tests
+press and hover a view that takes no pointer (the body's) where it is, through the hit layer, as a pointer would
+(`Screen::routed_press`, `Screen::hit_pointer`).
 
 The fixed-column separator sits above each row background and below its cells, so app-supplied cell borders
 remain visible at the fixed boundary.
@@ -77,7 +84,8 @@ draws no line until the pointer is on it (`PointerOnly`), so columns stand apart
 
 ## Columns' own classes, fitting, bounce
 
-A column's `cellClass` and `headerClass` come after the part's classes (`column_parts`, `view.rs`). Two presses of a
+A column's `cellClass` and `headerClass` come after the part's classes (`column_parts`, `view.rs`), and a
+`cellClasses` entry for that cell comes after those. Two presses of a
 resize handle that moved less than `MOVE_SLOP`, within `DOUBLE_PRESS` (400 ms), fit the column (`Dt::resize_end`).
 `bounces` sets the bounce of both scroll views.
 
@@ -86,6 +94,15 @@ separator; leaving the title's right border unset gives it one line. `headerCont
 label and sort button (for example, their gap), and `headerCellDragging` supplies drag feedback. `examples/nsh-gallery-ui/data-table.ts` supplies the gallery and website demos'
 8-point cell padding, 8 points before a title and 4 after its sort button, with a 4-point gap before the button.
 Its columns set `fitPadding: 16` for this app-owned spacing; fits add this to the widest title or cell text.
+
+`Columns` keeps each column's *base* width (its spec's, or what a drag, a fit or the app set) apart from the width it
+shows: the base plus its share of the room the columns leave free (`grow`, `Columns::grow`), given in whole points so
+they fill the room exactly. `Dt::sync_room` gives it the room (the viewport less the row header and a terminal's bar)
+whenever that changes; a layout with no area (`display: none` around the table) changes neither, so a hidden table
+keeps its rows and shows them again as they were. A width set by a drag, `setColumnWidth` or `fitColumn` settles the column: it keeps that width
+and no longer grows. `autoFit` (`Dt::auto_fit`, run when the columns or the rows change) measures as `fitColumn` does
+and sets the base without settling or reporting, once per column; `Columns::updated` carries the bases, the settled
+and the fitted columns over by key, as it does the widths the user dragged.
 
 ## Data
 
@@ -124,9 +141,11 @@ The table is one stop of Tab, as gpui-component's (a `tab_stop` focus handle): i
 `onFocus` / `onBlur` set the table's focus (`Dt::set_focus`), which binds its keys; its rows, titles and sort buttons
 are `focusable(false)`, and so are its columns' resize handles in a terminal, where a lone `ResizeHandle` is a stop
 (`PointerOnly`, provided around them: resizing is the mouse's, as gpui-component's). While it has the keyboard Tab moves the selection, as gpui-component's, and Escape gives it
-back; in a terminal Tab and Shift+Tab are not bound and move the focus on, out of the table, the arrows moving
-between the columns (`docs/dev/tui.md` "Interaction"). A press, `focus()` and `blur()` set the same flag. Tab stops at pressables and `focusable(true)` views on macOS
-and the web (`ViewProps::focus_stop`).
+back; Enter / Return activates the selection's row (`onRowActivate`), bound like a list's (`for_focus`) and not while a
+text input edits or a control inside the table has the focus; a terminal binds them the same (`docs/dev/tui.md`
+"Interaction"). A press,
+`focus()` and `blur()` set the same flag. Tab stops at pressables and `focusable(true)` views on macOS and the web
+(`ViewProps::focus_stop`).
 
 ## Compared with gpui-component
 
@@ -146,8 +165,11 @@ methods the ref's. Deliberate differences:
 - No strings and no fixed look: the empty and loading slots are the app's, and every part (the sort button
   among them) takes the app's classes for its appearance (gpui-component draws an inbox icon, a skeleton
   and a translated "Sort by" label).
-- `onRowPress` is gpui-component's `render_tr` click handler, for the app's own selections of several rows;
-  `rowClasses`, data beside `data`, is `render_tr`'s per-row look without a call into JS per row.
+- `onRowPress` and `onColumnPress` are where an app keeps its own selection of several rows, cells or columns.
+  With `selectOnModifierPress` false, a press with Shift or the secondary modifier leaves the table's selection,
+  on a row, a cell or a title. `cellClasses` paints one cell by its data row and column index, after the part's
+  classes and the column's `cellClass`, and the text stays the table's. A column's `headerClass` and `cellClass`
+  paint that column. `rowClasses`, data beside `data`, is the per-row look without a call into JS per row.
 - A fit measures the cells' texts natively; `fitPadding` adds what the app's drawing adds to them (gpui-component
   asks its delegate to measure).
 

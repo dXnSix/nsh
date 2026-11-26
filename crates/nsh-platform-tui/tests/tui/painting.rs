@@ -61,7 +61,7 @@ fn Borders() -> impl IntoElement {
             view()
                 .absolute()
                 .left(px(96.0))
-                .top(px(64.0))
+                .top(px(96.0))
                 .w(px(48.0))
                 .h(px(16.0))
                 .border_1()
@@ -99,7 +99,7 @@ fn Borders() -> impl IntoElement {
             view()
                 .absolute()
                 .left(px(0.0))
-                .top(px(64.0))
+                .top(px(96.0))
                 .w(px(80.0))
                 .h(px(32.0))
                 .border_b(px(1.0))
@@ -107,26 +107,29 @@ fn Borders() -> impl IntoElement {
                 .py(px(16.0))
                 .child(blank_row()),
         )
-        .child(view().absolute().top(px(112.0)).child(text("ready")))
+        .child(view().absolute().top(px(176.0)).child(text("ready")))
 }
 
 #[test]
 fn borders_draw_box_lines_dim_or_in_the_accent_of_each_side() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
     view.load(App::Rust(Root::new::<Borders>(|| ()))).unwrap();
     draw_until(&mut view, &mut terminal, &rx, "ready");
     let buffer = terminal.backend().buffer();
+    // 16pt of padding above and below: a row each inside the lines.
     assert_eq!(row(buffer, 0, 0..6), "┌────┐");
-    assert_eq!(row(buffer, 1, 0..6), "│    │");
-    assert_eq!(row(buffer, 2, 0..6), "└────┘");
+    for y in 1..=3 {
+        assert_eq!(row(buffer, y, 0..6), "│    │");
+    }
+    assert_eq!(row(buffer, 4, 0..6), "└────┘");
     assert_eq!(buffer[(2, 0)].fg, Color::Red, "top");
     assert_eq!(buffer[(5, 1)].fg, Color::Green, "right");
-    assert_eq!(buffer[(2, 2)].fg, Color::Blue, "bottom");
+    assert_eq!(buffer[(2, 4)].fg, crate::ACCENT, "bottom");
     assert_eq!(buffer[(0, 1)].fg, Color::Reset, "left");
     assert!(dim(buffer, 0, 1), "a neutral side is dim");
     assert!(!dim(buffer, 2, 0), "an accent is not");
-    for (x, y) in [(0, 0), (2, 0), (0, 1), (2, 1), (5, 2)] {
+    for (x, y) in [(0, 0), (2, 0), (0, 1), (2, 1), (5, 4)] {
         assert_eq!(buffer[(x, y)].bg, Color::Reset, "no fill at {x},{y}");
     }
 }
@@ -134,11 +137,11 @@ fn borders_draw_box_lines_dim_or_in_the_accent_of_each_side() {
 #[test]
 fn a_filled_and_bordered_box_is_its_fill_alone() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
     view.load(App::Rust(Root::new::<Borders>(|| ()))).unwrap();
     draw_until(&mut view, &mut terminal, &rx, "ready");
     let buffer = terminal.backend().buffer();
-    for y in 3..=5 {
+    for y in 5..=7 {
         assert_eq!(
             row(buffer, y, 12..18),
             "      ",
@@ -147,7 +150,7 @@ fn a_filled_and_bordered_box_is_its_fill_alone() {
         );
     }
     // A row's box: a small surface, its fill shown at 16 colors too.
-    for (x, y) in [(12, 4), (14, 4), (17, 4)] {
+    for (x, y) in [(12, 6), (14, 6), (17, 6)] {
         assert_ne!(buffer[(x, y)].bg, Color::Reset, "its fill at {x},{y}");
     }
 }
@@ -155,7 +158,7 @@ fn a_filled_and_bordered_box_is_its_fill_alone() {
 #[test]
 fn dashed_and_dotted_borders_draw_their_lines() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
     view.load(App::Rust(Root::new::<Borders>(|| ()))).unwrap();
     draw_until(&mut view, &mut terminal, &rx, "ready");
     let buffer = terminal.backend().buffer();
@@ -169,12 +172,13 @@ fn dashed_and_dotted_borders_draw_their_lines() {
 #[test]
 fn a_border_on_one_side_is_only_its_line() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
     view.load(App::Rust(Root::new::<Borders>(|| ()))).unwrap();
     draw_until(&mut view, &mut terminal, &rx, "ready");
     let buffer = terminal.backend().buffer();
-    assert_eq!(row(buffer, 4, 0..11), "           ");
-    assert_eq!(row(buffer, 5, 0..11), "────────── ");
+    // 16pt of padding above and below its row: three rows, then its line.
+    assert_eq!(row(buffer, 8, 0..11), "           ");
+    assert_eq!(row(buffer, 9, 0..11), "────────── ");
 }
 
 #[component]
@@ -270,7 +274,7 @@ fn Outlines() -> impl IntoElement {
 #[test]
 fn outlines_and_rings_draw_nothing_of_their_own() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
     view.load(App::Rust(Root::new::<Outlines>(|| ()))).unwrap();
     draw_until(&mut view, &mut terminal, &rx, "ready");
     let buffer = terminal.backend().buffer();
@@ -333,38 +337,6 @@ fn a_scroll_view_whose_content_overflows_shows_its_bar() {
     for y in 0..2 {
         assert_eq!(buffer[(21, y)].symbol(), " ", "the bar the app hides");
     }
-}
-
-#[component]
-fn Content() -> impl IntoElement {
-    const PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAIAAAAW4yFwAAAADUlEQVR4nGP4zwAC/wEIAAH/2ZC7NQAAAABJRU5ErkJggg==";
-    view()
-        .flex_1()
-        .child(
-            image(PNG)
-                .label("Chart")
-                .w(px(80.0))
-                .h(px(16.0))
-                .bg(nsh_core::color::rgb(0x123456)),
-        )
-        .child(image(PNG).w(px(80.0)).h(px(16.0)))
-        .child(text("ready"))
-}
-
-#[test]
-fn images_keep_their_box_blank() {
-    let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(12, 4)).unwrap();
-    view.load(App::Rust(Root::new::<Content>(|| ()))).unwrap();
-    draw_until(&mut view, &mut terminal, &rx, "ready");
-    let buffer = terminal.backend().buffer();
-    let drawn: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-    assert_eq!(drawn.replace(' ', ""), "ready", "no placeholder: {drawn:?}");
-    // A row each, blank: the text is below them, and the first one's fill
-    // is not drawn.
-    let row: String = (0..12).map(|x| buffer[(x, 2)].symbol()).collect();
-    assert!(row.starts_with("ready"), "{drawn:?}");
-    assert!(buffer.content.iter().all(|cell| cell.bg == Color::Reset));
 }
 
 #[component]
@@ -442,14 +414,16 @@ fn children_are_clipped_to_their_parents_content_box_with_an_ellipsis() {
     let buffer = terminal.backend().buffer();
     let rows: Vec<String> = (0..6).map(|y| row(buffer, y, 0..12)).collect();
     assert_eq!(rows[0], "┌──────┐    ", "{rows:#?}");
-    assert!(rows[1].starts_with("│Until"), "{rows:#?}");
+    // 16pt of padding above: a blank row inside the line first.
+    assert_eq!(rows[1], "│      │    ", "{rows:#?}");
+    assert!(rows[2].starts_with("│Until"), "{rows:#?}");
     // The text wraps to the box (the layout shrinks it before it overflows);
     // what the box cuts off below ends the last row shown in `…`.
     let bottom = rows
         .iter()
         .position(|r| r.starts_with('└'))
         .expect("the box's bottom");
-    let inside = rows[1..bottom].concat();
+    let inside = rows[2..bottom].concat();
     assert!(
         inside.contains("tonight") || inside.contains('…'),
         "a cut text shows it was cut: {rows:#?}"
@@ -581,7 +555,7 @@ fn controls_are_their_label_rows_and_their_fills_at_the_terminal_s_depth() {
 #[test]
 fn an_unchanged_frame_changes_no_cell() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
     view.load(App::Rust(Root::new::<Borders>(|| ()))).unwrap();
     draw_until(&mut view, &mut terminal, &rx, "ready");
     let before = terminal.backend().buffer().clone();
@@ -620,7 +594,7 @@ fn Popup() -> impl IntoElement {
 #[test]
 fn an_overlays_box_clears_what_is_behind_it_and_is_framed_with_its_title() {
     let (mut view, rx) = surface();
-    let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(24, 12)).unwrap();
     view.load(App::Rust(Root::new::<Popup>(|| ()))).unwrap();
     draw_until(&mut view, &mut terminal, &rx, "pop");
     let buffer = terminal.backend().buffer();
@@ -737,7 +711,7 @@ fn CrowdedIcons() -> impl IntoElement {
 }
 
 #[test]
-fn an_icon_button_short_of_room_cuts_its_label_with_an_ellipsis() {
+fn an_icon_button_short_of_room_keeps_its_first_word() {
     let (mut view, rx) = surface();
     let mut terminal = Terminal::new(TestBackend::new(16, 3)).unwrap();
     view.load(App::Rust(Root::new::<CrowdedIcons>(|| ())))
@@ -746,13 +720,99 @@ fn an_icon_button_short_of_room_cuts_its_label_with_an_ellipsis() {
     let buffer = terminal.backend().buffer();
     let first = row(buffer, 0, 0..16);
     assert!(first.starts_with("Title"), "{first:?}");
+    // Three columns hold `Add` of `Add item` whole: a word, not `Ad…`.
+    assert!(first.starts_with("TitleAdd "), "{first:?}");
+}
+
+#[component]
+fn ToolbarIcons() -> impl IntoElement {
+    let icon = |label: &'static str| {
+        view().label(label).on_press(|_: &()| {}).child(
+            canvas(Painter::new().fill_rect(0.0, 0.0, 16.0, 16.0))
+                .w(px(16.0))
+                .h(px(16.0)),
+        )
+    };
+    view()
+        .flex_1()
+        .child(
+            view()
+                .flex_row()
+                .gap(px(8.0))
+                .child(icon("Edit folder"))
+                .child(icon("Scan folder"))
+                .child(icon("Parent folder")),
+        )
+        .child(text("ready"))
+}
+
+#[test]
+fn icon_buttons_short_of_room_keep_their_first_words() {
+    for (cols, words) in [
+        (30, ["Edit", "Scan", "Parent"]),
+        (18, ["Edit", "Scan", "Parent"]),
+    ] {
+        let (mut view, rx) = surface();
+        let mut terminal = Terminal::new(TestBackend::new(cols, 3)).unwrap();
+        view.load(App::Rust(Root::new::<ToolbarIcons>(|| ())))
+            .unwrap();
+        draw_until(&mut view, &mut terminal, &rx, "ready");
+        let first = row(terminal.backend().buffer(), 0, 0..cols);
+        for word in words {
+            assert!(
+                first
+                    .split(|c: char| !c.is_alphanumeric())
+                    .any(|w| w == word),
+                "{cols} columns: {word} whole in {first:?}"
+            );
+        }
+    }
+}
+
+#[component]
+fn WideIcons() -> impl IntoElement {
+    let icon = |label: &'static str| {
+        view().label(label).w(px(16.0)).on_press(|_: &()| {}).child(
+            canvas(Painter::new().fill_rect(0.0, 0.0, 16.0, 16.0))
+                .w(px(16.0))
+                .h(px(16.0)),
+        )
+    };
+    view()
+        .flex_1()
+        .child(
+            view()
+                .flex_row()
+                .gap(px(16.0))
+                .child(icon("菜单"))
+                .child(icon("设置")),
+        )
+        .child(
+            view()
+                .w(px(80.0))
+                .flex_row()
+                .child(text("标题"))
+                .child(icon("打开最近的会话")),
+        )
+        .child(text("ready"))
+}
+
+#[test]
+fn an_icon_button_lays_out_its_wide_label_whole_or_cuts_it_with_an_ellipsis() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(20, 4)).unwrap();
+    view.load(App::Rust(Root::new::<WideIcons>(|| ()))).unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "ready");
+    let buffer = terminal.backend().buffer();
+    // A wide glyph's trailing cell reads back as a space, so compare without them.
+    let first = row(buffer, 0, 0..20).replace(' ', "");
+    assert!(first.starts_with("菜单"), "{first:?}");
+    assert!(first.contains("设置"), "{first:?}");
+    let second = row(buffer, 1, 0..20).replace(' ', "");
+    assert!(second.starts_with("标题"), "{second:?}");
     assert!(
-        first.contains('…'),
-        "a cut label ends in an ellipsis: {first:?}"
-    );
-    assert!(
-        !first[..first.find('…').unwrap()].ends_with(' '),
-        "{first:?}"
+        second.contains('…'),
+        "a cut wide label keeps its ellipsis: {second:?}"
     );
 }
 
@@ -970,4 +1030,84 @@ fn a_padded_popup_triggers_arrow_stands_in_its_middle() {
         first.chars().nth(arrow + 1) == Some(' '),
         "and after it: {first:?}"
     );
+}
+
+/// Rows parted by a line on their top, filled under the pointer (a
+/// list of links), in a card.
+#[component]
+fn HoveredRows() -> impl IntoElement {
+    // A link: a control around the row its look is on.
+    let row = |label: &'static str, first: bool| {
+        view().on_press(|_: &()| {}).child(
+            view()
+                .hover(|s| s.bg(nsh_core::color::rgb(0xef4444)))
+                .flex_row()
+                .px(px(16.0))
+                .py(px(6.0))
+                .border_t(px(if first { 0.0 } else { 1.0 }))
+                .border_color(nsh_core::color::rgb(0x444444))
+                .child(
+                    view()
+                        .flex_1()
+                        .child(text(label))
+                        .child(text(format!("{label} note"))),
+                ),
+        )
+    };
+    view().flex_1().child(
+        view()
+            .border_1()
+            .border_color(nsh_core::color::rgb(0x444444))
+            .p(px(12.0))
+            .child(row("One", true))
+            .child(row("Two", false))
+            .child(row("Three", false)),
+    )
+}
+
+#[test]
+fn a_rows_hover_fill_moves_nothing() {
+    let (mut view, rx) = super::dock::surfaces();
+    let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+    view.load(App::Rust(Root::new::<HoveredRows>(|| ())))
+        .unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "Three note");
+    let find = |terminal: &Terminal<TestBackend>, word: &str| super::dock::find(terminal, word);
+    let words = ["Two", "Two note", "Three", "Three note"];
+    let before = words.map(|w| find(&terminal, w));
+    let (x, y) = find(&terminal, "Two note").unwrap();
+    let resting = terminal.backend().buffer()[(x, y)].bg;
+    view.handle(super::app::mouse(nsh_platform_tui::MouseKind::Move, x, y));
+    super::app::draw_until_true(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "the hover's band",
+        |terminal| {
+            find(terminal, "Two note")
+                .is_some_and(|(x, y)| terminal.backend().buffer()[(x, y)].bg != resting)
+        },
+    );
+    // Whatever the hover commits after lands, and nothing more comes: a
+    // row that moved off the pointer would lose its hover and come back,
+    // over and over.
+    let mut settled = false;
+    for _ in 0..20 {
+        if rx
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_err()
+        {
+            settled = true;
+            break;
+        }
+        terminal
+            .draw(|frame| view.render(frame, frame.area()))
+            .unwrap();
+    }
+    assert!(settled, "the hover keeps laying the rows out");
+    terminal
+        .draw(|frame| view.render(frame, frame.area()))
+        .unwrap();
+    // The band shows; the line over the row and the rows stay.
+    assert_eq!(before, words.map(|w| find(&terminal, w)));
 }

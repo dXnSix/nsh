@@ -8,6 +8,7 @@ animation::animator::Animator::deadline ->                       # time
 animation::animator::Animator::deadline(now)                     # time
 animation::animator::Animator::frame_rate ->                     # a frame rate (Hz)
 animation::animator::Animator::tick(now)                         # time
+animation::animator::Animator::tick_frame(now)                   # time
 animation::animator::Animator::transform_moved(amount)           # a gesture amount fed to a generic animated value (a pinch scale, a rotation in degrees)
 animation::driver::sample_driver ->                              # generic animated values, sampled
 animation::driver::sample_driver(from)                           # a generic animated value (any prop: opacity, a color channel, a length)
@@ -21,6 +22,7 @@ animation::graph::Graph::set(new)                                # a generic ani
 animation::graph::Graph::deadline ->                             # time
 animation::graph::Graph::deadline(now)                           # time
 animation::graph::Graph::tick(now)                               # time
+animation::graph::Graph::tick_frame(now)                         # time
 animation::graph::Graph::value ->                                # a generic animated value (any prop: opacity, a color channel, a length)
 animation::motion::Keyframe.offset                               # progress through an iteration (0..1, as easing coordinates)
 animation::motion::Keyframe.value                                # a generic animated value (any prop: opacity, a color channel, a length)
@@ -38,8 +40,6 @@ animation::motion::MotionSpec::start_values ->                   # a motion chan
 animation::motion::MotionSpec::values(values)                    # a motion channel's value (an opacity, points or degrees by channel)
 animation::motion::keyframe_ends ->                              # a generic animated value (any prop: opacity, a color channel, a length)
 animation::motion::stagger_delay ->                              # a count of intervals
-animation::ops::AnimationOp::CreateDiffClamp.max                 # a generic animated value (any prop: opacity, a color channel, a length)
-animation::ops::AnimationOp::CreateDiffClamp.min                 # a generic animated value (any prop: opacity, a color channel, a length)
 animation::ops::AnimationOp::CreateInterpolate.input_range       # interpolation input stops (generic animated values)
 animation::ops::AnimationOp::CreateValue.value                   # a generic animated value (any prop: opacity, a color channel, a length)
 animation::ops::AnimationOp::Set.value                           # a generic animated value (any prop: opacity, a color channel, a length)
@@ -97,6 +97,10 @@ canvas::hit::point_in_path(slot)                                 # a generic num
 canvas::hit::point_in_stroke(slot)                               # a generic number (a JS value, a recorded slot)
 canvas::render::RenderRequest.scale                              # pixels per point, a ratio
 canvas::render::RenderOptions.scale                              # pixels per point, a ratio
+ops::CoalescedSample.pressure                                    # a pressure, 0..1 as the DOM PointerEvent's
+ops::CoalescedSample.tilt_x                                      # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::CoalescedSample.tilt_y                                      # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::CoalescedSample.timestamp                                   # time
 ops::Command::RenderCanvas.scale                                 # pixels per point, a ratio
 core::Core::scroll_listener ->                                   # time and a zoom scale factor (the sizes it gives are typed)
 core::Core::set_font_scale(scale)                                # a font scale factor
@@ -107,6 +111,8 @@ desktop::menu_icon::want(scale)                                  # device pixels
 desktop::window_state::Display.refresh_rate                     # a refresh rate (Hz)
 desktop::window_state::Display.scale_factor                     # device pixels per point, a ratio
 desktop::window_state::WindowState.scale_factor                 # device pixels per point, a ratio
+effects::ClipInset::lerp(t)                                      # transition progress (easing curve coordinates, unit square)
+effects::Gradient::lerp(t)                                       # transition progress (easing curve coordinates, unit square)
 effects::Filter::Brightness.0                                    # a filter amount (1 leaves the image as it is)
 effects::Filter::Contrast.0                                      # a filter amount (1 leaves the image as it is)
 effects::Filter::Grayscale.0                                     # a filter amount (1 leaves the image as it is)
@@ -126,6 +132,7 @@ effects::KeyframeAnimation::frame_rate(hz)                       # a frame rate 
 effects::Transition.delay                                        # time
 effects::Transition.duration                                     # time
 effects::Transition.easing                                       # easing curve coordinates (unit square)
+effects::Transition::run_ms ->                                   # time
 effects::Transition::EASE                                        # easing curve coordinates (unit square)
 effects::compose_color_matrices ->                               # color components
 filesystem::FileMetadata.atime_ms                                # time (milliseconds since the epoch)
@@ -150,6 +157,7 @@ input::WheelStep::Discrete.time                                  # time (millise
 input::ZOOM_STEP                                                 # a scale factor
 input::latch_holds(last)                                         # time (milliseconds)
 input::latch_holds(time)                                         # time (milliseconds)
+input::pick_press(views)                                         # time (milliseconds): the delayLongPress of each view
 input::touchpad_wait ->                                          # time (milliseconds)
 input::touchpad_wait(last)                                       # time (milliseconds)
 input::touchpad_wait(now)                                        # time (milliseconds)
@@ -188,6 +196,12 @@ ops::IMAGE_SCALES                                                # pixel densiti
 ops::ImageProp::FadeDuration.0                                   # time
 ops::ImageScales::iter ->                                        # pixel densities (device pixels per point)
 ops::ImageSource::at_pixel_ratio(pixel_ratio)                    # device pixels per point, a ratio
+ops::MouseEvent.pressure                                         # a pressure, 0..1 as the DOM PointerEvent's
+ops::MouseEvent.tilt_x                                           # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::MouseEvent.tilt_y                                           # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::MouseEvent::with_pointer(pressure)                          # a pressure, 0..1 as the DOM PointerEvent's
+ops::MouseEvent::with_pointer(tilt_x)                            # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::MouseEvent::with_pointer(tilt_y)                            # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
 ops::NativeProp::ProgressInterval.0                              # time
 ops::NativeProp::Rate.0                                          # a playback rate multiplier
 ops::NativeProp::Volume.0                                        # audio volume, 0..1
@@ -203,6 +217,14 @@ ops::ScrollProp::MaxZoom.0                                       # a zoom scale 
 ops::ScrollProp::MinZoom.0                                       # a zoom scale factor
 ops::ScrollProp::Zoom.0                                          # a zoom scale factor
 ops::TouchEvent.timestamp                                        # time
+ops::TouchPoint.pressure                                         # a pressure, 0..1 as the DOM PointerEvent's
+ops::TouchPoint.tilt_x                                           # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::TouchPoint.tilt_y                                           # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::TouchPoint::default_pressure ->                             # a pressure, 0..1 as the DOM PointerEvent's
+ops::TouchPoint::push_coalesced(pressure)                        # a pressure, 0..1 as the DOM PointerEvent's
+ops::TouchPoint::push_coalesced(tilt_x)                          # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::TouchPoint::push_coalesced(tilt_y)                          # a pen tilt in degrees, as the DOM PointerEvent's tiltX / tiltY
+ops::TouchPoint::push_coalesced(timestamp)                       # time
 platform::Environment.font_scale                                 # a font scale factor
 platform::Environment.keyboard_duration                          # time
 platform::Environment.pixel_ratio                                # device pixels per point
@@ -214,6 +236,11 @@ props::AccessibilityValue.max                                    # an app-define
 props::AccessibilityValue.min                                    # an app-defined value
 props::AccessibilityValue.now                                    # an app-defined value
 props::LayoutCurve::FittedSpring.damping_ratio                   # a rate or a physical constant of an animation
+props::LayoutCurve::Bezier.0                                     # easing curve coordinates (unit square)
+props::LayoutCurve::bezier(x1)                                   # easing curve coordinates (unit square)
+props::LayoutCurve::bezier(y1)                                   # easing curve coordinates (unit square)
+props::LayoutCurve::bezier(x2)                                   # easing curve coordinates (unit square)
+props::LayoutCurve::bezier(y2)                                   # easing curve coordinates (unit square)
 props::LayoutTransition.delay_ms                                 # time
 props::LayoutTransition.duration_ms                              # time
 props::LayoutTransition::new(duration_ms)                        # time
@@ -243,6 +270,10 @@ scroll::snap_duration(velocity)                                  # a velocity, p
 scroll::spokes ->                                                # an opacity per spoke, 0..1
 scroll::wheel_end(vx)                                            # a velocity, points per second
 scroll::wheel_end(vy)                                            # a velocity, points per second
+scroll::wheel_glide::Glide::end ->                               # time
+scroll::wheel_glide::Glide::new(now)                             # time
+scroll::wheel_glide::Glide::retargeted(now)                      # time
+scroll::wheel_glide::Glide::value(now)                           # time
 shader::UniformValue::Number.0                                  # a uniform's value, whatever the app's program makes of it
 shader::TransitionKey::number(n)                                 # a transition's value: a key compared for equality, no quantity
 ops::Prop::TransitionDuration.0                                  # time (milliseconds, as JS gives it)
@@ -259,6 +290,7 @@ style::PropertyValue::Easing.0                                   # easing curve 
 style::PropertyValue::Flex.0                                     # a flex grow factor
 style::PropertyValue::Flex.1                                     # a flex shrink factor
 style::PropertyValue::LetterSpacing.1                            # ems of the font size
+style::PropertyValue::FontSize.1                                 # a multiple of the inherited font size (em)
 style::PropertyValue::Ms.0                                       # time
 style::PropertyValue::Number.0                                   # a unitless style number (a flex factor, an opacity, a z-index)
 style::PropertyValue::OptNumber.0                                # an aspect ratio
@@ -269,6 +301,7 @@ style::StyleDecl::SetTransform.1                                 # transform ope
 style::Style::set_transform(steps)                               # transform operands (any of their kinds' units)
 style::StyleValue::Number.0                                      # a generic number (a JS value, a recorded slot)
 style::TextStyle.letter_spacing_em                               # a multiple of the font size (em)
+style::TextStyle.font_size_em                                    # a multiple of the inherited font size (em)
 style::TextStyle.line_height_multiple                            # a multiple of the font's line height
 style::ViewStyle.opacity                                         # an opacity, 0..1
 svg::rasterize_scaled(scale)                                     # a scale factor (device pixels per point)
@@ -294,10 +327,6 @@ element::ambient::animated_value(value)                               # an anima
 element::ambient::font_scale ->                                       # a font scale factor
 element::ambient::keyboard_duration ->                                # time
 element::ambient::pixel_ratio ->                                      # device pixels per point
-element::animated::AnimatedNode::diff_clamp(max)                      # an animated value (any quantity)
-element::animated::AnimatedNode::diff_clamp(min)                      # an animated value (any quantity)
-element::animated::AnimatedNode::diff_clamp_with(max)                 # an animated value (any quantity)
-element::animated::AnimatedNode::diff_clamp_with(min)                 # an animated value (any quantity)
 element::animated::AnimatedNode::interpolate(input)                   # an animated value (any quantity)
 element::animated::AnimatedNode::interpolate(output)                  # an animated value (any quantity)
 element::animated::AnimatedNode::interpolate_colors(input)            # an animated value (any quantity)
@@ -308,10 +337,6 @@ element::animated::AnimatedValue::decay_within(_)                     # an anima
 element::animated::AnimatedValue::decay_within(bounce)                # a rate or a physical constant of an animation
 element::animated::AnimatedValue::decay_within(deceleration)          # a rate or a physical constant of an animation
 element::animated::AnimatedValue::decay_within(velocity)              # a rate or a physical constant of an animation
-element::animated::AnimatedValue::diff_clamp(max)                     # an animated value (any quantity)
-element::animated::AnimatedValue::diff_clamp(min)                     # an animated value (any quantity)
-element::animated::AnimatedValue::diff_clamp_with(max)                # an animated value (any quantity)
-element::animated::AnimatedValue::diff_clamp_with(min)                # an animated value (any quantity)
 element::animated::AnimatedValue::interpolate(input)                  # an animated value (any quantity)
 element::animated::AnimatedValue::interpolate(output)                 # an animated value (any quantity)
 element::animated::AnimatedValue::interpolate_colors(input)           # an animated value (any quantity)

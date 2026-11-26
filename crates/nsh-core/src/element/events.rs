@@ -20,9 +20,17 @@ pub struct FileDropEvent {
     /// (TS: `mimeTypes`): `""` when the name says none (a directory, no
     /// extension), as the DOM's `File.type`.
     pub mime_types: Vec<String>,
-    /// Where the files were let go, in the window's coordinates (TS:
-    /// `pagePosition`), on backends that know it (Linux).
+    /// Where the files were let go, in the window's coordinates, as a
+    /// mouse event's `page_position` (TS: `pagePosition`): on AppKit, GTK,
+    /// Win32, iOS, Android and the Web; `None` on the GPUI backend.
     pub page_position: Option<Point<Points>>,
+    /// The dropped regular files with their contents, on backends that hand
+    /// over contents instead of paths (the Web, and on macOS files a drag
+    /// only promises, such as an image out of a browser's page; `uris` is
+    /// empty then):
+    /// in the drop's order, directories left out, so not by index of
+    /// `uris`. Each keeps its bytes after the listener returns.
+    pub files: Vec<crate::picker::PickedFile>,
 }
 
 /// Local files or directories a drag offers to an element while it enters
@@ -69,12 +77,15 @@ impl Default for ScrollEvent {
     }
 }
 
-/// A drag (`on_pan_start` / `on_pan_end`): translation since it started and
-/// velocity, in points (per second).
+/// A drag (`on_pan_start` / `on_pan_end`): where it started, translation
+/// since then and velocity, in points (per second).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PanEvent {
     /// The system cancelled the drag rather than releasing it.
     pub cancelled: bool,
+    /// Where the finger (or the pointer) went down, in the surface's points
+    /// as a touch's `page`: the same at the start and at the end.
+    pub origin: Point<Points>,
     /// The translation.
     pub translation: Point<Points>,
     /// Horizontal velocity.
@@ -201,8 +212,8 @@ pub struct ImageProgress {
     pub total: f64,
 }
 
-/// An accepted web view download started, finished or failed
-/// (`WebView::on_download`, the platform's `onDownload` payload).
+/// A web view download started, finished, failed or was cancelled
+/// (`WebView::on_download`, the core's `onDownload` payload).
 pub(crate) fn web_download(p: &EventPayload) -> Option<Cow<'_, crate::webview::WebDownload>> {
     let EventPayload::Map(entries) = p else {
         return None;
@@ -215,27 +226,51 @@ pub(crate) fn web_download(p: &EventPayload) -> Option<Cow<'_, crate::webview::W
         Some((_, PayloadValue::Number(n))) => Some(*n),
         _ => None,
     };
+    let state = crate::webview::WebDownloadState::parse(text("state")?.as_str())?;
+    let id = text("id")?;
+    // Only a running download can be cancelled by its event.
+    let handle = (state == crate::webview::WebDownloadState::Started)
+        .then(|| download_handle(id.clone()))
+        .flatten();
     Some(Cow::Owned(crate::webview::WebDownload {
-        state: crate::webview::WebDownloadState::parse(text("state")?.as_str())?,
-        id: text("id")?,
+        state,
+        id,
         url: text("url")?,
         filename: text("filename")?,
         path: std::path::PathBuf::from(text("path")?),
         bytes: number("bytes").map(|n| n.max(0.0) as u64),
         message: text("message"),
+        source: text("source")
+            .as_deref()
+            .and_then(crate::webview::WebDownloadSource::parse)
+            .unwrap_or_default(),
+        code: text("code"),
+        reason: text("reason").as_deref().and_then(cancel_reason),
+        handle,
     }))
 }
 
+fn cancel_reason(name: &str) -> Option<crate::webview::CancelReason> {
+    use crate::webview::CancelReason;
+    match name {
+        "app" => Some(CancelReason::App),
+        "timeout" => Some(CancelReason::Timeout),
+        "teardown" => Some(CancelReason::Teardown),
+        "noListener" => Some(CancelReason::NoListener),
+        _ => None,
+    }
+}
+
 thread_local! {
-    /// The web view a `DownloadPending` event is being dispatched to: its
-    /// node and the executor that reaches it. Set only while its listener
-    /// runs, so the event's handle cannot be made anywhere else.
+    /// The web view a download event is being dispatched to: its node and
+    /// the executor that reaches it. Set only while its listener runs, so
+    /// the event's handle cannot be made anywhere else.
     static DOWNLOAD_TARGET: RefCell<Option<(crate::NodeId, Weak<Executor>)>> =
         const { RefCell::new(None) };
 }
 
-/// Makes `node` the target of the `DownloadPending` events dispatched
-/// while it lives (the previous target is restored when it drops).
+/// Makes `node` the target of the download events dispatched while it
+/// lives (the previous target is restored when it drops).
 pub(crate) struct DownloadTarget {
     previous: Option<(crate::NodeId, Weak<Executor>)>,
 }
@@ -248,14 +283,14 @@ impl Drop for DownloadTarget {
     }
 }
 
-/// Sets the web view a `DownloadPending` event dispatched now belongs to.
+/// Sets the web view a download event dispatched now belongs to.
 pub(crate) fn download_target(node: crate::NodeId, executor: Weak<Executor>) -> DownloadTarget {
     let previous = DOWNLOAD_TARGET.with(|target| target.borrow_mut().replace((node, executor)));
     DownloadTarget { previous }
 }
 
 /// The handle of download `id` of the web view being dispatched to, or
-/// `None` outside a pending event's dispatch.
+/// `None` outside a download event's dispatch.
 fn download_handle(id: String) -> Option<crate::webview::DownloadHandle> {
     DOWNLOAD_TARGET.with(|target| {
         target
@@ -279,6 +314,26 @@ pub(crate) fn web_download_pending(
         id,
         url: value.get("url")?.as_str()?.to_owned(),
         filename: value.get("filename")?.as_str()?.to_owned(),
+        source: value
+            .get("source")
+            .and_then(|v| v.as_str())
+            .and_then(crate::webview::WebDownloadSource::parse)
+            .unwrap_or_default(),
+        mime_type: value
+            .get("mime_type")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
+        bytes: value.get("bytes").and_then(|v| {
+            v.as_u64().or_else(|| {
+                v.as_f64()
+                    .filter(|n| n.is_finite() && *n >= 0.0 && n.fract() == 0.0)
+                    .map(|n| n as u64)
+            })
+        }),
+        method: value
+            .get("method")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned),
         handle: Some(handle),
     }))
 }
@@ -401,6 +456,14 @@ pub(crate) fn typed<T: ?Sized + ToOwned + 'static>(
             inner(&value);
         }
     })
+}
+
+/// A sheet's new detent (`{ detent }`, [`crate::SheetDetent::change_payload`]).
+pub(crate) fn sheet_detent(p: &EventPayload) -> Option<Cow<'_, crate::SheetDetent>> {
+    let EventPayload::Json(value) = p else {
+        return None;
+    };
+    crate::SheetDetent::from_json(value.get("detent")?).map(Cow::Owned)
 }
 
 /// Events without data.
@@ -569,6 +632,7 @@ pub(crate) fn offset(p: &EventPayload) -> Option<Cow<'_, Point<Points>>> {
 pub(crate) fn pan(p: &EventPayload) -> Option<Cow<'_, PanEvent>> {
     match *p {
         EventPayload::Pan {
+            origin,
             translation,
             velocity_x,
             velocity_y,
@@ -576,6 +640,7 @@ pub(crate) fn pan(p: &EventPayload) -> Option<Cow<'_, PanEvent>> {
             value_y,
         }
         | EventPayload::PanCancelled {
+            origin,
             translation,
             velocity_x,
             velocity_y,
@@ -583,6 +648,7 @@ pub(crate) fn pan(p: &EventPayload) -> Option<Cow<'_, PanEvent>> {
             value_y,
         } => Some(Cow::Owned(PanEvent {
             cancelled: matches!(p, EventPayload::PanCancelled { .. }),
+            origin,
             translation,
             velocity_x,
             velocity_y,
@@ -718,6 +784,7 @@ pub(crate) fn file_drop(p: &EventPayload) -> Option<Cow<'_, FileDropEvent>> {
             uris: uris.clone(),
             mime_types: mime_types(uris),
             page_position: None,
+            files: Vec::new(),
         })),
         EventPayload::FileDropAt {
             uris,
@@ -726,6 +793,13 @@ pub(crate) fn file_drop(p: &EventPayload) -> Option<Cow<'_, FileDropEvent>> {
             uris: uris.clone(),
             mime_types: mime_types(uris),
             page_position: Some(*page_position),
+            files: Vec::new(),
+        })),
+        EventPayload::FileContents(c) => Some(Cow::Owned(FileDropEvent {
+            uris: Vec::new(),
+            mime_types: c.mime_types.clone(),
+            page_position: c.page_position,
+            files: c.files.clone(),
         })),
         _ => None,
     }
@@ -739,6 +813,10 @@ pub(crate) fn file_drag(p: &EventPayload) -> Option<Cow<'_, FileDragEvent>> {
                 mime_types: mime_types(uris),
             }))
         }
+        EventPayload::FileContents(c) => Some(Cow::Owned(FileDragEvent {
+            uris: Vec::new(),
+            mime_types: c.mime_types.clone(),
+        })),
         _ => None,
     }
 }
@@ -749,6 +827,7 @@ mod tests {
     fn a_cancelled_pan_preserves_its_final_values() {
         use crate::{EventPayload, Points, geometry::point};
         let payload = EventPayload::PanCancelled {
+            origin: point(Points(12.0), Points(30.0)),
             translation: point(Points(4.0), Points(150.0)),
             velocity_x: 0.0,
             velocity_y: 900.0,
@@ -757,6 +836,7 @@ mod tests {
         };
         let event = super::pan(&payload).unwrap();
         assert!(event.cancelled);
+        assert_eq!(event.origin, point(Points(12.0), Points(30.0)));
         assert_eq!(event.translation, point(Points(4.0), Points(150.0)));
         assert_eq!(event.value_y, Some(150.0));
         assert_eq!(event.velocity_y, 900.0);
@@ -795,6 +875,26 @@ mod tests {
         assert_eq!(drop.mime_types, types);
         assert_eq!(drop.page_position, Some(point(Points(3.0), Points(4.0))));
         assert!(super::file_drag(&EventPayload::None).is_none());
+    }
+
+    #[test]
+    fn dropped_contents_arrive_without_uris() {
+        use crate::{
+            EventPayload, FileContents, ImageData, Points, geometry::point, picker::PickedFile,
+        };
+        let file = PickedFile::new("a.txt", "text/plain", ImageData::new(b"hi".to_vec()));
+        let payload = EventPayload::FileContents(Box::new(FileContents::new(
+            vec![file.clone()],
+            vec!["text/plain".into()],
+            Some(point(Points(1.0), Points(2.0))),
+        )));
+        let drop = super::file_drop(&payload).unwrap();
+        assert!(drop.uris.is_empty());
+        assert_eq!(drop.files, vec![file]);
+        assert_eq!(drop.page_position, Some(point(Points(1.0), Points(2.0))));
+        let drag = super::file_drag(&payload).unwrap();
+        assert!(drag.uris.is_empty());
+        assert_eq!(drag.mime_types, ["text/plain"]);
     }
 
     #[test]

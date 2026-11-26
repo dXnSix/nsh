@@ -47,6 +47,22 @@ use std::{
 
 use anyhow::{Context as _, bail};
 
+/// The Rust target of the iOS simulator on this machine: the simulator runs
+/// the processor of the Mac, so an Intel Mac's is x86_64. Which CLI runs here
+/// decides, as a distribution is installed for the machine's own processor.
+pub(crate) const IOS_SIMULATOR_TRIPLE: &str = if cfg!(target_arch = "x86_64") {
+    "x86_64-apple-ios"
+} else {
+    "aarch64-apple-ios-sim"
+};
+
+/// The Rust target of Mac Catalyst on this machine, by its processor.
+pub(crate) const MAC_CATALYST_TRIPLE: &str = if cfg!(target_arch = "x86_64") {
+    "x86_64-apple-ios-macabi"
+} else {
+    "aarch64-apple-ios-macabi"
+};
+
 /// A runtime platform directory and its cargo target triple.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Platform {
@@ -99,8 +115,8 @@ impl Platform {
     pub(crate) fn triple(self) -> Option<&'static str> {
         match self {
             Platform::IphoneOs => Some("aarch64-apple-ios"),
-            Platform::IphoneSimulator => Some("aarch64-apple-ios-sim"),
-            Platform::MacCatalyst => Some("aarch64-apple-ios-macabi"),
+            Platform::IphoneSimulator => Some(IOS_SIMULATOR_TRIPLE),
+            Platform::MacCatalyst => Some(MAC_CATALYST_TRIPLE),
             // Packaged off Windows: cross-built ([`cross_build`]).
             Platform::Windows if !cfg!(windows) => Some(WINDOWS_TRIPLE),
             Platform::Linux
@@ -170,6 +186,24 @@ fn add_component(name: &str, missing: &Path) -> anyhow::Result<bool> {
     Ok(true)
 }
 
+/// Whether the component `name` of this CLI's distribution was built with
+/// it; outside a distribution (a checkout's build, a runtime laid out by
+/// hand) whatever is there is used.
+fn distribution_current(name: &str) -> bool {
+    let Some(root) = crate::component::distribution() else {
+        return true;
+    };
+    // Laid out without the component machinery: no record to check.
+    if !root
+        .join("components")
+        .join(format!("{name}.json"))
+        .exists()
+    {
+        return true;
+    }
+    crate::component::current(&root, name)
+}
+
 /// This `nsh`, through symlinks: an installer links `~/.local/bin/nsh` (or
 /// `/opt/homebrew/bin/nsh`) to the distribution's `bin/nsh`, whose runtimes
 /// are next to the real file. macOS reports the path as it was run, Linux
@@ -196,11 +230,12 @@ pub(crate) fn android(dev: bool, abis: &[String]) -> anyhow::Result<PathBuf> {
 }
 
 /// The Android runtime `nsh test --target android` runs apps in: the
-/// development one, a Rust app's too ([`crate::rust_app::RustApp::test_android`]).
-pub(crate) fn test_android() -> anyhow::Result<PathBuf> {
+/// development one, a Rust app's too, built for `abis` (empty: every ABI of
+/// the prebuilt runtime) ([`crate::rust_app::RustApp::test_android`]).
+pub(crate) fn test_android(abis: &[String]) -> anyhow::Result<PathBuf> {
     let prebuilt = prebuilt_android(true)?;
     match crate::rust_app::current() {
-        Some(app) => app.test_android(&prebuilt),
+        Some(app) => app.test_android(&prebuilt, abis),
         None => Ok(prebuilt),
     }
 }
@@ -213,7 +248,7 @@ fn prebuilt_android(dev: bool) -> anyhow::Result<PathBuf> {
     let exe = cli_exe()?;
     let bin = exe.parent().context("cli has no parent directory")?;
     let dist = bin.join("../runtime/android").join(variant);
-    if dist.join("classes.dex").exists() {
+    if dist.join("classes.dex").exists() && distribution_current("android") {
         return Ok(dist);
     }
     if add_component("android", &dist.join("classes.dex"))? {
@@ -429,7 +464,9 @@ pub(crate) fn web(kind: WebKind, build: bool) -> anyhow::Result<Option<WebRuntim
     }
     let exe = cli_exe()?;
     let bin = exe.parent().context("cli has no parent directory")?;
-    if let Some(runtime) = found(bin.join("../runtime/web")) {
+    if let Some(runtime) = found(bin.join("../runtime/web"))
+        && (!build || distribution_current("web"))
+    {
         return Ok(Some(runtime));
     }
     if build && add_component("web", &bin.join("../runtime/web").join(kind.file()))? {
@@ -506,18 +543,40 @@ pub(crate) fn file(platform: Platform, runner: bool) -> anyhow::Result<PathBuf> 
 }
 
 /// [`file`] built for `triple` (`None`: this machine) instead of the
-/// platform's own ([`Platform::triple`]): a macOS package for another
+/// platform's own ([`Platform::triple`]): a macOS package for a given
 /// processor (`nsh package --arch`). A prebuilt runtime is the one there
 /// is, built for the processor of the machine that built it; the caller
-/// checks what it holds.
+/// checks what it holds ([`locate`]).
 pub(crate) fn file_for(
     platform: Platform,
     runner: bool,
     triple: Option<&'static str>,
 ) -> anyhow::Result<PathBuf> {
+    locate(platform, runner, triple).map(|file| file.path)
+}
+
+/// A runtime binary [`locate`] found.
+pub(crate) struct RuntimeFile {
+    pub(crate) path: PathBuf,
+    /// Built by Cargo for this command (an app's crates, a checkout's
+    /// runtime), so for the target asked; else prebuilt (an installed
+    /// nsh's, `NSH_RUNTIME`), for whatever processor it was built for.
+    pub(crate) built: bool,
+}
+
+/// [`file_for`], and whether Cargo built the file for it.
+pub(crate) fn locate(
+    platform: Platform,
+    runner: bool,
+    triple: Option<&'static str>,
+) -> anyhow::Result<RuntimeFile> {
     if let Some(app) = crate::rust_app::current() {
-        return app.runtime(platform, runner, triple);
+        return Ok(RuntimeFile {
+            path: app.runtime(platform, runner, triple)?,
+            built: true,
+        });
     }
+    let prebuilt = |path| RuntimeFile { path, built: false };
     let name = platform.binary(runner);
     let file_name = platform.file_name(runner, triple);
     if let Some(root) = env::var_os("NSH_RUNTIME") {
@@ -526,25 +585,33 @@ pub(crate) fn file_for(
             platform,
             name,
             triple,
-        );
+        )
+        .map(prebuilt);
     }
     let exe = cli_exe()?;
     let bin = exe.parent().context("cli has no parent directory")?;
     // Distribution: bin/nsh + runtime/.
     let dist = bin.join("../runtime").join(platform.dir()).join(&file_name);
-    if dist.exists() {
-        return Ok(dist);
+    if dist.exists() && platform.component().is_none_or(distribution_current) {
+        return Ok(prebuilt(dist));
     }
     if let Some(component) = platform.component()
         && add_component(component, &dist)?
     {
-        return Ok(dist);
+        return Ok(prebuilt(dist));
     }
     // Cargo checkout: target/<profile>/nsh -> target/<triple>/<profile>/<name>.
     let profile = bin.file_name().context("cli profile dir")?;
     let mut host_target = None;
-    if let Some(root) = checkout(bin) {
+    let mut triple = triple;
+    let root = checkout(bin);
+    if let Some(root) = &root {
         let mut args = vec!["build", "-p", name];
+        // Web views need WebKitGTK 6.0 to build: without it, the host shows
+        // a placeholder instead (#2377).
+        if matches!(platform, Platform::Linux) && !runner && !linux_web_views() {
+            args.push("--no-default-features");
+        }
         // GPUI has its own workspace. Run there so Cargo reads its config,
         // and ask Cargo where it builds rather than imposing the CLI's target.
         let workspace = if matches!(platform, Platform::Gpui) {
@@ -553,10 +620,8 @@ pub(crate) fn file_for(
         } else {
             root.clone()
         };
+        triple = build_target(platform, triple, Some(&workspace))?;
         if let Some(triple) = triple {
-            if Some(triple) != platform.triple() {
-                require_target(Some(&workspace), triple)?;
-            }
             args.extend(["--target", triple]);
         }
         match profile.to_str() {
@@ -591,14 +656,18 @@ pub(crate) fn file_for(
     }
     built.push(profile);
     built.push(&file_name);
-    let built = existing(built, platform, name, triple)?;
-    match checkout(bin) {
+    let path = existing(built, platform, name, triple)?;
+    let path = match &root {
         Some(root) if cfg!(target_os = "macos") && triple.is_none() => stable_copy(
-            &built,
+            &path,
             &root.join(".nsh/hosts").join(profile).join(&file_name),
-        ),
-        _ => Ok(built),
-    }
+        )?,
+        _ => path,
+    };
+    Ok(RuntimeFile {
+        path,
+        built: root.is_some(),
+    })
 }
 
 /// A copy of the executable `built` at `copy` that changes only when the
@@ -654,6 +723,11 @@ fn metal_toolchain_missing() -> bool {
             .args(["metal", "--version"])
             .output()
             .is_ok_and(|out| out.status.success())
+}
+
+/// The nsh checkout this CLI was built in, if it was built in one.
+pub(crate) fn cli_checkout() -> Option<PathBuf> {
+    checkout(cli_exe().ok()?.parent()?)
 }
 
 /// The workspace of a cargo checkout of nsh this CLI was built in
@@ -757,6 +831,52 @@ pub(crate) fn other_triple(platform: Platform, triple: Option<&str>) -> String {
     }
 }
 
+/// The target triple a Cargo build with no `--target` is for in `dir`
+/// (`None`: this process's directory): the host of the Rust toolchain
+/// there (`rustc -vV`). It is the processor's own even when this CLI runs
+/// translated (an Intel nsh under Rosetta), so it can differ from the
+/// architecture of this CLI.
+pub(crate) fn rustc_host(dir: Option<&Path>) -> Option<String> {
+    let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+    let mut command = Command::new(rustc);
+    command.arg("-vV");
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
+    let output = command.output().ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    text.lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::to_owned)
+}
+
+/// The `--target` Cargo builds `platform`'s runtime for `triple` with in
+/// `dir` (`None`: this process's directory). A triple that is not the
+/// platform's own (a macOS package for a given processor) is left out when
+/// it is the toolchain's host ([`rustc_host`]), so the build is the one
+/// every other command shares (`target/<profile>`); any other needs its
+/// standard library ([`require_target`]).
+pub(crate) fn build_target<'a>(
+    platform: Platform,
+    triple: Option<&'a str>,
+    dir: Option<&Path>,
+) -> anyhow::Result<Option<&'a str>> {
+    let Some(other) = triple.filter(|triple| Some(*triple) != platform.triple()) else {
+        return Ok(triple);
+    };
+    let target = cross_target(other, rustc_host(dir).as_deref());
+    if let Some(target) = target {
+        require_target(dir, target)?;
+    }
+    Ok(target)
+}
+
+/// The `--target` a build for `triple` takes when the toolchain's host is
+/// `host` (`None`: unknown): none for the host itself.
+fn cross_target<'a>(triple: &'a str, host: Option<&str>) -> Option<&'a str> {
+    (Some(triple) != host).then_some(triple)
+}
+
 /// Fails with the command that adds the Rust target `triple` when the
 /// toolchain cargo builds with in `dir` (`None`: this process's directory)
 /// has no standard library for it. Without a `rustc` to ask, cargo's own
@@ -827,6 +947,28 @@ pub(crate) fn copy_browser_host(source: &Path, target: &Path) -> anyhow::Result<
     Ok(())
 }
 
+/// Whether this machine can build Linux web views: `pkg-config` finds
+/// WebKitGTK 6.0, or there is no `pkg-config` to ask (the build says
+/// then). A development host built without them shows a placeholder for
+/// each web view, which this says once (#2377). Release runners do not
+/// ask: an app that makes a web view must build with them.
+pub(crate) fn linux_web_views() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let found = std::process::Command::new("pkg-config")
+            .args(["--exists", "webkitgtk-6.0"])
+            .status()
+            .map_or(true, |s| s.success());
+        if !found {
+            crate::ui::warn(
+                "WebKitGTK 6.0 is not installed (webkitgtk-6.0 / libwebkitgtk-6.0-dev): \
+                 the development host builds without web views, which show a placeholder",
+            );
+        }
+        found
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::Platform;
@@ -852,6 +994,34 @@ mod tests {
         super::stable_copy(&built, &copy).unwrap();
         assert_eq!(fs::read(&copy).unwrap(), b"three");
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A build leaves out `--target` only for the toolchain's host, whatever
+    /// processor this CLI is built for: an Intel nsh under Rosetta with an
+    /// Apple silicon toolchain cross-builds for Intel and builds Apple
+    /// silicon as every other command does.
+    #[test]
+    fn only_the_toolchains_host_builds_without_a_target() {
+        const ARM64: &str = "aarch64-apple-darwin";
+        const X86_64: &str = "x86_64-apple-darwin";
+        for host in [ARM64, X86_64] {
+            let other = if host == ARM64 { X86_64 } else { ARM64 };
+            assert_eq!(super::cross_target(host, Some(host)), None);
+            assert_eq!(super::cross_target(other, Some(host)), Some(other));
+        }
+        // Without a toolchain to ask, Cargo is told the target.
+        assert_eq!(super::cross_target(X86_64, None), Some(X86_64));
+        // The platform's own target, or none, is what it was: no toolchain
+        // is asked.
+        let ios = Platform::IphoneOs.triple();
+        assert_eq!(
+            super::build_target(Platform::IphoneOs, ios, None).unwrap(),
+            ios
+        );
+        assert_eq!(
+            super::build_target(Platform::MacOs, None, None).unwrap(),
+            None
+        );
     }
 
     /// A Rust target is installed when its directory holds `core`: rustc

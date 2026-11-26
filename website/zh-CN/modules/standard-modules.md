@@ -63,7 +63,7 @@ Rust 代码用 Rust 标准库和 crates.io 完成同样的工作，作为应用�
 | `code` | 含义 |
 |---|---|
 | `ERR_ACCESS_DENIED` | 应用的 `capabilities` 未授权此调用。错误带有 `permission`，即该能力在 `nsh.json` 中的键（`"fs"`、`"process"`、`"network"`），以及 `resource`，即所请求的对象：路径、命令（`process.exit` 为 `"exit"`）、socket 的 `"host:port"` 或 WebSocket 的 URL |
-| `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` | 该调用属于其他平台：文件在桌面和浏览器中运行，进程在桌面上运行，TCP socket 在原生宿主上运行，`os.homedir()` 在配置了主目录的宿主上运行 |
+| `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` | 该调用属于其他平台：文件在原生宿主和浏览器中运行，进程在桌面上运行，TCP socket 在原生宿主上运行，`os.homedir()` 在配置了主目录的宿主上运行 |
 | `ERR_NSH_QUOTA_EXCEEDED` | 运行时的某项限制已用尽：进行中的操作或数据、子进程、socket、WebSocket、等待发送的字节、监听器 |
 | `ETIMEDOUT` | 调用超时：`run` 的 `timeoutMs`、连接、WebSocket 的握手、写入或关闭 |
 | `ENOENT`、`EEXIST`、`EACCES`、`ECONNREFUSED` 等 | 操作系统的结果，采用 Node 的错误码；`EACCES` 和 `EPERM` 表示操作系统拒绝访问文件，与应用的能力授权无关 |
@@ -99,7 +99,7 @@ async function loadSettings(): Promise<string> {
 
 ## 文件
 
-`fs/promises` 在桌面宿主（macOS、Windows 和 Linux）上读写原生文件，在浏览器中通过 Origin Private File System（OPFS）读写应用私有文件。每个路径在操作开始前都按 `capabilities.fs` 检查：`readFile`、`readdir`、`stat`、`lstat`、`readlink` 和 `exists` 使用 `read` 根目录，`writeFile`、`mkdir`、`rename`、`unlink` 和 `rmdir` 使用 `write` 根目录。所有失败都拒绝 Promise：授权范围之外的路径在任何磁盘操作之前以 `code` 为 `ERR_ACCESS_DENIED` 的错误拒绝（`permission` 为 `"fs"`，`resource` 为应用所写的路径）。图片、视频和声音显示的本地文件也按同样的 `read` 根目录检查（见
+`fs/promises` 在原生宿主（macOS、Windows、Linux、iOS 和 Android）上读写原生文件，在浏览器中通过 Origin Private File System（OPFS）读写应用私有文件。每个路径在操作开始前都按 `capabilities.fs` 检查：`readFile`、`readdir`、`stat`、`lstat`、`readlink` 和 `exists` 使用 `read` 根目录，`writeFile`、`mkdir`、`rename`、`unlink` 和 `rmdir` 使用 `write` 根目录。所有失败都拒绝 Promise：授权范围之外的路径在任何磁盘操作之前以 `code` 为 `ERR_ACCESS_DENIED` 的错误拒绝（`permission` 为 `"fs"`，`resource` 为应用所写的路径）。图片、视频和声音显示的本地文件也按同样的 `read` 根目录检查（见
 [沙箱](../docs/sandbox-and-capabilities.md#network)）。
 
 ```json
@@ -109,6 +109,8 @@ async function loadSettings(): Promise<string> {
   }
 }
 ```
+
+用户粘贴到输入框或拖放到视图上的文件，在应用本次运行期间可以按精确路径读取，不受 `read` 根目录限制：`onPaste` 或 `onFileDrop` 的处理函数在 `uris` 里收到它的 `file:` URL 之后，`readFile`、`stat`、`exists` 等 `read` 操作接受这个路径（URL 所指的路径或解析后的路径），与在选择器里选中的文件一样。只限这个路径：拖放的文件夹可以列出自身的条目，但其中的内容不授权；文件旁边的其他文件不授权；只是拖入（`onFileDragEnter`）不授权；也不授权任何 `write` 操作。收窄了 `fs.read` 的嵌入宿主同样会收窄这些路径。
 
 根目录可以是绝对路径、`${dataDir}`（宿主为此应用选定的数据目录）、`${pluginDir}`（应用目录）、`${homeDir}`，或相对于应用目录的路径。调用中的相对路径依次在每个授权根目录中解析。嵌入应用可以进一步缩小授权。每个操作都限定在其授权根目录之内，符号链接也是如此；绝对路径按书写形式检查，因此须通过根目录自身的路径（或其解析后的路径）访问，而不能经由根目录之外的符号链接。`lstat`、`readlink`、`exists`、`unlink`、`rename` 和 `rmdir` 作用于符号链接本身：目标不存在的符号链接 `exists` 为 `true`，`unlink` 删除链接并保留其目标。
 
@@ -132,6 +134,15 @@ async function loadSettings(): Promise<string> {
 ```
 
 命令须与 `process.execute` 完全一致：`git` 和 `/usr/bin/git` 是两项不同的授权。裸命令通过宿主 `PATH` 中的绝对目录解析；在 Windows 上，裸命令还会在其中匹配 `<name>.com` 和 `<name>.exe`。批处理文件（`.cmd`、`.bat`）通过 `cmd.exe` 运行：授权它的绝对路径（`C:\Windows\System32\cmd.exe`），并把 `/d`、`/c` 和脚本作为参数传入。子进程的环境是宿主的 `PATH`、`HOME`、`USERPROFILE`、`SystemRoot`、`TEMP`、`TMP`、`TMPDIR`、`LANG` 和 `LC_*`，加上 `process.env` 授权的变量名（按名称精确匹配，仅在环境变量不区分大小写的 Windows 上忽略大小写）。子进程在应用的数据目录（不存在时创建）中运行，或在 `cwd` 中运行；`cwd` 须是 `fs.write` 根目录内已存在的目录，因为子进程可以在其运行目录中写入。嵌入应用可以进一步缩小授权。
+
+```tsx tabs
+import process from "process";
+
+const { code, stdout } = await process.run("git", ["status", "--short"]);
+const child = process.spawn("git", ["log", "--oneline"], { lines: true });
+child.on("stdout", (line) => console.log(line));
+child.on("exit", ({ code, signal }) => console.log("done", code, signal));
+```
 
 ```rust tabs
 use std::{
@@ -157,15 +168,6 @@ spawn(async move {
     })
     .await;
 });
-```
-
-```tsx tabs
-import process from "process";
-
-const { code, stdout } = await process.run("git", ["status", "--short"]);
-const child = process.spawn("git", ["log", "--oneline"], { lines: true });
-child.on("stdout", (line) => console.log(line));
-child.on("exit", ({ code, signal }) => console.log("done", code, signal));
 ```
 
 `run` 在任何退出状态下都以 `{ code, signal, stdout, stderr }` 完成：`code` 为退出状态、`signal` 为 `null`；子进程被信号结束时，`code` 为 `null`，`signal` 为信号名（`"SIGTERM"`）。所有失败都使它拒绝。`spawn` 立即返回子进程；`stdin: "pipe"` 启用 `write` 和 `end`，`lines: true` 按完整行送达。`on(event, handler)` 返回子进程本身，处理函数收到事件的内容：文本，或在最后一次输出之后收到一次 `{ code, signal }`（由运行时结束子进程时，例如超时或行过长，还带有 `error`）（之后添加的监听器会立即收到它）。`pid` 是子进程的进程号。在子进程启动之前，`spawn` 抛出 `run` 会以之拒绝的错误：`process.execute` 未授权的命令为 `ERR_ACCESS_DENIED`（`permission` 为 `"process"`，`resource` 为该命令），`fs.write` 授权范围之外的 `cwd` 为 `ERR_ACCESS_DENIED`（`permission` 为 `"fs"`，`resource` 为该 `cwd`），桌面之外的调用为 `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`，超过子进程数量上限为 `ERR_NSH_QUOTA_EXCEEDED`；启动失败的错误带有 `code`（可执行文件不存在时为 `ENOENT`，操作系统无法执行时为 `EACCES`）、`syscall`（`spawn <命令>`）和 `path`。`run` 到达期限时以 `ETIMEDOUT` 拒绝，输出超过捕获上限时以 `RangeError`（`code` 为 `ERR_CHILD_PROCESS_STDIO_MAXBUFFER`）拒绝；`spawn` 的子进程退出时在 `error` 中带有同样的消息，在 `errorCode` 中带有它的错误码。宿主没有数据目录时 `process.dataDir` 为 `null`。`kill`、超时、响应式所有者的清理和 VM 的销毁都会结束整个进程树：在 Unix 上，进程组先收到 SIGTERM，250 ms 后收到 SIGKILL（VM 销毁时立即发送 SIGKILL）。
@@ -230,6 +232,12 @@ console.log(`closed: ${socket.closeCode} ${socket.closeReason}`);
 }
 ```
 
+```tsx tabs
+const socket = new WebSocket("wss://chat.example.com/socket");
+socket.addEventListener("open", () => socket.send("hello"));
+socket.addEventListener("message", (event) => console.log(event.data));
+```
+
 ```rust tabs
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -247,12 +255,6 @@ spawn(async move {
 });
 ```
 
-```tsx tabs
-const socket = new WebSocket("wss://chat.example.com/socket");
-socket.addEventListener("open", () => socket.send("hello"));
-socket.addEventListener("message", (event) => console.log(event.data));
-```
-
 ## TCP 授权示例
 
 TCP 使用 socket 授权：应用所连接的精确主机与端口。
@@ -262,6 +264,19 @@ TCP 使用 socket 授权：应用所连接的精确主机与端口。
   "capabilities": {
     "network": { "sockets": ["tcp.example.com:9000"] }
   }
+}
+```
+
+```tsx tabs
+import { connect } from "net";
+
+const socket = await connect({ host: "tcp.example.com", port: 9000 });
+try {
+  await socket.write("hello\n");
+  const bytes = await socket.read(1024);
+  if (bytes) console.log(new TextDecoder().decode(bytes));
+} finally {
+  socket.close();
 }
 ```
 
@@ -284,19 +299,6 @@ spawn(async move {
         log::info!("{reply}");
     }
 });
-```
-
-```tsx tabs
-import { connect } from "net";
-
-const socket = await connect({ host: "tcp.example.com", port: 9000 });
-try {
-  await socket.write("hello\n");
-  const bytes = await socket.read(1024);
-  if (bytes) console.log(new TextDecoder().decode(bytes));
-} finally {
-  socket.close();
-}
 ```
 
 ## Gallery

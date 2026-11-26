@@ -16,8 +16,8 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use nsh_core::{
     EventKind, EventPayload, JsonValue, NodeId, Points, Size,
     platform::{
-        MENU_BUTTON_COMPONENT, SEGMENTED_CONTROL_COMPONENT, TAB_BAR_COMPONENT,
-        is_reserved_component,
+        CONTEXT_MENU_COMPONENT, DATE_TIME_PICKER_COMPONENT, MENU_BUTTON_COMPONENT,
+        SEGMENTED_CONTROL_COMPONENT, SWITCH_COMPONENT, TAB_BAR_COMPONENT, is_reserved_component,
     },
 };
 use nsh_engine::EngineControl;
@@ -129,7 +129,16 @@ impl Default for Components {
             SEGMENTED_CONTROL_COMPONENT,
             crate::system_segmented_control::factory(),
         );
+        components.insert(SWITCH_COMPONENT, crate::system_switch::factory());
+        components.insert(
+            DATE_TIME_PICKER_COMPONENT,
+            crate::system_date_time_picker::factory(),
+        );
         components.insert(MENU_BUTTON_COMPONENT, crate::system_menu_button::factory());
+        components.insert(
+            CONTEXT_MENU_COMPONENT,
+            crate::system_context_menu::factory(),
+        );
         components
     }
 }
@@ -182,10 +191,8 @@ impl Components {
 pub(crate) struct ComponentHost {
     pub(crate) container: objc2::rc::Retained<crate::native_view::NshView>,
     pub(crate) component: Option<Box<dyn NativeComponent>>,
-    /// The names of its animated prop slots (`MountItem::ComponentPropSlots`).
-    pub(crate) slots: Vec<std::sync::Arc<str>>,
-    /// Slot -> the value last handed to the component.
-    handed: Vec<(u16, nsh_core::animation::AnimatedPropValue)>,
+    /// Its animated props.
+    pub(crate) bound: BoundProps,
 }
 
 impl ComponentHost {
@@ -193,8 +200,7 @@ impl ComponentHost {
         ComponentHost {
             container,
             component: None,
-            slots: Vec::new(),
-            handed: Vec::new(),
+            bound: BoundProps::default(),
         }
     }
 
@@ -208,10 +214,61 @@ impl ComponentHost {
         )],
         animator: &crate::animation::Animator,
     ) {
-        use nsh_core::animation::{AnimatedPropValue, AnimationProp};
+        use nsh_core::animation::AnimatedPropValue;
         let Some(component) = self.component.as_mut() else {
             return;
         };
+        self.bound
+            .moved(bindings, animator, |name, value| match value {
+                AnimatedPropValue::Color(argb) => component.set_animated_color(name, argb),
+                AnimatedPropValue::Number(n) => component.set_animated_number(name, n),
+                _ => {}
+            });
+    }
+
+    /// Its bindings changed or its component is new: what is bound is
+    /// handed over again.
+    pub(crate) fn forget(&mut self) {
+        self.bound.forget();
+    }
+
+    /// Puts `component` in the container, filling it.
+    pub(crate) fn attach(&mut self, component: Box<dyn NativeComponent>) {
+        let view = component.view();
+        view.setFrame(self.container.bounds());
+        view.setAutoresizingMask(
+            objc2_ui_kit::UIViewAutoresizing::FlexibleWidth
+                | objc2_ui_kit::UIViewAutoresizing::FlexibleHeight,
+        );
+        self.container.addSubview(view);
+        self.component = Some(component);
+    }
+}
+
+/// The animated props of a native component or of a GPU view's renderer
+/// ([`crate::gpu`]): the names of its slots and the values last handed
+/// over.
+#[derive(Default)]
+pub(crate) struct BoundProps {
+    /// The names of its animated prop slots (`MountItem::ComponentPropSlots`).
+    pub(crate) slots: Vec<Arc<str>>,
+    /// Slot -> the value last handed over.
+    handed: Vec<(u16, nsh_core::animation::AnimatedPropValue)>,
+}
+
+impl BoundProps {
+    /// Calls `f` with the name and value of each bound prop whose value
+    /// changed since it was last handed over.
+    pub(crate) fn moved(
+        &mut self,
+        bindings: &[(
+            nsh_core::animation::AnimationProp,
+            nsh_core::animation::NodeId,
+        )],
+        animator: &crate::animation::Animator,
+        mut f: impl FnMut(&str, nsh_core::animation::AnimatedPropValue),
+    ) {
+        use nsh_core::animation::{AnimatedPropValue, AnimationProp};
         for &(prop, node) in bindings {
             let AnimationProp::ComponentSlot(slot) = prop else {
                 continue;
@@ -225,29 +282,13 @@ impl ComponentHost {
                 Some((_, v)) => *v = value,
                 None => self.handed.push((slot, value)),
             }
-            match value {
-                AnimatedPropValue::Color(argb) => component.set_animated_color(name, argb),
-                AnimatedPropValue::Number(n) => component.set_animated_number(name, n),
-                _ => {}
-            }
+            f(name, value);
         }
     }
 
-    /// Its bindings changed or its component is new: what is bound is
+    /// The bindings changed, or what they go to is new: what is bound is
     /// handed over again.
     pub(crate) fn forget(&mut self) {
         self.handed.clear();
-    }
-
-    /// Puts `component` in the container, filling it.
-    pub(crate) fn attach(&mut self, component: Box<dyn NativeComponent>) {
-        let view = component.view();
-        view.setFrame(self.container.bounds());
-        view.setAutoresizingMask(
-            objc2_ui_kit::UIViewAutoresizing::FlexibleWidth
-                | objc2_ui_kit::UIViewAutoresizing::FlexibleHeight,
-        );
-        self.container.addSubview(view);
-        self.component = Some(component);
     }
 }

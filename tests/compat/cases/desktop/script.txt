@@ -73,8 +73,10 @@ absent d
 tap id:cleanup
 expect Result: closed
 tap id:outside
-expect Result: outside TypeError
+expect Result: outside TypeError, bar 0 0, state null null
 covers [nsh/desktop] currentWindow
+covers [nsh/desktop] titleBar
+covers [nsh/desktop] windowState
 # window-props
 tap id:case-window-props
 expect Document
@@ -112,3 +114,18 @@ expect Set: true ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
 tap id:misuse
 expect Misuse: TypeError
 covers [nsh/desktop] Application
+
+# Hover tracks pass presses through while the content fits, and start
+# receiving the pointer once it grows beyond the viewport on their axis.
+tap id:case-scrollbar-hover
+expect Grow
+style label:"Vertical hover bar" pointerEvents none
+style label:"Horizontal hover bar" pointerEvents none
+tap id:resize-content
+expect Shrink
+style label:"Vertical hover bar" pointerEvents auto
+style label:"Horizontal hover bar" pointerEvents auto
+tap id:resize-content
+expect Grow
+style label:"Vertical hover bar" pointerEvents none
+style label:"Horizontal hover bar" pointerEvents none

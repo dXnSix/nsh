@@ -209,10 +209,6 @@ pub(crate) struct NativeState {
     /// The application id: web views keep their data under it.
     #[cfg(feature = "webview")]
     app_id: RefCell<String>,
-    /// Where the running app's web views save automatic downloads (its
-    /// data directory's `<app id>/downloads`); `None` before an app starts.
-    #[cfg(feature = "webview")]
-    downloads: RefCell<Option<std::path::PathBuf>>,
     /// The controls, by node.
     hosts: RefCell<FxHashMap<NodeId, Host>>,
 }
@@ -255,17 +251,6 @@ impl NativeState {
     /// The application id (nothing to keep without web views).
     #[cfg(not(feature = "webview"))]
     pub(crate) fn set_app_id(&self, _app_id: &str) {}
-
-    /// Where the app that starts saves its web views' automatic downloads:
-    /// its data directory's `<app id>/downloads`.
-    #[cfg(feature = "webview")]
-    pub(crate) fn set_downloads(&self, downloads: Option<std::path::PathBuf>) {
-        *self.downloads.borrow_mut() = downloads;
-    }
-
-    /// Where automatic downloads go (nothing to save without web views).
-    #[cfg(not(feature = "webview"))]
-    pub(crate) fn set_downloads(&self, _downloads: Option<std::path::PathBuf>) {}
 
     /// Whether any web view is mounted (input then keeps pointer events
     /// from the parts of pages nsh clips off).
@@ -368,7 +353,7 @@ pub(crate) fn props(surface: &Rc<Surface>, view: &NshView, props: &NativeProps) 
     match (hosts.get_mut(&view.id()), props) {
         (Some(Host::Video(video)), NativeProps::Video(p)) => {
             let base = surface.native.asset_base.borrow();
-            video.set(view, p, base.as_ref());
+            video.set(surface, view, p, base.as_ref());
         }
         #[cfg(feature = "webview")]
         (Some(Host::Web(Some(web))), NativeProps::WebView(p)) => web.set(view, p),
@@ -577,6 +562,18 @@ fn host(view: &NshView, widget: &gtk::Widget, sized: bool) {
     });
 }
 
+/// How a video and its poster fit their box.
+fn fit(mode: ResizeMode) -> gtk::ContentFit {
+    match mode {
+        ResizeMode::Cover => gtk::ContentFit::Cover,
+        ResizeMode::Stretch => gtk::ContentFit::Fill,
+        // GTK draws no picture at its natural size in a box of another:
+        // `center` shrinks it to fit, as `scale-down`.
+        ResizeMode::Center | ResizeMode::ScaleDown => gtk::ContentFit::ScaleDown,
+        ResizeMode::Contain => gtk::ContentFit::Contain,
+    }
+}
+
 fn bounds(width: f32, height: f32) -> Bounds<Points> {
     Bounds {
         origin: Point {
@@ -657,6 +654,8 @@ struct Status {
     buffering: Cell<bool>,
     /// Playing was asked for (applied again once the stream is prepared).
     playing: Cell<bool>,
+    /// The poster, hidden when the first frame is ready.
+    poster: std::cell::RefCell<Option<gtk::Picture>>,
 }
 
 impl Status {
@@ -672,8 +671,12 @@ impl Status {
 /// A video: its stream and the widget showing it.
 struct VideoHost {
     emitter: Emitter,
-    /// A `Picture`, or a `Video` with controls.
+    /// An `Overlay` holding the media and its poster.
     widget: Option<gtk::Widget>,
+    /// A `Picture`, or a `Video` with controls, inside the overlay.
+    media: Option<gtk::Widget>,
+    /// The image shown until the first frame.
+    poster: Option<gtk::Picture>,
     stream: Option<gtk::MediaFile>,
     status: Rc<Status>,
     /// The props applied (`None` before the first).
@@ -711,6 +714,8 @@ impl VideoHost {
                 id: view.id(),
             },
             widget: None,
+            media: None,
+            poster: None,
             stream: None,
             status: Rc::default(),
             props: None,
@@ -719,7 +724,13 @@ impl VideoHost {
         }
     }
 
-    fn set(&mut self, view: &NshView, p: &VideoProps, base: Option<&AssetBase>) {
+    fn set(
+        &mut self,
+        surface: &Rc<Surface>,
+        view: &NshView,
+        p: &VideoProps,
+        base: Option<&AssetBase>,
+    ) {
         let old = self.props.take();
         let first = old.is_none();
         let old = old.unwrap_or_default();
@@ -729,6 +740,10 @@ impl VideoHost {
         }
         if reopened || p.controls != old.controls {
             self.show(view, p.controls);
+        }
+        if reopened || p.poster != old.poster {
+            self.clear_poster();
+            self.load_poster(surface, p.poster.as_deref(), p.resize_mode);
         }
         if p.rate != 1.0 {
             static WARNED: AtomicBool = AtomicBool::new(false);
@@ -740,24 +755,27 @@ impl VideoHost {
             stream.set_muted(p.muted);
             stream.set_volume(p.volume.clamp(0.0, 1.0) as f64);
             stream.set_loop(p.repeat);
-            self.status.playing.set(!p.paused);
-            stream.set_playing(!p.paused && !self.status.failed.get());
+            // `paused` is acted on when it changes (or for a new source): a
+            // stream that ended, or that `gtk::Video`'s controls paused,
+            // stays so when another prop (the volume, say) changes.
+            if reopened || p.paused != old.paused {
+                self.status.playing.set(!p.paused);
+                stream.set_playing(!p.paused && !self.status.failed.get());
+            }
             let waiting = !p.paused && !self.status.loaded.get() && !self.status.failed.get();
             self.status.set_buffering(&self.emitter, waiting);
         }
-        if let Some(widget) = &self.widget {
-            if let Some(picture) = widget.downcast_ref::<gtk::Picture>() {
-                picture.set_content_fit(match p.resize_mode {
-                    ResizeMode::Cover => gtk::ContentFit::Cover,
-                    ResizeMode::Stretch => gtk::ContentFit::Fill,
-                    // GTK draws no picture at its natural size in a box of
-                    // another: `center` shrinks it to fit, as `scale-down`.
-                    ResizeMode::Center | ResizeMode::ScaleDown => gtk::ContentFit::ScaleDown,
-                    ResizeMode::Contain => gtk::ContentFit::Contain,
-                });
-            } else if let Some(video) = widget.downcast_ref::<gtk::Video>() {
+        if let Some(media) = &self.media {
+            if let Some(picture) = media.downcast_ref::<gtk::Picture>() {
+                picture.set_content_fit(fit(p.resize_mode));
+            } else if let Some(video) = media.downcast_ref::<gtk::Video>() {
                 video.set_loop(p.repeat);
             }
+        }
+        if p.resize_mode != old.resize_mode
+            && let Some(poster) = &self.poster
+        {
+            poster.set_content_fit(fit(p.resize_mode));
         }
         if reopened || p.progress_interval_ms != old.progress_interval_ms {
             self.observe(p.progress_interval_ms);
@@ -823,6 +841,7 @@ impl VideoHost {
     /// Stops and drops the stream, or keeps it paused where dropping it would
     /// stop the window drawing.
     fn close(&mut self) {
+        self.clear_poster();
         let handlers = std::mem::take(&mut self.handlers);
         let Some(stream) = self.stream.take() else {
             return;
@@ -843,7 +862,7 @@ impl VideoHost {
         if let Some(old) = self.widget.take() {
             view.remove_native(&old);
         }
-        let widget: gtk::Widget = if controls {
+        let media: gtk::Widget = if controls {
             let video = gtk::Video::new();
             // nsh drives playback (`paused`), not the widget.
             video.set_autoplay(false);
@@ -857,8 +876,60 @@ impl VideoHost {
             picture.set_can_target(false);
             picture.upcast()
         };
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&media));
+        if let Some(poster) = &self.poster {
+            overlay.add_overlay(poster);
+        }
+        let widget = overlay.upcast();
         fill(view, &widget);
+        self.media = Some(media);
         self.widget = Some(widget);
+    }
+
+    /// Shows `source` (an image) over the video until its first frame.
+    fn load_poster(&mut self, surface: &Rc<Surface>, source: Option<&str>, mode: ResizeMode) {
+        let Some(source) = source else { return };
+        // The first frame is there: it replaces the poster.
+        if self.status.loaded.get() {
+            return;
+        }
+        let picture = gtk::Picture::new();
+        picture.set_can_shrink(true);
+        picture.set_can_target(false);
+        picture.set_content_fit(fit(mode));
+        if let Some(overlay) = self
+            .widget
+            .as_ref()
+            .and_then(|widget| widget.downcast_ref::<gtk::Overlay>())
+        {
+            overlay.add_overlay(&picture);
+        }
+        self.poster = Some(picture.clone());
+        *self.status.poster.borrow_mut() = Some(picture.clone());
+        let scale = surface.root.scale_factor() as f64;
+        let name = source.to_owned();
+        crate::image::load_bitmap(surface, source, scale, move |result| match result {
+            Ok((texture, _)) => picture.set_paintable(Some(&texture)),
+            Err(message) => log::warn!("video poster {name}: {message}"),
+        });
+    }
+
+    /// Removes the poster, if one shows.
+    fn clear_poster(&mut self) {
+        self.status.poster.take();
+        if let Some(poster) = self.poster.take() {
+            if let Some(overlay) = self
+                .widget
+                .as_ref()
+                .and_then(|widget| widget.downcast_ref::<gtk::Overlay>())
+            {
+                overlay.remove_overlay(&poster);
+            }
+            if poster.parent().is_some() {
+                poster.unparent();
+            }
+        }
     }
 
     /// Reports `onProgress` every `interval_ms` while playing.
@@ -892,6 +963,12 @@ impl VideoHost {
             && stream.is_seekable()
         {
             stream.seek((seconds.max(0.0) * 1e6) as i64);
+            // A stream that ended stopped playing: a seek on one the app
+            // has not paused plays it on from there, as the other
+            // platforms do.
+            if self.status.playing.get() && !stream.is_playing() && !self.status.failed.get() {
+                stream.set_playing(true);
+            }
         }
     }
 }
@@ -904,7 +981,7 @@ impl Drop for VideoHost {
         // A removal animation may keep the view on screen a little longer:
         // it shows the last frame, without the stream.
         if let Some(picture) = self
-            .widget
+            .media
             .as_ref()
             .and_then(|w| w.downcast_ref::<gtk::Picture>())
         {
@@ -930,6 +1007,9 @@ fn loaded(stream: &gtk::MediaFile, emitter: &Emitter, status: &Status) {
         return;
     }
     status.loaded.set(true);
+    if let Some(poster) = status.poster.take() {
+        poster.set_visible(false);
+    }
     // Playing asked for before the pipeline was ready.
     if status.playing.get() && !stream.is_playing() {
         stream.set_playing(true);

@@ -7,7 +7,10 @@
 use std::{os::unix::fs::symlink, path::PathBuf, sync::atomic::AtomicUsize};
 
 use crossbeam_channel::Receiver;
-use nsh_core::{ApproxTextEngine, MountBatch, Size, platform::Os};
+use nsh_core::{
+    ApproxTextEngine, EventKind, EventPayload, MountBatch, MountItem, PasteEvent, Size,
+    platform::Os,
+};
 use nsh_engine::{Bundle, Engine, EngineConfig, Environment};
 
 use crate::{ChannelSink, rust_classes::shown};
@@ -46,8 +49,14 @@ fn start(
 const shown = signal("waiting");
 const report = (text) => shown.set(`done ${{text}}`);
 {body}
-mount(() => <Text>{{shown()}}</Text>);
-"#
+{mount}
+"#,
+            // A body may mount its own views (showing `shown()`).
+            mount = if body.contains("\nmount(") {
+                ""
+            } else {
+                "mount(() => <Text>{shown()}</Text>);"
+            }
         ),
     )
     .unwrap();
@@ -88,7 +97,7 @@ mount(() => <Text>{{shown()}}</Text>);
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
-        data_dir: data,
+        support_dir: data,
         cache: nsh_engine::CacheOptions::off(),
         storage: None,
         clock: Default::default(),
@@ -97,10 +106,10 @@ mount(() => <Text>{{shown()}}</Text>);
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
+        data_dir: None,
     };
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
@@ -110,7 +119,7 @@ mount(() => <Text>{{shown()}}</Text>);
 
 /// A data root whose app directory (returned second) the app may read and
 /// write as `${dataDir}`.
-fn data_dir(name: &str) -> (PathBuf, PathBuf) {
+fn support_dir(name: &str) -> (PathBuf, PathBuf) {
     let root = scratch(name);
     let app = root.join(APP_ID);
     std::fs::create_dir_all(&app).unwrap();
@@ -202,7 +211,7 @@ fn reference_metadata_script_matches_gpui_shell_contract() {
         REFERENCE_METADATA_PROBE,
         expected,
     );
-    let (root, app) = data_dir("metadata");
+    let (root, app) = support_dir("metadata");
     std::fs::write(app.join("target.txt"), "linked").unwrap();
     symlink("target.txt", app.join("link.txt")).unwrap();
     let (_engine, rx) = start(
@@ -261,7 +270,7 @@ export default class Probe extends View {
 fn reference_io_script_matches_gpui_shell_contract() {
     let expected = "hello|true:0,255,42|bytes.bin,notes.txt|true|true|true|true";
     check_reference("const PROBE: &str = r#\"", REFERENCE_IO_PROBE, expected);
-    let (root, _app) = data_dir("io");
+    let (root, _app) = support_dir("io");
     let (_engine, rx) = start(
         &probe(REFERENCE_IO_PROBE),
         DATA_GRANT,
@@ -274,7 +283,7 @@ fn reference_io_script_matches_gpui_shell_contract() {
 
 #[test]
 fn options_errors_and_link_operations_match_the_reference() {
-    let (root, app) = data_dir("options");
+    let (root, app) = support_dir("options");
     let outside = root.join("outside");
     std::fs::create_dir(&outside).unwrap();
     std::fs::write(outside.join("secret"), "safe").unwrap();
@@ -360,7 +369,7 @@ const absoluteLink = ABSOLUTE;
 
 #[test]
 fn stats_and_dirents_have_node_s_shape() {
-    let (root, app) = data_dir("shapes");
+    let (root, app) = support_dir("shapes");
     std::fs::create_dir(app.join("folder")).unwrap();
     let (_engine, rx) = start(
         r#"
@@ -391,7 +400,7 @@ import { writeFile, stat, readdir } from "fs/promises";
 
 #[test]
 fn read_and_write_limits_match_the_reference() {
-    let (root, app) = data_dir("limits");
+    let (root, app) = support_dir("limits");
     let big = std::fs::File::create(app.join("over-read-limit")).unwrap();
     big.set_len(64 * 1024 * 1024 + 1).unwrap();
     let allowed = std::fs::File::create(app.join("above-native-text-limit")).unwrap();
@@ -421,7 +430,7 @@ import fs from "fs/promises";
 
 #[test]
 fn data_in_flight_is_bounded_per_vm() {
-    let (root, app) = data_dir("in-flight");
+    let (root, app) = support_dir("in-flight");
     for name in ["first", "second"] {
         let file = std::fs::File::create(app.join(name)).unwrap();
         file.set_len(40 * 1024 * 1024).unwrap();
@@ -490,7 +499,7 @@ import fs from "fs/promises";
 
 #[test]
 fn trusted_plugin_home_and_relative_roots_are_resolved_by_host_anchors() {
-    let (root, app) = data_dir("anchors");
+    let (root, app) = support_dir("anchors");
     let (plugin, home) = (root.join("plugin"), root.join("home"));
     for path in [
         plugin.join("resources"),
@@ -534,7 +543,7 @@ import fs from "fs/promises";
 
 #[test]
 fn named_and_default_exports_enforce_grants() {
-    let (root, app) = data_dir("denied");
+    let (root, app) = support_dir("denied");
     let p = serde_json::to_string(&app.join("denied")).unwrap();
     let (_engine, rx) = start(
         &format!(
@@ -560,7 +569,7 @@ import fs, {{ writeFile, readFile, exists }} from "fs/promises";
 
 #[test]
 fn a_symlink_cannot_escape_its_root() {
-    let (root, app) = data_dir("escape");
+    let (root, app) = support_dir("escape");
     let outside = root.join("outside");
     std::fs::create_dir(&outside).unwrap();
     std::fs::write(outside.join("secret"), "untouched").unwrap();
@@ -593,7 +602,7 @@ import fs, {{ readFile }} from "fs/promises";
 
 #[test]
 fn a_fifo_is_refused_without_blocking() {
-    let (root, app) = data_dir("fifo");
+    let (root, app) = support_dir("fifo");
     let fifo = std::ffi::CString::new(app.join("pipe").to_str().unwrap()).unwrap();
     // SAFETY: a NUL-terminated path.
     assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
@@ -613,9 +622,11 @@ fs.readFile("pipe").then(() => report("read"), (e) => report(e.message));
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// `fs/promises` runs on a mobile surface as on the desktops: the same
+/// `capabilities.fs` roots confine the calls (`access::native_files`).
 #[test]
-fn files_are_unavailable_on_a_mobile_surface() {
-    let (root, _app) = data_dir("mobile");
+fn files_run_on_a_mobile_surface_under_the_same_roots() {
+    let (root, _app) = support_dir("mobile");
     let dir = scratch("mobile-app");
     let entry = dir.join("App.tsx");
     std::fs::write(
@@ -623,9 +634,13 @@ fn files_are_unavailable_on_a_mobile_surface() {
         r#"import { mount, signal, Text } from "nsh";
 import fs from "fs/promises";
 const shown = signal("");
-let promise;
-try { promise = fs.readFile("x"); } catch { shown.set("done threw"); }
-promise?.then(() => "read", (e) => `done ${e.constructor.name} ${e.code}`).then((text) => shown.set(text));
+(async () => {
+  await fs.writeFile("x", "mobile");
+  const inside = await fs.readFile("x", "utf8");
+  const outside = await fs.readFile("/outside-every-root")
+    .then(() => "none", (e) => `${e.code}:${e.permission}`);
+  shown.set(`done ${inside}|${outside}`);
+})().catch((e) => shown.set(`done threw ${e}`));
 mount(() => <Text>{shown()}</Text>);
 "#,
     )
@@ -661,7 +676,7 @@ mount(() => <Text>{shown()}</Text>);
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
-        data_dir: Some(root.clone()),
+        support_dir: Some(root.clone()),
         cache: nsh_engine::CacheOptions::off(),
         storage: None,
         clock: Default::default(),
@@ -670,23 +685,20 @@ mount(() => <Text>{shown()}</Text>);
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
+        data_dir: None,
     };
     let _engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
-    assert_eq!(
-        shown(&rx, "done"),
-        "done Error ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"
-    );
+    assert_eq!(shown(&rx, "done"), "done mobile|ERR_ACCESS_DENIED:fs");
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
 fn failures_carry_node_s_codes() {
-    let (root, app) = data_dir("codes");
+    let (root, app) = support_dir("codes");
     std::fs::create_dir_all(app.join("full/inner")).unwrap();
     std::fs::write(app.join("invalid"), [0xff]).unwrap();
     symlink("loop", app.join("loop")).unwrap();
@@ -835,7 +847,7 @@ import fs from "fs/promises";
 
 #[test]
 fn a_directory_past_the_readdir_limit_is_refused_with_a_code() {
-    let (root, app) = data_dir("many");
+    let (root, app) = support_dir("many");
     std::fs::create_dir(app.join("many")).unwrap();
     for i in 0..10_001 {
         std::fs::write(app.join(format!("many/{i:05}")), "").unwrap();
@@ -863,4 +875,115 @@ import fs from "fs/promises";
         "done RangeError:ERR_OUT_OF_RANGE 3000 true"
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// The files the user pastes or drops are readable at their exact paths
+/// once the app's handler gets them, whatever `capabilities.fs.read`
+/// declares: not before, not on a drag that only entered, nothing beside
+/// them, never written.
+#[test]
+fn pasted_and_dropped_files_are_readable_at_their_exact_paths() {
+    let (root, _) = support_dir("user-files");
+    let desk = scratch("desk").canonicalize().unwrap();
+    std::fs::write(desk.join("pasted file.txt"), "pasted").unwrap();
+    std::fs::write(desk.join("dropped.txt"), "dropped").unwrap();
+    std::fs::write(desk.join("beside.txt"), "beside").unwrap();
+    let pasted = desk.join("pasted file.txt");
+    let dropped = desk.join("dropped.txt");
+    let beside = desk.join("beside.txt");
+    let (engine, rx) = start(
+        &format!(
+            r#"
+import fs from "fs/promises";
+import {{ View }} from "nsh";
+import {{ Input }} from "nsh/base";
+const read = (path) => fs.readFile(path, "utf8").then((t) => t, (e) => e.code);
+const paths = {{ pasted: {pasted:?}, dropped: {dropped:?}, beside: {beside:?} }};
+let step = 0;
+const check = async () => {{
+  step += 1;
+  const write = await fs.writeFile(paths.pasted, "x").then(() => "wrote", (e) => e.code);
+  report(`${{step}} ${{await read(paths.pasted)}} ${{await read(paths.dropped)}} ${{await read(paths.beside)}} ${{write}}`);
+}};
+mount(() => (
+  <View>
+    <Input onPaste={{check}} />
+    <View onFileDragEnter={{check}} onFileDrop={{check}} />
+    <Text>{{shown()}}</Text>
+  </View>
+));
+check();
+"#
+        ),
+        DATA_GRANT,
+        Some(root.clone()),
+        Default::default(),
+    );
+    // The input and the drop view, by the events they listen to.
+    let input = std::cell::Cell::new(None);
+    let drop_view = std::cell::Cell::new(None);
+    let seen = |rx: &Receiver<MountBatch>, prefix: &str| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = String::new();
+        while let Ok(batch) = rx.recv_deadline(deadline) {
+            for item in &batch.items {
+                match item {
+                    MountItem::Events { id, events } if events.contains(EventKind::Paste) => {
+                        input.set(Some(*id))
+                    }
+                    MountItem::Events { id, events } if events.contains(EventKind::FileDrop) => {
+                        drop_view.set(Some(*id))
+                    }
+                    MountItem::Text { text, .. } => last = text.text.clone(),
+                    _ => {}
+                }
+            }
+            if last.starts_with(prefix) {
+                break;
+            }
+        }
+        last
+    };
+    let denied = "ERR_ACCESS_DENIED";
+    let url =
+        |path: &std::path::Path| nsh_core::platform::clipboard::file_url(path.to_str().unwrap());
+    assert_eq!(
+        seen(&rx, "done 1"),
+        format!("done 1 {denied} {denied} {denied} {denied}")
+    );
+    let (input, drop_view) = (input.get().unwrap(), drop_view.get().unwrap());
+    let control = engine.control();
+    // A drag that only entered grants nothing.
+    control.dispatch_event(
+        drop_view,
+        EventKind::FileDragEnter,
+        EventPayload::FileDrop(vec![url(&dropped)]),
+    );
+    assert_eq!(
+        seen(&rx, "done 2"),
+        format!("done 2 {denied} {denied} {denied} {denied}")
+    );
+    let mut paste = PasteEvent::new("pasted file.txt");
+    paste.uris = vec![url(&pasted)];
+    control.dispatch_event(
+        input,
+        EventKind::Paste,
+        EventPayload::Paste(Box::new(paste)),
+    );
+    assert_eq!(
+        seen(&rx, "done 3"),
+        format!("done 3 pasted {denied} {denied} {denied}")
+    );
+    control.dispatch_event(
+        drop_view,
+        EventKind::FileDrop,
+        EventPayload::FileDrop(vec![url(&dropped)]),
+    );
+    assert_eq!(
+        seen(&rx, "done 4"),
+        format!("done 4 pasted dropped {denied} {denied}")
+    );
+    assert_eq!(std::fs::read_to_string(&pasted).unwrap(), "pasted");
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(desk);
 }

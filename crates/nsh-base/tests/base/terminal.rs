@@ -16,14 +16,14 @@ use nsh_base::{
     text_view, tree,
 };
 use nsh_core::{
-    MountItem, NodeId, Size,
-    element::Root,
+    ApproxTextEngine, AttachmentAlignments, AttributedText, MountItem, NodeId, Size, TextEngine,
+    TextLayout, TextLine,
     geometry::point,
     platform::{Environment, Idiom, Os},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
-use nsh_testing::{Headless, Screen};
+use nsh_testing::{DragOptions, Headless, Screen};
 
 fn start<C: Component<Props = ()>>(idiom: Idiom) -> Headless {
     let viewport = Size::new(px(390.0), px(844.0));
@@ -35,9 +35,14 @@ fn start<C: Component<Props = ()>>(idiom: Idiom) -> Headless {
             idiom,
             ..Environment::default()
         },
-        ..EngineConfig::new(Root::of::<C>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<C>())
     };
-    let mut app = Headless::start(config).unwrap();
+    let mut app = if idiom == Idiom::Terminal {
+        Headless::start_with_text_engine(config, || TerminalText)
+    } else {
+        Headless::start(config)
+    }
+    .unwrap();
     app.first_render().unwrap();
     app
 }
@@ -112,7 +117,7 @@ fn checkboxes_radios_and_switches_show_the_terminals_marks() {
     let mut app = start::<Marks>(Idiom::Terminal);
     // Agree unchecked, All mixed, Free checked, Pro not, Wi-Fi off.
     let shown = joined(&app);
-    for row in ["[ ] Agree", "[–] All", "(●) Free", "( ) Pro", "[ ] Wi-Fi"] {
+    for row in ["[ ] Agree", "[–] All", "[●] Free", "[ ] Pro", "[ ] Wi-Fi"] {
         assert!(shown.contains(row), "{row} not in {shown:?}");
     }
     app.press("text:Agree").unwrap();
@@ -124,7 +129,7 @@ fn checkboxes_radios_and_switches_show_the_terminals_marks() {
     })
     .unwrap();
     let shown = joined(&app);
-    for row in ["[✓] Agree", "[✓] All", "( ) Free", "(●) Pro", "[✓] Wi-Fi"] {
+    for row in ["[✓] Agree", "[✓] All", "[ ] Free", "[●] Pro", "[✓] Wi-Fi"] {
         assert!(shown.contains(row), "{row} not in {shown:?}");
     }
 }
@@ -153,7 +158,7 @@ fn the_marks_take_the_accent_when_on_and_are_muted_when_off() {
 fn outside_a_terminal_the_controls_show_no_marks() {
     let app = start::<Marks>(Idiom::Desktop);
     let shown = joined(&app);
-    for mark in ["[ ]", "[–]", "(●)", "( )", "[ ]"] {
+    for mark in ["[ ]", "[–]", "[●]", "[ ]"] {
         assert!(!shown.contains(mark), "{mark} in {shown:?}");
     }
     assert!(app.screen().shows("Agree"));
@@ -397,6 +402,57 @@ fn text_origins<C: Component<Props = ()>>() -> std::collections::HashMap<String,
         .collect()
 }
 
+/// [`ApproxTextEngine`] as a terminal lays text out: a line is one row
+/// whatever the style's line height, as the TUI's cell engine draws it,
+/// so a line `1.2 ×` its font tall stays one Cell where an explicit
+/// `lineHeight` (a text view's body, code, headings) would round up to two.
+struct TerminalText;
+
+impl TextEngine for TerminalText {
+    type Prepared = <ApproxTextEngine as TextEngine>::Prepared;
+
+    fn prepare(&self, text: &AttributedText) -> Self::Prepared {
+        self.prepare_aligned(text, &AttachmentAlignments::default())
+    }
+
+    fn prepare_aligned(
+        &self,
+        text: &AttributedText,
+        alignments: &AttachmentAlignments,
+    ) -> Self::Prepared {
+        let mut text = text.clone();
+        for span in &mut text.spans {
+            span.style.line_height = Points::ZERO;
+            span.style.line_height_multiple = 0.0;
+        }
+        ApproxTextEngine.prepare_aligned(&text, alignments)
+    }
+
+    fn measure(&self, prepared: &Self::Prepared, max_width: Option<Points>) -> Size<Points> {
+        ApproxTextEngine.measure(prepared, max_width)
+    }
+
+    fn first_baseline(&self, prepared: &Self::Prepared, width: Points) -> Option<Points> {
+        ApproxTextEngine.first_baseline(prepared, width)
+    }
+
+    fn breaks_lines_greedily(&self) -> bool {
+        ApproxTextEngine.breaks_lines_greedily()
+    }
+
+    fn layout(&self, prepared: &Self::Prepared, size: Size<Points>) -> TextLayout {
+        ApproxTextEngine.layout(prepared, size)
+    }
+
+    fn lines(&self, layout: &TextLayout) -> Vec<TextLine> {
+        ApproxTextEngine.lines(layout)
+    }
+
+    fn attachments(&self, layout: &TextLayout) -> Vec<Option<Point<Points>>> {
+        ApproxTextEngine.attachments(layout)
+    }
+}
+
 /// Where each text is in the window in a terminal, its size with it.
 fn text_bounds<C: Component<Props = ()>>() -> std::collections::HashMap<String, Bounds<Points>> {
     let viewport = Size::new(px(390.0), px(844.0));
@@ -407,7 +463,7 @@ fn text_bounds<C: Component<Props = ()>>() -> std::collections::HashMap<String, 
             os: Os::Linux,
             idiom: Idiom::Terminal,
             // A terminal's Cells, so the core lays out on its grid as the
-            // TUI's does. The headless text engine's lines are 1.2 × the
+            // TUI's does. [`TerminalText`]'s lines are 1.2 × the
             // font size: the body's 18pt, a code block's 15.6, a level-3
             // heading's 20.4 and the canvas font's 12, which components
             // measure as a Cell, are each one row of 21pt (nearest), as a
@@ -415,13 +471,15 @@ fn text_bounds<C: Component<Props = ()>>() -> std::collections::HashMap<String, 
             cell: Some(Size::new(px(8.0), px(21.0))),
             ..Environment::default()
         },
-        ..EngineConfig::new(Root::of::<C>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<C>())
     };
-    let mut app = Headless::start(config).unwrap();
+    let mut app = Headless::start_with_text_engine(config, || TerminalText).unwrap();
     type Seen = (
         std::collections::HashMap<NodeId, String>,
         std::collections::HashMap<NodeId, Bounds<Points>>,
         std::collections::HashMap<NodeId, NodeId>,
+        // Image views.
+        std::collections::HashSet<NodeId>,
     );
     let seen = Arc::new(Mutex::new(Seen::default()));
     let into = seen.clone();
@@ -437,6 +495,9 @@ fn text_bounds<C: Component<Props = ()>>() -> std::collections::HashMap<String, 
                 }
                 MountItem::Insert { parent, child, .. } => {
                     seen.2.insert(*child, *parent);
+                }
+                MountItem::Image { id, .. } => {
+                    seen.3.insert(*id);
                 }
                 _ => {}
             }
@@ -473,6 +534,10 @@ fn text_bounds<C: Component<Props = ()>>() -> std::collections::HashMap<String, 
     };
     // A text shown twice (a day of two months) is where it shows.
     let mut origins = std::collections::HashMap::new();
+    // An image view as `<image>`.
+    for id in &seen.3 {
+        origins.insert("<image>".to_string(), at(*id).0);
+    }
     let mut shown = std::collections::HashSet::new();
     for (id, t) in &seen.0 {
         let (origin, shows) = at(*id);
@@ -708,14 +773,31 @@ fn Picture() -> impl IntoElement {
     text_view().markdown("Intro.\n\n![Green mountains](https://example.com/a.png)\n\nAfter.")
 }
 
+/// Where `Intro.`, the block image and `After.` of `C` are.
+fn picture_rows<C: Component<Props = ()>>() -> (f32, Bounds<Points>, f32) {
+    let at = text_bounds::<C>();
+    let get = |t: &str| *at.get(t).unwrap_or_else(|| panic!("no {t} in {at:?}"));
+    (
+        get("Intro.").origin.y.0,
+        get("<image>"),
+        get("After.").origin.y.0,
+    )
+}
+
 #[test]
-fn a_terminals_block_image_reads_as_its_alt_text_on_a_line() {
-    let at = text_origins::<Picture>();
-    let row = |t: &str| at.get(t).unwrap_or_else(|| panic!("no {t} in {at:?}")).1;
-    // A line of its own, a blank row on each side as any block has.
-    let image = row("[Green mountains]");
-    assert!(image > row("Intro."), "{at:?}");
-    assert_eq!(image - row("Intro."), row("After.") - image, "{at:?}");
+fn a_terminals_block_image_is_a_picture_a_blank_row_from_the_blocks() {
+    // The terminal draws the picture in the image's box (or, where it
+    // cannot, its alt text there): the document keeps the image, not a
+    // line of text, a blank row on each side as any block has.
+    let (intro, image, after) = picture_rows::<Picture>();
+    assert_eq!(image.origin.y.0 - intro, 2.0 * CELL, "{image:?}");
+    assert_eq!(
+        after - (image.origin.y.0 + image.size.height.0),
+        CELL,
+        "{image:?}"
+    );
+    let at = text_bounds::<Picture>();
+    assert!(!at.contains_key("[Green mountains]"), "{at:?}");
 }
 
 /// The same with an image without alt text.
@@ -725,14 +807,20 @@ fn Unlabeled() -> impl IntoElement {
 }
 
 #[test]
-fn a_terminal_leaves_out_an_image_without_alt_text_and_its_row() {
-    let at = text_origins::<Unlabeled>();
-    let row = |t: &str| at.get(t).unwrap_or_else(|| panic!("no {t} in {at:?}")).1;
-    assert!(!at.keys().any(|t| t.contains('[')), "{at:?}");
-    // One blank row from Intro to Next, as from Next to After.
+fn a_terminals_image_without_alt_text_keeps_its_place() {
+    // Drawn as any picture: nothing to read, but the picture shows, a
+    // blank row from the blocks around it.
+    let at = text_bounds::<Unlabeled>();
+    let get = |t: &str| *at.get(t).unwrap_or_else(|| panic!("no {t} in {at:?}"));
+    let image = get("<image>");
     assert_eq!(
-        row("Next.") - row("Intro."),
-        row("After.") - row("Next."),
+        image.origin.y.0 - get("Intro.").origin.y.0,
+        2.0 * CELL,
+        "{at:?}"
+    );
+    assert_eq!(
+        get("Next.").origin.y.0 - (image.origin.y.0 + image.size.height.0),
+        CELL,
         "{at:?}"
     );
 }
@@ -1055,7 +1143,12 @@ fn a_color_slider_is_a_row_of_its_colors_with_a_thumb() {
     assert_eq!(app.screen().count("label:Hue").unwrap(), 1);
     // A drag to the start picks the smallest hue, its thumb on the first
     // Cell; End the largest, on the last.
-    app.drag("label:Hue", point(px(-400.0), px(0.0))).unwrap();
+    app.drag(
+        "label:Hue",
+        point(px(-400.0), px(0.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     let wait = Duration::from_secs(1);
     app.wait_until("the thumb at the start", wait, |s| {
         hue_track(s).starts_with('│')
@@ -1195,7 +1288,7 @@ fn a_color_area_fills_its_width_and_its_rows_with_cells() {
             cell: Some(Size::new(px(8.0), px(21.0))),
             ..Environment::default()
         },
-        ..EngineConfig::new(Root::of::<WideArea>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<WideArea>())
     };
     let mut app = Headless::start(config).unwrap();
     app.first_render().unwrap();
@@ -1232,7 +1325,7 @@ fn a_checkboxs_children_keep_their_column_beside_the_mark() {
             idiom: Idiom::Terminal,
             ..Environment::default()
         },
-        ..EngineConfig::new(Root::of::<Choice>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<Choice>())
     };
     let mut app = Headless::start(config).unwrap();
     // Each text's frame, in its parent, as the batches set it.
@@ -1300,7 +1393,7 @@ fn backgrounds<C: Component<Props = ()>>(idiom: Idiom) -> Vec<nsh_core::Color> {
             idiom,
             ..Environment::default()
         },
-        ..EngineConfig::new(Root::of::<C>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<C>())
     };
     let mut app = Headless::start(config).unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1464,7 +1557,7 @@ fn a_terminals_diff_cuts_every_line_alike() {
             cell: Some(Size::new(px(8.0), px(16.0))),
             ..Environment::default()
         },
-        ..EngineConfig::new(Root::of::<LongDiff>())
+        ..EngineConfig::new(nsh_testing::windowed_root::<LongDiff>())
     };
     let mut app = Headless::start(config).unwrap();
     let lines = Arc::new(Mutex::new(std::collections::HashMap::new()));

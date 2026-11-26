@@ -24,10 +24,30 @@ public final class DevActivity extends Activity {
     /** Created by the system from the manifest. */
     public DevActivity() {}
 
+    /** What the activity made again for a configuration change takes over: the running app. */
+    private static final class Kept {
+        final NshView view;
+        final NshTrust trust;
+
+        Kept(NshView view, NshTrust trust) {
+            this.view = view;
+            this.trust = trust;
+        }
+    }
+
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         edgeToEdge(this);
+        // Made again for a configuration change (as AppActivity): the app keeps running.
+        Object last = getLastNonConfigurationInstance();
+        if (last instanceof Kept) {
+            Kept kept = (Kept) last;
+            view = kept.view;
+            trust = kept.trust;
+            view.enterActivity(this);
+            return;
+        }
         // Before the view starts the engine, whose `process.env` reads this
         // process's environment.
         applyEnv(getIntent().getExtras());
@@ -39,14 +59,18 @@ public final class DevActivity extends Activity {
             java.io.File dir = new java.io.File(new java.io.File(getCacheDir(), "nsh-test"), data);
             deleteTree(dir);
             // Its caches too (downloaded images): the app starts with none.
-            view = new NshView(this, trace, dir, new java.io.File(dir, "cache"));
+            view = new NshView(new android.content.MutableContextWrapper(this), trace, dir, new java.io.File(dir, "cache"));
         } else {
-            view = new NshView(this, trace);
+            view = new NshView(new android.content.MutableContextWrapper(this), trace);
         }
         // An app on its own, not a module embedded in another app: no limits.
         view.useStandaloneLimits();
+        view.ownSystemBars();
         setContentView(view);
-        view.handleNotificationIntent(getIntent());
+        // The CLI's launch (its `url` or `package`) is no notification's press: its extras are the CLI's.
+        if (!getIntent().hasExtra("url") && !getIntent().hasExtra("package")) {
+            view.handleNotificationIntent(getIntent());
+        }
         // A recreated activity's intent was handed in already.
         if (state == null) view.handleUrlSchemeIntent(getIntent());
         String pkg = getIntent().getStringExtra("package");
@@ -106,10 +130,20 @@ public final class DevActivity extends Activity {
         if (view == null || !view.handleBack()) super.onBackPressed();
     }
 
+    /** The running app, for the activity made again ({@link #onCreate}). */
+    @Override
+    public Object onRetainNonConfigurationInstance() {
+        return view != null && view.canMove() ? new Kept(view, trust) : null;
+    }
+
     @Override
     protected void onDestroy() {
-        view.destroy();
-        if (trust != null) trust.close();
+        if (isChangingConfigurations() && view.canMove()) {
+            view.leaveActivity();
+        } else {
+            view.destroy();
+            if (trust != null) trust.close();
+        }
         super.onDestroy();
     }
 
@@ -117,6 +151,7 @@ public final class DevActivity extends Activity {
     public void onConfigurationChanged(android.content.res.Configuration config) {
         super.onConfigurationChanged(config);
         systemBars(this);
+        if (view != null) view.mounter().applySystemBars();
     }
 
     /** Draw behind the system bars: the app gets them as `safeArea()`. */
@@ -135,12 +170,17 @@ public final class DevActivity extends Activity {
         systemBars(activity);
     }
 
-    /** Dark system bar icons in light mode, light ones in dark mode. */
-    @SuppressWarnings("deprecation")
+    /** Dark system bar icons in light mode, light ones in dark mode (the system's, until the app sets its own). */
     static void systemBars(Activity activity) {
         int night = activity.getResources().getConfiguration().uiMode
                 & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
-        boolean dark = night == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        systemBars(activity, night == android.content.res.Configuration.UI_MODE_NIGHT_YES);
+    }
+
+    /** Light system bar icons over {@code dark} content, dark ones over light. */
+    @SuppressWarnings("deprecation")
+    static void systemBars(Activity activity, boolean dark) {
+        if (activity == null) return;
         // Creates the decor view, which owns the insets controller.
         activity.getWindow().getDecorView();
         if (Build.VERSION.SDK_INT >= 30) {

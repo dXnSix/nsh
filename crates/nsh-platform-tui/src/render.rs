@@ -40,10 +40,13 @@
 //! - **Scroll bars** ([`crate::scrollbar`]): a dim track `│` with a thumb
 //!   `┃` in the default color over the inner right (bottom) edge, only when
 //!   the content overflows.
-//! - **Unsupported** content is left out: images, video, web views,
-//!   native components without a terminal rendering and icon-sized
-//!   canvases take no Cells in the layout (the mounter logs each content
-//!   kind once). A control whose content is all left out (an icon button)
+//! - **Unsupported** content is left out: icon-sized videos, web views
+//!   and canvases take no Cells in the layout; larger videos, web views
+//!   and native components without a terminal rendering show a dim
+//!   `[Video: …]` / `[Web page: …]` / `[name: not available in the
+//!   terminal]` line in their box, and a picture on a terminal of 16
+//!   colors or fewer its `[label]` (the mounter logs each content kind
+//!   once). A control whose content is all left out (an icon button)
 //!   draws its accessibility label as its label.
 //! - **Clipping**: a text draws inside its own view's box; a view that
 //!   clips, scrolls or has a border keeps its children inside its content
@@ -155,6 +158,7 @@ pub(crate) fn draw(
         spans: std::mem::take(&mut tree_spans),
         hues: palette::Hues::default(),
         dividers: Vec::new(),
+        sticky: Vec::new(),
     };
     painter.pane = focus_pane(painter.tree);
     let root = Layer::default();
@@ -252,8 +256,9 @@ struct Layer {
     /// its line, as a handle's.
     rule: bool,
     /// Among texts of a row that draws more than lines (a slider's track
-    /// beside its thumb, a progress bar's track beside its fill): a run of
-    /// `─` there is part of that control, no divider of the box.
+    /// beside its thumb, a progress bar's track beside its fill) or inside
+    /// a picture (a color slider's Cells and its thumb's `│`): a run of
+    /// lines there is part of that control, no divider of the box.
     track: bool,
     /// The Cells of the innermost box around the view that draws lines
     /// (its sides, or a frame around it): a divider's ends join only the
@@ -296,10 +301,15 @@ struct Painter<'a> {
     spans: HashMap<NodeId, crate::keyboard::Span>,
     /// The canvas colors drawn this frame, kept apart at 16 colors.
     hues: palette::Hues,
-    /// The Cells of the dividers drawn this frame (a resize handle's line,
-    /// a menu's separator) and whether each runs down: where they meet
-    /// another line they are joined with it ([`join_lines`]).
+    /// The dividers drawn this frame (a resize handle's line, a menu's
+    /// separator): where both ends of one meet lines of its box it is
+    /// joined with them ([`join_lines`]).
     dividers: Vec<Divider>,
+    /// The shifts of the sticky cells of the scroll views being drawn,
+    /// outermost first: a cell may sit deeper than its scroll view's
+    /// children (a list's cells in the scroll view around it, a `position:
+    /// sticky` view), and is shifted wherever its parent draws it.
+    sticky: Vec<(NodeId, Point<Points>)>,
 }
 
 /// How far from a framed box's right line a scroll view's right edge may
@@ -373,6 +383,7 @@ impl Painter<'_> {
             .get(id)
             .and_then(|view| icon_label(self.tree, view))
             .map(str::to_owned);
+        let stand_in = self.tree.get(id).and_then(|view| stand_in(self.tree, view));
         // Only an overlay's box takes a title, so only there is it asked
         // whether its label is already its text.
         let label_shown = self.tree.get(id).is_some_and(|view| {
@@ -413,13 +424,17 @@ impl Painter<'_> {
         // Such a group whose field has the keys shows it on its band.
         let group_focused = holds_field && focused_field_in(self.tree, id, 3);
         let rule_box = holds_rule(self.tree, id, 3);
-        // A row of lines among marks (a slider's track), and anything in a
-        // progress bar (its track, empty at 0): part of the control, no
-        // divider of the box around it.
+        // A row of lines among marks (a slider's track), anything in a
+        // progress bar (its track, empty at 0) and anything in a picture (a
+        // color slider's Cell, the thumb's `│` on it): part of the control,
+        // no divider of the box around it.
         let track = layer.track
             || lines_with_marks(self.tree, id)
             || self.tree.get(id).is_some_and(|view| {
-                view.props.accessibility.role == AccessibilityRole::Progressbar
+                matches!(
+                    view.props.accessibility.role,
+                    AccessibilityRole::Progressbar | AccessibilityRole::Image
+                )
             });
         // An overlay's scrim (a translucent fill with no text in it that
         // the keys never reach, the app's backdrop, whatever it covers: a
@@ -454,6 +469,16 @@ impl Painter<'_> {
                 .unwrap_or(view.style.opacity)
                 .clamp(0.0, 1.0);
         if view.concealed || view.style.hidden || opacity < INVISIBLE_OPACITY {
+            // A transparent picture still loads once it has Cells, as it
+            // does once it has a frame elsewhere: an avatar's waits,
+            // transparent, for its own `onLoad` before it shows.
+            if !view.concealed && view.image.is_some() {
+                let at = origin + view.frame.origin + translation(view);
+                let bounds = CellBounds::new(Bounds::new(at, view.frame.size), cells, area);
+                if let Some(image) = &mut view.image {
+                    crate::image::prepare(image, &mut self.tree.images, id, bounds, cells);
+                }
+            }
             return;
         }
         let at = origin + view.frame.origin + translation(view);
@@ -466,6 +491,16 @@ impl Painter<'_> {
         } else {
             CellBounds::new(frame, cells, area)
         };
+        // `clipPath`: what shows of the view and its children, and where it
+        // is hit, are the Cells of its rectangle (Cells have no rounded
+        // corners).
+        let clip = match view.style.clip_path() {
+            Some(c) => {
+                let (r, _) = c.resolve(view.frame.size);
+                CellBounds::new(Bounds::new(at + r.origin, r.size), cells, area).clipped(clip)
+            }
+            None => clip,
+        };
         let visible = bounds.clipped(clip);
         let cell_origin = bounds.origin(cells, area);
 
@@ -473,7 +508,10 @@ impl Painter<'_> {
         let press = if pointer
             && view.props.pointer_events != PointerEvents::BoxNone
             && !view.props.accessibility.state.disabled
-            && nsh_core::input::has_press(view.events)
+            // The terminal's mouse holds no long press: a view that
+            // listens only to `onLongPress` leaves the clicks to the one
+            // around it.
+            && nsh_core::input::has_tap(view.events)
         {
             Some((id, cell_origin))
         } else {
@@ -490,8 +528,9 @@ impl Painter<'_> {
         }
         let children_pointer = pointer && view.props.pointer_events != PointerEvents::BoxOnly;
 
-        // What a terminal cannot show (an image, a video, a web view)
-        // keeps its box blank: its fill would read as a band of content.
+        // An image draws its picture over what is under it; what a
+        // terminal cannot show (a video, a web view) keeps its box blank:
+        // its fill would read as a band of content.
         let blank = matches!(
             view.kind,
             ViewKind::Image | ViewKind::Video | ViewKind::WebView
@@ -617,8 +656,16 @@ impl Painter<'_> {
             && bounds.bottom - bounds.top == 1
             && fill.0 & 255 == 255
             && holds_field;
+        // A select's trigger (a combobox holding no field) is a field the
+        // user picks from: the same raised band, so it reads as one to
+        // press, as a combobox's does.
+        let picker = view.props.accessibility.role == AccessibilityRole::Combobox
+            && view.input.is_none()
+            && !layer.field_group
+            && !page
+            && bounds.bottom - bounds.top == 1;
         if let Some(ramp) = parent.ramp
-            && (view.input.is_some() && !layer.field_group || group)
+            && (view.input.is_some() && !layer.field_group || group || picker)
             && filled == Surface::None
             && !edges.any()
             && !hidden
@@ -769,8 +816,9 @@ impl Painter<'_> {
         // overlay's own box is its frame instead, and a field keeps its
         // underline. A swatch is its color at any size.
         let small = bounds.bottom - bounds.top < i32::from(CONTAINER_ROWS);
+        let picture = view.props.accessibility.role == AccessibilityRole::Image;
         let bandless = parent.ramp.is_none()
-            && (small || swatch.is_some())
+            && (small || picture)
             && !page
             && !dot
             && !hidden
@@ -778,7 +826,14 @@ impl Painter<'_> {
             && !edges.any()
             && !(layer.overlay && !layer.boxed);
         let bandless_fill = bandless
-            .then(|| palette::bandless_fill(fill, parent))
+            .then(|| {
+                // A swatch's Cells keep their own colors, as with surfaces.
+                if picture {
+                    palette::bandless_swatch(fill, parent)
+                } else {
+                    palette::bandless_fill(fill, parent)
+                }
+            })
             .flatten();
         let bandless_reversed = bandless
             && small
@@ -801,6 +856,14 @@ impl Painter<'_> {
         let docked = layer.overlay
             && !layer.boxed
             && view.props.accessibility.role == AccessibilityRole::Summary;
+        // A floating box (a "back to bottom" pill, a composer over the
+        // timeline) that casts a shadow stands off what scrolls under it:
+        // its shadow is a Cell left blank each side, and the row below it
+        // when the shadow falls down, so no word behind it runs into its
+        // label or shows in the gap under it.
+        if !layer.overlay && !visible.is_empty() && floats_with_shadow(view) {
+            clear_shadow(self.buffer, visible, clip, view);
+        }
         if layer.overlay && surface && !visible.is_empty() {
             dialog::clear(self.buffer, visible);
             // A word behind it that the box cuts at its sides (or the
@@ -832,9 +895,13 @@ impl Painter<'_> {
                 }
             };
             for y in rows.filter(|_| outer) {
-                // The frame's Cell, else the one beyond it (a word touching
-                // the frame).
-                for (frame, step) in [(left - 1, -1), (right, 1)] {
+                // The frame's Cell (drawn a Cell around the box, else the
+                // box's own line, cleared above), else the one beyond it (a
+                // word touching the frame). Never further out: a word a
+                // blank column keeps from a box with lines of its own (a
+                // menu's shortcut beside its open submenu) is not cut.
+                let out = i32::from(around);
+                for (frame, step) in [(left - out, -1), (right - 1 + out, 1)] {
                     let start = match word(self.buffer, &self.text_cells, frame, y) {
                         true => frame,
                         false => frame + step,
@@ -997,18 +1064,13 @@ impl Painter<'_> {
                 && (visible.y..visible.bottom()).contains(&y)
                 && !visible.is_empty()
             {
-                let inside = |x: i32| {
-                    layer.frame.or(layer.parent).is_none_or(|frame| {
-                        (i32::from(frame.x)..i32::from(frame.right())).contains(&x)
-                    })
-                };
-                if inside(i32::from(visible.x) - 1) {
-                    self.dividers.push((visible.x, y, false, layer.overlay));
-                }
-                if inside(i32::from(visible.right())) {
-                    self.dividers
-                        .push((visible.right() - 1, y, false, layer.overlay));
-                }
+                self.dividers.push(Divider {
+                    start: Position::new(visible.x, y),
+                    len: visible.width,
+                    down: false,
+                    bridge: layer.overlay,
+                    within: layer.frame.or(layer.parent),
+                });
             }
             // Where the terminal has surfaces the title is set off by the
             // line on both sides: `╭─ Title ─`.
@@ -1059,10 +1121,20 @@ impl Painter<'_> {
                 if let Some(down) = rule {
                     let drawn = text_bounds.clipped(visible);
                     let glyph = if down { "│" } else { "─" };
-                    for y in drawn.y..drawn.bottom() {
-                        for x in drawn.x..drawn.right() {
+                    let (lanes, along) = if down {
+                        (drawn.x..drawn.right(), drawn.y..drawn.bottom())
+                    } else {
+                        (drawn.y..drawn.bottom(), drawn.x..drawn.right())
+                    };
+                    // Each unbroken run of the line is one divider: its
+                    // ends are where it meets the lines it may join.
+                    for lane in lanes {
+                        let mut run: Option<Divider> = None;
+                        for step in along.clone() {
+                            let (x, y) = if down { (lane, step) } else { (step, lane) };
                             let cell = &mut self.buffer[(x, y)];
                             if cell.symbol() != glyph {
+                                self.dividers.extend(run.take());
                                 continue;
                             }
                             // A divider is a line of the box it splits: in
@@ -1078,8 +1150,23 @@ impl Painter<'_> {
                                 };
                                 cell.modifier = Modifier::empty();
                             }
-                            self.dividers.push((x, y, down, layer.overlay));
+                            match &mut run {
+                                Some(run) => run.len += 1,
+                                None => {
+                                    run = Some(Divider {
+                                        start: Position::new(x, y),
+                                        len: 1,
+                                        down,
+                                        bridge: layer.overlay,
+                                        // The box it splits is the one that
+                                        // draws lines around it, not the
+                                        // view drawing its glyphs.
+                                        within: layer.frame,
+                                    });
+                                }
+                            }
                         }
+                        self.dividers.extend(run);
                     }
                 }
             }
@@ -1115,8 +1202,35 @@ impl Painter<'_> {
                     &mut self.hues,
                 );
             }
+            if let Some(image) = &mut view.image {
+                let tint = view.style.tint_color;
+                crate::image::draw(
+                    image,
+                    &mut self.tree.images,
+                    id,
+                    self.buffer,
+                    inner,
+                    inner_visible,
+                    cells,
+                    ground,
+                    tint,
+                );
+            }
             if let Some(component) = &mut view.component {
                 component.render(inner_visible, self.buffer);
+            }
+            if let Some(text) = &stand_in
+                && !inner_visible.is_empty()
+            {
+                // What the terminal cannot show says so in its box, dim,
+                // instead of leaving a blank the reader takes for a gap.
+                let (x, y) = (inner_visible.x, inner_visible.y);
+                let room = inner_visible.right() - x;
+                let drawn = dialog::put(self.buffer, x, y, text, room, Color::Reset, Modifier::DIM);
+                if drawn > 0 && unicode_width::UnicodeWidthStr::width(text.as_str()) > room as usize
+                {
+                    self.buffer[(x + drawn - 1, y)].set_symbol("…");
+                }
             }
             if control && let Some(label) = &icon {
                 let (x, y) = (inner_visible.x, inner_visible.y);
@@ -1154,20 +1268,19 @@ impl Painter<'_> {
                     } else {
                         x
                     };
+                    // A row short of room shrinks an icon button below its
+                    // label: the label is cut on a character's edge (never
+                    // half of a wide one), its last Cell `…`.
+                    let cut = cut_label(label, room.max(0) as usize);
                     let drawn = dialog::put(
                         self.buffer,
                         x,
                         y,
-                        label,
+                        &cut,
                         inner_visible.right() - x,
                         Color::Reset,
                         Modifier::empty(),
                     );
-                    // A row short of room shrinks an icon button below its
-                    // label: the label is cut, its last Cell `…`.
-                    if drawn > 0 && unicode_width::UnicodeWidthStr::width(label) > room as usize {
-                        self.buffer[(x + drawn - 1, y)].set_symbol("…");
-                    }
                     let width = usize::from(self.buffer.area.width);
                     let start = usize::from(y) * width + usize::from(x);
                     for cell in &mut self.text_cells[start..start + usize::from(drawn)] {
@@ -1177,12 +1290,13 @@ impl Painter<'_> {
             }
         }
 
-        let sticky: Vec<(NodeId, Point<Points>)> = view
-            .scroll
-            .as_ref()
-            .filter(|scroll| !scroll.sticky.is_empty())
-            .map(|scroll| scroll.sticky_shifts().collect())
-            .unwrap_or_default();
+        let sticky_mark = self.sticky.len();
+        if let Some(scroll) = view.scroll.as_ref().filter(|s| !s.sticky.is_empty()) {
+            // An animated offset (`stickyHeaderOffset`) is the graph's now.
+            let animator = &self.tree.animator;
+            self.sticky
+                .extend(scroll.sticky_shifts_with(|node| animator.value(node)));
+        }
         let content_origin = at - scroll_origin;
         let outer_focus = std::mem::take(&mut self.focus);
         let own_disabled =
@@ -1223,46 +1337,64 @@ impl Painter<'_> {
                 height: visible.height + 2,
             });
         }
-        let mut index = 0;
-        while let Some(child) = self
-            .tree
-            .get(id)
-            .and_then(|view| view.children.get(index).copied())
-        {
-            index += 1;
-            if self
+        // Sticky cells draw (and take the pointer: hits are in paint
+        // order) over the other children, in the order they are among
+        // them, as the desktops raise them.
+        let mut raised = false;
+        loop {
+            let mut index = 0;
+            let mut deferred = false;
+            while let Some(child) = self
                 .tree
-                .get(child)
-                .is_some_and(|view| view.kind == ViewKind::Modal)
+                .get(id)
+                .and_then(|view| view.children.get(index).copied())
             {
-                continue;
+                index += 1;
+                if self
+                    .tree
+                    .get(child)
+                    .is_some_and(|view| view.kind == ViewKind::Modal)
+                {
+                    continue;
+                }
+                let shift = self
+                    .sticky
+                    .iter()
+                    .rev()
+                    .find(|(cell, _)| *cell == child)
+                    .map(|&(_, shift)| shift);
+                if shift.is_some() != raised {
+                    deferred |= shift.is_some();
+                    continue;
+                }
+                // An anchored overlay stands over everything, wherever its
+                // owner is.
+                let child_clip = if self
+                    .tree
+                    .get(child)
+                    .is_some_and(|view| view.props.overlay_anchor.is_some())
+                {
+                    self.screen
+                } else {
+                    children_clip
+                };
+                self.view(
+                    child,
+                    content_origin + shift.unwrap_or_default(),
+                    child_clip,
+                    opacity,
+                    ground,
+                    child_layer.clone(),
+                    children_pointer,
+                    press,
+                );
             }
-            // An anchored overlay stands over everything, wherever its
-            // owner is.
-            let child_clip = if self
-                .tree
-                .get(child)
-                .is_some_and(|view| view.props.overlay_anchor.is_some())
-            {
-                self.screen
-            } else {
-                children_clip
-            };
-            let shift = sticky
-                .iter()
-                .find(|(cell, _)| *cell == child)
-                .map_or_else(Point::default, |(_, shift)| *shift);
-            self.view(
-                child,
-                content_origin + shift,
-                child_clip,
-                opacity,
-                ground,
-                child_layer.clone(),
-                children_pointer,
-                press,
-            );
+            if raised || !deferred {
+                break;
+            }
+            raised = true;
         }
+        self.sticky.truncate(sticky_mark);
 
         let Some(view) = self.tree.get(id) else {
             return;
@@ -1390,6 +1522,7 @@ impl Painter<'_> {
                 ),
                 popup: popup_item,
                 lined_group: layer.lined_group,
+                pointer_focus: self.tree.pointer_focus,
             };
             match ground.ramp {
                 Some(ramp) => mark_surface(
@@ -1405,6 +1538,7 @@ impl Painter<'_> {
                     popup_item,
                     layer.modal,
                     layer.pane,
+                    self.tree.pointer_focus,
                 ),
                 None => mark_state(
                     self.buffer,
@@ -1554,7 +1688,8 @@ fn focus_pane(tree: &Mounter) -> Option<NodeId> {
 
 /// Whether the box `pane` holds rows the keys move through: a scroll view
 /// (a list) or a selected item, in its own content (not inside a framed
-/// box within it, a pane of its own).
+/// box within it, a pane of its own). A chosen tab (a segmented control's)
+/// is a control's value, not a row: a card around one keeps its line.
 fn holds_rows(tree: &Mounter, pane: NodeId) -> bool {
     let mut stack: Vec<NodeId> = tree
         .get(pane)
@@ -1563,7 +1698,9 @@ fn holds_rows(tree: &Mounter, pane: NodeId) -> bool {
         let Some(view) = tree.get(id) else {
             continue;
         };
-        if view.kind == ViewKind::Scroll || view.props.accessibility.state.selected {
+        let row = view.props.accessibility.state.selected
+            && view.props.accessibility.role != AccessibilityRole::Tab;
+        if view.kind == ViewKind::Scroll || row {
             return true;
         }
         let lined = view
@@ -1628,6 +1765,44 @@ enum Focus {
     Shown,
 }
 
+/// `label` as it fits `room` columns: whole; its first word whole when a
+/// cut would fall inside it (`Edit` of `Edit folder`); else cut on a
+/// character's edge with `…` in the column after the last one that fits.
+fn cut_label(label: &str, room: usize) -> std::borrow::Cow<'_, str> {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+    if label.width() <= room {
+        return label.into();
+    }
+    // A cut inside the first word would leave a stub (`Sc…` of `Scan
+    // folder`): the first word whole reads better, when it fits.
+    let first = label.split_whitespace().next().unwrap_or("");
+    let first_width = first.width();
+    if first != label && first_width <= room && room <= first_width + 1 {
+        let mut cut = first.to_string();
+        if first_width < room {
+            cut.push('…');
+        }
+        return cut.into();
+    }
+    let mut cut = String::new();
+    let mut width = 0;
+    for grapheme in label.graphemes(true) {
+        let w = grapheme.width();
+        if width + w + 1 > room {
+            break;
+        }
+        cut.push_str(grapheme);
+        width += w;
+    }
+    // Not `Edit …`: the ellipsis follows the last character.
+    cut.truncate(cut.trim_end().len());
+    if room > 0 {
+        cut.push('…');
+    }
+    cut.into()
+}
+
 /// The label an icon button shows: its accessibility label, trimmed, when
 /// all its content is left out (every child laid out empty or hidden), as
 /// the layout then gives it a row as wide as that label.
@@ -1640,10 +1815,48 @@ fn icon_label<'a>(tree: &Mounter, view: &'a NshView) -> Option<&'a str> {
     (empty && !label.is_empty()).then_some(label)
 }
 
+/// The line that stands in for content the terminal cannot show: a video,
+/// a web view, a native component without a terminal rendering, or a
+/// picture on a terminal of 16 colors or fewer (its accessibility label).
+fn stand_in(tree: &Mounter, view: &NshView) -> Option<String> {
+    if view.frame.size.width <= Points::ZERO || view.frame.size.height <= Points::ZERO {
+        return None;
+    }
+    let label = view
+        .props
+        .accessibility
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty());
+    let what = match view.kind {
+        ViewKind::Video => "Video",
+        ViewKind::WebView => "Web page",
+        ViewKind::Image => {
+            let image = view.image.as_ref()?;
+            if !tree.images.hides(image) {
+                return None;
+            }
+            return Some(format!("[{}]", label.unwrap_or("Image")));
+        }
+        _ => match (&view.component, &view.component_name) {
+            (None, Some(name)) => {
+                return Some(format!("[{name}: not available in the terminal]"));
+            }
+            _ => return None,
+        },
+    };
+    Some(match label {
+        Some(label) => format!("[{what}: {label}]"),
+        None => format!("[{what}: not available in the terminal]"),
+    })
+}
+
 /// Whether `id` or a view inside it draws anything of its own in the
-/// terminal: a text, a field, a canvas, a native component or a fill (a
-/// carousel's pagination bar); a wrapper of an icon the terminal leaves
-/// out draws nothing, and so does a picture (its box stays blank).
+/// terminal: a text, a field, a canvas, a native component, a picture the
+/// terminal can show or a fill (a carousel's pagination bar); a wrapper of
+/// an icon the terminal leaves out draws nothing, and so does a picture it
+/// cannot show (its box stays blank).
 fn draws(tree: &Mounter, id: NodeId) -> bool {
     tree.get(id).is_some_and(|view| {
         view.frame.size.width > Points::ZERO
@@ -1652,6 +1865,10 @@ fn draws(tree: &Mounter, id: NodeId) -> bool {
                 || view.field.is_some()
                 || view.canvas.is_some()
                 || view.component.is_some()
+                || view
+                    .image
+                    .as_ref()
+                    .is_some_and(|image| tree.images.shows(image))
                 || (!matches!(
                     view.kind,
                     ViewKind::Image | ViewKind::Video | ViewKind::WebView
@@ -2307,16 +2524,35 @@ const ARMS: [(&str, [bool; 4]); 15] = [
     ("┼", [true, true, true, true]),
 ];
 
-/// A divider's Cell: its column and row, whether it runs down (else
-/// across), and whether it may bridge a blank Cell to reach a frame (in an
-/// overlay).
-type Divider = (u16, u16, bool, bool);
+/// A divider drawn this frame: an unbroken run of `─` across or `│` down
+/// (a resize handle's line, a menu's separator, a box's lone line).
+#[derive(Clone, Copy)]
+struct Divider {
+    /// Its first Cell: the leftmost of a run across, the top of one down.
+    start: Position,
+    /// How many Cells it runs.
+    len: u16,
+    /// Whether it runs down (else across).
+    down: bool,
+    /// Whether it may bridge a blank Cell to reach a frame (in an overlay).
+    bridge: bool,
+    /// The Cells of the box it splits (`Layer::frame`; a box's lone line
+    /// falls back on its parent's): its ends join only lines inside them.
+    within: Option<Rect>,
+}
 
 /// Joins each divider's ends with the lines they reach: a divider running
 /// across that ends on a line running down (a frame's side, another
 /// divider) turns it into `├` / `┤` (`┼` across it), one running down that
 /// ends on a line across turns it into `┬` / `┴`, as a box drawn in lines
 /// joins its own.
+///
+/// A divider splits its box from side to side: only one whose two ends
+/// each meet a line across it inside that box, or run to the box's edge
+/// (the screen's, where no box around draws lines), is joined. A line that
+/// stops short at either end (a separator in one row of a wrapped
+/// toolbar) is no divider of the lines it happens to touch, and joins
+/// neither.
 fn join_lines(buffer: &mut Buffer, dividers: &[Divider]) {
     let arms = |symbol: &str| {
         ARMS.iter()
@@ -2324,55 +2560,95 @@ fn join_lines(buffer: &mut Buffer, dividers: &[Divider]) {
             .map(|(_, arms)| *arms)
     };
     let area = buffer.area;
-    for &(x, y, down, bridge) in dividers {
-        let expected = if down { "│" } else { "─" };
-        if buffer[(x, y)].symbol() != expected {
-            // Covered since (an overlay drawn over it).
-            continue;
-        }
-        // Its two ends' neighbors along its own line, and the arm each
-        // takes toward it (up, right, down, left).
+    for divider in dividers {
+        let Divider {
+            start,
+            len,
+            down,
+            bridge,
+            within,
+        } = *divider;
+        let inside = |(x, y): (i32, i32)| {
+            let holds = |rect: Rect| {
+                (i32::from(rect.x)..i32::from(rect.right())).contains(&x)
+                    && (i32::from(rect.y)..i32::from(rect.bottom())).contains(&y)
+            };
+            holds(area) && within.is_none_or(holds)
+        };
+        let symbol = |(x, y): (i32, i32)| buffer[(x as u16, y as u16)].symbol();
+        // A line along the divider (another thumb over it) continues it;
+        // only one across it is a line it ends on.
+        let along = |arms: [bool; 4]| {
+            if down {
+                arms[0] && arms[2]
+            } else {
+                arms[1] && arms[3]
+            }
+        };
+        let across = |arms: [bool; 4]| {
+            if down {
+                arms[1] || arms[3]
+            } else {
+                arms[0] || arms[2]
+            }
+        };
+        let (x, y) = (i32::from(start.x), i32::from(start.y));
+        let last = i32::from(len) - 1;
+        // Its two end Cells, the step out of each, and the arm the line
+        // beyond takes toward it (up, right, down, left).
         let ends = if down {
-            [
-                (i32::from(x), i32::from(y) - 1, 2),
-                (i32::from(x), i32::from(y) + 1, 0),
-            ]
+            [((x, y), (0, -1), 2), ((x, y + last), (0, 1), 0)]
         } else {
-            [
-                (i32::from(x) - 1, i32::from(y), 1),
-                (i32::from(x) + 1, i32::from(y), 3),
-            ]
+            [((x, y), (-1, 0), 1), ((x + last, y), (1, 0), 3)]
         };
-        let within = |x: i32, y: i32| {
-            x >= i32::from(area.x)
-                && y >= i32::from(area.y)
-                && x < i32::from(area.right())
-                && y < i32::from(area.bottom())
-        };
-        for (mut nx, ny, arm) in ends {
-            if !within(nx, ny) {
+        // Whether each end reaches its box's side: the line it meets there
+        // (none at the box's edge) and the blank Cell bridged on the way.
+        let mut reached = [None; 2];
+        for (reach, &(end, (dx, dy), _)) in reached.iter_mut().zip(&ends) {
+            // Covered since (an overlay drawn over its end).
+            if !inside(end) || !arms(symbol(end)).is_some_and(along) {
+                break;
+            }
+            let mut next = (end.0 + dx, end.1 + dy);
+            if !inside(next) {
+                *reach = Some(None);
                 continue;
             }
+            let mut gap = None;
             // A row across a popup's content stops at its padding: a
             // blank Cell, then the frame's side, is bridged (a menu's
             // separator reaches its frame). On the page a rule joins only
             // the line it touches: one inside a card (a heading's) is the
             // card's content, not a divider of it.
-            let beyond = nx + (nx - i32::from(x));
+            let beyond = (next.0 + dx, next.1 + dy);
             if !down
                 && bridge
-                && buffer[(nx as u16, ny as u16)].symbol() == " "
-                && within(beyond, ny)
-                && arms(buffer[(beyond as u16, ny as u16)].symbol())
-                    .is_some_and(|arms| arms[0] && arms[2])
+                && symbol(next) == " "
+                && inside(beyond)
+                && arms(symbol(beyond)).is_some_and(|arms| arms[0] && arms[2])
             {
-                let style = buffer[(x, y)].style();
-                let gap = &mut buffer[(nx as u16, ny as u16)];
-                gap.set_symbol("─");
-                gap.set_style(style);
-                nx = beyond;
+                gap = Some(next);
+                next = beyond;
             }
-            let cell = &mut buffer[(nx as u16, ny as u16)];
+            if arms(symbol(next)).is_some_and(across) {
+                *reach = Some(Some((next, gap)));
+            }
+        }
+        let [Some(first), Some(second)] = reached else {
+            continue;
+        };
+        for ((line, gap), (end, _, arm)) in [first, second]
+            .into_iter()
+            .zip(ends)
+            .filter_map(|(met, end)| Some((met?, end)))
+        {
+            if let Some((gx, gy)) = gap {
+                let style = buffer[(end.0 as u16, end.1 as u16)].style();
+                let cell = &mut buffer[(gx as u16, gy as u16)];
+                cell.set_symbol("─");
+                cell.set_style(style);
+            }
+            let cell = &mut buffer[(line.0 as u16, line.1 as u16)];
             let Some(mut joined) = arms(cell.symbol()) else {
                 continue;
             };
@@ -2502,6 +2778,7 @@ fn control(view: &NshView) -> bool {
                 | AccessibilityRole::Adjustable
                 | AccessibilityRole::Combobox
                 | AccessibilityRole::Spinbutton
+                | AccessibilityRole::Textbox
         )
 }
 
@@ -2558,6 +2835,21 @@ struct Marks {
     /// The view is inside an input group that draws its line
     /// ([`Layer::lined_group`]).
     lined_group: bool,
+    /// The pointer moved the focus (`Mounter::pointer_focus`).
+    pointer_focus: bool,
+}
+
+/// The states a view's marks show: its own and those projected on it as
+/// a part of its control. A control the pointer focused shows no focus of
+/// its own (a paragraph pressed for one of its links, a button clicked),
+/// as CSS's `:focus-visible`; a field, which edits, does.
+fn shown_states(view: &NshView, pointer_focus: bool) -> u16 {
+    let own = if pointer_focus && view.input.is_none() {
+        view.states & !state::FOCUSED
+    } else {
+        view.states
+    };
+    own | view.projected
 }
 
 /// Draws the view's state over its drawn Cells (its subtree's included):
@@ -2573,7 +2865,7 @@ fn mark_state(
 ) {
     // A part shows its control's states as its own (a list's highlighted
     // option is focused while the keys stay in the search field).
-    let flags = view.states | view.projected;
+    let flags = shown_states(view, marks.pointer_focus);
     let disabled = view.props.accessibility.state.disabled || flags & state::DISABLED != 0;
     let selected = banded(view);
     let field = view.input.is_some();
@@ -2739,10 +3031,11 @@ fn mark_surface(
     popup: bool,
     dialog: bool,
     pane: bool,
+    pointer_focus: bool,
 ) {
     // A part shows its control's states as its own (a list's highlighted
     // option is focused while the keys stay in the search field).
-    let flags = view.states | view.projected;
+    let flags = shown_states(view, pointer_focus);
     let disabled = view.props.accessibility.state.disabled || flags & state::DISABLED != 0;
     let selected = banded(view);
     let field = view.input.is_some();
@@ -2847,9 +3140,17 @@ fn mark_surface(
     let covered = !(visible.y..visible.bottom())
         .any(|y| (visible.x..visible.right()).any(|x| buffer[(x, y)].bg == own));
     let active = (popup && (focused || hovered || pressed) && pressable(view))
-        || ((dialog || pane) && !popup && highlighted)
-        || (pane && !popup && selected && !tab && !covered && (item || !pressable(view)));
-    if active {
+        || ((dialog || pane) && !popup && highlighted);
+    // The selected row of a list in the focused pane, the keys not on it
+    // (a sidebar's current page): an accent rail down its leading column
+    // and its label in the accent, bold (Bubbles' list), no band, which
+    // would read as where the keys are. Without a free leading column it
+    // is the accent band.
+    let chosen = pane && !popup && selected && !tab && !covered && (item || !pressable(view));
+    if chosen && !active && selection_rail(buffer, visible, inner) {
+        return;
+    }
+    if active || chosen {
         accent_band(buffer, visible, inner, ramp, selected);
         return;
     }
@@ -2937,6 +3238,19 @@ fn mark_surface(
     } else if marked {
         focus_underline(buffer, visible, covered);
     }
+    // A list's selected row out of the focused pane keeps the same rail as
+    // in it, so the current page of a sidebar reads alike either way.
+    let nav = view.props.accessibility.state.current.is_some();
+    if selected
+        && (item || nav)
+        && !popup
+        && !covered
+        && !hued_label
+        && !focused
+        && selection_rail(buffer, visible, inner)
+    {
+        return;
+    }
     if selected {
         if !hued_label {
             band(buffer, visible, step(SELECT), own);
@@ -2971,13 +3285,17 @@ fn mark_surface(
     if framed {
         // The line shows it.
     } else if focused && container {
-        // A step up alone reads as one more raised surface: an accent
-        // rail down its leading column marks it, as a focused pane's
-        // line does, or its label without a free column for one.
-        if !selected {
-            band(buffer, visible, step(HOVER), own);
-        }
-        if !focus_rail(buffer, visible, inner) {
+        // A pane the keys move within (a sidebar's list, an editor) shows
+        // its focus by what is focused in it (its highlighted item, the
+        // caret), no mark of its own: a band and a rail over a whole pane
+        // only weigh it down. A container that takes presses itself (a
+        // card that is a button) has nothing else to show it: an accent
+        // rail down its leading column, or its label without a free
+        // column for one, never a band, which would read as one more
+        // raised surface.
+        if (pressable(view) || nsh_core::input::has_tap(view.events))
+            && !focus_rail(buffer, visible, inner)
+        {
             drawn(buffer, inner, |cell| {
                 cell.modifier.insert(Modifier::BOLD | Modifier::UNDERLINED)
             });
@@ -3016,6 +3334,33 @@ fn focus_rail(buffer: &mut Buffer, visible: Rect, inner: Rect) -> bool {
         }
     }
     any
+}
+
+/// Marks the selected row of a list (Bubbles' list): `▌` in the accent on
+/// its leading column when that column is blank on every row in sight, its
+/// text in the accent and bold. Whether it could (else nothing changes).
+fn selection_rail(buffer: &mut Buffer, visible: Rect, inner: Rect) -> bool {
+    let rows = inner.intersection(visible);
+    if rows.is_empty() || visible.width < 3 {
+        return false;
+    }
+    let x = visible.x;
+    if (rows.y..rows.bottom()).any(|y| buffer[(x, y)].symbol() != " ") {
+        return false;
+    }
+    for y in rows.y..rows.bottom() {
+        let cell = &mut buffer[(x, y)];
+        cell.set_symbol("▌");
+        cell.fg = ACCENT;
+        cell.modifier -= Modifier::DIM;
+    }
+    drawn(buffer, inner, |cell| {
+        if cell.symbol() != "▌" {
+            cell.fg = ACCENT;
+            cell.modifier = (cell.modifier | Modifier::BOLD) - Modifier::DIM;
+        }
+    });
+    true
 }
 
 /// The accent band of what the keys act on (a focused control, the
@@ -3384,14 +3729,40 @@ fn gradient(
     if layers.is_empty() {
         return None;
     }
+    // The surface the terminal actually shows under the box: a step of
+    // its ramp, not the app's page color (which the terminal's background
+    // stands for, and may be far darker or lighter than it).
+    let base = parent.ramp.map_or(parent.rgb, |ramp| {
+        ramp.mix(palette::LADDER[parent.level.min(palette::LADDER.len() - 1)])
+    });
     let [red, green, blue, alpha] = fill.0.to_be_bytes();
     let alpha = f32::from(alpha) / 255.0;
     let under: palette::Rgb = std::array::from_fn(|i| {
         let top = f32::from([red, green, blue][i]);
-        (top * alpha + f32::from(parent.rgb[i]) * (1.0 - alpha)).round() as u8
+        (top * alpha + f32::from(base[i]) * (1.0 - alpha)).round() as u8
     });
-    let color_at =
-        |point: (f32, f32)| crate::gradient::over(under, layers.iter().map(|l| l.at(point)));
+    // The hue a too-faint wash is lifted toward: the box's own fill, else
+    // its gradient's first visible stop.
+    let toward: palette::Rgb = if fill.0 & 255 != 0 {
+        [red, green, blue]
+    } else {
+        effects
+            .background_images
+            .iter()
+            .flat_map(|g| g.stops.iter())
+            .find(|stop| stop.color.0 & 255 != 0)
+            .map_or(base, |stop| {
+                let [r, g, b, _] = stop.color.0.to_be_bytes();
+                [r, g, b]
+            })
+    };
+    let color_at = |point: (f32, f32)| {
+        palette::apart(
+            crate::gradient::over(under, layers.iter().map(|l| l.at(point))),
+            base,
+            toward,
+        )
+    };
     for y in visible.y..visible.bottom() {
         let py = (i32::from(y) - bounds.top) as f32 * ch + ch / 2.0;
         for x in visible.x..visible.right() {
@@ -3516,6 +3887,57 @@ fn emphasize_border(buffer: &mut Buffer, bounds: CellBounds, visible: Rect) {
             if edge {
                 let cell = &mut buffer[(x, y)];
                 cell.modifier = (cell.modifier | Modifier::BOLD) - Modifier::DIM;
+            }
+        }
+    }
+}
+
+/// Whether `view` casts an outer shadow: on a screen, it floats over what
+/// is around it.
+fn floats_with_shadow(view: &NshView) -> bool {
+    view.style
+        .effects
+        .as_deref()
+        .is_some_and(|effects| effects.box_shadows.iter().any(|shadow| !shadow.inset))
+}
+
+/// Blanks the Cells a floating box's shadow covers around `visible`
+/// (inside `clip`): a Cell each side, and the row below or above as the
+/// shadow falls. What is drawn after it (the box itself, a later
+/// sibling) paints over.
+fn clear_shadow(buffer: &mut Buffer, visible: Rect, clip: Rect, view: &NshView) {
+    let (mut down, mut up) = (false, false);
+    if let Some(effects) = view.style.effects.as_deref() {
+        for shadow in effects.box_shadows.iter().filter(|shadow| !shadow.inset) {
+            down |= shadow.offset_y.0 > 0.0;
+            up |= shadow.offset_y.0 < 0.0;
+        }
+    }
+    let x = visible.x.saturating_sub(1);
+    let right = visible.right().saturating_add(1);
+    let y = if up {
+        visible.y.saturating_sub(1)
+    } else {
+        visible.y
+    };
+    let bottom = if down {
+        visible.bottom().saturating_add(1)
+    } else {
+        visible.bottom()
+    };
+    let ring = Rect::new(x, y, right - x, bottom - y).intersection(clip);
+    let area = ring.intersection(buffer.area);
+    for row in area.y..area.bottom() {
+        for column in area.x..area.right() {
+            let inside = row >= visible.y
+                && row < visible.bottom()
+                && column >= visible.x
+                && column < visible.right();
+            // The scroll bar on the clip's right edge stays.
+            let bar = column + 1 == clip.right()
+                && matches!(buffer[(column, row)].symbol(), "│" | "┃" | "╹" | "╻");
+            if !inside && !bar {
+                buffer[(column, row)].reset();
             }
         }
     }

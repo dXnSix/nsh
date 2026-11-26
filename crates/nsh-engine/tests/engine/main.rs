@@ -22,9 +22,11 @@ mod counter;
 mod errors;
 mod external_wake;
 mod fetch;
+mod first_poll;
 mod focus;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod fs;
+mod gc_bench;
 mod handle_bench;
 mod host;
 mod host_channel;
@@ -52,6 +54,7 @@ mod runtime;
 mod rust_animation;
 mod rust_app;
 mod rust_classes;
+mod rust_host;
 mod rust_inputs;
 mod rust_lists;
 mod rust_media;
@@ -64,6 +67,7 @@ mod rust_touch;
 mod shader;
 mod shutdown;
 mod split;
+mod split_view;
 mod storage;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod system;

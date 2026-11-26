@@ -13,7 +13,7 @@
 //! - **Opening**: the root leaves the main window's modals
 //!   ([`crate::navigation::release`]) and becomes the content of the new
 //!   window, its size the root's (`set_root_size`). The window shows once a
-//!   batch laid out at that size is in ([`batch_applied`]), or after
+//!   batch laid out at that size is in ([`batch_applied`], [`laid_out`]), or after
 //!   [`FIRST_FRAME_MS`] if the engine is late, so it never flashes empty.
 //! - **Input** reaches the surface with the window's root as the root
 //!   events are picked in ([`crate::input::enter`]). A window under a
@@ -451,8 +451,45 @@ pub(crate) struct AppWindow {
     /// The app called `focus()` while it waited for its first frame
     /// (`Window.open(..).focus()`): it shows focused.
     focus_requested: Cell<bool>,
-    /// The mode it opens in, applied once it shows.
-    open_mode: Cell<Option<WindowMode>>,
+    /// When it opened (a count): the oldest normal window still open is
+    /// the app's primary one ([`primary`]).
+    opened: u64,
+}
+
+thread_local! {
+    /// How many of the app's own windows opened so far.
+    static OPENED: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The size and scale of the app's primary window: the oldest of its own
+/// normal windows still open that was given a size. What the app sees as
+/// `windowSize()` and `pixelRatio()`; `None` while it shows none.
+pub(crate) fn primary(surface: &Surface) -> Option<(Size<Points>, f32)> {
+    let windows = surface.windows.try_borrow().ok()?;
+    windows
+        .values()
+        .filter(|w| w.kind == WindowKind::Normal)
+        .filter_map(|w| w.reported.get().map(|size| (w, size)))
+        .min_by_key(|(w, _)| w.opened)
+        .map(|(w, size)| (size, w.window.backingScaleFactor() as f32))
+}
+
+/// The container for surface-wide UI. Among visible windows, prefer the
+/// key normal window, then the main normal window, then another normal
+/// window. An embedded surface may have no app window of its own.
+pub(crate) fn visible_container(surface: &Surface) -> Option<Retained<NSView>> {
+    let windows = surface.windows.borrow();
+    let normal = || {
+        windows
+            .values()
+            .filter(|w| w.kind == WindowKind::Normal && w.window.isVisible())
+    };
+    normal()
+        .find(|w| is_key(&w.window))
+        .or_else(|| normal().find(|w| w.window.isMainWindow()))
+        .or_else(|| normal().next())
+        .or_else(|| windows.values().find(|w| w.window.isVisible()))
+        .map(|w| w.container.clone())
 }
 
 /// The state of window `id` (the main window's for the root) as it is now;
@@ -875,6 +912,9 @@ fn apply(
     if let Some(max) = a.max_size {
         window.setContentMaxSize(max.map_or(NSSize::new(f64::MAX, f64::MAX), ns_size));
     }
+    if let Some(ratio) = a.aspect_ratio {
+        set_aspect_ratio(window, ratio);
+    }
     if let Some(movable) = a.movable {
         window.setMovable(movable);
     }
@@ -1193,17 +1233,6 @@ fn request(surface: &Rc<Surface>, id: NodeId, request: &WindowRequest) {
             });
         }
     }
-    if id == ROOT_ID {
-        match request {
-            // A main window hidden at launch shows at last.
-            WindowRequest::Show | WindowRequest::Focus => main_shown(surface),
-            // The app's own mode replaces the one it was to open in.
-            WindowRequest::SetMode(_) | WindowRequest::SetPlacement(_) => {
-                surface.main_open_mode.take();
-            }
-            _ => {}
-        }
-    }
     report(surface, id);
 }
 
@@ -1255,8 +1284,6 @@ fn with_target_watch(surface: &Surface, id: NodeId, f: impl FnOnce(&Watch)) {
 /// Shows window `id` (`focus`: and makes it key); a new window waiting for
 /// its first frame shows with it.
 fn show(surface: &Surface, id: NodeId, window: &NSWindow, focus: bool) {
-    // Shown again while it leaves full screen: it stays.
-    with_target_watch(surface, id, crate::window_state::shown);
     if let Some(w) = surface.windows.borrow().get(&id)
         && let Showing::Waiting(_) = w.showing.get()
     {
@@ -1278,6 +1305,11 @@ fn show(surface: &Surface, id: NodeId, window: &NSWindow, focus: bool) {
         focus || (focusable && activate),
         focus,
     );
+    // Shown again while it leaves full screen, it stays; hidden, it
+    // enters the full screen asked for meanwhile.
+    with_target_watch(surface, id, |watch| {
+        crate::window_state::shown(watch, window)
+    });
 }
 
 /// Orders `window` front: the app activates first when it may (ordering a
@@ -1441,6 +1473,11 @@ fn open_window(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
     container.setWantsLayer(true);
     view.ns()
         .setFrame(NSRect::new(NSPoint::new(0.0, 0.0), content));
+    // Mounted views disable autoresizing translation to skip per-view Auto
+    // Layout storage (`mount.rs`), so re-enable it here: once any descendant
+    // (such as a glass or backdrop view) activates Auto Layout in this window,
+    // AppKit otherwise ignores the root's autoresizing mask on resize.
+    view.ns().setTranslatesAutoresizingMaskIntoConstraints(true);
     view.ns().setAutoresizingMask(
         NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
     );
@@ -1471,11 +1508,6 @@ fn open_window(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
             parent_window.as_deref(),
         ),
     }
-    let open_mode = open
-        .placement
-        .map(|p| p.mode)
-        .or(options.default_mode)
-        .filter(|m| *m != WindowMode::Normal);
     surface.windows.borrow_mut().insert(
         id,
         AppWindow {
@@ -1493,7 +1525,10 @@ fn open_window(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
             title_bar_area: Cell::new(None),
             showing: Cell::new(Showing::Waiting(0)),
             focus_requested: Cell::new(false),
-            open_mode: Cell::new(open_mode),
+            opened: OPENED.with(|n| {
+                n.set(n.get() + 1);
+                n.get()
+            }),
         },
     );
     {
@@ -1503,6 +1538,12 @@ fn open_window(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         // It takes the app's appearance, as the main window's root does.
         window.setAppearance(surface.root.ns().appearance().as_deref());
         crate::window_state::observe(surface, Target::Own(id), &w.watch, Some(&window));
+    }
+    // The mode it opens in: zoomed now, in full screen once it shows.
+    if let Some(mode) = open.placement.map(|p| p.mode).or(options.default_mode) {
+        with_watch(surface, id, |watch| {
+            crate::window_state::set_mode(watch, &window, mode)
+        });
     }
     // Dialogs of its first render were presented before it was a window.
     crate::navigation::window_opened(surface, view);
@@ -1527,6 +1568,7 @@ fn open_window(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         crate::file_drop::register(view.ns());
     }
     resized(surface, view);
+    crate::fps::attach_for_surface(surface);
     // Shown with its first frame, or late.
     let key = surface.key();
     crate::surface::after(FIRST_FRAME_MS, move || {
@@ -1553,23 +1595,19 @@ fn place(
         .or_else(|| parent.and_then(|p| p.screen()))
         .or_else(|| surface.root.ns().window().and_then(|w| w.screen()))
         .or_else(|| NSScreen::mainScreen(mtm));
-    let position = position.unwrap_or(match kind {
-        WindowKind::Dialog if parent.is_some() => WindowPosition::ParentCenter,
-        WindowKind::Popup | WindowKind::Overlay => WindowPosition::Center,
-        _ if display.is_some() => WindowPosition::Center,
-        _ => {
-            // Cascaded from the parent's (or the main window's) top left.
-            let step = CASCADE * (surface.windows.borrow().len() % 8 + 1) as f64;
-            let from = parent
-                .map(|p| p.frame())
-                .or_else(|| surface.root.ns().window().map(|w| w.frame()));
-            let top_left = from.map_or(NSPoint::new(step, step), |f| {
-                NSPoint::new(f.origin.x + step, f.origin.y + f.size.height - step)
-            });
-            window.setFrameTopLeftPoint(top_left);
-            return;
-        }
-    });
+    let Some(position) = opening_position(position, kind, parent.is_some(), display.is_some())
+    else {
+        // Cascaded from the parent's (or the main window's) top left.
+        let step = CASCADE * (surface.windows.borrow().len() % 8 + 1) as f64;
+        let from = parent
+            .map(|p| p.frame())
+            .or_else(|| surface.root.ns().window().map(|w| w.frame()));
+        let top_left = from.map_or(NSPoint::new(step, step), |f| {
+            NSPoint::new(f.origin.x + step, f.origin.y + f.size.height - step)
+        });
+        window.setFrameTopLeftPoint(top_left);
+        return;
+    };
     match position {
         WindowPosition::At(p) => {
             let primary = crate::window_state::primary_height(mtm);
@@ -1585,6 +1623,25 @@ fn place(
             }
         }
     }
+}
+
+/// Where a window opens: the app's `position` (`WindowOptions`'
+/// `default_position`) when it gives one, else its kind's default; `None`
+/// cascades it from its parent's (or the main window's) top left. Kept
+/// apart from placing the window, so a default is never chosen, and
+/// applied, over the app's position.
+fn opening_position(
+    position: Option<WindowPosition>,
+    kind: WindowKind,
+    parent: bool,
+    display: bool,
+) -> Option<WindowPosition> {
+    position.or(match kind {
+        WindowKind::Dialog if parent => Some(WindowPosition::ParentCenter),
+        WindowKind::Popup | WindowKind::Overlay => Some(WindowPosition::Center),
+        _ if display => Some(WindowPosition::Center),
+        _ => None,
+    })
 }
 
 /// A batch was applied: the windows waiting for their first frame show
@@ -1611,24 +1668,43 @@ pub(crate) fn batch_applied(surface: &Surface) {
     }
 }
 
+/// The engine laid root `id` out at `size`, and the batch that came of it
+/// was applied: a window waiting for its first frame at that size has it,
+/// even when its content was in the commit that opened it and nothing
+/// changed since (no batch follows to show it). Shown on the next turn of
+/// the run loop: this may run while a resize waits for its layout
+/// ([`Surface::await_layout`]).
+pub(crate) fn laid_out(surface: &Surface, id: NodeId, size: Size<Points>) {
+    let ready = surface.windows.try_borrow().is_ok_and(|windows| {
+        windows.get(&id).is_some_and(|w| {
+            matches!(w.showing.get(), Showing::Waiting(_)) && w.reported.get() == Some(size)
+        })
+    });
+    if ready {
+        let key = surface.key();
+        crate::surface::after(0, move || {
+            if let Some(surface) = Surface::with_key(key) {
+                first_frame(&surface, id);
+            }
+        });
+    }
+}
+
 /// Window `id` has its first frame (or waited long enough): it shows, in
 /// the mode it opens in.
 fn first_frame(surface: &Surface, id: NodeId) {
-    let Some((window, activate, mode, focus)) =
-        surface.windows.try_borrow().ok().and_then(|windows| {
-            let w = windows.get(&id)?;
-            if w.showing.get() == Showing::Done {
-                return None;
-            }
-            w.showing.set(Showing::Done);
-            Some((
-                w.window.clone(),
-                w.held.activate.get(),
-                w.open_mode.take(),
-                w.focus_requested.take(),
-            ))
-        })
-    else {
+    let Some((window, activate, focus)) = surface.windows.try_borrow().ok().and_then(|windows| {
+        let w = windows.get(&id)?;
+        if w.showing.get() == Showing::Done {
+            return None;
+        }
+        w.showing.set(Showing::Done);
+        Some((
+            w.window.clone(),
+            w.held.activate.get(),
+            w.focus_requested.take(),
+        ))
+    }) else {
         return;
     };
     // A window that does not activate (a panel) shows without taking the
@@ -1637,12 +1713,23 @@ fn first_frame(surface: &Surface, id: NodeId) {
     // The root has held the keyboard since the window was made (a field
     // the app focused meanwhile keeps it).
     order_front(surface, &window, activate, key, focus);
-    if let Some(mode) = mode {
-        with_watch(surface, id, |watch| {
-            crate::window_state::set_mode(watch, &window, mode)
-        });
-    }
+    with_watch(surface, id, |watch| {
+        crate::window_state::shown(watch, &window)
+    });
     report(surface, id);
+}
+
+/// Whether a window of the app's own is still opening, hidden until its
+/// first frame ([`batch_applied`], [`laid_out`], or [`FIRST_FRAME_MS`] after it opened):
+/// AppKit gives it no mouse events until it shows, so the test agent waits
+/// for it (`nsh_testing::agent::Native::opening`).
+#[cfg(feature = "dev")]
+pub(crate) fn opening(surface: &Surface) -> bool {
+    surface.windows.try_borrow().is_ok_and(|windows| {
+        windows
+            .values()
+            .any(|w| matches!(w.showing.get(), Showing::Waiting(_)))
+    })
 }
 
 /// The standalone app's main window is made: nsh.json `window`'s
@@ -1687,27 +1774,27 @@ pub(crate) fn launch_main(
 }
 
 /// The standalone app's main window launched (`shown`: and showed): it
-/// takes the mode it opens in when it first shows. A full screen or zoomed
-/// window would show at once.
+/// takes the mode it opens in, zoomed at once, in full screen once it
+/// shows.
 pub(crate) fn launched_main(surface: &Surface, mode: Option<WindowMode>, shown: bool) {
-    surface
-        .main_open_mode
-        .set(mode.filter(|m| *m != WindowMode::Normal));
+    if let Some(mode) = mode
+        && let Some(window) = surface.root.ns().window()
+    {
+        crate::window_state::set_mode(&surface.window, &window, mode);
+        crate::window_state::changed(surface);
+    }
     if shown {
         main_shown(surface);
     }
 }
 
-/// The standalone app's main window shows: the first time, it takes the
-/// mode it opens in.
+/// The standalone app's main window was ordered in by the app's runner
+/// (the Dock icon, a link, a development host's first show): shown again
+/// while it leaves full screen, it stays; hidden, it enters the full
+/// screen asked for meanwhile, or the one it opens in.
 pub(crate) fn main_shown(surface: &Surface) {
-    // Shown again while it leaves full screen (the Dock icon, a link):
-    // it stays.
-    crate::window_state::shown(&surface.window);
-    if let Some(mode) = surface.main_open_mode.take()
-        && let Some(window) = surface.root.ns().window()
-    {
-        crate::window_state::set_mode(&surface.window, &window, mode);
+    if let Some(window) = surface.root.ns().window() {
+        crate::window_state::shown(&surface.window, &window);
     }
 }
 
@@ -1795,32 +1882,46 @@ fn send(surface: &Surface, id: NodeId, event: WindowEvent) {
 }
 
 /// The root view of a window of the app's own was resized (it fills the
-/// window's content view): the core lays the root out at its size.
-pub(crate) fn resized(surface: &Surface, view: &NshView) {
+/// window's content view): the core lays the root out at its size, which
+/// is applied before this returns unless the engine is late, as for the
+/// host's root ([`Surface::await_layout`]): AppKit's full screen and zoom
+/// animations otherwise grow the window around its old content.
+pub(crate) fn resized(surface: &Rc<Surface>, view: &NshView) {
     let id = view.id();
-    let size = {
+    // The window's content (the container the root fills), whatever set
+    // the root's own frame.
+    let Some(bounds) = surface
+        .windows
+        .borrow()
+        .get(&id)
+        .map(|w| w.container.bounds())
+    else {
+        return;
+    };
+    // Outside the borrow: this resizes the root again, which comes back
+    // here and may wait for the layout ([`Surface::await_layout`]).
+    if view.ns().frame() != bounds {
+        view.ns().setFrame(bounds);
+    }
+    let size = Size::new(
+        Points(bounds.size.width as f32),
+        Points(bounds.size.height as f32),
+    );
+    {
         let windows = surface.windows.borrow();
         let Some(w) = windows.get(&id) else {
             return;
         };
-        // The window's content (the container the root fills), whatever
-        // set the root's own frame.
-        let bounds = w.container.bounds();
-        if view.ns().frame() != bounds {
-            view.ns().setFrame(bounds);
-        }
-        let size = Size::new(
-            Points(bounds.size.width as f32),
-            Points(bounds.size.height as f32),
-        );
         if w.reported.replace(Some(size)) == Some(size) {
             return;
         }
-        size
-    };
+    }
     view.state_mut().frame = Bounds::new(point(Points(0.0), Points(0.0)), size);
     surface.control(|c| c.set_root_size(id, size, EdgeInsets::default()));
     crate::navigation::window_resized(surface, view);
+    // The primary window's size is the app's `windowSize()`.
+    surface.window_environment();
+    surface.await_layout(id, size);
 }
 
 /// The displays changed: the windows of the app's own read their state
@@ -1834,6 +1935,8 @@ pub(crate) fn screens_changed(surface: &Surface) {
     for id in ids {
         state_changed(surface, id);
     }
+    // The primary window may be on a display of another scale now.
+    surface.window_environment();
 }
 
 // --- The key window in the background -----------------------------------------------------
@@ -1847,7 +1950,10 @@ thread_local! {
 }
 
 /// Whether the app runs in the background: it never activates, and AppKit
-/// gives none of its windows the keyboard.
+/// gives none of its windows the keyboard. Costly: AppKit asks Launch
+/// Services for the policy on every call (a round trip to another process,
+/// 0.5 ms and more), so checks that run per batch ask it last, after
+/// [`background_key`] (only ever set in such an app).
 fn in_background(mtm: MainThreadMarker) -> bool {
     NSApplication::sharedApplication(mtm).activationPolicy()
         == objc2_app_kit::NSApplicationActivationPolicy::Prohibited
@@ -1862,15 +1968,15 @@ fn background_key() -> Option<Retained<NSWindow>> {
 fn app_key_window(mtm: MainThreadMarker) -> Option<Retained<NSWindow>> {
     NSApplication::sharedApplication(mtm)
         .keyWindow()
-        .or_else(|| in_background(mtm).then(background_key).flatten())
+        .or_else(|| background_key().filter(|_| in_background(mtm)))
 }
 
 /// Whether `window` has the keyboard (`WindowState.focused`): it is the
 /// key window, or the one that would be in a background app.
 pub(crate) fn is_key(window: &NSWindow) -> bool {
     window.isKeyWindow()
-        || (in_background(MainThreadMarker::from(window))
-            && background_key().is_some_and(|k| &*k == window))
+        || (background_key().is_some_and(|k| &*k == window)
+            && in_background(MainThreadMarker::from(window)))
 }
 
 /// `window` was made key (shown, focused, pressed). In a background app
@@ -1903,7 +2009,7 @@ pub(crate) fn became_key(surface: &Surface, window: &NSWindow) {
 /// window that would be key, the main window becomes it, as AppKit gives
 /// the keyboard to the next window.
 fn lost_key(surface: &Surface, window: &NSWindow) {
-    if !in_background(surface.mtm) || background_key().as_deref() != Some(window) {
+    if background_key().as_deref() != Some(window) || !in_background(surface.mtm) {
         return;
     }
     BACKGROUND_KEY.with(|k| k.borrow_mut().take());
@@ -1993,6 +2099,9 @@ fn close_press(surface: &Rc<Surface>, id: NodeId, window: &NSWindow) -> bool {
 fn main_close_press(surface: &Surface, reason: CloseReason) -> bool {
     let held = &surface.main_window;
     if held.pending_close.get().is_some() {
+        return false;
+    }
+    if crate::app::ask_main_window_quit(surface.key(), held.close_on_press.get()) {
         return false;
     }
     let serial = held.serial.get() + 1;
@@ -2136,11 +2245,14 @@ pub(crate) fn removed(surface: &Surface, view: &NshView) -> bool {
         dismiss(surface, child, WindowCloseCause::ParentClose);
     }
     dock::set(surface.key(), id, None);
+    crate::input::window_closed(surface, &w.view);
     let window = w.window.clone();
     close(w);
     lost_key(surface, &window);
     // A link made from its root would neither fire nor let the root go.
     surface.follow_windows();
+    // Another window may be the primary one now.
+    surface.window_environment();
     true
 }
 
@@ -2155,6 +2267,7 @@ pub(crate) fn close_all(surface: &Surface) {
     dock::set(surface.key(), ROOT_ID, None);
     surface.main_window.reset();
     surface.follow_windows();
+    surface.window_environment();
 }
 
 fn close(w: AppWindow) {
@@ -2255,13 +2368,13 @@ pub(crate) fn root_in(surface: &Surface, window: &NSWindow) -> Option<NshView> {
 /// window of the app's own; `None` for another surface's view (or one in
 /// no window's tree).
 pub(crate) fn root_containing(surface: &Surface, view: &NshView) -> Option<NshView> {
-    if view.ns().isDescendantOf(surface.root.ns()) {
+    if view.is_within(surface.root.ns()) {
         return Some(surface.root.clone());
     }
     let windows = surface.windows.try_borrow().ok()?;
     windows
         .values()
-        .find(|w| view.ns().isDescendantOf(w.view.ns()))
+        .find(|w| view.is_within(w.view.ns()))
         .map(|w| w.view.clone())
 }
 
@@ -2298,6 +2411,19 @@ fn ns_color(color: nsh_core::Color) -> Retained<NSColor> {
     let c = color.0;
     let f = |shift: u32| f64::from((c >> shift) & 0xff) / 255.0;
     NSColor::colorWithSRGBRed_green_blue_alpha(f(24), f(16), f(8), f(0))
+}
+
+/// Keeps the user's resizes of `window`'s content at `ratio` (width /
+/// height), or lets them free (`None`). AppKit holds one of the content's
+/// aspect ratio and its resize increments: the later set wins, so
+/// increments of one point clear the ratio.
+fn set_aspect_ratio(window: &NSWindow, ratio: Option<f32>) {
+    match ratio {
+        Some(r) if r.is_finite() && r > 0.0 => {
+            window.setContentAspectRatio(NSSize::new(f64::from(r), 1.0))
+        }
+        _ => window.setContentResizeIncrements(NSSize::new(1.0, 1.0)),
+    }
 }
 
 fn ns_size(size: Size<Points>) -> NSSize {
@@ -2509,6 +2635,59 @@ pub(crate) mod dock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_window_opens_where_the_app_asks() {
+        let at = WindowPosition::At(point(Points(1180.0), Points(720.0)));
+        let kinds = [
+            WindowKind::Normal,
+            WindowKind::Dialog,
+            WindowKind::Panel,
+            WindowKind::Popup,
+            WindowKind::Overlay,
+        ];
+        for kind in kinds {
+            for parent in [false, true] {
+                for display in [false, true] {
+                    for asked in [at, WindowPosition::Center, WindowPosition::ParentCenter] {
+                        assert_eq!(
+                            opening_position(Some(asked), kind, parent, display),
+                            Some(asked),
+                            "{kind:?}, parent {parent}, display {display}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_without_a_position_opens_where_its_kind_does() {
+        use WindowKind::{Dialog, Normal, Overlay, Panel, Popup};
+        use WindowPosition::{Center, ParentCenter};
+        // (kind, parent, display) -> default; `None` cascades. A parent
+        // comes before a display for a dialog.
+        let cases = [
+            (Normal, false, false, None),
+            (Normal, true, false, None),
+            (Normal, false, true, Some(Center)),
+            (Panel, true, false, None),
+            (Panel, true, true, Some(Center)),
+            (Dialog, false, false, None),
+            (Dialog, false, true, Some(Center)),
+            (Dialog, true, false, Some(ParentCenter)),
+            (Dialog, true, true, Some(ParentCenter)),
+            (Popup, false, false, Some(Center)),
+            (Overlay, true, false, Some(Center)),
+        ];
+        for (kind, parent, display, expected) in cases {
+            assert_eq!(
+                opening_position(None, kind, parent, display),
+                expected,
+                "{kind:?}, parent {parent}, display {display}"
+            );
+        }
+    }
 
     fn inputs(kind: WindowKind) -> StyleInputs {
         StyleInputs {

@@ -1,5 +1,6 @@
 //! Render functions a component takes (an `Option<Renderer<T>>` prop): in
-//! JS a function `(value: T) => JSX.Element` the app passes, in Rust a
+//! JS a function `(value: T) => JSX.Element` the app passes (of an
+//! `InContext<A, B>`: `(value: A, context: B) => JSX.Element`), in Rust a
 //! closure. The component asks it for content where it places it, with a
 //! key and a value: `props.render_code.get().map(|r| r.render(key, code))`.
 //!
@@ -16,8 +17,8 @@
 use std::{any::Any, cell::Cell, fmt, rc::Rc};
 
 use super::{
-    AnyElement, ElNode, Element, Interactive, IntoElement, JsHost, JsOwned, JsValue, PropError,
-    SharedString,
+    AnyElement, CallbackHandle, ElNode, Element, Interactive, IntoElement, JsHost, JsOwned,
+    JsValue, PropError, SharedString,
 };
 use crate::{NodeId, Tag};
 
@@ -35,6 +36,14 @@ enum Kind<T> {
     /// The app's JS function: the prop of this name of the component on
     /// node `host`.
     Js { prop: &'static str, host: NodeId },
+    /// A JS function a Rust component holds itself (not a prop's), for
+    /// the component on node `host`: called once per key with props that
+    /// read the latest value, which later values update in place.
+    JsFn {
+        prop: &'static str,
+        host: NodeId,
+        func: Rc<dyn CallbackHandle>,
+    },
     /// A Rust view's closure.
     Rust(Rc<dyn Fn(&T) -> AnyElement>),
 }
@@ -44,6 +53,11 @@ impl<T> Clone for Renderer<T> {
         Self {
             kind: match &self.kind {
                 Kind::Js { prop, host } => Kind::Js { prop, host: *host },
+                Kind::JsFn { prop, host, func } => Kind::JsFn {
+                    prop,
+                    host: *host,
+                    func: func.clone(),
+                },
                 Kind::Rust(f) => Kind::Rust(f.clone()),
             },
         }
@@ -54,6 +68,18 @@ impl<T> PartialEq for Renderer<T> {
     fn eq(&self, other: &Self) -> bool {
         match (&self.kind, &other.kind) {
             (Kind::Js { prop: a, host: h }, Kind::Js { prop: b, host: k }) => a == b && h == k,
+            (
+                Kind::JsFn {
+                    prop: a,
+                    host: h,
+                    func: f,
+                },
+                Kind::JsFn {
+                    prop: b,
+                    host: k,
+                    func: g,
+                },
+            ) => a == b && h == k && Rc::ptr_eq(f, g),
             (Kind::Rust(a), Kind::Rust(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
@@ -63,7 +89,9 @@ impl<T> PartialEq for Renderer<T> {
 impl<T> fmt::Debug for Renderer<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            Kind::Js { prop, host } => write!(f, "Renderer({prop} of {host})"),
+            Kind::Js { prop, host } | Kind::JsFn { prop, host, .. } => {
+                write!(f, "Renderer({prop} of {host})")
+            }
             Kind::Rust(_) => write!(f, "Renderer(<closure>)"),
         }
     }
@@ -111,6 +139,18 @@ impl<T: JsValue + Clone + PartialEq + 'static> Renderer<T> {
         }
     }
 
+    /// JS function `func`, which the component on node `host` holds
+    /// itself (an extension's node view), rendering under `prop` (a name
+    /// of its own among its renders). Unlike a prop's function it is
+    /// called once per key, with props reading the latest value: a placed
+    /// value that differs updates them in place, nothing is made again.
+    #[doc(hidden)]
+    pub fn __js_fn(prop: &'static str, host: NodeId, func: Rc<dyn CallbackHandle>) -> Self {
+        Self {
+            kind: Kind::JsFn { prop, host, func },
+        }
+    }
+
     /// The content rendered for `value`, under `key` (unique among the
     /// component's renders of this renderer), in a view of its own to
     /// style and place as any view (in a text: an inline view).
@@ -124,15 +164,77 @@ impl<T: JsValue + Clone + PartialEq + 'static> Renderer<T> {
         match &self.kind {
             Kind::Rust(f) => node.children.push(f(&value).0),
             Kind::Js { prop, host } => {
-                node.attrs.render = Some(RenderAt(Rc::new(RenderPlace {
+                node.attrs.rare_mut().render = Some(RenderAt(Rc::new(RenderPlace {
                     host: *host,
                     prop,
                     key: key.into(),
                     value: Rc::new(value),
+                    func: None,
+                })));
+            }
+            Kind::JsFn { prop, host, func } => {
+                node.attrs.rare_mut().render = Some(RenderAt(Rc::new(RenderPlace {
+                    host: *host,
+                    prop,
+                    key: key.into(),
+                    value: Rc::new(value),
+                    func: Some(func.clone()),
                 })));
             }
         }
         Rendered(node)
+    }
+
+    /// `el` (a view with no children of its own) holding what the renderer
+    /// `place` gives renders for its key and value, without a view of the
+    /// render's own: the app's JS function's content goes into `el` itself,
+    /// a Rust closure's is its child. `place` is bound: when the key or
+    /// the value it gives changes, the content is rendered again, as
+    /// [`Renderer::render`]'s would; `None` holds nothing.
+    ///
+    /// For a view a component makes many of, a list's or a table's cells:
+    /// each is one view fewer than with [`Renderer::render`] placed in it.
+    /// Hidden while `nsh-base`'s DataTable is its only user.
+    #[doc(hidden)]
+    pub fn render_into<E: Element>(
+        mut el: E,
+        place: impl Fn() -> Option<(Self, SharedString, T)> + 'static,
+    ) -> E {
+        let place = crate::element::computed(place);
+        el.node().bound_attrs.push(Rc::new(move |attrs| {
+            let at = place.with(|place| {
+                let (renderer, key, value) = place.as_ref()?;
+                let (prop, host, func) = match &renderer.kind {
+                    Kind::Rust(_) => return None,
+                    Kind::Js { prop, host } => (*prop, *host, None),
+                    Kind::JsFn { prop, host, func } => (*prop, *host, Some(func.clone())),
+                };
+                Some(RenderAt(Rc::new(RenderPlace {
+                    host,
+                    prop,
+                    key: key.clone(),
+                    value: Rc::new(value.clone()),
+                    func,
+                })))
+            });
+            if at.is_some() || attrs.rare.is_some() {
+                attrs.rare_mut().render = at;
+            }
+        }));
+        let content = super::dynamic(move || {
+            place.with(|place| match place {
+                Some((
+                    Renderer {
+                        kind: Kind::Rust(f),
+                    },
+                    _,
+                    value,
+                )) => Some(f(value)),
+                _ => None,
+            })
+        });
+        el.node().children.push(content.0);
+        el
     }
 }
 
@@ -164,6 +266,9 @@ pub trait RenderValue: 'static {
     fn render_js<'a>(&self, host: &'a dyn JsHost) -> Result<JsOwned<'a>, PropError>;
     /// Whether `other` is an equal value of the same type.
     fn same(&self, other: &dyn RenderValue) -> bool;
+    /// Whether JS passes the value (an array) to the function as its
+    /// arguments ([`JsValue::RENDER_SPREAD`]: an [`super::InContext`]'s).
+    fn spread(&self) -> bool;
     /// The value, to downcast.
     fn as_any(&self) -> &dyn Any;
 }
@@ -175,6 +280,10 @@ impl<T: JsValue + PartialEq + 'static> RenderValue for T {
 
     fn same(&self, other: &dyn RenderValue) -> bool {
         other.as_any().downcast_ref::<T>() == Some(self)
+    }
+
+    fn spread(&self) -> bool {
+        T::RENDER_SPREAD
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -189,6 +298,9 @@ pub(crate) struct RenderPlace {
     pub(crate) prop: &'static str,
     pub(crate) key: SharedString,
     pub(crate) value: Rc<dyn RenderValue>,
+    /// The function to render with, held by the component
+    /// ([`Renderer::__js_fn`]); `None`: the prop's.
+    pub(crate) func: Option<Rc<dyn CallbackHandle>>,
 }
 
 impl RenderPlace {

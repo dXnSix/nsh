@@ -1,6 +1,6 @@
 ---
 title: TUI
-description: "在终端里运行 Rust 和 TSX 编写的 NSH 应用：Cell 布局、键盘与鼠标输入、终端的颜色、组件和弹出层在字符网格上的样子、在应用代码中识别终端、测试，以及在 ratatui 应用中嵌入 AppView。"
+description: "在终端里运行 TSX 和 Rust 编写的 NSH 应用：Cell 布局、键盘与鼠标输入、终端的颜色、组件和弹出层在字符网格上的样子、在应用代码中识别终端、测试，以及在 ratatui 应用中嵌入 AppView。"
 order: 16.5
 group: platforms
 ---
@@ -65,7 +65,7 @@ nsh run App.tsx --target tui --points-per-cell 10x20
 
 每个控件都能用键盘到达。Tab 和 Shift+Tab 按文档顺序访问可按下和可编辑的视图，与桌面一致；方向键移到该方向上最近的控件，
 需要时滚动过去。键盘滚动到视野内的控件会在滚动视图中居中。对话框或 Sheet 带着遮罩打开时，Tab 只在它里面移动，关闭后焦点
-回到打开前的控件。Tab 总是移到下一个控件：在 `DataTable` 里它离开表格，列之间用方向键移动。点击会把焦点交给所点的控件
+回到打开前的控件。在 `DataTable` 里，Tab 和方向键在单元格之间移动，与桌面一致；按 Escape 交出键盘后，Tab 移到下一个控件。点击会把焦点交给所点的控件
 或包着它的控件，Tab 从那里继续。
 
 | 按键 | 作用 |
@@ -87,6 +87,21 @@ nsh run App.tsx --target tui --points-per-cell 10x20
 区分开，报告按键重复和松开，并把 Super 作为 Cmd 报告，因此 `cmd+` 快捷键在这些终端里可用；在不支持该协议的 macOS 终端里，
 没有绑定接收的 Ctrl 快捷键会再作为 Cmd 匹配一次，菜单和提示（`keymap.label`、`Command`）也把这些快捷键显示为 Ctrl，
 即在这里要按的键（`mod+o` 显示为 `⌃O`）。
+
+**原始按键事件。** 与桌面一致，获得焦点的自定义视图也能直接听到按键：`onKeyDown` / `onKeyUp`（Rust 视图的
+`on_key_down` / `on_key_up`）收到 `KeyEvent`，其中 `key` 是终端报告的逻辑按键（`a`、`A`、`ArrowLeft`、`Enter`），
+并带有终端报告的 `modifiers` 和 `repeat`。`code` 始终为空：终端不报告硬件按键身份，宿主也绝不根据按键输入的字符推断。
+`defaultPrevented` 是捕获规则（`capture_keys`）的决定，与应用 keymap 使用同一套规范快捷键匹配；被捕获的按键会被标记，
+不执行终端的默认行为，但监听者仍能听到。应用自己的快捷键保持优先，文本框和 Minibuffer 保留自己的按键。dialog（`Modal`）是
+键盘边界；sheet 是同一窗口内的浮层，其中的按键跟随声明它的视图，门户（overlay）同理，与桌面一致。
+
+终端能报告什么取决于协议；报告不出的一律不编造：
+
+| 终端 | `KeyEvent` 得到的信息 |
+|---|---|
+| 纯文本 / 传统终端 | 只有按下：每次按键一个 key down，没有松开，自动重复以新的按下到达；没有物理 code |
+| kitty 键盘协议 | 独立宿主会协商该协议：以转义序列发送的按键（方向键、功能键、带修饰键的按键）报告松开和自动重复；Enter、Tab、Backspace 和普通文本仍是按下；仍无物理 code |
+| Windows 控制台 | crossterm 读取控制台的按键松开记录，因此会收到松开；自动重复按控制台报告的形式到达；仍无物理 code |
 
 **搜索。** Ctrl+S 和 Ctrl+R 像 readline 和 Emacs 那样随输入搜索屏幕上的文本。查询显示在最底一行，前面是 `/`（向前）或
 `?`（向后），匹配处高亮，焦点移到匹配所属的控件。Ctrl+S / Ctrl+R 跳到下一个 / 上一个匹配，Backspace 或 Ctrl+H 撤回上一个
@@ -168,7 +183,7 @@ nsh run App.tsx --target tui --points-per-cell 10x20
 | 组件 | 在终端中 |
 |---|---|
 | `Checkbox` | `[✓]`、`[ ]` 或 `[–]`，后接标签 |
-| `Radio` | `(●)` 或 `( )`，后接标签 |
+| `Radio` | `[●]` 或 `[ ]`，后接标签 |
 | `Switch` | 开为 `[✓]`，关为 `[ ]`，与复选框相同 |
 | `Slider` | 一行 `─`，到当前值为止用 `━` 填充，每个滑块一个 `●` |
 | `Progress` | 指示色的粗线 `━`，其后为线条色的细线 `─` |
@@ -200,33 +215,19 @@ Escape 关闭状态行上的 toast，它自己的按钮和超时也会关闭它�
 以及指针在槽上时变为强调色。自己做这样的标识时，用一个可按的 `View`，宽三个 Cell、高一个 Cell（默认尺寸下为 24 × 16 points），字形居中。`NumberInput` 设了 `controlsRight` 时，
 在终端里把步进器并排放，减号在前（` −  + `）。
 
-**媒体元素在布局中保留自己的空间。** 大于图标尺寸的 `Image`、`Video`、`WebView` 或着色器视图保留它的盒子，周围的文本和控件
-停在设计安排的位置；终端显示文字和线条，所以这个盒子是空白的 Cell。图标尺寸（48 × 48 points 及以下）的图片、视频、Web
-视图、着色器和画布把空间让给周围的内容。有 surface 时，图片角色、背景为某种颜色的视图（色块）显示这种颜色。
+**图片显示自己的画面。** 大于图标尺寸的 `Image` 在它的盒子里绘制图片，按 `objectFit` 和 `objectPosition` 适配，并用 `tintColor`
+着色。在 kitty 和 Ghostty 中，图片通过 kitty 图形协议以终端自己的像素显示；其他终端在 256 色及以上时用半块字符（`▀`）显示，每个
+Cell 两个像素，在 tmux 里也一样。任何尺寸的图片都会显示：小的 SVG、logo 或头像照片占据其盒子取整后的 Cell，加载完成前保持透明的图片（如头像）也照常加载。PNG、JPEG、GIF、WebP 和 SVG 文件、资源、远程 URL 以及 `data:` / `blob:` 来源与其他平台一样加载，
+`onLoad`、`onError` 等加载事件照常触发，`Image.getSize` 和 `Image.prefetch` 也会返回结果。动图显示第一帧。只有 16 色或无色时，
+盒子里以暗色显示方括号中的图片标签（如 `[Green mountains]`，没有标签时为 `[Image]`）。
+
+**其他媒体元素在布局中保留自己的空间。** 大于图标尺寸的 `Video`、`WebView` 或着色器视图保留它的盒子，周围的文本和控件停在设计
+安排的位置；这个盒子是空白的 Cell。图标尺寸（48 × 48 points 及以下）的视频、Web 视图、着色器和画布把空间让给周围的内容。
+有 surface 时，图片角色、背景为某种颜色的视图（色块）显示这种颜色。
 
 ## 为终端布局
 
 大多数应用无需改动：桌面行为适用，上面的布局规则会把桌面设计适配到字符网格上。需要为终端单独布局时，用 idiom 判断：
-
-```rust tabs
-use nsh_core::{platform::Idiom, prelude::*};
-
-#[component]
-pub fn Shell() -> impl IntoElement {
-    // 终端使用一列紧凑布局；窗口使用侧边栏。
-    view()
-        .flex_1()
-        .child(if idiom() == Idiom::Terminal { compact_layout() } else { sidebar_layout() })
-}
-
-fn compact_layout() -> AnyElement {
-    view().flex_1().flex_col().into_element()
-}
-
-fn sidebar_layout() -> AnyElement {
-    view().flex_1().flex_row().into_element()
-}
-```
 
 ```tsx tabs
 import { View, platform } from "nsh";
@@ -246,6 +247,26 @@ function CompactLayout() {
 
 function SidebarLayout() {
   return <View class="flex-1 flex-row" />;
+}
+```
+
+```rust tabs
+use nsh_core::{platform::Idiom, prelude::*};
+
+#[component]
+pub fn Shell() -> impl IntoElement {
+    // 终端使用一列紧凑布局；窗口使用侧边栏。
+    view()
+        .flex_1()
+        .child(if idiom() == Idiom::Terminal { compact_layout() } else { sidebar_layout() })
+}
+
+fn compact_layout() -> AnyElement {
+    view().flex_1().flex_col().into_element()
+}
+
+fn sidebar_layout() -> AnyElement {
+    view().flex_1().flex_row().into_element()
 }
 ```
 

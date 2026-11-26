@@ -146,6 +146,7 @@ impl Mounter {
                     crate::input::removed(surface, &view);
                     crate::native::deleted(surface, &view);
                     crate::shader::deleted(surface, &view);
+                    crate::gpu::deleted(surface, &view);
                     // A removal animation detaches the view when it ends.
                     if !crate::transition::removing(surface, &view, self.layout_animation.as_ref())
                     {
@@ -196,7 +197,10 @@ impl Mounter {
                         crate::shader::resized(view);
                         crate::image::resized(surface, view);
                     }
-                    _ => crate::shader::resized(view),
+                    _ => {
+                        crate::shader::resized(view);
+                        crate::gpu::resized(surface, view);
+                    }
                 }
             }
             MountItem::ViewStyle { id, style } => {
@@ -205,6 +209,7 @@ impl Mounter {
                 crate::input::style_changed(view);
                 crate::transition::style_changed(surface, view, &old);
                 crate::access::style_changed(view, &old);
+                crate::key_focus::changed(view);
                 view.moved();
             }
             MountItem::Text {
@@ -310,6 +315,11 @@ impl Mounter {
                     crate::shader::set(surface, view, layer.clone());
                 }
             }
+            MountItem::GpuView { id, source } => {
+                if let Some(view) = self.get(*id) {
+                    crate::gpu::set(surface, view, source.clone());
+                }
+            }
             MountItem::ShaderInput { id } => {
                 if let Some(view) = self.get(*id) {
                     crate::shader::input_changed(view);
@@ -335,6 +345,7 @@ impl Mounter {
                 crate::input::props_changed(surface, view);
                 crate::selectable_view::props_changed(surface, view);
                 crate::access::props_changed(surface, view);
+                crate::key_focus::changed(view);
             }
             MountItem::LayoutAnimation(a) => self.layout_animation = Some(*a),
             MountItem::Input { id, config } => {
@@ -373,7 +384,9 @@ impl Mounter {
                 }
             }
             MountItem::ComponentProps { id, props } => {
-                if let Some(view) = self.get(*id) {
+                if let Some(view) = self.get(*id)
+                    && !crate::gpu::props(surface, view, props)
+                {
                     crate::native::component_props(surface, view, props);
                 }
             }
@@ -423,6 +436,11 @@ impl Mounter {
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {
                     crate::text_input::set_selection(view, *start, *end);
+                }
+            }
+            Command::ClearSelection => {
+                if let Some(view) = view {
+                    crate::selectable_view::clear_in(surface, view);
                 }
             }
             Command::InsertText(text) => {

@@ -9,6 +9,36 @@ demo: el-resizable
 
 可调整大小的分组把面板并排或上下排列，每两个面板的边界上有一个手柄：文档旁边的侧边栏、控制台上方的编辑器、详情旁边的列表。用户拖动手柄移动边界，每个面板都保持在应用允许的尺寸范围内。`ResizablePanelGroup` 负责行为：拖动（以原生方式逐帧运行）、空间如何分配、调整大小的光标，以及为手指准备的更大触摸区域。外观由应用决定：手柄是一条没有自己的线条、颜色或握把的条带，它绘制的是应用的指示器；面板是应用自己的视图。
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { ResizablePanel, ResizablePanelGroup } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const sidebar = signal(240);
+  return (
+    <ResizablePanelGroup
+      axis="horizontal"
+      handleClass="bg-border group-hover:bg-ring group-active:bg-primary"
+      handleAccessibilityLabel="Resize the sidebar"
+    >
+      <ResizablePanel size={sidebar()} minSize={160} maxSize={480} onResize={({ size }) => sidebar.set(size)} class="p-4">
+        <Text class="text-muted-foreground">Files</Text>
+      </ResizablePanel>
+      <ResizablePanel class="p-4">
+        <Text class="text-foreground">Editor</Text>
+      </ResizablePanel>
+    </ResizablePanelGroup>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{h_resizable, resizable_panel, theme};
 use nsh_core::prelude::*;
@@ -31,31 +61,6 @@ fn workspace() -> impl IntoElement {
                 .child(text("Editor").text_color(move || theme().foreground())),
         )
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { ResizablePanel, ResizablePanelGroup } from "nsh/base";
-
-function App() {
-  const sidebar = signal(240);
-  return (
-    <ResizablePanelGroup
-      axis="horizontal"
-      handleClass="bg-border group-hover:bg-ring group-active:bg-primary"
-      handleAccessibilityLabel="Resize the sidebar"
-    >
-      <ResizablePanel size={sidebar()} minSize={160} maxSize={480} onResize={({ size }) => sidebar.set(size)} class="p-4">
-        <Text class="text-muted-foreground">Files</Text>
-      </ResizablePanel>
-      <ResizablePanel class="p-4">
-        <Text class="text-foreground">Editor</Text>
-      </ResizablePanel>
-    </ResizablePanelGroup>
-  );
-}
-
-mount(App);
 ```
 
 `ResizablePanelGroup` 和 `ResizablePanel` 来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate。面板是分组的直接子元素。在 Rust 中，`h_resizable()` 和 `v_resizable()` 分别创建沿两个方向的分组（`resizable_panel_group().axis(..)` 把方向作为值传入），`resizable_panel()` 创建面板；每个属性对应一个设置方法，每个事件对应一个监听方法，外观用类型化的样式方法，内容用 `.child(..)`；`.size_range(min..max)` 一次设置两个限制。

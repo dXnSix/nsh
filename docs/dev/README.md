@@ -4,7 +4,12 @@ For people working on NSH itself (`AGENTS.md` at the root is the short version a
 
 | Page | What |
 |---|---|
+| [repository-map.md](repository-map.md) | Crate/component inventory and documentation ownership |
+| [engineering.md](engineering.md) | Detailed implementation and public API constraints |
+| [commands.md](commands.md) | Build, packaging and verification cookbook |
+| [workflow.md](workflow.md) | PR, CI and parallel-work reference |
 | [architecture.md](architecture.md) | Threads, the data flow from JS to native views, crates |
+| [window-model.md](window-model.md) | App-host/window model v2: first-class windows, lifecycle, quit mode, keyboard scope, platform matrix (implemented; per-window menu bars and the retired `defaultVisible` are noted inside) |
 | [native-pipeline.md](native-pipeline.md) | How apps are compiled and run: the JSX compiler, the native modules, the renderer, types, hot reload |
 | [js-modules.md](js-modules.md) | The modules (`nsh`, `nsh/*`, apps' UI sets), where each module is implemented and declared, platform props, where new things go |
 | [api-naming.md](api-naming.md) | API names: how TSX names follow `gpui-base`'s, the conventions, the renames |
@@ -21,6 +26,7 @@ For people working on NSH itself (`AGENTS.md` at the root is the short version a
 | [scrolling-and-lists.md](scrolling-and-lists.md) | Scroll views, zooming, `List` |
 | [animation.md](animation.md) | Animated values, composites, layout animation |
 | [canvas.md](canvas.md) | `Canvas` |
+| [gpu-views.md](gpu-views.md) | GPU views (`gpuView`, `nsh-gpu`): renderers apps write with wgpu, their render thread, how platforms show frames |
 | [images.md](images.md) | Loading, decoding, caching, animated images |
 | [sandbox.md](sandbox.md) | VM limits, hardening, capabilities |
 | [signed-packages.md](signed-packages.md) | Keys, packages, verification, revocation |

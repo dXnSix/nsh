@@ -21,15 +21,18 @@ use std::{
 
 use super::{IntoReactive, Reactive, SharedString};
 use crate::{
-    BlendMode, BoxShadow, Cursor, FontVariant, ObjectPosition, TransformOrigin, TransitionProps,
+    BlendMode, BoxShadow, ClipInset, Cursor, FontVariant, ObjectPosition, TransformOrigin,
+    TransitionProps,
     color::{Hsla, Rgba, transparent_black},
-    effects::{Filter, GradientKind, GradientSize, KeyframeAnimation, Keyframes},
+    effects::{
+        ColorStop, Filter, Gradient, GradientKind, GradientSize, KeyframeAnimation, Keyframes,
+    },
     geometry::{
         AbsoluteLength, DefiniteLength, Length, Percentage, Points, REM_SIZE, Radians, Rems, deg,
         percentage, px, relative,
     },
     style::{Color, LineHeight, PositionAxis, PropertyValue, StyleKey},
-    tailwind::{self, ClassList, Decl, Part, Rank, Rule, rank, state},
+    tailwind::{self, ClassList, Decl, Part, PropDecl, Rank, Rule, rank, state},
     transform::TransformKind,
 };
 
@@ -466,12 +469,19 @@ pub(crate) enum Declaration {
     },
     /// [`UNDERLINE`] and [`LINE_THROUGH`] add up; 0 removes both.
     Decoration(u8),
+    /// Lines never wrap (`true`, `whitespace-nowrap`) or wrap
+    /// (`whitespace-normal`): inherited, as the classes'.
+    NoWrap(bool),
+    /// Lines wrap without a lone last word (`text-pretty`).
+    Pretty,
     /// [`TransitionProps`] bits.
     Transition(u8),
     TransitionNone,
     Duration(Bits),
     Delay(Bits),
     Ease([Bits; 4]),
+    /// A spring's stiffness, damping and mass (`ease-spring-[…]`).
+    EaseSpring([Bits; 3]),
     /// Tailwind's `ease-*`.
     EasePreset(&'static str),
     /// A keyframe animation (`None`: none).
@@ -571,7 +581,7 @@ impl Declaration {
                 if let Some(&(size, line)) = PRESETS.text.get(*name) {
                     out.push(Decl::Set(
                         StyleKey::FontSize,
-                        PropertyValue::OptPoints(Some(px(size))),
+                        PropertyValue::FontSize(Some(px(size)), None),
                     ));
                     // As `text-lg`'s: a line height set anywhere wins.
                     if let Some(m) = line {
@@ -705,11 +715,19 @@ impl Declaration {
                     line_through: bits & LINE_THROUGH != 0,
                 })),
             )),
+            Declaration::NoWrap(no_wrap) => out.push(Decl::Prop(PropDecl::NoWrap(*no_wrap))),
+            Declaration::Pretty => out.push(Decl::Prop(PropDecl::Pretty)),
             Declaration::Transition(props) => part(out, Part::TransitionProps(*props)),
             Declaration::TransitionNone => part(out, Part::TransitionNone),
             Declaration::Duration(ms) => part(out, Part::Duration(ms.0)),
             Declaration::Delay(ms) => part(out, Part::Delay(ms.0)),
             Declaration::Ease(curve) => part(out, Part::Ease(curve.map(|b| b.0))),
+            Declaration::EaseSpring(physics) => {
+                let [stiffness, damping, mass] = physics.map(|b| b.0);
+                if let Some(spring) = crate::style::spring_of((stiffness, damping, mass)) {
+                    part(out, Part::Spring(spring));
+                }
+            }
             Declaration::EasePreset(name) => {
                 if let Some(curve) = PRESETS.ease.get(*name) {
                     part(out, Part::Ease(*curve));
@@ -838,6 +856,7 @@ crate::static_reactive!(Radians: Radians);
 crate::static_reactive!(Percentage: Percentage);
 crate::static_reactive!(u16: u16);
 crate::static_reactive!(i16: i16);
+crate::static_reactive!(ClipInset: ClipInset);
 
 /// A bound part of a style: it adds its declarations to a style, reading
 /// the signals it binds (run again when they change).
@@ -891,6 +910,40 @@ impl Hash for StyleRefinement {
 }
 
 impl StyleRefinement {
+    /// The color of an input's placeholder (`placeholderColor`, Tailwind's
+    /// `placeholder:text-*`), for the style of a component's part that edits
+    /// text ([`super::InputPartStyle`], such as `number_input`'s
+    /// `input_style`). Inherent rather than [`super::Styled`]'s: on an element it
+    /// is the input's own prop (`input().placeholder_color(..)`).
+    pub fn placeholder_color(mut self, color: impl IntoReactive<AdaptiveColor>) -> Self {
+        self.bind_value(color, |s, color: AdaptiveColor| {
+            s.color(&[StyleKey::PlaceholderColor], color);
+        });
+        self
+    }
+
+    /// The color of an input's caret (`caretColor`, Tailwind's `caret-*`),
+    /// for a part that edits text ([`super::InputPartStyle`]); on iOS it
+    /// also tints the selection highlight, as UIKit has one tint for both.
+    pub fn caret_color(mut self, color: impl IntoReactive<AdaptiveColor>) -> Self {
+        self.bind_value(color, |s, color: AdaptiveColor| {
+            s.color(&[StyleKey::CaretColor], color);
+        });
+        self
+    }
+
+    /// The color of the selection highlight (`selectionColor`, Tailwind's
+    /// `selection:bg-*`) of a part's input or texts
+    /// ([`super::InputPartStyle`], [`super::TextPartStyle`]). Inherent
+    /// rather than [`super::Styled`]'s: an element has
+    /// [`Element::selection_color`](super::Element::selection_color).
+    pub fn selection_color(mut self, color: impl IntoReactive<AdaptiveColor>) -> Self {
+        self.bind_value(color, |s, color: AdaptiveColor| {
+            s.color(&[StyleKey::SelectionColor], color);
+        });
+        self
+    }
+
     /// Applies `value` with `apply`: now when it is static, else as a bound
     /// part.
     pub(crate) fn bind_value<T: 'static>(
@@ -2881,6 +2934,105 @@ pub trait Styled: Sized {
         self
     }
 
+    /// Masks the view and its content with a linear gradient's alpha:
+    /// opaque stops reveal it, transparent stops hide it. Colors do not tint it.
+    /// The angle follows CSS (0 up, `deg(90.0)` right). Stops accept colors or
+    /// `(color, position)` pairs, with typed fractions or lengths. Both arguments
+    /// accept signals and closures (`Vec<ColorStop>` for reactive stops); static
+    /// values create no binding.
+    /// `.mask_linear(deg(90.0), [transparent_black(), black(), transparent_black()])`.
+    /// An empty stop vector clears the mask reactively. Includes backdrop filters.
+    /// Not drawn on Windows and GPUI.
+    fn mask_linear(
+        mut self,
+        angle: impl IntoReactive<Radians>,
+        stops: impl IntoReactive<Vec<ColorStop>>,
+    ) -> Self {
+        let angle = angle.into_reactive();
+        let stops = stops.into_reactive();
+        let gradient = match (angle, stops) {
+            (Reactive::Static(angle), Reactive::Static(stops)) => Reactive::Static(Gradient {
+                kind: GradientKind::Linear { angle },
+                stops,
+                repeating: false,
+            }),
+            (angle, stops) => Reactive::Bound(Rc::new(move || Gradient {
+                kind: GradientKind::Linear { angle: angle.get() },
+                stops: stops.get(),
+                repeating: false,
+            })),
+        };
+        self.style().bind_value(gradient, |s, gradient| {
+            s.value(
+                StyleKey::MaskImage,
+                PropertyValue::Gradients(if gradient.stops.is_empty() {
+                    Vec::new().into()
+                } else {
+                    vec![gradient].into()
+                }),
+            );
+        });
+        self
+    }
+
+    /// Masks with an elliptical gradient from the center to the farthest corner.
+    /// Stops and platform support follow [`Styled::mask_linear`]. Use a
+    /// `Vec<ColorStop>` for signal/closure results, or an array of colors/pairs
+    /// for static stops. An empty vector clears the mask reactively.
+    fn mask_radial(mut self, stops: impl IntoReactive<Vec<ColorStop>>) -> Self {
+        self.style().bind_value(stops, |s, stops| {
+            let gradients = if stops.is_empty() {
+                Vec::new()
+            } else {
+                vec![Gradient {
+                    kind: GradientKind::Radial {
+                        circle: false,
+                        size: GradientSize::FarthestCorner,
+                        x: percentage(0.5),
+                        y: percentage(0.5),
+                    },
+                    stops,
+                    repeating: false,
+                }]
+            };
+            s.value(
+                StyleKey::MaskImage,
+                PropertyValue::Gradients(gradients.into()),
+            );
+        });
+        self
+    }
+
+    /// Clears the gradient mask, including in state styles.
+    fn mask_none(mut self) -> Self {
+        self.style().value(
+            StyleKey::MaskImage,
+            PropertyValue::Gradients(Vec::new().into()),
+        );
+        self
+    }
+
+    /// Clips everything it draws, the elements in it included, to `clip`
+    /// (CSS's `clip-path: inset(..)`): a rectangle inset from its box with
+    /// rounded corners, outside which presses reach neither it nor what is
+    /// in it. Its changes animate with [`Styled::transition_clip_path`]
+    /// (or [`Styled::transition_all`]), so a panel opens out of a corner:
+    /// `.clip_path(ClipInset::new().bottom(percentage(1.0)).left(percentage(1.0)).rounded(px(12.0)))`
+    /// while closed, `.clip_path(ClipInset::new().rounded(px(12.0)))` open.
+    fn clip_path(mut self, clip: impl IntoReactive<ClipInset>) -> Self {
+        self.style().bind_value(clip, |s, clip| {
+            s.value(StyleKey::ClipPath, PropertyValue::ClipPath(Some(clip)));
+        });
+        self
+    }
+
+    /// Clears the clip path, including in state styles.
+    fn clip_path_none(mut self) -> Self {
+        self.style()
+            .value(StyleKey::ClipPath, PropertyValue::ClipPath(None));
+        self
+    }
+
     /// Blurs it and its content by `radius` (Tailwind's `blur-sm` is 8
     /// points).
     fn blur(self, radius: impl Into<Points>) -> Self {
@@ -3089,6 +3241,19 @@ pub trait Styled: Sized {
         transition(self, TransitionProps::TRANSFORM)
     }
 
+    /// Changes of the clip path animate (CSS's `transition-property:
+    /// clip-path`).
+    fn transition_clip_path(self) -> Self {
+        transition(self, TransitionProps::CLIP_PATH)
+    }
+
+    /// Changes of the mask animate (CSS's `transition-property:
+    /// mask-image`): gradients of the same shape and stop count move stop
+    /// by stop; any other change applies at once.
+    fn transition_mask(self) -> Self {
+        transition(self, TransitionProps::MASK)
+    }
+
     /// Changes jump.
     fn transition_none(mut self) -> Self {
         self.style().push(Declaration::TransitionNone);
@@ -3135,10 +3300,25 @@ pub trait Styled: Sized {
         self
     }
 
-    /// Transitions along the cubic Bézier curve `x1, y1, x2, y2`.
+    /// Transitions along the cubic Bézier curve `x1, y1, x2, y2` (a `y`
+    /// outside 0..1 overshoots).
     fn ease_bezier(mut self, x1: f32, y1: f32, x2: f32, y2: f32) -> Self {
         self.style()
             .push(Declaration::Ease([x1, y1, x2, y2].map(Bits)));
+        self
+    }
+
+    /// Transitions on a spring's physics (its stiffness, damping and mass;
+    /// Tailwind extension `ease-spring-[620,36]`): they time themselves,
+    /// lasting until the spring settles ([`Spring::settle_ms`]), so
+    /// [`Self::duration`] is not used. A spring that cannot settle (a
+    /// stiffness, damping or mass that is not positive) sets nothing.
+    ///
+    /// [`Spring::settle_ms`]: crate::element::Spring::settle_ms
+    fn ease_spring(mut self, spring: crate::element::Spring) -> Self {
+        self.style().push(Declaration::EaseSpring(
+            [spring.stiffness, spring.damping, spring.mass].map(Bits),
+        ));
         self
     }
 
@@ -3568,6 +3748,17 @@ pub trait Styled: Sized {
         self
     }
 
+    /// The color a system control shows its state in (`accentColor`, CSS's
+    /// `accent-color`, Tailwind's `accent-*`): the track of
+    /// a system switch when on. Set on the control itself; it is
+    /// not inherited.
+    fn accent_color(mut self, color: impl IntoReactive<AdaptiveColor>) -> Self {
+        self.style().bind_value(color, |s, color: AdaptiveColor| {
+            s.color(&[StyleKey::AccentColor], color);
+        });
+        self
+    }
+
     /// What the shapes the element draws are filled with (`fill`,
     /// Tailwind's `fill-<color>`; the elements inside inherit it, as in
     /// CSS): the areas of `nsh_base::plot`.
@@ -3961,6 +4152,29 @@ pub trait Styled: Sized {
     fn truncate(self) -> Self {
         self.number_of_lines(1u32)
             .text_overflow(crate::EllipsizeMode::Tail)
+    }
+
+    /// Its texts' lines never wrap (Tailwind's `whitespace-nowrap`). A
+    /// view's reaches the texts in it, as CSS's `white-space` does.
+    fn whitespace_nowrap(mut self) -> Self {
+        self.style().push(Declaration::NoWrap(true));
+        self
+    }
+
+    /// Its texts' lines wrap (Tailwind's `whitespace-normal`): undoes a
+    /// view's `whitespace_nowrap` or `text_pretty` around them.
+    fn whitespace_normal(mut self) -> Self {
+        self.style().push(Declaration::NoWrap(false));
+        self
+    }
+
+    /// Its texts' lines wrap without leaving a word or two alone on the
+    /// last line (Tailwind's `text-pretty`): a last line shorter than a
+    /// quarter of the box takes words from the lines above, without adding
+    /// a line. A view's reaches the texts in it.
+    fn text_pretty(mut self) -> Self {
+        self.style().push(Declaration::Pretty);
+        self
     }
 
     /// The text's base direction (by default its content's).
@@ -4372,7 +4586,7 @@ mod tests {
     use super::*;
     use crate::{
         Style,
-        color::rgba,
+        color::{black, rgba},
         element::palette::{EMERALD, PINK, RED, SKY, VIOLET},
         geometry::point,
         tailwind::{ClassEnvironment, ClassProps, Context},
@@ -4623,6 +4837,33 @@ mod tests {
     }
 
     #[test]
+    fn a_parts_input_colors_come_from_the_typed_style() {
+        let list = s()
+            .placeholder_color(RED.shade(500))
+            .caret_color(SKY.shade(500))
+            .selection_color(EMERALD.shade(500))
+            .lower();
+        let mut style = Style::default();
+        list.apply(
+            &Context {
+                env: ClassEnvironment::default(),
+                window: crate::geometry::size_pt(390.0, 844.0),
+                rtl: false,
+                states: 0,
+                position: 0,
+                group: &|_| 0,
+            },
+            &PRESETS,
+            &mut style,
+            &mut ClassProps::default(),
+            |_| {},
+        );
+        assert_eq!(style.text.placeholder_color, Some(RED.shade(500).into()));
+        assert_eq!(style.text.caret_color, Some(SKY.shade(500).into()));
+        assert_eq!(style.text.selection_color, Some(EMERALD.shade(500).into()));
+    }
+
+    #[test]
     fn custom_shadows_are_layers_of_their_own() {
         let list = s()
             .text_shadow([crate::TextShadow {
@@ -4716,6 +4957,27 @@ mod tests {
             s().transition_transform().duration(200.0),
             "transition-transform duration-200",
         );
+        let spring = crate::element::Spring {
+            stiffness: 620.0,
+            damping: 36.0,
+            ..crate::element::Spring::default()
+        };
+        same(
+            s().transition_transform().ease_spring(spring),
+            "transition-transform ease-spring-[620,36]",
+        );
+        same(
+            s().transition_opacity()
+                .ease_spring(crate::element::Spring {
+                    mass: 2.0,
+                    ..spring
+                }),
+            "transition-opacity ease-spring-[620,36,2]",
+        );
+        same(
+            s().transition().ease_bezier(0.3, 1.25, 0.6, 1.0),
+            "transition ease-[cubic-bezier(0.3,1.25,0.6,1)]",
+        );
         for (typed, classes) in [
             (s().animate_spin(), "animate-spin"),
             (s().animate_ping(), "animate-ping"),
@@ -4724,6 +4986,100 @@ mod tests {
         ] {
             same(typed, classes);
         }
+    }
+
+    #[test]
+    fn mask_gradients_match_css() {
+        let css = |value: &'static str| {
+            move |style: &mut Style| {
+                style
+                    .set_key(StyleKey::MaskImage, crate::StyleValue::Str(value))
+                    .unwrap();
+            }
+        };
+        same_with(
+            s().mask_linear(
+                deg(90.0),
+                [transparent_black(), black(), transparent_black()],
+            ),
+            "",
+            &css("linear-gradient(to right, transparent, black, transparent)"),
+        );
+        same_with(
+            s().mask_linear(
+                deg(180.0),
+                [
+                    (transparent_black(), percentage(0.2)),
+                    (black(), percentage(0.8)),
+                ],
+            ),
+            "",
+            &css("linear-gradient(to bottom, transparent 20%, black 80%)"),
+        );
+        same_with(
+            s().mask_linear(
+                deg(90.0),
+                [(transparent_black(), px(12.0)), (black(), px(24.0))],
+            ),
+            "",
+            &css("linear-gradient(to right, transparent 12px, black 24px)"),
+        );
+        same_with(
+            s().mask_radial([black(), transparent_black()]),
+            "",
+            &css("radial-gradient(black, transparent)"),
+        );
+        same_with(
+            s().mask_radial([black(), transparent_black()]).mask_none(),
+            "",
+            &css("none"),
+        );
+    }
+
+    #[test]
+    fn empty_stops_clear_masks_and_radial_accepts_reactive_stops() {
+        same_with(
+            s().mask_linear(deg(90.0), Vec::<ColorStop>::new()),
+            "",
+            &|style| {
+                style
+                    .set_key(StyleKey::MaskImage, crate::StyleValue::Str("none"))
+                    .unwrap();
+            },
+        );
+        same_with(s().mask_radial(Vec::<ColorStop>::new()), "", &|style| {
+            style
+                .set_key(StyleKey::MaskImage, crate::StyleValue::Str("none"))
+                .unwrap();
+        });
+        // Constructed inside a component in normal use; these static reactive
+        // wrappers exercise the same accepted type without needing an owner.
+        let stops = Reactive::Static(vec![ColorStop::from(black()), transparent_black().into()]);
+        same_with(s().mask_radial(stops), "", &|style| {
+            style
+                .set_key(
+                    StyleKey::MaskImage,
+                    crate::StyleValue::Str("radial-gradient(black, transparent)"),
+                )
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn masks_keep_background_stops_separate() {
+        let typed = s()
+            .bg_linear(deg(180.0))
+            .gradient_from(black())
+            .gradient_to(crate::color::white())
+            .mask_linear(deg(90.0), [black(), transparent_black()]);
+        same_with(typed, "bg-linear-180 from-black to-white", &|style| {
+            style
+                .set_key(
+                    StyleKey::MaskImage,
+                    crate::StyleValue::Str("linear-gradient(to right, black, transparent)"),
+                )
+                .unwrap();
+        });
     }
 
     #[test]
@@ -4863,6 +5219,18 @@ mod tests {
         same(s().align_text_top(), "align-text-top");
         same(s().align_text_bottom(), "align-text-bottom");
         same(s().align_middle(), "align-middle");
+        same(s().text_pretty(), "text-pretty");
+        same(s().whitespace_nowrap(), "whitespace-nowrap");
+        same(s().whitespace_normal(), "whitespace-normal");
+        // The last of them holds, as the classes'.
+        same(
+            s().text_pretty().whitespace_normal(),
+            "text-pretty whitespace-normal",
+        );
+        same(
+            s().whitespace_nowrap().text_pretty(),
+            "whitespace-nowrap text-pretty",
+        );
         // Unlike classes, the two lines add up.
         let both = s().underline().line_through().lower();
         let mut style = Style::default();

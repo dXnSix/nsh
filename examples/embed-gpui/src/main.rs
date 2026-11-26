@@ -591,6 +591,7 @@ fn open_app(path: &Path, window: &mut Window, cx: &mut App) -> Option<Entity<App
         }
     };
     let options = AppOptions {
+        inline_root: true,
         // The build copies imported assets next to the bundle.
         asset_base: path
             .parent()
@@ -655,7 +656,7 @@ fn main() {
         })
         .detach();
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::centered(size(px(1280.), px(820.)), cx)),
+            window_bounds: Some(WindowBounds::centered(None, size(px(1280.), px(820.)), cx)),
             titlebar: Some(TitlebarOptions {
                 title: Some("NSH + GPUI Kit".into()),
                 ..Default::default()

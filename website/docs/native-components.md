@@ -19,7 +19,7 @@ there is no layering problem, it clips, scrolls and receives touches like a `<Vi
 > [!NOTE]
 > Native components are registered by the app that embeds NSH ([iOS](./ios.md), [Android](./android.md),
 > [macOS](./macos.md#embedding-in-a-mac-app), [Linux](./linux.md#embedding-in-a-gtk-app),
-> [Windows](./windows.md#embedding-in-a-win32-app)), or on Windows, macOS, Linux and iOS by the app's own Rust crate,
+> [Windows](./windows.md#embedding-in-a-win32-app)), or on Windows, macOS, Linux, iOS and Android by the app's own Rust crate,
 > whose components the development host and the packaged app (`nsh package`) register
 > ([Registering from the app's crate](#registering-from-the-apps-crate)). A name nothing registered renders an empty
 > view (the name is logged once as unknown).
@@ -40,6 +40,47 @@ In Rust, `native(name)` makes the element: `.prop(name, value)` gives it a prop 
 closure of one, sent again when it changes), `.on_native_event(..)` hears its events as `NativeEvent { name, data }`, and the methods of an
 `element_ref()` put on it with `.element_ref(&r)` send its commands. In TSX, `nativeComponent()` declares a component
 for the name with the props and events it uses.
+
+```tsx tabs
+import { mount, type NativeComponentRef, signal, Text, View } from "nsh";
+import { nativeComponent } from "nsh";
+import { Window } from "nsh/desktop";
+
+/** The host app's badge: a label it draws, sized to its text. */
+const Badge = nativeComponent<{ text: string; color?: string }, { tap: { count: number } }>("embed.badge", {
+  props: ["text", "color"],
+  events: ["tap"],
+});
+
+const colors = ["#8250df", "#0969da", "#1a7f37", "#cf222e"];
+
+function App() {
+  const taps = signal(0);
+  let badge: NativeComponentRef | undefined;
+  return (
+    <View style={{ flex: 1, padding: 20, paddingTop: "calc(env(safe-area-inset-top) + 20px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 20px)", gap: 16, backgroundColor: "#f6f8fa" }}>
+      <Text style={{ fontSize: 22, fontWeight: "700" }}>Rendered by nsh</Text>
+      <Badge
+        ref={(node) => (badge = node)}
+        text={taps() === 0 ? "Tap the native badge" : `Tapped ${taps()}×`}
+        color={colors[taps() % colors.length]}
+        onTap={(e) => {
+          taps.set(e.count);
+          badge?.command("pulse");
+        }}
+        style={{ alignSelf: "flex-start", borderRadius: 8, overflow: "hidden" }}
+      />
+      <Text>{`JS saw ${taps()} taps`}</Text>
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -80,42 +121,6 @@ pub fn App() -> impl IntoElement {
         )
         .child(text(move || format!("Rust saw {} taps", taps.get())))
 }
-```
-
-```tsx tabs
-import { mount, type NativeComponentRef, signal, Text, View } from "nsh";
-import { nativeComponent } from "nsh";
-
-/** The host app's badge: a label it draws, sized to its text. */
-const Badge = nativeComponent<{ text: string; color?: string }, { tap: { count: number } }>("embed.badge", {
-  props: ["text", "color"],
-  events: ["tap"],
-});
-
-const colors = ["#8250df", "#0969da", "#1a7f37", "#cf222e"];
-
-function App() {
-  const taps = signal(0);
-  let badge: NativeComponentRef | undefined;
-  return (
-    <View style={{ flex: 1, padding: 20, paddingTop: "calc(env(safe-area-inset-top) + 20px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 20px)", gap: 16, backgroundColor: "#f6f8fa" }}>
-      <Text style={{ fontSize: 22, fontWeight: "700" }}>Rendered by nsh</Text>
-      <Badge
-        ref={(node) => (badge = node)}
-        text={taps() === 0 ? "Tap the native badge" : `Tapped ${taps()}×`}
-        color={colors[taps() % colors.length]}
-        onTap={(e) => {
-          taps.set(e.count);
-          badge?.command("pulse");
-        }}
-        style={{ alignSelf: "flex-start", borderRadius: 8, overflow: "hidden" }}
-      />
-      <Text>{`JS saw ${taps()} taps`}</Text>
-    </View>
-  );
-}
-
-mount(App);
 ```
 
 The TSX version is `examples/embedded/App.tsx`, which both embedding samples in the repository run.
@@ -184,23 +189,6 @@ value. The web has no registered components.
 The component emits an event by name with an optional JSON payload. NSH delivers it to the engine thread and calls the
 matching handler with the payload (in Rust, the one `on_native_event` listener with the event's `name` and `data`):
 
-```rust tabs
-use serde_json::json;
-
-native("acme.map")
-    .prop("latitude", json!(52.52))
-    .prop("longitude", json!(13.405))
-    .on_native_event(move |e: &NativeEvent| match &*e.name {
-        "regionChange" => center.set((
-            e.data["latitude"].as_f64().unwrap_or_default(),
-            e.data["longitude"].as_f64().unwrap_or_default(),
-        )),
-        "markerPress" => open(e.data["id"].as_str().unwrap_or_default()),
-        _ => {}
-    })
-    .flex_1()
-```
-
 ```tsx tabs
 const MapView = nativeComponent<
   { latitude: number; longitude: number; zoom?: number },
@@ -219,12 +207,37 @@ const MapView = nativeComponent<
 />;
 ```
 
+```rust tabs
+use serde_json::json;
+
+native("acme.map")
+    .prop("latitude", json!(52.52))
+    .prop("longitude", json!(13.405))
+    .on_native_event(move |e: &NativeEvent| match &*e.name {
+        "regionChange" => center.set((
+            e.data["latitude"].as_f64().unwrap_or_default(),
+            e.data["longitude"].as_f64().unwrap_or_default(),
+        )),
+        "markerPress" => open(e.data["id"].as_str().unwrap_or_default()),
+        _ => {}
+    })
+    .flex_1()
+```
+
 Events are asynchronous: the main thread never waits for the app's code. A component that must decide something on the spot (may
 this gesture start, may this region change) has to decide it natively, from props it received earlier.
 
 ## Commands
 
 Imperative calls (zoom to a point, start playback, pulse an animation) go through the element's ref (`element_ref()` in Rust, `ref` in TSX):
+
+```tsx tabs
+let map: NativeComponentRef | undefined;
+
+<MapView ref={(node) => (map = node)} latitude={52.52} longitude={13.405} style={{ flex: 1 }} />;
+
+map?.command("zoomTo", { level: 3 });
+```
 
 ```rust tabs
 let map = element_ref();
@@ -236,14 +249,6 @@ native("acme.map")
     .flex_1()
 
 map.command("zoomTo", json!({ "level": 3 }));
-```
-
-```tsx tabs
-let map: NativeComponentRef | undefined;
-
-<MapView ref={(node) => (map = node)} latitude={52.52} longitude={13.405} style={{ flex: 1 }} />;
-
-map?.command("zoomTo", { level: 3 });
 ```
 
 `command(name, args)` (TSX: `command(name, args?)`) sends the name and the arguments (any JSON value) to the component's `command` method. Commands
@@ -391,7 +396,7 @@ nsh.registerComponent("embed.badge") { context -> Badge(context) }
 | `NshView.registerComponent(String name, NshComponent.Factory factory)` | Registers a factory under a name; it makes one component per element created from then on (UI thread). |
 | `interface NshComponent` | `View view()`, `void setProp(String, Object)`, `default void command(String, Object)`, `default void destroy()` (the element is gone: removed, or its app stopped by `NshView.destroy()` or replaced by another load; called once per component). Called on the UI thread. |
 | `setProp` values | `String`, `Number`, `Boolean`, `java.util.List`, `java.util.Map`, or `null` when removed (or JSON `null`). |
-| `NshComponentContext.getContext()` | The context of the `NshView` the component is in (its activity's), for the component's views, resources and system services; keep its `getApplicationContext()` in what outlives the component. Any thread. |
+| `NshComponentContext.getContext()` | The context of the `NshView` the component is in (its activity's), for the component's views, resources and system services; keep its `getApplicationContext()` in what outlives the component. In Native Shell's own activities it wraps the activity (`ContextWrapper`) and moves to the activity Android makes again for a configuration change while the app keeps running: reach the `Activity` through `getBaseContext()` when needed, and keep none. Any thread. |
 | `NshComponentContext.emit(String event, Object data)` | Emits an event; `data` as the same Java types, or `null`. Any thread. |
 | `NshComponentContext.setSize(float width, float height)` | Reports the component's own size in dp. Any thread. |
 
@@ -633,6 +638,42 @@ impl NativeComponent for ImageView {
 }
 ```
 
+A drawn component can also take presses, moves and releases where it has something to hit (an annotation it draws
+over an image). `hit` is asked for each point and is `false` by default, so presses go to its view's handlers
+(`onPress`, `onMouseMove`) as before. Where it returns `true`, `pointer` gets a `Pointer` (`kind`: `Down`, `Move`,
+`Up`, `Cancel`, `Leave`; `x`, `y` in the component's points; `clicks`; `shift`, `ctrl`, `alt`): after a press it took,
+the moves and the release follow until the release, also outside its bounds; with no button down, moves come while
+the mouse is over where it hits, then `Leave`. A press it returns `false` for goes to the views below. Only the left
+button reaches it, so right-clicks and context menus stay with its view. `cursor` sets the cursor where it hits:
+
+```rust
+use nsh_platform_windows::{Cursor, Pointer, PointerKind};
+
+impl NativeComponent for ImageView {
+    // draw, set_prop, wheel, ...
+
+    fn hit(&self, x: f32, y: f32, _size: (f32, f32)) -> bool {
+        self.annotation_at(x, y).is_some()
+    }
+
+    fn pointer(&mut self, event: &Pointer) -> bool {
+        match event.kind {
+            PointerKind::Down => self.grab(event.x, event.y),
+            PointerKind::Move => self.drag_or_hover(event.x, event.y),
+            PointerKind::Up | PointerKind::Cancel => self.release(),
+            PointerKind::Leave => self.unhover(),
+            _ => {}
+        }
+        self.context.redraw();
+        true
+    }
+
+    fn cursor(&self, _x: f32, _y: f32) -> Option<Cursor> {
+        Some(Cursor::Move)
+    }
+}
+```
+
 ## Registering from the app's crate
 
 An app with a Rust crate of its own (`nsh.json` `"rust"`, [Rust](./rust.md)) registers native components in that
@@ -657,18 +698,22 @@ fn components(components: &nsh_platform_windows::Components) {
 }
 ```
 
-The platform is `windows`, `macos`, `linux` or `ios`, and the components are those of
-`nsh_platform_windows`, `nsh_platform_macos`, `nsh_platform_linux` or `nsh_platform_ios` (the sections above). The
+The platform is `windows`, `macos`, `linux`, `ios` or `android`, and the components are those of
+`nsh_platform_windows`, `nsh_platform_macos`, `nsh_platform_linux`, `nsh_platform_ios` (the sections above) or
+`nsh-platform-android` (`nsh::Components`, `nsh::NativeComponent` over JNI). The
 function compiles only on its platform, so a crate has one per platform it supports, each registering the same names,
 and depends on each platform's crate for that platform only, at the version and from the source of its other NSH
 crates (`nsh-core` and the rest; the CLI checks that they all match):
 
 ```toml
 [target.'cfg(windows)'.dependencies]
-nsh-platform-windows = { version = "0.3", default-features = false }
+nsh-platform-windows = { version = "0.6", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { version = "0.3", default-features = false }
+nsh-platform-macos = { version = "0.6", default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+nsh-platform-android = { version = "0.6", default-features = false }
 ```
 
 The host registers the crate's components when it makes each view, before the code holding the view registers its

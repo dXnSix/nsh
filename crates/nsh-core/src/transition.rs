@@ -31,8 +31,9 @@
 use std::sync::Arc;
 
 use crate::{
-    AttributedText, Bounds, BoxShadow, Color, Corners, Edges, KeyframeAnimation, Keyframes,
-    LayoutCurve, LayoutProperty, LayoutTransition, Points, Transform, TransitionProps, ViewStyle,
+    AttributedText, Bounds, BoxShadow, Color, Corners, Edges, Gradient, KeyframeAnimation,
+    Keyframes, LayoutCurve, LayoutProperty, LayoutTransition, Points, Transform, Transition,
+    TransitionProps, ViewStyle,
     geometry::{Percentage, Point, Radians, Size, deg},
 };
 
@@ -382,7 +383,7 @@ pub fn restyle(
     let keyframes_changed = style.animation != old.animation;
     let transition = style.transition.filter(|t| {
         !reduce_motion
-            && t.duration + t.delay > 0.0
+            && t.run_ms() + t.delay > 0.0
             && differs(old, style, t.properties)
             // A view's first style does not transition from the defaults.
             && *old != ViewStyle::default()
@@ -398,7 +399,7 @@ pub fn restyle(
             from: Box::new(old.clone()),
             to,
             props: t.properties,
-            timing: Timing::new(t.delay, t.duration, Curve::Bezier(t.easing)),
+            timing: Timing::transition(&t),
         }
     });
     Some(Restyle { track, keyframes })
@@ -517,7 +518,7 @@ pub fn recolor(
     reduce_motion: bool,
 ) -> Recolor {
     let transition = style.transition.filter(|t| {
-        !reduce_motion && t.duration + t.delay > 0.0 && t.properties.has(TransitionProps::COLORS)
+        !reduce_motion && t.run_ms() + t.delay > 0.0 && t.properties.has(TransitionProps::COLORS)
     });
     // Most texts have no transition: their runs are not looked at.
     let Some((t, to)) = transition.and_then(|t| Some((t, text.uniform_color()?))) else {
@@ -528,7 +529,7 @@ pub fn recolor(
         Some(from) => Recoloring::Start {
             from,
             to,
-            timing: Timing::new(t.delay, t.duration, Curve::Bezier(t.easing)),
+            timing: Timing::transition(&t),
         },
         None => Recoloring::Stop,
     })
@@ -586,6 +587,7 @@ impl Curve {
             }
             LayoutCurve::FittedSpring { damping_ratio } => Curve::Spring(damping_ratio),
             LayoutCurve::Spring(spring) => Curve::Physical(spring),
+            LayoutCurve::Bezier(points) => Curve::Bezier(points),
         }
     }
 
@@ -694,6 +696,14 @@ impl Timing {
 
     fn layout(t: &LayoutTransition) -> Self {
         Timing::new(t.delay_ms, t.run_ms(), Curve::of(t.curve))
+    }
+
+    fn transition(t: &Transition) -> Self {
+        let curve = match t.spring {
+            Some(spring) => Curve::Physical(spring),
+            None => Curve::Bezier(t.easing),
+        };
+        Timing::new(t.delay, t.run_ms(), curve)
     }
 
     /// When it ends (ms), `now` before its first step.
@@ -835,7 +845,7 @@ fn lerp_points(a: Points, b: Points, t: f32) -> Points {
 
 /// Interpolates colors in premultiplied RGBA, as CSS does, so that
 /// transparent ends do not pass through black.
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+pub(crate) fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     if a == b {
         return a;
     }
@@ -923,6 +933,21 @@ fn box_shadows(s: &ViewStyle) -> &[BoxShadow] {
     s.effects.as_deref().map_or(&[], |e| &e.box_shadows)
 }
 
+fn mask_images(s: &ViewStyle) -> &[Gradient] {
+    s.effects.as_deref().map_or(&[], |e| &e.mask_images)
+}
+
+/// The mask layers `t` of the way from `a` to `b`, layer by layer; `None`
+/// when they do not interpolate (a different number of layers, or one
+/// pair that [`Gradient::lerp`] cannot mix) and `b` applies at once. To or
+/// from `none` (no layers) it changes at once, as in CSS.
+fn lerp_masks(a: &[Gradient], b: &[Gradient], t: f32) -> Option<Vec<Gradient>> {
+    if a.is_empty() || a.len() != b.len() {
+        return None;
+    }
+    a.iter().zip(b).map(|(a, b)| a.lerp(b, t)).collect()
+}
+
 /// True if `a` and `b` differ in what `props` animates.
 fn differs(a: &ViewStyle, b: &ViewStyle, props: TransitionProps) -> bool {
     (props.has(TransitionProps::COLORS)
@@ -933,6 +958,15 @@ fn differs(a: &ViewStyle, b: &ViewStyle, props: TransitionProps) -> bool {
         || (props.has(TransitionProps::OPACITY) && a.opacity != b.opacity)
         || (props.has(TransitionProps::TRANSFORM) && a.transform != b.transform)
         || (props.has(TransitionProps::SHADOW) && box_shadows(a) != box_shadows(b))
+        // To or from `none` it changes at once, as in CSS.
+        || (props.has(TransitionProps::CLIP_PATH)
+            && a.clip_path().is_some()
+            && b.clip_path().is_some()
+            && a.clip_path() != b.clip_path())
+        || (props.has(TransitionProps::MASK) && {
+            let (ma, mb) = (mask_images(a), mask_images(b));
+            ma != mb && lerp_masks(ma, mb, 0.0).is_some()
+        })
         || (props.has(TransitionProps::SHAPE)
             && (a.border_radius != b.border_radius
                 || a.corner_radius != b.corner_radius
@@ -976,6 +1010,24 @@ fn lerp_style(
             out.effects = Some(Arc::new(effects));
         }
     }
+    if props.has(TransitionProps::CLIP_PATH)
+        && let (Some(a), Some(b)) = (from.clip_path(), to.clip_path())
+        && a != b
+    {
+        let mut effects = out.effects.as_deref().cloned().unwrap_or_default();
+        effects.clip_path = Some(a.lerp(b, t));
+        out.effects = Some(Arc::new(effects));
+    }
+    if props.has(TransitionProps::MASK) {
+        let (ma, mb) = (mask_images(from), mask_images(to));
+        if ma != mb
+            && let Some(masks) = lerp_masks(ma, mb, t)
+        {
+            let mut effects = out.effects.as_deref().cloned().unwrap_or_default();
+            effects.mask_images = masks;
+            out.effects = Some(Arc::new(effects));
+        }
+    }
     if props.has(TransitionProps::SHAPE) {
         out.border_radius = lerp_points(from.border_radius, to.border_radius, t).max(Points::ZERO);
         let (ca, cb) = (from.corner_radius.to_array(), to.corner_radius.to_array());
@@ -1014,7 +1066,11 @@ fn lerp_rect(a: Bounds<Points>, b: Bounds<Points>, t: f32) -> Bounds<Points> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LayoutAnimation, TransformKind, element::Spring};
+    use crate::{
+        LayoutAnimation, TransformKind,
+        element::Spring,
+        geometry::{point, size},
+    };
 
     fn close(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
@@ -1264,6 +1320,218 @@ mod tests {
             Some((1.0, true))
         );
         assert_eq!(progress(Curve::Linear, 0.0, 0.0, 0.0), Some((1.0, true)));
+    }
+
+    /// A view scaled from `from` to `to` with `easing` on its transforms:
+    /// the scales it shows every 10 ms until the transition ends.
+    fn scales(
+        easing: [f32; 4],
+        spring: Option<crate::element::Spring>,
+        from: f32,
+        to: f32,
+    ) -> Vec<f32> {
+        let styled = |scale: f32| {
+            let mut transform = Transform::IDENTITY;
+            let _ = transform.push(crate::transform::TransformKind::Scale, scale);
+            ViewStyle {
+                transform,
+                transition: Some(Transition {
+                    properties: TransitionProps(TransitionProps::TRANSFORM),
+                    duration: 200.0,
+                    delay: 0.0,
+                    easing,
+                    spring,
+                }),
+                ..ViewStyle::default()
+            }
+        };
+        let old = styled(from);
+        let mut style = Box::new(styled(to));
+        let mut live = Live::default();
+        live.restyle(restyle(&old, &mut style, false).expect("it transitions"));
+        let mut frame = Bounds::default();
+        let mut out = Vec::new();
+        for i in 0..200 {
+            let step = live.step(f64::from(i) * 10.0, &mut frame, &mut style);
+            out.push(style.transform.ops()[0].value);
+            if step.finished {
+                break;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_clip_path_opens_out_of_a_corner() {
+        use crate::{ClipInset, geometry::percentage};
+        let clipped = |clip: Option<ClipInset>, properties: u8| {
+            let mut style = transitioning(properties);
+            style.effects = crate::effects::shared(crate::Effects {
+                clip_path: clip,
+                ..Default::default()
+            });
+            style
+        };
+        let shut = ClipInset::new()
+            .bottom(percentage(1.0))
+            .left(percentage(1.0))
+            .rounded(Points(12.0));
+        let open = ClipInset::new().rounded(Points(12.0));
+        let old = clipped(Some(shut), TransitionProps::CLIP_PATH);
+        let mut style = Box::new(clipped(Some(open), TransitionProps::CLIP_PATH));
+        let mut live = Live::default();
+        live.restyle(restyle(&old, &mut style, false).expect("it transitions"));
+        // The old shape shows until the first frame, then each edge moves
+        // on its own (linear, 150 ms): from the top right corner.
+        assert_eq!(style.clip_path(), Some(&shut));
+        let mut frame = Bounds::default();
+        live.step(1000.0, &mut frame, &mut style);
+        live.step(1075.0, &mut frame, &mut style);
+        let half = style.clip_path().copied().unwrap();
+        assert_eq!(half.fractions.left, percentage(0.5));
+        assert_eq!(half.fractions.bottom, percentage(0.5));
+        assert_eq!(half.fractions.top, percentage(0.0));
+        let (rect, radii) = half.resolve(size(Points(200.0), Points(100.0)));
+        assert_eq!(
+            rect,
+            Bounds::new(
+                point(Points(100.0), Points(0.0)),
+                size(Points(100.0), Points(50.0))
+            )
+        );
+        assert_eq!(radii.top_right, Points(12.0));
+        let step = live.step(1200.0, &mut frame, &mut style);
+        assert!(step.finished);
+        assert_eq!(style.clip_path(), Some(&open));
+
+        // Not named, or to and from `none`, it changes at once, as in CSS.
+        let mut style = Box::new(clipped(Some(open), TransitionProps::SHAPE));
+        assert!(
+            restyle(
+                &clipped(Some(shut), TransitionProps::SHAPE),
+                &mut style,
+                false
+            )
+            .is_none()
+        );
+        let mut style = Box::new(clipped(Some(open), TransitionProps::ALL));
+        let mut old = clipped(None, TransitionProps::ALL);
+        old.opacity = 0.5;
+        let restyled = restyle(&old, &mut style, false).expect("the opacity transitions");
+        assert_eq!(style.clip_path(), Some(&open));
+        drop(restyled);
+    }
+
+    #[test]
+    fn a_mask_fades_in_stop_by_stop() {
+        use crate::geometry::DefiniteLength;
+        let masked = |mask: &str, properties: u8| {
+            let mut style = transitioning(properties);
+            style.effects = crate::effects::shared(crate::Effects {
+                mask_images: crate::css::gradients(mask).unwrap_or_default(),
+                ..Default::default()
+            });
+            style
+        };
+        let masks = |s: &ViewStyle| mask_images(s).to_vec();
+        // #3033: a fade that grows in from the bottom edge.
+        let whole = "linear-gradient(to bottom, black 100%, transparent 100%)";
+        let faded = "linear-gradient(to bottom, black 40%, transparent 100%)";
+        let old = masked(whole, TransitionProps::MASK);
+        let mut style = Box::new(masked(faded, TransitionProps::MASK));
+        let target = masks(&style);
+        let mut live = Live::default();
+        live.restyle(restyle(&old, &mut style, false).expect("it transitions"));
+        // The old mask shows until the first frame, then each stop moves on
+        // its own (linear, 150 ms).
+        assert_eq!(masks(&style), masks(&old));
+        let mut frame = Bounds::default();
+        live.step(1000.0, &mut frame, &mut style);
+        live.step(1075.0, &mut frame, &mut style);
+        let half = &mask_images(&style)[0];
+        let at = |i: usize| match half.stops[i].position {
+            Some(DefiniteLength::Fraction(p)) => p.0,
+            other => panic!("{other:?}"),
+        };
+        assert!(close(at(0), 0.7), "{}", at(0));
+        assert!(close(at(1), 1.0), "{}", at(1));
+        assert_eq!(half.stops[0].color, Color::BLACK);
+        assert_eq!(half.stops[1].color, Color::TRANSPARENT);
+        let step = live.step(1200.0, &mut frame, &mut style);
+        assert!(step.finished);
+        assert_eq!(masks(&style), target);
+
+        // Alpha moves too, in premultiplied RGBA: no grey halfway.
+        let a = crate::css::gradient("linear-gradient(black, black)").unwrap();
+        let b = crate::css::gradient("linear-gradient(black, transparent)").unwrap();
+        let mid = a.lerp(&b, 0.5).unwrap();
+        assert_eq!(mid.stops[1].color, Color::rgba(0, 0, 0, 128));
+        // The angle moves, and lengths with lengths.
+        let a = crate::css::gradient("linear-gradient(0deg, black 10px, transparent)").unwrap();
+        let b = crate::css::gradient("linear-gradient(90deg, black 30px, transparent)").unwrap();
+        let mid = a.lerp(&b, 0.5).unwrap();
+        assert_eq!(mid.kind, crate::GradientKind::Linear { angle: deg(45.0) });
+        assert_eq!(mid.stops[0].position, Some(Points(20.0).into()));
+
+        // Gradients that do not match change at once, as in CSS's discrete
+        // interpolation: another stop count, another kind, a fraction to a
+        // length, or to and from `none`; and so does a mask not named.
+        for (from, to) in [
+            (
+                whole,
+                "linear-gradient(to bottom, black, black 50%, transparent)",
+            ),
+            (whole, "radial-gradient(black 40%, transparent)"),
+            (
+                whole,
+                "linear-gradient(to bottom, black 20px, transparent 100%)",
+            ),
+            ("none", faded),
+            (faded, "none"),
+        ] {
+            let mut style = Box::new(masked(to, TransitionProps::ALL));
+            assert!(
+                restyle(&masked(from, TransitionProps::ALL), &mut style, false).is_none(),
+                "{from} -> {to}"
+            );
+        }
+        let mut style = Box::new(masked(faded, TransitionProps::OPACITY));
+        assert!(restyle(&masked(whole, TransitionProps::OPACITY), &mut style, false).is_none());
+    }
+
+    #[test]
+    fn a_style_transition_runs_on_a_spring() {
+        let spring = crate::element::Spring {
+            stiffness: 620.0,
+            damping: 36.0,
+            ..crate::element::Spring::default()
+        };
+        let shown = scales(Transition::EASE, Some(spring), 0.95, 1.0);
+        // It passes its target (by 3.7% of the travel) and settles on it, in
+        // the time the spring takes, not the transition's 200 ms.
+        let peak = shown.iter().copied().fold(f32::MIN, f32::max);
+        assert!(peak > 1.001 && peak < 1.003, "{peak}");
+        assert_eq!(*shown.last().unwrap(), 1.0);
+        let ms = (shown.len() - 1) * 10;
+        assert!((380..=390).contains(&ms), "{ms}");
+        // Its exit waits as long.
+        let t = Transition {
+            properties: TransitionProps(TransitionProps::ALL),
+            duration: 200.0,
+            delay: 20.0,
+            easing: Transition::EASE,
+            spring: Some(spring),
+        };
+        assert!((t.run_ms() - spring.settle_ms()).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_bezier_past_one_overshoots() {
+        let shown = scales([0.3, 1.25, 0.6, 1.0], None, 0.95, 1.0);
+        let peak = shown.iter().copied().fold(f32::MIN, f32::max);
+        assert!(peak > 1.0, "{peak}");
+        assert_eq!(*shown.last().unwrap(), 1.0);
+        assert_eq!(shown.len(), 21);
     }
 
     #[test]
@@ -1562,6 +1830,7 @@ mod tests {
                 duration: 150.0,
                 delay: 0.0,
                 easing: [0.0, 0.0, 1.0, 1.0],
+                spring: None,
             }),
             ..ViewStyle::default()
         }

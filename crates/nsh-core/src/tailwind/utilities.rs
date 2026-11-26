@@ -109,6 +109,8 @@ pub(crate) enum Part {
     TransitionProps(u8),
     Duration(f32),
     Ease([f32; 4]),
+    /// NSH's `ease-spring-[…]`: the transition runs on a spring.
+    Spring(crate::element::Spring),
     Delay(f32),
     TransitionNone,
     Animate(Option<Keyframes>),
@@ -139,6 +141,8 @@ pub(crate) enum ColorSlot {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PropDecl {
     NoWrap(bool),
+    /// `text-pretty`: wraps, without a lone last word.
+    Pretty,
     Caret(Color),
     /// `space-x-*` (`false`) / `space-y-*` (`true`).
     Space(bool, PropertyValue),
@@ -182,13 +186,29 @@ pub(crate) enum Decl {
 }
 
 impl Decl {
+    #[inline]
+    pub(crate) fn is_default(&self) -> bool {
+        matches!(self, Decl::Default(..) | Decl::CurrentColor(_))
+    }
+
+    #[inline]
+    pub(crate) fn needs_parts(&self) -> bool {
+        matches!(
+            self,
+            Decl::Part(_) | Decl::AdaptivePart(_) | Decl::Screen(..)
+        ) || matches!(self, Decl::CurrentPart(slot, _) if !matches!(slot, ColorSlot::Caret))
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply(
         &self,
         dark: bool,
         important: bool,
+        current: Color,
+        ch: f32,
         style: &mut Style,
         props: &mut ClassProps,
-        parts: &mut Parts,
+        parts: Option<&mut Parts>,
     ) {
         match self {
             Decl::Set(key, value) => {
@@ -197,32 +217,43 @@ impl Decl {
             // Applied by `ClassList::apply` before the rules.
             Decl::Default(..) | Decl::CurrentColor(_) => {}
             Decl::SetCurrentColor(key, alpha) => {
-                style.set_color(*key, mixed(parts.current, *alpha));
+                style.set_color(*key, mixed(current, *alpha));
             }
             Decl::CurrentPart(slot, alpha) => {
-                let c = mixed(parts.current, *alpha);
+                let c = mixed(current, *alpha);
                 match slot {
                     ColorSlot::Caret => props.caret_color = Some(c),
-                    slot => parts.push(match slot {
-                        ColorSlot::Shadow => Part::ShadowColor(c),
-                        ColorSlot::InsetShadow => Part::InsetShadowColor(c),
-                        ColorSlot::TextShadow => Part::TextShadowColor(c),
-                        ColorSlot::DropShadow => Part::DropShadowColor(c),
-                        ColorSlot::Ring => Part::RingColor(c),
-                        ColorSlot::InsetRing => Part::InsetRingColor(c),
-                        ColorSlot::RingOffset => Part::RingOffsetColor(c),
-                        ColorSlot::From => Part::From(c, true),
-                        ColorSlot::Via => Part::Via(c, true),
-                        _ => Part::To(c, true),
-                    }),
+                    slot => parts
+                        .expect("parts allocated for part decl")
+                        .push(match slot {
+                            ColorSlot::Shadow => Part::ShadowColor(c),
+                            ColorSlot::InsetShadow => Part::InsetShadowColor(c),
+                            ColorSlot::TextShadow => Part::TextShadowColor(c),
+                            ColorSlot::DropShadow => Part::DropShadowColor(c),
+                            ColorSlot::Ring => Part::RingColor(c),
+                            ColorSlot::InsetRing => Part::InsetRingColor(c),
+                            ColorSlot::RingOffset => Part::RingOffsetColor(c),
+                            ColorSlot::From => Part::From(c, true),
+                            ColorSlot::Via => Part::Via(c, true),
+                            _ => Part::To(c, true),
+                        }),
                 }
             }
             Decl::Style(decl) => {
                 let _ = decl.apply(style);
             }
-            Decl::Part(part) => parts.push(part.clone()),
+            Decl::Part(part) => parts
+                .expect("parts allocated for part decl")
+                .push(part.clone()),
             Decl::Prop(p) => match p {
-                PropDecl::NoWrap(b) => props.no_wrap = Some(*b),
+                PropDecl::NoWrap(b) => {
+                    props.no_wrap = Some(*b);
+                    props.pretty = false;
+                }
+                PropDecl::Pretty => {
+                    props.no_wrap = Some(false);
+                    props.pretty = true;
+                }
                 PropDecl::Caret(c) => props.caret_color = Some(*c),
                 PropDecl::Space(y, v) => {
                     let space = props.space.get_or_insert_default();
@@ -244,16 +275,19 @@ impl Decl {
                 }
             },
             Decl::Screen(key, fw, fh) => {
+                let parts = parts.expect("parts allocated for screen decl");
                 parts.screen.push((*key, *fw, *fh));
                 parts.touched |= touched::SCREEN;
             }
             Decl::Ch(key, n) => {
-                let _ = style.set_key(*key, StyleValue::Number(n * parts.ch));
+                let _ = style.set_key(*key, StyleValue::Number(n * ch));
             }
             Decl::Adaptive(key, values) => {
                 let _ = style.apply_value(*key, &values[usize::from(dark)]);
             }
-            Decl::AdaptivePart(pair) => parts.push(pair[usize::from(dark)].clone()),
+            Decl::AdaptivePart(pair) => parts
+                .expect("parts allocated for part decl")
+                .push(pair[usize::from(dark)].clone()),
         }
     }
 
@@ -357,7 +391,6 @@ pub(crate) mod touched {
     pub(crate) const TRANSITION: u16 = 128;
     pub(crate) const ANIMATE: u16 = 256;
     pub(crate) const TEXT_SHADOW: u16 = 512;
-    pub(crate) const ALL: u16 = u16::MAX;
 }
 
 /// The transform properties parts set ([`Parts::transform_parts`]).
@@ -417,6 +450,7 @@ pub(crate) struct Parts {
     transition_props: Option<u8>,
     duration: Option<f32>,
     ease: Option<[f32; 4]>,
+    spring: Option<crate::element::Spring>,
     delay: Option<f32>,
     transition_none: bool,
     animate: Option<Option<KeyframeAnimation>>,
@@ -452,7 +486,7 @@ impl Parts {
             | DropShadowAlpha(_) => touched::FILTERS,
             Filter { backdrop: true, .. } | FilterNone { backdrop: true } => touched::BACKDROP,
             FontVariant { .. } => touched::FONT_VARIANT,
-            TransitionProps(_) | Duration(_) | Ease(_) | Delay(_) | TransitionNone => {
+            TransitionProps(_) | Duration(_) | Ease(_) | Spring(_) | Delay(_) | TransitionNone => {
                 touched::TRANSITION
             }
             Animate(_) | Animation(_) => touched::ANIMATE,
@@ -551,7 +585,9 @@ impl Parts {
                 self.transition_none = false;
             }
             Duration(ms) => self.duration = Some(ms),
-            Ease(e) => self.ease = Some(e),
+            // The later timing function wins, as one property.
+            Ease(e) => (self.ease, self.spring) = (Some(e), None),
+            Spring(s) => self.spring = Some(s),
             Delay(ms) => self.delay = Some(ms),
             TransitionNone => {
                 self.transition_none = true;
@@ -766,7 +802,10 @@ impl Parts {
         if !has(touched::TRANSITION) {
         } else if self.transition_none {
             style.view.transition = None;
-        } else if self.transition_props.is_some() || self.duration.is_some() || self.ease.is_some()
+        } else if self.transition_props.is_some()
+            || self.duration.is_some()
+            || self.ease.is_some()
+            || self.spring.is_some()
         {
             let (duration, ease) = theme.transition;
             style.view.transition = Some(Transition {
@@ -779,6 +818,7 @@ impl Parts {
                 }),
                 delay: self.delay.unwrap_or(0.0),
                 easing: self.ease.unwrap_or(ease),
+                spring: self.spring,
             });
         }
         if let Some(k) = self.animate.filter(|_| has(touched::ANIMATE)) {
@@ -880,6 +920,12 @@ fn fraction(v: &str) -> Option<f32> {
     let (a, b) = v.split_once('/')?;
     let (a, b) = (int(a)?, int(b)?);
     (b > 0.0).then(|| a / b)
+}
+
+/// A ring's width or offset in brackets, with or without its hint
+/// (`[3px]`, `[length:3px]`).
+fn ring_length(theme: &Theme, value: &str) -> Option<f32> {
+    class_length(theme, arbitrary_hinted(value, "length").unwrap_or(value))
 }
 
 fn class_length(theme: &Theme, value: &str) -> Option<f32> {
@@ -1203,9 +1249,11 @@ fn opacity_factor(v: &str) -> Option<f32> {
     }
 }
 
+/// A scale factor: a percentage step (`scale-95`) or arbitrary, with or
+/// without the `number:` hint (`[0.97]`, `[number:0.97]`).
 fn scale_factor(v: &str) -> Option<f32> {
-    if v.starts_with('[') {
-        percent_factor(v)
+    if let Some(a) = arbitrary(v) {
+        css::amount(arbitrary_hinted(&a, "number").unwrap_or(&a))
     } else {
         int(v).map(|n| n / 100.0)
     }
@@ -1252,6 +1300,9 @@ fn valid(decls: Vec<Decl>) -> Option<Vec<Decl>> {
         PropertyValue::Number(n) => n.0 < 0.0,
         PropertyValue::Points(p) => p.0 < 0.0,
         PropertyValue::OptPoints(p) => p.is_some_and(|p| p.0 < 0.0),
+        PropertyValue::FontSize(p, em) => {
+            p.is_some_and(|p| p.0 < 0.0) || em.is_some_and(|e| e.0 < 0.0)
+        }
         PropertyValue::Dimension(d) => d.into_raw().value() < 0.0,
         PropertyValue::Lpa(d) => d.into_raw().value() < 0.0,
         PropertyValue::Lp(d) => d.into_raw().value() < 0.0,
@@ -1684,9 +1735,8 @@ fn keyword(u: &str) -> Option<Vec<Decl>> {
             ]);
         }
         "whitespace-nowrap" | "text-nowrap" => Decl::Prop(PropDecl::NoWrap(true)),
-        "whitespace-normal" | "text-wrap" | "text-balance" | "text-pretty" => {
-            Decl::Prop(PropDecl::NoWrap(false))
-        }
+        "text-pretty" => Decl::Prop(PropDecl::Pretty),
+        "whitespace-normal" | "text-wrap" | "text-balance" => Decl::Prop(PropDecl::NoWrap(false)),
         "line-clamp-none" => clamp(0),
         // `font-variant-numeric: normal`: the number forms only.
         "normal-nums" => Decl::Part(Part::FontVariant {
@@ -2460,7 +2510,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         Some(outline_width(arbitrary_points(t, v)?))
     }),
     ("inset-ring", |t, v, _| {
-        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| ring_length(t, &a))) {
             return part(Part::InsetRing(n));
         }
         if let Some(a) = current(v) {
@@ -2469,7 +2519,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         part(Part::InsetRingColor(color(t, v)?))
     }),
     ("ring-offset", |t, v, _| {
-        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| ring_length(t, &a))) {
             return part(Part::RingOffset(n));
         }
         if let Some(a) = current(v) {
@@ -2478,7 +2528,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         part(Part::RingOffsetColor(color(t, v)?))
     }),
     ("ring", |t, v, _| {
-        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| class_length(t, &a))) {
+        if let Some(n) = int(v).or_else(|| arbitrary(v).and_then(|a| ring_length(t, &a))) {
             return part(Part::Ring(n));
         }
         if let Some(a) = current(v) {
@@ -2665,6 +2715,18 @@ static PREFIXES: &[(&str, Handler)] = &[
     ("ease", |t, v, _| {
         let e = match t.ease.get(v) {
             Some(e) => *e,
+            // NSH's spring: `ease-spring-[stiffness,damping]` or
+            // `ease-spring-[stiffness,damping,mass]`.
+            None if v.starts_with("spring-[") => {
+                let args = arbitrary(v.strip_prefix("spring-")?)?;
+                let n: Option<Vec<f32>> = args.split(',').map(css::number).collect();
+                let physics = match *n?.as_slice() {
+                    [stiffness, damping] => (stiffness, damping, 1.0),
+                    [stiffness, damping, mass] => (stiffness, damping, mass),
+                    _ => return None,
+                };
+                return part(Part::Spring(crate::style::spring_of(physics)?));
+            }
             None => {
                 let a = arbitrary(v)?;
                 let args = a.strip_prefix("cubic-bezier(")?.strip_suffix(')')?;
@@ -2707,6 +2769,7 @@ static PREFIXES: &[(&str, Handler)] = &[
         one(sets(K::ObjectPosition, p))
     }),
     ("tint", |t, v, _| one(setc(K::TintColor, color(t, v)?))),
+    ("accent", |t, v, _| one(setc(K::AccentColor, color(t, v)?))),
 ];
 
 /// Forms without a value: `shadow`, `ring`, `border`, `rounded`, ...

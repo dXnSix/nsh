@@ -20,6 +20,53 @@ the highlighted row and what screen readers hear. With `multiple`, a choice togg
 list stays open, so several are picked in one go. The look is the app's: it styles the field, the popup, the list,
 the rows, the sections' headers, the input and the footer, or draws the rows itself.
 
+```tsx tabs
+import { mount, signal, Text, View } from "nsh";
+import { Combobox } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+const TAGS = [
+  { value: "bug", title: "Bug" },
+  { value: "design", title: "Design" },
+  { value: "docs", title: "Docs" },
+  { value: "perf", title: "Performance" },
+  { value: "security", title: "Security" },
+];
+
+function App() {
+  const tags = signal<string[]>([]);
+  return (
+    <Combobox
+      items={TAGS}
+      multiple
+      placeholder={tags().length ? `${tags().length} tags` : "Add tags"}
+      value={tags()}
+      onChange={({ value }) => tags.set(value)}
+      accessibilityLabel="Tags"
+      offset={4}
+      popupClass="rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
+      backdropClass="bg-black/40"
+      class="h-9 w-48 flex-row items-center rounded-md border border-input px-3"
+      inputClass="flex-1 text-sm placeholder:text-muted-foreground"
+      itemClass="group rounded-md px-2 py-1.5 text-sm focus:bg-accent focus:text-accent-foreground"
+      triggerButton={<Text class="px-1 text-muted-foreground">⌄</Text>}
+      renderItem={(item) => (
+        <View class="flex-row justify-between">
+          <Text>{item.title}</Text>
+          <Text class="opacity-0 group-selected:opacity-100">✓</Text>
+        </View>
+      )}
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{SelectEntry, SelectItem, combobox, theme};
 use nsh_core::prelude::*;
@@ -73,48 +120,6 @@ fn tag_picker() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, signal, Text, View } from "nsh";
-import { Combobox } from "nsh/base";
-
-const TAGS = [
-  { value: "bug", title: "Bug" },
-  { value: "design", title: "Design" },
-  { value: "docs", title: "Docs" },
-  { value: "perf", title: "Performance" },
-  { value: "security", title: "Security" },
-];
-
-function App() {
-  const tags = signal<string[]>([]);
-  return (
-    <Combobox
-      items={TAGS}
-      multiple
-      placeholder={tags().length ? `${tags().length} tags` : "Add tags"}
-      value={tags()}
-      onChange={({ value }) => tags.set(value)}
-      accessibilityLabel="Tags"
-      offset={4}
-      popupClass="rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
-      backdropClass="bg-black/40"
-      class="h-9 w-48 flex-row items-center rounded-md border border-input px-3"
-      inputClass="flex-1 text-sm placeholder:text-muted-foreground"
-      itemClass="group rounded-md px-2 py-1.5 text-sm focus:bg-accent focus:text-accent-foreground"
-      triggerButton={<Text class="px-1 text-muted-foreground">⌄</Text>}
-      renderItem={(item) => (
-        <View class="flex-row justify-between">
-          <Text>{item.title}</Text>
-          <Text class="opacity-0 group-selected:opacity-100">✓</Text>
-        </View>
-      )}
-    />
-  );
-}
-
-mount(App);
-```
-
 `Combobox` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. In Rust, `combobox()` makes
 one with a setter per prop (`.items(..)`, `.value(..)`, `.multiple(..)`) and a listener per event (`.on_change(..)`).
 Its items are `Select`'s: `SelectItem::new(value, title)`, with `.disabled(..)` and `.group(..)`, in sections as a
@@ -165,11 +170,12 @@ a count, a hint. It stays in place while the rows scroll.
 ## Entrance and exit
 
 On the desktops the popup comes and goes with your transitions, as a [Popover](./popover.md#entrance-and-exit)'s:
-`popupStartingClass` is its look in its first frame, and the `transition-*` classes of `popupClass` carry it to its
-own look; `popupEndingClass` is its look once closed, which it keeps, taking no presses, while those transitions run,
-and `onClose` follows. The keyboard focus is back on the input as it closes. Opened again on its way out, it returns to
-its look from where it is. `popupStartingStyle` and `popupEndingStyle` do the same with inline styles. When the user
-asks for less motion it appears and goes at once; the sheet of touch screens slides in and out on its own.
+`popupStartingClass` is its look in its first frame, and the `transition-*` classes of `popupClass` carry it to its own
+look; `popupEndingClass` is its look once closed, which it keeps, taking no presses, while those transitions run, and
+`onClose` follows. The keyboard focus is back on the input as it closes, unless the choice's `onChange` focused another
+view (the next field of a form), which keeps it. Opened again on its way out, it returns to its look from where it is.
+`popupStartingStyle` and `popupEndingStyle` do the same with inline styles. When the user asks for less motion it
+appears and goes at once; the sheet of touch screens slides in and out on its own.
 
 ```tsx
 <Combobox
@@ -252,11 +258,12 @@ They come in this order: `onChange` for a choice, or `onCancel` for a close with
 
 ## Keyboard
 
-The keys are a select's (see [Keyboard](./select.md#keyboard)) while the input keeps the focus, with these
-differences: letters and digits are typed into the input, which filters the list, rather than typeahead; Down and Up
-open the closed list; Return toggles the highlighted item with `multiple` and keeps the list open; Cmd+Return on a
-Mac (Ctrl+Return elsewhere) closes it and confirms. Tab and Shift+Tab close the open list and move the focus to the
-next or previous control. When the list closes otherwise on the desktops, the input keeps the focus.
+The keys are a select's (see [Keyboard](./select.md#keyboard)) while the input keeps the focus, with these differences:
+letters and digits are typed into the input, which filters the list, rather than typeahead; Down and Up open the closed
+list; Return toggles the highlighted item with `multiple` and keeps the list open; Cmd+Return on a Mac (Ctrl+Return
+elsewhere) closes it and confirms. Tab and Shift+Tab close the open list and move the focus to the next or previous
+control. When the list closes otherwise on the desktops, the input keeps the focus, unless the choice's `onChange` moved
+it to another view.
 
 ## Accessibility
 

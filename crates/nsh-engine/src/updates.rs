@@ -50,11 +50,14 @@ pub const TRYING: &str = "trying.nshpkg";
 const TRUST: &str = "trust";
 const PACKAGES: &str = "packages";
 
-/// The update state of app `app_id` keeping its data in `data_dir` (the
-/// directory each app has a directory of its own in, as
-/// [`crate::EngineConfig::data_dir`]): `<data_dir>/<app id>/updates`.
-pub fn updates_dir(data_dir: &Path, app_id: &str) -> PathBuf {
-    data_dir.join(crate::app_dir_name(Some(app_id))).join(DIR)
+/// The update state of app `app_id` under `support_dir` (the directory
+/// each app has a directory of its own in, as
+/// [`crate::EngineConfig::support_dir`]): `<support_dir>/<app id>/updates`,
+/// wherever the app's data directory is.
+pub fn updates_dir(support_dir: &Path, app_id: &str) -> PathBuf {
+    support_dir
+        .join(crate::app_dir_name(Some(app_id)))
+        .join(DIR)
 }
 
 /// What a packaged app's launcher runs ([`launch`]).
@@ -74,13 +77,14 @@ pub struct Launch {
 /// directory `resources` (`nsh`, holding `assets/nsh-updater.json`), or a
 /// newer signed package from its updates when its `nsh.json` trusts
 /// package roots (`"updater": { "packages": { "roots": [...] } }`) and
-/// `data_dir` is where its engine keeps the apps' data. Never fails: any
-/// problem with a package is logged and the shipped bundle runs.
-pub fn launch(shipped: Bundle, resources: &Path, data_dir: Option<&Path>) -> Launch {
+/// `support_dir` is its engine's [`crate::EngineConfig::support_dir`].
+/// Never fails: any problem with a package is
+/// logged and the shipped bundle runs.
+pub fn launch(shipped: Bundle, resources: &Path, support_dir: Option<&Path>) -> Launch {
     let assets = resources.join("assets");
     let config = std::fs::read(assets.join(nsh_updater::CONFIG_ASSET)).ok();
     let mut shipped = shipped;
-    match package_to_run(&mut shipped, config, data_dir) {
+    match package_to_run(&mut shipped, config, support_dir) {
         Some(run) => Launch {
             bundle: run.bundle,
             assets: run.assets,
@@ -113,7 +117,7 @@ pub struct PackageRun {
 pub fn package_to_run(
     shipped: &mut Bundle,
     config: Option<Vec<u8>>,
-    data_dir: Option<&Path>,
+    support_dir: Option<&Path>,
 ) -> Option<PackageRun> {
     // `nsh/updater` reads the shipped configuration, whatever runs.
     shipped.updater_config = config.map(Arc::from);
@@ -121,7 +125,7 @@ pub fn package_to_run(
         shipped.updater_config.as_deref()?,
         shipped.app_id.as_deref(),
     )?;
-    let dir = updates_dir(data_dir?, &update.app_id);
+    let dir = updates_dir(support_dir?, &update.app_id);
     let chosen = choose(&dir, &update)?;
     let app = chosen.loaded.app.clone();
     log::info!(
@@ -139,12 +143,15 @@ pub fn package_to_run(
 }
 
 /// A package's bundle with what belongs to the installed app: its id
-/// (checked equal), URL schemes, trusted paths and update configuration,
+/// (checked equal), links, trusted paths and update configuration,
 /// and at most the capabilities it declares.
 fn as_shipped(mut bundle: Bundle, shipped: &Bundle, trial: Option<Arc<dyn Trial>>) -> Bundle {
-    bundle.url_schemes = shipped.url_schemes.clone();
+    bundle.links = shipped.links.clone();
     bundle.system_paths = shipped.system_paths.clone();
     bundle.main_window = shipped.main_window.clone();
+    // The app's lifecycle (its quit mode) is the installed app's: an
+    // update reaches nothing it could not configure before.
+    bundle.application = shipped.application;
     bundle.updater_config = shipped.updater_config.clone();
     // The package's declaration, granted at most what the shipped app
     // declares: an update reaches nothing the installed app could not.
@@ -655,7 +662,12 @@ mod tests {
             crate::parse_capabilities(r#"{"network":{"hosts":["api.example.com"]}}"#).unwrap();
         let shipped = Bundle::source("1".into())
             .with_app_id(Some(ID))
-            .with_url_schemes(["example"])
+            .with_links(nsh_core::url_scheme::AppLinks::from_json(
+                &serde_json::json!({
+                    "schemes": ["example"],
+                    "links": [{ "host": "example.com", "paths": ["/orders/*"] }]
+                }),
+            ))
             .with_main_window(Some(r#"{"defaultSize":{"width":900,"height":640}}"#))
             .with_policy(crate::Policy {
                 declared: Some(declared),
@@ -666,7 +678,8 @@ mod tests {
         let launched = launch(shipped.clone(), &resources, Some(&data));
         assert_eq!(launched.package.as_ref().map(|a| a.build), Some(2));
         let bundle = &launched.bundle;
-        assert_eq!(bundle.url_schemes, ["example"]);
+        assert_eq!(bundle.links, shipped.links);
+        assert_eq!(bundle.links.web().len(), 1);
         assert_eq!(bundle.main_window, shipped.main_window);
         assert!(bundle.updater_config.is_some() && bundle.trial.is_some());
         // The package declares the clipboard; the app did not.

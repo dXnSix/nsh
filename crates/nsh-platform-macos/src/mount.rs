@@ -52,7 +52,16 @@ pub(crate) struct Mounter {
     /// it is applied they are drawn if they show, with one [`Sights`] pass
     /// for all of them ([`Mounter::draw_shown`]).
     drawn: RefCell<Vec<(NshView, Damage)>>,
+    /// Views the batches deleted, out of their window and the table, whose
+    /// release waits for the frames after the batch ([`release_later`]).
+    released: Rc<RefCell<Vec<NshView>>>,
+    /// The pictures of the batch's texts the engine thread painted
+    /// ([`crate::text::prerender`]), until their items are applied.
+    pub(crate) rasters: crate::text::Rasters,
 }
+
+/// The time a frame spends releasing deleted views ([`release_later`]).
+const RELEASE_TIME: std::time::Duration = std::time::Duration::from_millis(1);
 
 impl Mounter {
     pub(crate) fn new(root: NshView) -> Self {
@@ -71,6 +80,8 @@ impl Mounter {
             deleting: FxHashSet::default(),
             batching: Cell::new(false),
             drawn: RefCell::default(),
+            released: Rc::default(),
+            rasters: crate::text::Rasters::default(),
         }
     }
 
@@ -123,8 +134,12 @@ impl Mounter {
                 Damage::Rect(r) => view.redraw_rect(r),
                 _ => view.redraw(),
             }
-        } else if view.set_stale(true) {
-            self.stale.borrow_mut().push(view.clone());
+        } else {
+            // Drawn when it shows, if ever: no picture waits for it.
+            crate::text::drop_raster(view);
+            if view.set_stale(true) {
+                self.stale.borrow_mut().push(view.clone());
+            }
         }
     }
 
@@ -210,7 +225,10 @@ impl Mounter {
             view.set_stale(false);
             if self.alive(&view) {
                 view.redraw();
+                // A picture taken while drawing was deferred lacks this content.
+                crate::shader::ui_changed(&view);
                 crate::shader::shown(&view);
+                crate::gpu_view::shown(&view);
             }
         }
         true
@@ -289,7 +307,10 @@ impl Mounter {
     /// The batch is applied.
     pub(crate) fn end_batch(&mut self, surface: &Rc<Surface>) {
         self.batching.set(false);
+        // Pictures of items the batch did not apply (their views gone).
+        self.rasters = crate::text::Rasters::default();
         self.draw_shown();
+        crate::view::compact_gone_leaves();
         self.deleting.clear();
         self.layout_animation = None;
         crate::navigation::end_batch(surface);
@@ -297,6 +318,7 @@ impl Mounter {
         crate::system::end_batch(surface);
         crate::input::content_moved(surface, false);
         crate::selectable_view::end_batch(surface);
+        release_later(surface, &self.released);
     }
 
     fn get(&self, id: NodeId) -> Option<&NshView> {
@@ -315,7 +337,8 @@ impl Mounter {
                 // lays out with Auto Layout, AppKit gives a view that
                 // translates its autoresizing mask constraints, anchors and
                 // layout storage that nothing here reads: hundreds of bytes
-                // per view. The root keeps them: the host places it.
+                // per view. The host root keeps them, and app windows re-enable
+                // them in `window::open_window`.
                 view.ns()
                     .setTranslatesAutoresizingMaskIntoConstraints(false);
                 crate::access::created(&view);
@@ -356,6 +379,12 @@ impl Mounter {
                 let before = before
                     .and_then(|b| self.views.get(&b))
                     .filter(|b| b.parent_view().as_ref() == Some(parent));
+                // A move within the parent keeps the focus it holds.
+                if child.parent_view().as_ref() == Some(parent)
+                    && child.restack_focused(parent, before)
+                {
+                    return;
+                }
                 if child.has_parent() {
                     child.unparent();
                 }
@@ -380,9 +409,12 @@ impl Mounter {
             MountItem::Delete { id } => {
                 crate::file_drop::deleted(surface, *id);
                 if let Some(view) = self.views.remove(id) {
+                    crate::access::deleted(&view);
                     crate::text_input::deleted(&view);
                     crate::native::deleted(surface, &view);
                     crate::shader::deleted(surface, &view);
+                    crate::gpu_view::deleted(surface, &view);
+                    crate::scroll::deleted(&view);
                     // A view whose parent the batch deletes too stays in it:
                     // the subtree leaves the window with its root, in one
                     // `removeFromSuperview`, not one per view while still
@@ -410,8 +442,12 @@ impl Mounter {
                         self.detach(surface, &view);
                     }
                     // After the detach: a dialog closing through its shader
-                    // has read it.
-                    crate::navigation::deleted(surface, &view);
+                    // has read it. Navigation lets go of it too, as the
+                    // release below assumes.
+                    crate::navigation::deleted(surface, &view, inside);
+                    // Out of its window and of every table: what is left is
+                    // freeing it, which waits ([`release_later`]).
+                    self.released.borrow_mut().push(view);
                 }
             }
             MountItem::Frame { id, frame } => {
@@ -467,14 +503,29 @@ impl Mounter {
                 }
                 match view.kind() {
                     ViewKind::Stack => crate::navigation::stack_resized(surface, view),
-                    ViewKind::Canvas => view.changed(),
-                    _ => crate::shader::resized(surface, view),
+                    ViewKind::Canvas => {
+                        if old.size != frame.size && crate::canvas::has_drawing(view) {
+                            self.draw_when_shown(view, Damage::All);
+                        }
+                    }
+                    _ => {
+                        crate::shader::resized(surface, view);
+                        crate::gpu_view::resized(surface, view);
+                    }
                 }
             }
             MountItem::ViewStyle { id, style } => {
                 let Some(view) = self.get(*id) else { return };
                 let old = std::mem::replace(&mut view.state_mut().style, style.clone());
-                crate::input::style_changed(view);
+                if old.hidden != style.hidden {
+                    // The focus inside goes to the root, as when a batch
+                    // hides it otherwise, not to AppKit's next key view.
+                    if style.hidden {
+                        crate::navigation::drop_focus(surface, view.ns());
+                    }
+                    view.sync_hidden();
+                }
+                crate::input::style_changed(surface, view, &old);
                 crate::transition::style_changed(surface, view, &old);
                 view.moved();
                 crate::decor::style_changed(view, &old);
@@ -486,10 +537,13 @@ impl Mounter {
                 layout,
                 content,
             } => {
+                let raster = self.rasters.take(*id, text, layout);
                 if let Some(view) = self.get(*id) {
                     let old = view.state().text.as_ref().map(|t| t.text.clone());
                     let damage = crate::text::damage(view, text, layout, *content);
-                    crate::text::set(view, text, layout, *content);
+                    // A text that draws the same keeps its picture.
+                    let raster = raster.filter(|_| damage != Damage::None);
+                    crate::text::set(surface, view, text, layout, *content, raster);
                     if let Some(old) = old {
                         crate::transition::text_changed(surface, view, &old, text);
                     }
@@ -502,6 +556,7 @@ impl Mounter {
             MountItem::Events { id, events } => {
                 if let Some(view) = self.get(*id) {
                     view.state_mut().events = *events;
+                    view.settle_leaf();
                     crate::file_drop::events_changed(surface, view);
                     crate::input::events_changed(surface, view);
                     crate::access::events_changed(view);
@@ -599,6 +654,11 @@ impl Mounter {
                     crate::navigation::set_shader(surface, view, shader.clone());
                 }
             }
+            MountItem::GpuView { id, source } => {
+                if let Some(view) = self.get(*id) {
+                    crate::gpu_view::set(surface, view, source.clone());
+                }
+            }
             MountItem::Shader { id, layer } => {
                 if let Some(view) = self.get(*id) {
                     crate::shader::set(surface, view, layer.clone());
@@ -611,8 +671,9 @@ impl Mounter {
             }
             MountItem::ViewProps { id, props } => {
                 let Some(view) = self.get(*id) else { return };
-                view.state_mut().props = props.clone();
-                crate::input::props_changed(surface, view);
+                let old = std::mem::replace(&mut view.state_mut().props, props.clone());
+                view.settle_leaf();
+                crate::input::props_changed(surface, view, &old);
                 crate::access::props_changed(view);
             }
             MountItem::LayoutAnimation(a) => self.layout_animation = Some(*a),
@@ -652,7 +713,9 @@ impl Mounter {
                 }
             }
             MountItem::ComponentProps { id, props } => {
-                if let Some(view) = self.get(*id) {
+                if let Some(view) = self.get(*id)
+                    && !crate::gpu_view::props(surface, view, props)
+                {
                     crate::native::component_props(surface, view, props);
                 }
             }
@@ -707,10 +770,10 @@ impl Mounter {
                     crate::text_input::set_selection(view, *start, *end);
                 }
             }
-            // Not carried out on this platform yet: the app's paste is lost,
-            // so say so.
-            Command::InsertText(_) => {
-                log::warn!("insertText is not supported on macOS yet; nothing inserted")
+            Command::InsertText(text) => {
+                if let Some(view) = view {
+                    crate::text_input::insert_text(view, text);
+                }
             }
             Command::ScrollTo { y, animated, .. }
                 if view.is_some_and(|v| v.kind() == ViewKind::Input) =>
@@ -741,6 +804,11 @@ impl Mounter {
             Command::SetJsResponder { .. } | Command::ClearJsResponder => {
                 crate::input::command(surface, id, command);
             }
+            Command::ClearSelection => {
+                if let Some(view) = view {
+                    surface.selection.area.clear_in(surface, view);
+                }
+            }
             Command::Reload
             | Command::GoBack
             | Command::GoForward
@@ -750,6 +818,8 @@ impl Mounter {
             | Command::SendInput(_)
             | Command::Load(_)
             | Command::WebViewRequest(_)
+            | Command::Evaluate { .. }
+            | Command::CancelEvaluate { .. }
             | Command::Seek(_)
             | Command::Native { .. } => {
                 if let Some(view) = view {
@@ -759,4 +829,40 @@ impl Mounter {
             other => crate::system::command(surface, id, other),
         }
     }
+}
+
+/// Frees the views the batch deleted over the frames after it, at most
+/// [`RELEASE_TIME`] a frame. A page replaced by another deletes thousands
+/// of views: they left their window with their subtree's root in one
+/// `removeFromSuperview`, but freeing each (its layer tree, its state, the
+/// subviews it holds) cost milliseconds more in the frame that shows the
+/// new page. Nothing reads them any longer: they are out of the view table
+/// and their window, and every module let go of them in
+/// [`MountItem::Delete`].
+fn release_later(surface: &Rc<Surface>, released: &Rc<RefCell<Vec<NshView>>>) {
+    // None deleted, or already waiting for a frame callback.
+    if released.borrow().is_empty() || Rc::strong_count(released) > 1 {
+        return;
+    }
+    let released = released.clone();
+    let after = objc2_quartz_core::CACurrentMediaTime();
+    surface.add_frame_callback(move |_, now| {
+        // Not in the frame that applied the batch.
+        if now <= after {
+            return crate::surface::Next::At(after + 0.004);
+        }
+        let start = std::time::Instant::now();
+        loop {
+            // Never borrowed while a view is freed: freeing may run code
+            // that deletes views.
+            let view = released.borrow_mut().pop();
+            let Some(view) = view else {
+                return crate::surface::Next::Done;
+            };
+            drop(view);
+            if start.elapsed() >= RELEASE_TIME {
+                return crate::surface::Next::At(now + 0.004);
+            }
+        }
+    });
 }

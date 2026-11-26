@@ -28,9 +28,10 @@ use std::{
 };
 
 use block2::RcBlock;
+use dispatch2::DispatchQueue;
 use nsh_core::{
     NodeId,
-    desktop::{Display, DisplayId, WindowMode, WindowPlacement, WindowState},
+    desktop::{self, Display, DisplayId, WindowMode, WindowPlacement, WindowState},
     geometry::{Bounds, Points, point, px, size},
 };
 use objc2::{
@@ -88,6 +89,10 @@ pub(crate) struct Watch {
     after_full_screen: Cell<Option<WindowPlacement>>,
     /// Its full screen transitions and a hide waiting for them ([`hide`]).
     full_screen: Cell<FullScreenHide>,
+    /// Full screen asked for while it was ordered out: it enters full
+    /// screen when it shows ([`shown`]), since AppKit shows a window that
+    /// enters it. Meanwhile its state reads the mode.
+    full_screen_on_show: Cell<bool>,
     /// Counts moves and resizes, so only the last one of a burst reports.
     settle: Cell<u64>,
 }
@@ -108,11 +113,11 @@ impl Watch {
     }
 
     /// `event` applied to the window's [`FullScreenHide`]: what to do now.
-    fn full_screen_step(&self, event: impl FnOnce(&mut FullScreenHide) -> Step) -> Step {
+    fn full_screen_step<R>(&self, event: impl FnOnce(&mut FullScreenHide) -> R) -> R {
         let mut model = self.full_screen.get();
-        let step = event(&mut model);
+        let result = event(&mut model);
         self.full_screen.set(model);
-        step
+        result
     }
 }
 
@@ -130,12 +135,23 @@ impl Drop for Watch {
 /// it is back on its desktop (shown again, it is a window there, as a
 /// full screen window closed and opened again in AppKit's apps). AppKit
 /// ignores `toggleFullScreen:` while a transition animates, so a hide
-/// asked for then waits for its end.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// asked for then waits for its end, and so does a mode or a placement
+/// ([`Request`]): the last one asked for applies once it is over.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub(crate) struct FullScreenHide {
     transition: Transition,
     /// Hidden by the app: ordered out once it has left full screen.
     hide: bool,
+    /// The last mode or placement asked for during the transition.
+    held: Option<Request>,
+}
+
+/// `WindowRef.setMode` or `WindowRef.setPlacement`, held through a full
+/// screen transition.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Request {
+    Mode(WindowMode),
+    Placement(WindowPlacement),
 }
 
 /// The transition AppKit animates a window through.
@@ -175,6 +191,36 @@ impl FullScreenHide {
                 Step::Wait
             }
         }
+    }
+
+    /// Hidden by the app, it waits for full screen to end to be ordered
+    /// out.
+    fn hiding(&self) -> bool {
+        self.hide
+    }
+
+    /// No transition is under way: AppKit takes `toggleFullScreen:`.
+    fn idle(&self) -> bool {
+        self.transition == Transition::None
+    }
+
+    /// The app asks for a mode or a placement: `Some` to apply now, `None`
+    /// while a transition is under way, which keeps it (in place of one
+    /// asked for before) until [`Self::take_held`].
+    fn request(&mut self, request: Request) -> Option<Request> {
+        if self.idle() {
+            self.held = None;
+            Some(request)
+        } else {
+            self.held = Some(request);
+            None
+        }
+    }
+
+    /// The request held through the transition that just ended, to apply
+    /// now; `None` while another one is under way.
+    fn take_held(&mut self) -> Option<Request> {
+        if self.idle() { self.held.take() } else { None }
     }
 
     /// The window shows again: a hide still waiting is dropped, and it
@@ -227,10 +273,46 @@ pub(crate) fn hide(watch: &Watch, window: &NSWindow) -> bool {
     }
 }
 
-/// The window observed with `watch` shows: a hide waiting for full screen
-/// to end is dropped.
-pub(crate) fn shown(watch: &Watch) {
+/// `window`, observed with `watch`, is ordered in: a hide waiting for full
+/// screen to end is dropped, and a full screen asked for while it was
+/// hidden begins.
+pub(crate) fn shown(watch: &Watch, window: &NSWindow) {
     watch.full_screen_step(FullScreenHide::show);
+    begin_held_full_screen(watch, window);
+}
+
+/// `window`, observed with `watch`, shows: a full screen held while it
+/// was hidden begins, once no transition is under way.
+fn begin_held_full_screen(watch: &Watch, window: &NSWindow) {
+    if !watch.full_screen_on_show.get() || hidden(watch, window) || !watch.full_screen.get().idle()
+    {
+        return;
+    }
+    watch.full_screen_on_show.set(false);
+    if !crate::chrome::full_screen(window) {
+        window.toggleFullScreen(None);
+    }
+}
+
+/// `window` enters full screen, or, hidden, holds it for when it shows
+/// ([`Watch::full_screen_on_show`]).
+fn enter_full_screen(watch: &Watch, window: &NSWindow) {
+    if hidden(watch, window) {
+        watch.full_screen_on_show.set(true);
+    } else {
+        window.toggleFullScreen(None);
+    }
+}
+
+/// `window`, observed with `watch`, is hidden: ordered out, or hidden by
+/// the app and on its way out of full screen ([`hide`]).
+fn hidden(watch: &Watch, window: &NSWindow) -> bool {
+    ordered_out(window) || watch.full_screen.get().hiding()
+}
+
+/// `window` is ordered out: hidden, not minimized.
+fn ordered_out(window: &NSWindow) -> bool {
+    !window.isVisible() && !window.isMiniaturized()
 }
 
 /// The watch of `target`, borrowed for `f`.
@@ -257,6 +339,7 @@ pub(crate) fn observe(surface: &Surface, target: Target, watch: &Watch, window: 
     watch.windowed.set(None);
     watch.zooming.set(false);
     watch.full_screen.set(FullScreenHide::default());
+    watch.full_screen_on_show.set(false);
     let Some(window) = window else {
         return;
     };
@@ -266,6 +349,13 @@ pub(crate) fn observe(surface: &Surface, target: Target, watch: &Watch, window: 
             if let Target::Own(_) = target {
                 with_watch(&surface, target, |w| w.settle.set(w.settle.get() + 1));
             }
+            // Ordered in where nothing said so (an embedding app showing
+            // its own window): a full screen held meanwhile begins.
+            with_watch(&surface, target, |w| {
+                if let Some(window) = w.window() {
+                    begin_held_full_screen(w, &window);
+                }
+            });
             report(&surface, target);
             // Shown, hidden, minimized, covered, on another screen or the
             // key one: the display link follows a window that shows.
@@ -305,32 +395,50 @@ pub(crate) fn observe(surface: &Surface, target: Target, watch: &Watch, window: 
         });
         if let Some((Some(placement), Some(window))) = pending {
             with_watch(&surface, target, |w| {
-                set_placement(w, &window, placement);
+                apply_placement(w, &window, placement);
             });
         }
         crate::window::left_full_screen(&surface, target);
         report(&surface, target);
         // Hidden in full screen: it goes now that it is back on the
-        // desktop it came from.
-        if with_watch(&surface, target, |w| {
-            w.full_screen_step(FullScreenHide::left)
-        }) == Some(Step::OrderOut)
-        {
+        // desktop it came from. Shown again on its way out, it enters the
+        // full screen asked for meanwhile.
+        let step = with_watch(&surface, target, |w| {
+            let step = w.full_screen_step(FullScreenHide::left);
+            if step != Step::OrderOut
+                && let Some(window) = w.window()
+            {
+                begin_held_full_screen(w, &window);
+            }
+            step
+        });
+        if step == Some(Step::OrderOut) {
             crate::window::hidden_after_full_screen(&surface, target);
         }
+        apply_held(key, target);
     });
     let entered_full_screen = RcBlock::new(move |_: NonNull<NSNotification>| {
         let Some(surface) = Surface::with_key(key) else {
             return;
         };
-        // Hidden on its way into full screen: it leaves at once.
+        // Hidden on its way into full screen: it leaves at once (on the
+        // main queue's next turn, as AppKit ignores `toggleFullScreen:`
+        // from within this notification), unless shown again meanwhile.
         let leave = with_watch(&surface, target, |w| {
-            (w.full_screen_step(FullScreenHide::entered) == Step::Leave)
-                .then(|| w.window())
-                .flatten()
+            w.full_screen_step(FullScreenHide::entered) == Step::Leave
         });
-        if let Some(Some(window)) = leave {
-            window.toggleFullScreen(None);
+        if leave == Some(true) {
+            DispatchQueue::main().exec_async(move || {
+                if let Some(surface) = Surface::with_key(key)
+                    && let Some(Some(window)) = with_watch(&surface, target, |w| {
+                        w.full_screen.get().hiding().then(|| w.window()).flatten()
+                    })
+                {
+                    window.toggleFullScreen(None);
+                }
+            });
+        } else {
+            apply_held(key, target);
         }
         report(&surface, target);
         surface.follow_windows();
@@ -395,6 +503,31 @@ pub(crate) fn observe(surface: &Surface, target: Target, watch: &Watch, window: 
         .replace(Some(Weak::from_retained(&window.retain())));
 }
 
+/// A full screen transition of `target`'s window ended: the last mode or
+/// placement asked for during it applies, unless another transition began
+/// (hidden on its way in, it leaves first). AppKit still ignores
+/// `toggleFullScreen:` from within its did-enter notification, so it
+/// applies on the main queue's next turn.
+fn apply_held(key: u64, target: Target) {
+    DispatchQueue::main().exec_async(move || {
+        let Some(surface) = Surface::with_key(key) else {
+            return;
+        };
+        let applied = with_watch(&surface, target, |w| {
+            let held = w.full_screen_step(FullScreenHide::take_held)?;
+            let window = w.window()?;
+            match held {
+                Request::Mode(mode) => apply_mode(w, &window, mode),
+                Request::Placement(placement) => apply_placement(w, &window, placement),
+            }
+            Some(())
+        });
+        if applied.flatten().is_some() {
+            report(&surface, target);
+        }
+    });
+}
+
 /// `target`'s window changed: its state is read and reported.
 pub(crate) fn report(surface: &Surface, target: Target) {
     match target {
@@ -442,7 +575,7 @@ pub(crate) fn read_window(watch: &Watch, window: &NSWindow) -> WindowState {
     }
     let bounds = to_bounds(frame, primary);
     let windowed = to_bounds(watch.windowed.get().unwrap_or(frame), primary);
-    let mode = if full {
+    let mode = if full || (watch.full_screen_on_show.get() && ordered_out(window)) {
         WindowMode::FullScreen
     } else if zoomed {
         WindowMode::Maximized
@@ -488,20 +621,37 @@ pub(crate) fn screen(mtm: MainThreadMarker, id: DisplayId) -> Option<Retained<NS
 
 /// `WindowRef.setPlacement`: the window restored to `placement`'s bounds,
 /// then zoomed or in full screen as its mode says. Leaving full screen
-/// takes AppKit's animation: the bounds apply once it is done.
+/// takes AppKit's animation: the bounds apply once it is done. A hidden
+/// window enters full screen when it shows. Asked for while full screen
+/// animates, which ignores `toggleFullScreen:`, it waits for the end
+/// ([`FullScreenHide::request`]).
 pub(crate) fn set_placement(watch: &Watch, window: &NSWindow, placement: WindowPlacement) {
+    if let Some(Request::Placement(placement)) =
+        watch.full_screen_step(|m| m.request(Request::Placement(placement)))
+    {
+        apply_placement(watch, window, placement);
+    }
+}
+
+/// [`set_placement`], with no transition under way.
+fn apply_placement(watch: &Watch, window: &NSWindow, placement: WindowPlacement) {
     let primary = primary_height(MainThreadMarker::from(window));
     let frame = from_bounds(placement.bounds, primary);
     let full = crate::chrome::full_screen(window);
+    watch.full_screen_on_show.set(false);
     match placement.mode {
         WindowMode::FullScreen if full => {
             // Where it returns to.
             watch.windowed.set(Some(frame));
+            // Hidden on its way out: back in full screen when it shows.
+            if watch.full_screen.get().hiding() {
+                watch.full_screen_on_show.set(true);
+            }
         }
         WindowMode::FullScreen => {
             window.setFrame_display(frame, true);
             watch.windowed.set(Some(frame));
-            window.toggleFullScreen(None);
+            enter_full_screen(watch, window);
         }
         _ if full => {
             watch.after_full_screen.set(Some(placement));
@@ -539,12 +689,26 @@ pub(crate) fn will_zoom(watch: &Watch, window: &NSWindow) {
 }
 
 /// `WindowRef.setMode`: puts the window in `mode`, keeping its windowed
-/// bounds (an intent: asking for the mode it is in changes nothing).
+/// bounds (an intent: asking for the mode it is in changes nothing). A
+/// hidden window enters full screen when it shows; zooming leaves it
+/// hidden. Asked for while full screen animates, which ignores
+/// `toggleFullScreen:`, it waits for the end ([`FullScreenHide::request`]):
+/// full screen and back at once ends in the window it started as.
 pub(crate) fn set_mode(watch: &Watch, window: &NSWindow, mode: WindowMode) {
+    if let Some(Request::Mode(mode)) = watch.full_screen_step(|m| m.request(Request::Mode(mode))) {
+        apply_mode(watch, window, mode);
+    }
+}
+
+/// [`set_mode`], with no transition under way.
+fn apply_mode(watch: &Watch, window: &NSWindow, mode: WindowMode) {
     let full = crate::chrome::full_screen(window);
     let zoomed = !full && window.isZoomed();
+    watch.full_screen_on_show.set(false);
     match mode {
-        WindowMode::FullScreen if !full => window.toggleFullScreen(None),
+        WindowMode::FullScreen if !full || watch.full_screen.get().hiding() => {
+            enter_full_screen(watch, window)
+        }
         WindowMode::Maximized if full => {
             let primary = primary_height(MainThreadMarker::from(window));
             let windowed = watch.windowed.get().unwrap_or_else(|| window.frame());
@@ -598,7 +762,36 @@ fn display(screen: &NSScreen, primary_height: f64) -> Display {
     display.scale_factor = screen.backingScaleFactor() as f32;
     let rate = screen.maximumFramesPerSecond();
     display.refresh_rate = (rate > 0).then_some(rate as f32);
+    display.cutouts = notch(
+        screen.auxiliaryTopLeftArea(),
+        screen.auxiliaryTopRightArea(),
+        screen.safeAreaInsets().top,
+        frame,
+        primary_height,
+    )
+    .into_iter()
+    .collect();
     display
+}
+
+/// The notch of a screen of `frame` (Cocoa coordinates), in NSH's, from
+/// `NSScreen`'s auxiliary top areas (`left`, `right`) and its safe area's
+/// top inset: [`nsh_core::desktop::notch`], which the GPUI backend computes
+/// it with too.
+fn notch(
+    left: NSRect,
+    right: NSRect,
+    safe_top: f64,
+    frame: NSRect,
+    primary_height: f64,
+) -> Option<Bounds<Points>> {
+    let area = |r: NSRect| size(px(r.size.width as f32), px(r.size.height as f32));
+    desktop::notch(
+        to_bounds(frame, primary_height),
+        area(left),
+        area(right),
+        px(safe_top as f32),
+    )
 }
 
 /// The screen's display id (`CGDirectDisplayID`).
@@ -651,6 +844,30 @@ pub(crate) fn from_bounds(bounds: Bounds<Points>, primary_height: f64) -> NSRect
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rect(x: f64, y: f64, width: f64, height: f64) -> NSRect {
+        NSRect::new(NSPoint::new(x, y), NSSize::new(width, height))
+    }
+
+    fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Points> {
+        Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn a_screens_notch_is_read_in_screen_coordinates() {
+        // The built-in screen right of a 2560 × 1440 primary display, its
+        // bottom 200 points below the primary's (Cocoa's y grows up), its
+        // auxiliary areas in Cocoa coordinates.
+        let frame = rect(2560.0, -200.0, 1512.0, 982.0);
+        let left = rect(2560.0, 750.0, 664.0, 32.0);
+        let right = rect(3409.0, 750.0, 663.0, 32.0);
+        // Its top is 1440 - 782 = 658 points below the primary's.
+        assert_eq!(
+            notch(left, right, 32.0, frame, 1440.0),
+            Some(bounds(3224.0, 658.0, 185.0, 32.0)),
+        );
+        assert_eq!(notch(NSRect::ZERO, NSRect::ZERO, 0.0, frame, 1440.0), None);
+    }
 
     #[test]
     fn a_window_hides_at_once_out_of_full_screen() {
@@ -711,6 +928,41 @@ mod tests {
         assert_eq!(m.show(), Step::Wait);
         // It stays in full screen.
         assert_eq!(m.entered(), Step::Wait);
+    }
+
+    #[test]
+    fn a_mode_asked_for_while_full_screen_animates_waits_for_the_end() {
+        let normal = Request::Mode(WindowMode::Normal);
+        let full = Request::Mode(WindowMode::FullScreen);
+        let mut m = FullScreenHide::default();
+        // No transition: at once, and nothing is held.
+        assert_eq!(m.request(full), Some(full));
+        assert_eq!(m.will_enter(), Step::Wait);
+        // `toggleFullScreen:` would be ignored: held, the last one kept.
+        assert_eq!(m.request(full), None);
+        assert_eq!(m.request(normal), None);
+        assert_eq!(m.take_held(), None);
+        assert_eq!(m.entered(), Step::Wait);
+        assert_eq!(m.take_held(), Some(normal));
+        assert_eq!(m.take_held(), None);
+    }
+
+    #[test]
+    fn a_held_request_outlasts_a_hide_on_the_way_into_full_screen() {
+        let placement = Request::Placement(WindowPlacement::new(
+            WindowMode::Maximized,
+            bounds(0.0, 0.0, 800.0, 600.0),
+        ));
+        let mut m = FullScreenHide::default();
+        assert_eq!(m.will_enter(), Step::Wait);
+        assert_eq!(m.request(placement), None);
+        assert_eq!(m.hide(true), Step::Wait);
+        // In, it leaves for the hide: the request waits for that too.
+        assert_eq!(m.entered(), Step::Leave);
+        assert_eq!(m.will_leave(), Step::Wait);
+        assert_eq!(m.take_held(), None);
+        assert_eq!(m.left(), Step::OrderOut);
+        assert_eq!(m.take_held(), Some(placement));
     }
 
     #[test]

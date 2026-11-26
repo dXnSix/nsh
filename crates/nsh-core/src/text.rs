@@ -75,6 +75,11 @@ pub struct TextBackground {
     /// The span that set it, so neighboring spans that look the same still
     /// get a box each.
     pub node: NodeId,
+    /// Room above the font's ascent (the span's top padding): drawing only,
+    /// as a CSS inline box's vertical padding, the line keeps its height.
+    pub top: Points,
+    /// Room below the font's descent (the span's bottom padding).
+    pub bottom: Points,
 }
 
 /// A piece of a laid out line, in visual order, for
@@ -123,6 +128,8 @@ impl BackgroundBox {
         let mut current: Option<BackgroundBox> = None;
         let mut emit = |b: Option<BackgroundBox>| {
             if let Some(mut b) = b {
+                b.ascent += b.background.top;
+                b.descent += b.background.bottom;
                 let x1 = (b.x + b.width).min(right);
                 b.x = b.x.max(left);
                 b.width = x1 - b.x;
@@ -200,7 +207,11 @@ impl ResolvedTextStyle {
     /// Applies the properties set on a node on top of the inherited style.
     #[inline]
     pub(crate) fn inherit(self, style: &TextStyle) -> Self {
-        let font_size = style.font_size.unwrap_or(self.font_size);
+        // Ems / percentages are of the inherited font size, like CSS.
+        let font_size = match style.font_size_em {
+            Some(em) => px(em * self.font_size.0),
+            None => style.font_size.unwrap_or(self.font_size),
+        };
         // A multiple follows each nested font size (unitless CSS
         // line-height); points stay points.
         let (line_height, line_height_multiple) = match (
@@ -252,6 +263,22 @@ impl ResolvedTextStyle {
             background: None,
             hidden: true,
             ..self
+        }
+    }
+
+    /// The line height [`ApproxTextEngine`] and offscreen estimates give
+    /// this style: its explicit `line_height`, `line_height_multiple` of
+    /// `font_size` (clamped to at least 1 pt), or `1.2 × font_size`.
+    #[doc(hidden)]
+    #[inline]
+    pub fn approx_line_height(&self) -> Points {
+        let font = self.font_size.max(px(1.0));
+        if self.line_height > Points::ZERO {
+            self.line_height
+        } else if self.line_height_multiple > 0.0 {
+            font * self.line_height_multiple
+        } else {
+            font * 1.2
         }
     }
 
@@ -347,9 +374,22 @@ pub struct AttributedText {
     pub shadow: Option<TextShadow>,
     /// Nested `<text>` spans that take presses (they may nest).
     pub links: Vec<TextLink>,
+    /// Where links of [`links`](Self::links) go: the `href` of their span
+    /// (`nsh-base`'s `TextView` gives its links their URL), by the link's
+    /// index there. It changes nothing drawn or laid out; a platform that
+    /// makes links hyperlinks takes it (the web draws a link's characters
+    /// as an `<a href>`). Hidden: only the web reads it so far, so it is
+    /// not yet a stable part of the core's API.
+    #[doc(hidden)]
+    pub link_hrefs: Vec<LinkHref>,
     /// Nested `<Text>` spans with a `testID` (they may nest). Platforms
     /// draw nothing from them. Tests name a span by its id.
     pub test_ids: Vec<SpanTestId>,
+    /// What attachments give in place of their placeholder when the text
+    /// is copied (`copyText` of a view inside the text), in text order.
+    /// Platforms draw nothing from them: they are what
+    /// [`AttributedText::copied_text`] puts where the attachment is.
+    pub copy_texts: Vec<AttachmentCopyText>,
     /// `writingDirection`: right to left (`Some(true)`), left to right, or
     /// from the content (`None`).
     pub writing_direction: Option<bool>,
@@ -450,6 +490,10 @@ impl TextAttachment {
 #[non_exhaustive]
 pub struct AttachmentAlignments {
     values: Vec<(u32, VerticalAlign)>,
+    /// How far below its top an attachment's own baseline is, where it
+    /// has one (the first baseline of the text in it): the bits of the points, so the table
+    /// compares and hashes.
+    baselines: Vec<(u32, u32)>,
 }
 
 impl AttachmentAlignments {
@@ -472,6 +516,56 @@ impl AttachmentAlignments {
         }
     }
 
+    /// How far below its top the attachment at `index` has its own
+    /// baseline (the first line of the text inside it), if it has one:
+    /// [`VerticalAlign::Baseline`] puts that on the line's baseline, as
+    /// CSS aligns an `inline-flex` box, where an attachment without one
+    /// stands on its bottom edge.
+    pub fn baseline(&self, index: u32) -> Option<Points> {
+        self.baselines
+            .binary_search_by_key(&index, |v| v.0)
+            .ok()
+            .map(|i| Points(f32::from_bits(self.baselines[i].1)))
+    }
+
+    /// Sets or clears the attachment's own baseline
+    /// ([`Self::baseline`]).
+    pub fn set_baseline(&mut self, index: u32, baseline: Option<Points>) {
+        match (
+            self.baselines.binary_search_by_key(&index, |v| v.0),
+            baseline,
+        ) {
+            (Ok(i), Some(b)) => self.baselines[i].1 = b.0.to_bits(),
+            (Ok(i), None) => {
+                self.baselines.remove(i);
+            }
+            (Err(i), Some(b)) => self.baselines.insert(i, (index, b.0.to_bits())),
+            (Err(_), None) => {}
+        }
+    }
+
+    /// The distance of attachment `a`'s top above the baseline in a line
+    /// of `font` ([`TextAttachment::ascent`]), by its alignment here: on
+    /// the baseline, an attachment with a baseline of its own
+    /// ([`Self::baseline`]) puts that one there. What every engine places
+    /// an attachment by.
+    pub fn ascent(&self, a: &TextAttachment, font: FontExtent) -> Points {
+        match (self.get(a.index), self.baseline(a.index)) {
+            (VerticalAlign::Baseline, Some(baseline)) => baseline.max(Points::ZERO).min(a.height),
+            (align, _) => a.ascent(font, align),
+        }
+    }
+
+    /// What attachment `a`'s line reserves for it above and below the
+    /// baseline ([`TextAttachment::extent`]), by its alignment here.
+    pub fn extent(&self, a: &TextAttachment, font: FontExtent) -> (Points, Points) {
+        let ascent = self.ascent(a, font);
+        (
+            ascent.max(Points::ZERO),
+            (a.height - ascent).max(Points::ZERO),
+        )
+    }
+
     /// Appends an attachment and records its alignment.
     pub fn push(
         &mut self,
@@ -486,7 +580,7 @@ impl AttachmentAlignments {
 
     /// Whether all attachments use the default baseline alignment.
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.values.is_empty() && self.baselines.is_empty()
     }
 
     /// The text's layout hash including attachment alignment.
@@ -523,6 +617,20 @@ fn is_emoji_presentation(c: &str) -> bool {
 /// The length of `s` in UTF-16 units.
 fn utf16_len(s: &str) -> u32 {
     s.chars().map(|c| c.len_utf16() as u32).sum()
+}
+
+/// Appends `s` to `out` with the characters HTML gives a meaning (`&`, `<`,
+/// `>`, `"`) escaped: text or an attribute's value of a copy's `text/html`.
+pub(crate) fn escape_html(out: &mut String, s: &str) {
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+    }
 }
 
 /// The byte offset in `s` of the UTF-16 offset `to` and the UTF-16 offset
@@ -580,6 +688,51 @@ pub struct SpanTestId {
     pub test_id: Arc<str>,
 }
 
+/// Where a link of a text goes (`AttributedText::link_hrefs`). Hidden, as
+/// that field is.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct LinkHref {
+    /// The link's index in [`AttributedText::links`].
+    pub link: u32,
+    /// Its span's `href`: a URL or a path of the app's, as a `Link`'s.
+    pub href: Arc<str>,
+}
+
+impl LinkHref {
+    /// Link `link` of the text goes to `href`.
+    pub fn new(link: u32, href: impl Into<Arc<str>>) -> Self {
+        Self {
+            link,
+            href: href.into(),
+        }
+    }
+}
+
+/// What an attachment of a text gives when the text is copied
+/// ([`AttributedText::copy_texts`]): a formula's source, an emoji image's
+/// character.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct AttachmentCopyText {
+    /// The attachment's placeholder character (UTF-16 offset,
+    /// [`TextAttachment::index`]).
+    pub index: u32,
+    /// What a copy gives in its place.
+    pub text: Arc<str>,
+}
+
+impl AttachmentCopyText {
+    /// `text` in place of the attachment at UTF-16 offset `index`.
+    pub fn new(index: u32, text: impl Into<Arc<str>>) -> Self {
+        Self {
+            index,
+            text: text.into(),
+        }
+    }
+}
+
 impl AttributedText {
     /// Whether the text was made selectable (`userSelect: "text"`, `select-text`).
     pub fn is_selectable(&self) -> bool {
@@ -589,6 +742,25 @@ impl AttributedText {
     /// Whether a span has a background ([`TextBackground`]).
     pub fn has_backgrounds(&self) -> bool {
         self.spans.iter().any(|s| s.style.background.is_some())
+    }
+
+    /// The largest clamped font size across spans (`14 pt` when empty) and
+    /// the tallest [`ResolvedTextStyle::approx_line_height`] across spans,
+    /// shared by [`ApproxTextEngine`] and offscreen text estimates.
+    pub(crate) fn approx_metrics(&self) -> (Points, Points) {
+        if self.spans.is_empty() {
+            let font = px(14.0);
+            return (font, font * 1.2);
+        }
+        self.spans
+            .iter()
+            .fold((Points::ZERO, Points::ZERO), |(font, line), span| {
+                let s = &span.style;
+                (
+                    font.max(s.font_size.max(px(1.0))),
+                    line.max(s.approx_line_height()),
+                )
+            })
     }
 
     /// The color every character is drawn in, decoration lines included,
@@ -615,31 +787,182 @@ impl AttributedText {
 
     /// The text a screen reader reads: all of it but its hidden runs
     /// ([`ResolvedTextStyle::hidden`]); borrowed when none is.
+    ///
+    /// Empty attachments (no height: a span's padding) are no content and
+    /// are left out too.
     pub fn visible_text(&self) -> std::borrow::Cow<'_, str> {
-        if !self.has_hidden() {
+        let spacers = self.attachments.iter().any(|a| a.height <= Points::ZERO);
+        if !self.has_hidden() && !spacers {
             return std::borrow::Cow::Borrowed(&self.text);
         }
         let mut out = String::with_capacity(self.text.len());
-        self.each_shown(0..self.len_utf16(), |s| out.push_str(s));
+        self.each_shown(0..self.len_utf16(), |s, _| out.push_str(s));
+        if spacers {
+            // Offsets in `out` shift where hidden runs were dropped: find the
+            // empty attachments by counting placeholders instead.
+            let shown: Vec<bool> = self
+                .attachments
+                .iter()
+                .filter(|a| !self.hidden_at(a.index))
+                .map(|a| a.height > Points::ZERO)
+                .collect();
+            let mut nth = 0;
+            out.retain(|c| {
+                if c != ATTACHMENT_CHAR {
+                    return true;
+                }
+                nth += 1;
+                shown.get(nth - 1).copied().unwrap_or(true)
+            });
+        }
         std::borrow::Cow::Owned(out)
     }
 
     /// The characters of the UTF-16 range `range` as a copy gives them:
-    /// without attachments' placeholders ([`ATTACHMENT_CHAR`]) and hidden
-    /// runs ([`ResolvedTextStyle::hidden`]). The range is clamped to the
-    /// text; offsets inside a surrogate pair round down.
+    /// an attachment as its copy text ([`Self::copy_texts`]), or nothing
+    /// without one (its placeholder, [`ATTACHMENT_CHAR`], is left out), and
+    /// without hidden runs ([`ResolvedTextStyle::hidden`]). The range is
+    /// clamped to the text; offsets inside a surrogate pair round down.
     pub fn copied_text(&self, range: Range<u32>) -> String {
+        if self.copy_texts.is_empty() {
+            return self.text_without_attachments(range);
+        }
         let mut out = String::new();
-        self.each_shown(range, |s| {
+        let mut copies = self.copy_texts.iter().peekable();
+        self.each_shown(range, |s, mut at| {
+            for c in s.chars() {
+                if c == ATTACHMENT_CHAR {
+                    while copies.next_if(|t| t.index < at).is_some() {}
+                    if let Some(copy) = copies.next_if(|t| t.index == at) {
+                        out.push_str(&copy.text);
+                    }
+                } else {
+                    out.push(c);
+                }
+                at += c.len_utf16() as u32;
+            }
+        });
+        out
+    }
+
+    /// The characters of the UTF-16 range `range` as an HTML fragment, for
+    /// the `text/html` flavor of a copy: the characters
+    /// [`Self::copied_text`] gives, escaped, with bold runs (weight 600 or
+    /// more) in `<b>`, italic ones in `<i>`, links with an `href`
+    /// ([`Self::link_hrefs`]) in `<a href>` and line breaks as `<br>`.
+    /// The second value is whether any run was bold, italic or a link:
+    /// without one the fragment is the plain text, escaped. Hidden, as
+    /// `link_hrefs` is: only the platforms' copy reads it.
+    #[doc(hidden)]
+    pub fn copied_html(&self, range: Range<u32>) -> (String, bool) {
+        #[derive(Clone, Copy, PartialEq)]
+        struct Format<'a> {
+            href: Option<&'a str>,
+            bold: bool,
+            italic: bool,
+        }
+        fn close(out: &mut String, f: Format<'_>) {
+            if f.italic {
+                out.push_str("</i>");
+            }
+            if f.bold {
+                out.push_str("</b>");
+            }
+            if f.href.is_some() {
+                out.push_str("</a>");
+            }
+        }
+        fn open(out: &mut String, f: Format<'_>) {
+            if let Some(href) = f.href {
+                out.push_str("<a href=\"");
+                escape_html(out, href);
+                out.push_str("\">");
+            }
+            if f.bold {
+                out.push_str("<b>");
+            }
+            if f.italic {
+                out.push_str("<i>");
+            }
+        }
+        let plain = Format {
+            href: None,
+            bold: false,
+            italic: false,
+        };
+        let mut out = String::new();
+        let mut formatted = false;
+        let mut current = plain;
+        let mut copies = self.copy_texts.iter().peekable();
+        let mut piece = String::new();
+        self.each_shown(range, |s, mut at| {
+            for c in s.chars() {
+                let format = match self.span_at(at) {
+                    Some(span) => Format {
+                        href: self
+                            .links
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, l)| at >= l.start && at < l.end)
+                            .filter_map(|(n, l)| Some((l.end - l.start, self.link_href(n)?)))
+                            .min_by_key(|&(len, _)| len)
+                            .map(|(_, href)| href),
+                        bold: span.style.font_weight >= 600,
+                        italic: span.style.italic,
+                    },
+                    None => plain,
+                };
+                piece.clear();
+                if c == ATTACHMENT_CHAR {
+                    while copies.next_if(|t| t.index < at).is_some() {}
+                    if let Some(copy) = copies.next_if(|t| t.index == at) {
+                        piece.push_str(&copy.text);
+                    }
+                } else {
+                    piece.push(c);
+                }
+                at += c.len_utf16() as u32;
+                if piece.is_empty() {
+                    continue;
+                }
+                if format != current {
+                    close(&mut out, current);
+                    open(&mut out, format);
+                    current = format;
+                    formatted |= format != plain;
+                }
+                for line in piece.split_inclusive('\n') {
+                    match line.strip_suffix('\n') {
+                        Some(line) => {
+                            escape_html(&mut out, line);
+                            out.push_str("<br>");
+                        }
+                        None => escape_html(&mut out, line),
+                    }
+                }
+            }
+        });
+        close(&mut out, current);
+        (out, formatted)
+    }
+
+    /// The characters of the UTF-16 range `range` without attachments'
+    /// placeholders ([`ATTACHMENT_CHAR`], whatever they copy as) and
+    /// hidden runs: the text's own characters, as accessibility reads them
+    /// beside the inline views it reads on their own. Clamped as
+    /// [`Self::copied_text`].
+    pub fn text_without_attachments(&self, range: Range<u32>) -> String {
+        let mut out = String::new();
+        self.each_shown(range, |s, _| {
             out.extend(s.chars().filter(|&c| c != ATTACHMENT_CHAR));
         });
         out
     }
 
     /// Calls `f` with each piece of `range` (UTF-16 units) that no hidden
-    /// run covers, in order. Characters past the runs (a text built without
-    /// them) count as shown.
-    fn each_shown(&self, range: Range<u32>, mut f: impl FnMut(&str)) {
+    /// run covers, in order, and the offset it starts at. Characters past
+    /// the runs (a text built without them) count as shown.
+    fn each_shown(&self, range: Range<u32>, mut f: impl FnMut(&str, u32)) {
         let end = range.end.min(self.len_utf16().max(utf16_len(&self.text)));
         let (mut byte, mut at) = seek(&self.text, 0, 0, range.start.min(end));
         // The first span ending after `at`.
@@ -651,7 +974,7 @@ impl AttributedText {
             };
             let (next, reached) = seek(&self.text, byte, at, to);
             if !hidden {
-                f(&self.text[byte..next]);
+                f(&self.text[byte..next], at);
             }
             if reached == at {
                 break;
@@ -724,6 +1047,16 @@ impl AttributedText {
             .min_by_key(|l| l.end - l.start)
     }
 
+    /// Where link `link` (its index in [`Self::links`]) goes, when its
+    /// span has an `href` (`link_hrefs`). Hidden, as that field is.
+    #[doc(hidden)]
+    pub fn link_href(&self, link: usize) -> Option<&str> {
+        self.link_hrefs
+            .iter()
+            .find(|h| h.link as usize == link)
+            .map(|h| &*h.href)
+    }
+
     /// Appends an attachment of `size` on the baseline.
     pub fn push_attachment(&mut self, size: Size<Points>, style: ResolvedTextStyle) {
         let index = self.len_utf16();
@@ -787,10 +1120,10 @@ impl AttributedText {
 
     /// Whether the two texts differ at most in their spans' colors (text,
     /// decoration and background), which of them are hidden
-    /// ([`ResolvedTextStyle::hidden`]) and test metadata: the same
-    /// characters in the same styles but for those, wherever the spans
-    /// begin and end (neighbors that take the same color merge into one
-    /// span).
+    /// ([`ResolvedTextStyle::hidden`]) and metadata (test ids, copy texts,
+    /// links' hrefs): the same characters in the same styles but for those,
+    /// wherever the spans begin and end (neighbors that take the same color
+    /// merge into one span).
     pub(crate) fn same_but_colors(&self, other: &Self) -> bool {
         // Enumerating the fields makes additions revisit this comparison.
         let Self {
@@ -808,6 +1141,8 @@ impl AttributedText {
             selection_color,
             attachments,
             test_ids: _,
+            copy_texts: _,
+            link_hrefs: _,
         } = self;
         text == &other.text
             && align == &other.align
@@ -861,7 +1196,25 @@ impl AttributedText {
         Some(out)
     }
 
-    /// Equality of the content the platform draws, excluding test metadata.
+    /// Whether the two texts have the same metadata: what
+    /// [`Self::rendering_eq`] leaves out (test ids, copy texts, links'
+    /// hrefs).
+    pub(crate) fn metadata_eq(&self, other: &Self) -> bool {
+        self.test_ids == other.test_ids
+            && self.copy_texts == other.copy_texts
+            && self.link_hrefs == other.link_hrefs
+    }
+
+    /// Takes `other`'s metadata ([`Self::metadata_eq`]), keeping what is
+    /// drawn: a fitted text's scaled spans mounted again with new metadata.
+    pub(crate) fn set_metadata(&mut self, other: &Self) {
+        self.test_ids = other.test_ids.clone();
+        self.copy_texts = other.copy_texts.clone();
+        self.link_hrefs = other.link_hrefs.clone();
+    }
+
+    /// Equality of the content the platform draws, excluding metadata (test
+    /// ids, copy texts, links' hrefs).
     pub(crate) fn rendering_eq(&self, other: &Self) -> bool {
         // Enumerating the fields makes additions revisit this comparison.
         let Self {
@@ -878,7 +1231,10 @@ impl AttributedText {
             selectable,
             selection_color,
             attachments,
+            // Metadata: `metadata_eq` and `set_metadata` take these.
             test_ids: _,
+            copy_texts: _,
+            link_hrefs: _,
         } = self;
         text == &other.text
             && spans == &other.spans
@@ -992,6 +1348,12 @@ pub trait TextEngine {
         None
     }
 
+    /// Whether a single-line input's intrinsic height depends only on its
+    /// text style, including when a glyph comes from a fallback font.
+    fn uniform_input_line_height(&self) -> bool {
+        false
+    }
+
     /// Whether each line takes all that fits and [`TextEngine::measure`]'s
     /// width is the widest line's: a maximum width between that width and
     /// the one measured then breaks the lines at the same places, so the
@@ -1100,6 +1462,10 @@ impl<T: TextEngine> TextEngine for std::rc::Rc<T> {
 
     fn draws_colors_from_text(&self) -> bool {
         (**self).draws_colors_from_text()
+    }
+
+    fn uniform_input_line_height(&self) -> bool {
+        (**self).uniform_input_line_height()
     }
 
     fn measure(&self, prepared: &Self::Prepared, max_width: Option<Points>) -> Size<Points> {
@@ -1294,28 +1660,57 @@ mod estimate {
     }
 }
 
+/// Prepared typesetting state for [`ApproxTextEngine`].
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct ApproxPrepared {
+    chars: usize,
+    font: Points,
+    line: Points,
+    max_lines: u32,
+    attachments: Vec<TextAttachment>,
+    astral: Vec<u32>,
+    breaks: Vec<usize>,
+}
+
+impl ApproxPrepared {
+    /// Characters this preparation covers.
+    #[doc(hidden)]
+    pub fn chars(&self) -> usize {
+        self.chars
+    }
+}
+
+impl Default for ApproxPrepared {
+    fn default() -> Self {
+        let font = px(14.0);
+        Self {
+            chars: 0,
+            font,
+            line: font * 1.2,
+            max_lines: 0,
+            attachments: Vec::new(),
+            astral: Vec::new(),
+            breaks: Vec::new(),
+        }
+    }
+}
+
 /// A deterministic, platform-free [`TextEngine`] for headless runs and
-/// tests: every character is `0.55 × font size` wide and lines are
-/// `1.2 × font size` tall; a text with line breaks measures as wide as its
-/// widest line and as tall as its lines (each wrapped on its own), their baseline at the bottom (the font's ascent
-/// is the line, its descent 0, its x height `0.5 × font size`), where
-/// attachments are placed by [`TextAttachment::ascent`] on the line their
-/// character wraps to (its lines, carets and hits are those of one line).
+/// tests: every character is `0.55 × font size` wide (in the largest span's
+/// font) and lines are as tall as the spans' `lineHeight` (or `1.2 × font size`
+/// by default); a text with line breaks measures as wide as its widest line and
+/// as tall as its lines (each wrapped on its own), their baseline placed with
+/// half-leading around the natural `1.2 × font size` ascent (its descent 0 when
+/// unspaced, its x height `0.5 × font size`), where attachments are placed by
+/// [`TextAttachment::ascent`] on the line their character wraps to (its lines,
+/// carets and hits are those of one line).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ApproxTextEngine;
 
 impl TextEngine for ApproxTextEngine {
-    /// `(character count, font size, max lines, attachments, the indices of
-    /// the characters two UTF-16 units long, each line's character count
-    /// when the text has line breaks)`.
-    type Prepared = (
-        usize,
-        Points,
-        u32,
-        Vec<TextAttachment>,
-        Vec<u32>,
-        Vec<usize>,
-    );
+    type Prepared = ApproxPrepared;
 
     fn prepare(&self, text: &AttributedText) -> Self::Prepared {
         self.prepare_aligned(text, &AttachmentAlignments::default())
@@ -1326,7 +1721,7 @@ impl TextEngine for ApproxTextEngine {
         text: &AttributedText,
         alignments: &AttachmentAlignments,
     ) -> Self::Prepared {
-        let size = text.spans.first().map_or(px(14.0), |s| s.style.font_size);
+        let (font, line) = text.approx_metrics();
         // Empty (no allocation) for text in the Basic Multilingual Plane.
         let astral = text
             .text
@@ -1336,99 +1731,111 @@ impl TextEngine for ApproxTextEngine {
             .filter_map(|(i, _)| u32::try_from(i).ok())
             .collect();
         // Empty (no allocation) for a text of one line.
-        let lines = match text.text.contains('\n') {
+        let breaks = match text.text.contains('\n') {
             true => text.text.split('\n').map(|l| l.chars().count()).collect(),
             false => Vec::new(),
         };
-        (
-            text.text.chars().count(),
-            size,
-            text.max_lines,
-            text.attachments
+        let metrics = FontExtent::new(font * 1.2, Points::ZERO, font * 0.5);
+        ApproxPrepared {
+            chars: text.text.chars().count(),
+            font,
+            line,
+            max_lines: text.max_lines,
+            attachments: text
+                .attachments
                 .iter()
-                .map(|a| {
-                    let metrics = FontExtent::new(size * 1.2, Points::ZERO, size * 0.5);
-                    TextAttachment {
-                        height: a.ascent(metrics, alignments.get(a.index)),
-                        ..*a
-                    }
+                .map(|a| TextAttachment {
+                    height: alignments.ascent(a, metrics),
+                    ..*a
                 })
                 .collect(),
             astral,
-            lines,
-        )
+            breaks,
+        }
     }
 
-    /// The bottom of the first line: the font's ascent is the line.
-    fn first_baseline(&self, &(_, font, ..): &Self::Prepared, _: Points) -> Option<Points> {
-        Some(font * 1.2)
+    /// The first line's baseline from the top of the box (natural ascent plus
+    /// half-leading).
+    fn first_baseline(&self, prepared: &Self::Prepared, _: Points) -> Option<Points> {
+        let natural = prepared.font * 1.2;
+        Some(natural + (prepared.line - natural) * 0.5)
     }
 
-    fn measure(
-        &self,
-        &(chars, font, max_lines, _, _, ref breaks): &Self::Prepared,
-        max_width: Option<Points>,
-    ) -> Size<Points> {
+    fn measure(&self, prepared: &Self::Prepared, max_width: Option<Points>) -> Size<Points> {
         // The order of the products is kept: it decides the last bit.
         let wrap = |chars: usize| {
-            let width = Points(chars as f32 * font.0 * 0.55);
+            let width = Points(chars as f32 * prepared.font.0 * 0.55);
             match max_width {
                 Some(max) if width > max && max > Points::ZERO => (max, (width / max).ceil()),
                 _ => (width, 1.0),
             }
         };
-        let line = font * 1.2;
-        let (width, mut lines) = match breaks.is_empty() {
-            true => wrap(chars),
-            false => breaks.iter().fold((Points::ZERO, 0.0), |(w, n), &c| {
-                let (lw, ln) = wrap(c);
-                (w.max(lw), n + ln)
-            }),
+        let (width, mut lines) = match prepared.breaks.is_empty() {
+            true => wrap(prepared.chars),
+            false => prepared
+                .breaks
+                .iter()
+                .fold((Points::ZERO, 0.0), |(w, n), &c| {
+                    let (lw, ln) = wrap(c);
+                    (w.max(lw), n + ln)
+                }),
         };
-        if max_lines > 0 {
-            lines = lines.min(max_lines as f32);
+        if prepared.max_lines > 0 {
+            lines = lines.min(prepared.max_lines as f32);
         }
-        size(width, line * lines)
+        size(width, prepared.line * lines)
     }
 
     fn layout(&self, prepared: &Self::Prepared, size: Size<Points>) -> TextLayout {
         // Each character as wide as the others, reported as one line.
-        let (chars, font, max_lines, attachments, astral, breaks) = prepared;
-        let line = *font * 1.2;
-        let advance = *font * 0.55;
-        // Baseline at the bottom of the line: the ascent is the line and
-        // the descent is 0, the same extent attachments are placed against.
-        let units = chars.saturating_add(astral.len());
+        let line = prepared.line;
+        let font = prepared.font;
+        let natural = font * 1.2;
+        let baseline = natural + (line - natural) * 0.5;
+        let advance = font * 0.55;
+        let units = prepared.chars.saturating_add(prepared.astral.len());
         let mut layout = ApproxLayout {
             attachments: Vec::new(),
+            attachment_widths: Vec::new(),
             line: TextLine {
                 end: u32::try_from(units).unwrap_or(u32::MAX),
                 width: size.width,
                 height: line,
-                ascender: line,
-                x_height: *font * 0.5,
+                ascender: baseline,
+                descender: (line - baseline).max(Points::ZERO),
+                x_height: font * 0.5,
                 ..TextLine::default()
             },
             advance,
-            chars: u32::try_from(*chars).unwrap_or(u32::MAX),
-            astral: astral.clone(),
+            chars: u32::try_from(prepared.chars).unwrap_or(u32::MAX),
+            astral: prepared.astral.clone(),
         };
+        layout.attachment_widths = prepared
+            .attachments
+            .iter()
+            .map(|a| (layout.char_at(a.index), a.width))
+            .collect();
+        layout.attachment_widths.sort_unstable_by_key(|&(k, _)| k);
         // An attachment sits on the line its character wraps to, as
         // `measure` wraps the text in a box this wide.
-        layout.attachments = attachments
+        layout.attachments = prepared
+            .attachments
             .iter()
             .map(|a| {
                 let (row, x) = approx_place(
                     layout.char_at(a.index) as usize,
-                    *chars,
-                    *font,
-                    breaks,
+                    prepared.chars,
+                    font,
+                    &prepared.breaks,
                     size.width,
                 );
-                if *max_lines > 0 && row >= *max_lines as f32 {
+                if prepared.max_lines > 0 && row >= prepared.max_lines as f32 {
                     return None;
                 }
-                Some(point(x, line * row + (line - a.height).max(Points::ZERO)))
+                Some(point(
+                    x,
+                    line * row + (baseline - a.height).max(Points::ZERO),
+                ))
             })
             .collect();
         TextLayout(Arc::new(layout))
@@ -1450,13 +1857,7 @@ impl TextEngine for ApproxTextEngine {
         let Some(l) = layout.downcast::<ApproxLayout>() else {
             return TextPosition::default();
         };
-        let k = if l.advance > Points::ZERO {
-            // Clamped to `0..=chars` first: the cast cannot truncate.
-            (p.x / l.advance).round().clamp(0.0, l.chars as f32) as u32
-        } else {
-            0
-        };
-        TextPosition::new(l.unit_of(k), Affinity::Downstream)
+        TextPosition::new(l.unit_of(l.hit_x(p.x)), Affinity::Downstream)
     }
 
     fn caret_rect(&self, layout: &TextLayout, position: TextPosition) -> Option<Bounds<Points>> {
@@ -1528,6 +1929,8 @@ fn approx_place(
 /// [`ApproxTextEngine`]'s final layout: reported as one line.
 struct ApproxLayout {
     attachments: Vec<Option<Point<Points>>>,
+    /// `(char_index, width)` of each attachment, sorted by `char_index`.
+    attachment_widths: Vec<(u32, Points)>,
     line: TextLine,
     /// The width of every character.
     advance: Points,
@@ -1563,7 +1966,68 @@ impl ApproxLayout {
 
     /// The x of the caret at UTF-16 offset `o`.
     fn x_of(&self, o: u32) -> Points {
-        self.advance * self.char_at(o) as f32
+        let k = self.char_at(o);
+        let mut x = self.advance * k as f32;
+        for &(at, width) in &self.attachment_widths {
+            if at >= k {
+                break;
+            }
+            x += width - self.advance;
+        }
+        x
+    }
+
+    /// The character boundary nearest horizontal position `x`.
+    fn hit_x(&self, x: Points) -> u32 {
+        if x <= Points::ZERO {
+            return 0;
+        }
+        if self.attachment_widths.is_empty() {
+            return if self.advance > Points::ZERO {
+                // Clamped to `0..=chars` first: the cast cannot truncate.
+                (x / self.advance).round().clamp(0.0, self.chars as f32) as u32
+            } else {
+                0
+            };
+        }
+        let mut seg_start = 0u32;
+        let mut cur_x = Points::ZERO;
+        for &(at, width) in &self.attachment_widths {
+            let at = at.min(self.chars);
+            if at > seg_start {
+                let n = at - seg_start;
+                let run_end = cur_x + self.advance * n as f32;
+                if x < run_end {
+                    let step = if self.advance > Points::ZERO {
+                        ((x - cur_x) / self.advance).round().clamp(0.0, n as f32) as u32
+                    } else {
+                        0
+                    };
+                    return seg_start + step;
+                }
+                cur_x = run_end;
+            }
+            let att_end = cur_x + width;
+            if x < att_end {
+                return if x < cur_x + width * 0.5 {
+                    at
+                } else {
+                    (at + 1).min(self.chars)
+                };
+            }
+            cur_x = att_end;
+            seg_start = (at + 1).min(self.chars);
+        }
+        if seg_start < self.chars {
+            let n = self.chars - seg_start;
+            let step = if self.advance > Points::ZERO {
+                ((x - cur_x) / self.advance).round().clamp(0.0, n as f32) as u32
+            } else {
+                0
+            };
+            return seg_start + step;
+        }
+        self.chars
     }
 }
 
@@ -1883,6 +2347,41 @@ mod tests {
         assert!(cache.get(1000, None).is_none(), "cold entries are evicted");
     }
 
+    /// An attachment with a baseline of its own stands on the line's by it
+    /// (the first baseline of the text in it), and the line reserves what reaches past each
+    /// side; the other alignments place its box, whatever is in it.
+    #[test]
+    fn an_attachments_own_baseline_stands_on_the_lines() {
+        let font = FontExtent::new(px(10.0), px(3.0), px(5.0));
+        let a = TextAttachment {
+            index: 4,
+            width: px(30.0),
+            height: px(20.0),
+        };
+        let mut alignments = AttachmentAlignments::default();
+        assert_eq!(alignments.ascent(&a, font), px(20.0));
+        alignments.set_baseline(4, Some(px(14.0)));
+        assert!(!alignments.is_empty());
+        assert_eq!(alignments.baseline(4), Some(px(14.0)));
+        assert_eq!(alignments.baseline(5), None);
+        assert_eq!(alignments.ascent(&a, font), px(14.0));
+        assert_eq!(alignments.extent(&a, font), (px(14.0), px(6.0)));
+        // Never past its own box.
+        alignments.set_baseline(4, Some(px(25.0)));
+        assert_eq!(alignments.extent(&a, font), (px(20.0), px(0.0)));
+        alignments.set_baseline(4, Some(px(14.0)));
+        alignments.set(4, VerticalAlign::TextTop);
+        assert_eq!(alignments.ascent(&a, font), px(10.0));
+        alignments.set(4, VerticalAlign::Baseline);
+        alignments.set_baseline(4, None);
+        assert!(alignments.is_empty());
+        // A text's layout is another with it.
+        let text = AttributedText::default();
+        let plain = alignments.layout_hash(&text);
+        alignments.set_baseline(4, Some(px(14.0)));
+        assert_ne!(alignments.layout_hash(&text), plain);
+    }
+
     #[test]
     fn attachments_sit_in_their_line_by_vertical_align() {
         // A font 10 above and 3 below the baseline, x height 5; a 20 pt
@@ -1961,6 +2460,103 @@ mod tests {
             );
         }
         assert_eq!(engine.first_baseline(&prepared, px(20.0)), Some(px(12.0)));
+    }
+
+    #[test]
+    fn approx_engine_honors_line_height_and_multiple() {
+        let engine = ApproxTextEngine;
+        let mut explicit = AttributedText::default();
+        explicit.push(
+            "ab\ncd",
+            ResolvedTextStyle {
+                font_size: px(10.0),
+                line_height: px(24.0),
+                ..ResolvedTextStyle::default()
+            },
+        );
+        let prepared = engine.prepare(&explicit);
+        let measured = engine.measure(&prepared, None);
+        assert_eq!(measured, size(px(11.0), px(48.0)));
+        let laid = engine.layout(&prepared, measured);
+        let line = engine.lines(&laid).remove(0);
+        // Natural ascent = 12, line = 24, half-leading = 6 => ascender 18, descender 6.
+        assert_eq!(line.height, px(24.0));
+        assert_eq!(line.ascender, px(18.0));
+        assert_eq!(line.descender, px(6.0));
+        assert_eq!(engine.first_baseline(&prepared, px(50.0)), Some(px(18.0)));
+        assert_eq!(
+            engine.first_baseline(&prepared, px(50.0)),
+            Some(line.y + line.ascender)
+        );
+
+        let mut multiple = AttributedText::default();
+        multiple.push(
+            "ab",
+            ResolvedTextStyle {
+                font_size: px(10.0),
+                line_height_multiple: 2.0,
+                ..ResolvedTextStyle::default()
+            },
+        );
+        let mp = engine.prepare(&multiple);
+        assert_eq!(engine.measure(&mp, None), size(px(11.0), px(20.0)));
+
+        // Mixed spans take the tallest resolved line height.
+        let mut mixed = AttributedText::default();
+        mixed.push(
+            "a",
+            ResolvedTextStyle {
+                font_size: px(10.0),
+                line_height: px(16.0),
+                ..ResolvedTextStyle::default()
+            },
+        );
+        mixed.push(
+            "b",
+            ResolvedTextStyle {
+                font_size: px(12.0),
+                line_height: px(30.0),
+                ..ResolvedTextStyle::default()
+            },
+        );
+        let mp_mixed = engine.prepare(&mixed);
+        assert_eq!(engine.measure(&mp_mixed, None).height, px(30.0));
+
+        // Unspaced mixed font sizes resolve both advance and natural ascent
+        // from the largest span, matching offscreen estimates.
+        let mut mixed_fonts = AttributedText::default();
+        mixed_fonts.push(
+            "a",
+            ResolvedTextStyle {
+                font_size: px(10.0),
+                ..ResolvedTextStyle::default()
+            },
+        );
+        mixed_fonts.push(
+            "b",
+            ResolvedTextStyle {
+                font_size: px(20.0),
+                ..ResolvedTextStyle::default()
+            },
+        );
+        let mp_fonts = engine.prepare(&mixed_fonts);
+        assert_eq!(engine.measure(&mp_fonts, None), size(px(22.0), px(24.0)));
+        assert_eq!(engine.first_baseline(&mp_fonts, px(50.0)), Some(px(24.0)));
+
+        // Default prepared state matches an empty `AttributedText`, and zero
+        // font sizes clamp to at least 1 pt.
+        assert_eq!(
+            engine.measure(&ApproxPrepared::default(), None),
+            engine.measure(&engine.prepare(&AttributedText::default()), None)
+        );
+        assert_eq!(
+            ResolvedTextStyle {
+                font_size: Points::ZERO,
+                ..ResolvedTextStyle::default()
+            }
+            .approx_line_height(),
+            px(1.2)
+        );
     }
 
     #[test]
@@ -2261,5 +2857,343 @@ mod tests {
         forged.extend([0; 6]); // the stream, padded to 4 bytes
         assert_eq!(forged.len(), 60);
         assert!(font_data(&forged).is_err());
+    }
+
+    #[test]
+    fn em_font_size_is_of_the_inherited_size() {
+        let parent = ResolvedTextStyle {
+            font_size: px(16.0),
+            ..ResolvedTextStyle::default()
+        };
+        let span = TextStyle {
+            font_size_em: Some(0.875),
+            letter_spacing_em: Some(0.1),
+            ..TextStyle::default()
+        };
+        let r = parent.inherit(&span);
+        assert_eq!(r.font_size, px(14.0));
+        // Other ems follow the resolved size.
+        assert!((r.letter_spacing.0 - 1.4).abs() < 1e-4);
+    }
+}
+
+/// The engine calls a [`TextGeometry`] needs, object-safe.
+pub(crate) trait GeometryEngine {
+    fn geometry_lines(&self, layout: &TextLayout) -> Vec<TextLine>;
+    fn geometry_hit_test(&self, layout: &TextLayout, point: Point<Points>) -> TextPosition;
+    fn geometry_caret_rect(
+        &self,
+        layout: &TextLayout,
+        position: TextPosition,
+    ) -> Option<Bounds<Points>>;
+    fn geometry_range_rects(
+        &self,
+        layout: &TextLayout,
+        range: Range<u32>,
+        out: &mut Vec<Bounds<Points>>,
+    );
+}
+
+impl<M: TextEngine> GeometryEngine for M {
+    fn geometry_lines(&self, layout: &TextLayout) -> Vec<TextLine> {
+        self.lines(layout)
+    }
+    fn geometry_hit_test(&self, layout: &TextLayout, point: Point<Points>) -> TextPosition {
+        self.hit_test(layout, point)
+    }
+    fn geometry_caret_rect(
+        &self,
+        layout: &TextLayout,
+        position: TextPosition,
+    ) -> Option<Bounds<Points>> {
+        self.caret_rect(layout, position)
+    }
+    fn geometry_range_rects(
+        &self,
+        layout: &TextLayout,
+        range: Range<u32>,
+        out: &mut Vec<Bounds<Points>>,
+    ) {
+        self.range_rects(layout, range, out);
+    }
+}
+
+/// A text block's final layout as the platform engine made it
+/// ([`crate::Text::on_text_layout`]), to ask where its characters are:
+/// the engine's own answers, not an estimate from the lines.
+///
+/// Offsets are UTF-16 units in the block's own text: the empty
+/// placeholders the core adds for a span's padding are not counted, so
+/// they match the text the app gave. Boxes are in the content box (y
+/// down, points). Rust-only: it holds the engine and lives on the engine
+/// thread.
+#[derive(Clone)]
+pub struct TextGeometry {
+    engine: std::rc::Rc<dyn GeometryEngine>,
+    layout: TextLayout,
+    text: Arc<AttributedText>,
+    /// The laid-out text's offsets of the padding placeholders, in order.
+    spacers: Arc<[u32]>,
+}
+
+impl TextGeometry {
+    pub(crate) fn new(
+        engine: std::rc::Rc<dyn GeometryEngine>,
+        layout: TextLayout,
+        text: Arc<AttributedText>,
+        spacers: &[u32],
+    ) -> Self {
+        let mut spacers = spacers.to_vec();
+        spacers.sort_unstable();
+        spacers.dedup();
+        Self {
+            engine,
+            layout,
+            text,
+            spacers: spacers.into(),
+        }
+    }
+
+    /// The offset in the app's text of laid-out offset `t`.
+    fn to_source(&self, t: u32) -> u32 {
+        t - self.spacers.partition_point(|&s| s < t) as u32
+    }
+
+    /// The laid-out offset of offset `s` in the app's text: past the
+    /// placeholders before it, and past those at it unless `upstream`
+    /// (the caret stays with the character before).
+    fn to_laid(&self, s: u32, upstream: bool) -> u32 {
+        let mut t = s;
+        for &at in self.spacers.iter() {
+            if at < t || (at == t && !upstream) {
+                t += 1;
+            } else {
+                break;
+            }
+        }
+        t
+    }
+
+    /// Its lines, in order, with their characters.
+    pub fn lines(&self) -> Vec<TextLine> {
+        let units: Vec<u16> = self.text.text.encode_utf16().collect();
+        let mut lines = self.engine.geometry_lines(&self.layout);
+        for line in &mut lines {
+            let (start, end) = (line.start as usize, (line.end as usize).min(units.len()));
+            if start < end {
+                let mut text = String::from_utf16_lossy(&units[start..end]);
+                if self
+                    .spacers
+                    .iter()
+                    .any(|&s| s >= line.start && s < line.end)
+                {
+                    // Placeholders are one unit each: drop those at spacer
+                    // offsets.
+                    let mut k = line.start;
+                    text = text
+                        .chars()
+                        .filter(|c| {
+                            let at = k;
+                            k += c.len_utf16() as u32;
+                            !(*c == ATTACHMENT_CHAR && self.spacers.binary_search(&at).is_ok())
+                        })
+                        .collect();
+                }
+                line.text = text;
+            }
+            line.start = self.to_source(line.start);
+            line.end = self.to_source(line.end);
+        }
+        lines
+    }
+
+    /// The caret position nearest `point` (content box).
+    pub fn hit_test(&self, point: Point<Points>) -> TextPosition {
+        let p = self.engine.geometry_hit_test(&self.layout, point);
+        TextPosition::new(self.to_source(p.offset), p.affinity)
+    }
+
+    /// The caret at `position`: a box of no width as high as its line.
+    pub fn caret_rect(&self, position: TextPosition) -> Option<Bounds<Points>> {
+        let upstream = position.affinity == Affinity::Upstream;
+        let t = self.to_laid(position.offset, upstream);
+        self.engine
+            .geometry_caret_rect(&self.layout, TextPosition::new(t, position.affinity))
+    }
+
+    /// The boxes that cover the characters of `range`, line high.
+    pub fn range_rects(&self, range: Range<u32>) -> Vec<Bounds<Points>> {
+        let mut out = Vec::new();
+        if range.start < range.end {
+            let r = self.to_laid(range.start, false)..self.to_laid(range.end, true);
+            self.engine.geometry_range_rects(&self.layout, r, &mut out);
+        }
+        out
+    }
+}
+
+thread_local! {
+    static GEOMETRY: std::cell::RefCell<Option<TextGeometry>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The geometry of the text block whose `TextLayout` event is being
+/// dispatched, for [`crate::Text::on_text_layout`]: the event's payload
+/// crosses threads, the engine does not.
+pub(crate) struct GeometryScope(Option<TextGeometry>);
+
+impl GeometryScope {
+    pub(crate) fn enter(geometry: TextGeometry) -> Self {
+        Self(GEOMETRY.with(|g| g.replace(Some(geometry))))
+    }
+
+    /// The geometry of the event being dispatched, if any.
+    pub(crate) fn current() -> Option<TextGeometry> {
+        GEOMETRY.with(|g| g.borrow().clone())
+    }
+}
+
+impl Drop for GeometryScope {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        GEOMETRY.with(|g| *g.borrow_mut() = previous);
+    }
+}
+
+impl fmt::Debug for TextGeometry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextGeometry")
+            .field("spacers", &self.spacers)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    /// "a[pad]bc[pad]d": a padded span's placeholders, as the core adds them.
+    fn padded() -> Arc<AttributedText> {
+        let mut text = AttributedText {
+            text: format!("a{ATTACHMENT_CHAR}bc{ATTACHMENT_CHAR}d"),
+            ..AttributedText::default()
+        };
+        for index in [1, 4] {
+            text.attachments.push(TextAttachment {
+                index,
+                width: Points(4.0),
+                height: Points::ZERO,
+            });
+        }
+        Arc::new(text)
+    }
+
+    fn geometry() -> TextGeometry {
+        let engine = ApproxTextEngine;
+        let text = padded();
+        let prepared = engine.prepare(&text);
+        let layout = engine.layout(&prepared, size(Points(1000.0), Points(100.0)));
+        TextGeometry::new(std::rc::Rc::new(ApproxTextEngine), layout, text, &[1, 4])
+    }
+
+    #[test]
+    fn padding_placeholders_are_not_offsets() {
+        let g = geometry();
+        let lines = g.lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "abcd");
+        assert_eq!((lines[0].start, lines[0].end), (0, 4));
+        let at = |o| {
+            g.caret_rect(TextPosition::new(o, Affinity::Downstream))
+                .unwrap()
+                .origin
+                .x
+        };
+        let laid = |o: u32| {
+            ApproxTextEngine
+                .caret_rect(&g.layout, TextPosition::new(o, Affinity::Downstream))
+                .unwrap()
+                .origin
+                .x
+        };
+        // "b" is after the first placeholder, "d" after both.
+        assert_eq!(at(1), laid(2));
+        assert_eq!(at(3), laid(5));
+        // And back: a point at "d" is offset 3 of the text.
+        let p = point(laid(5), Points(1.0));
+        assert_eq!(g.hit_test(p).offset, 3);
+        // A range over "bc" covers the laid-out "bc", not the spacers.
+        let r = g.range_rects(1..3);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].origin.x, laid(2));
+    }
+
+    #[test]
+    fn zero_height_user_attachments_stay_in_source_offsets() {
+        let engine = ApproxTextEngine;
+        let mut text = AttributedText {
+            text: format!("a{ATTACHMENT_CHAR}b"),
+            ..AttributedText::default()
+        };
+        text.attachments.push(TextAttachment {
+            index: 1,
+            width: Points(40.0),
+            height: Points::ZERO,
+        });
+        let text = Arc::new(text);
+        let prepared = engine.prepare(&text);
+        let layout = engine.layout(&prepared, size(Points(1000.0), Points(100.0)));
+        // Not a synthetic span-padding spacer, so its offset remains part of the source text.
+        let g = TextGeometry::new(std::rc::Rc::new(ApproxTextEngine), layout, text, &[]);
+        let lines = g.lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!((lines[0].start, lines[0].end), (0, 3));
+        assert_eq!(lines[0].text, format!("a{ATTACHMENT_CHAR}b"));
+        let r = g.range_rects(1..2);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].size.width, Points(40.0));
+    }
+
+    #[test]
+    fn approx_engine_hit_test_and_range_rects_respect_attachment_widths() {
+        let engine = ApproxTextEngine;
+        let style = ResolvedTextStyle {
+            font_size: px(10.0 / 0.55),
+            ..ResolvedTextStyle::default()
+        };
+        let mut t = AttributedText::default();
+        t.push("ab", style);
+        t.push_attachment(size(px(80.0), px(16.0)), style);
+        t.push("cd", style);
+        let prepared = engine.prepare(&t);
+        let layout = engine.layout(&prepared, size(px(300.0), px(20.0)));
+
+        let x = |o| {
+            engine
+                .caret_rect(&layout, TextPosition::new(o, Affinity::Downstream))
+                .map(|b| b.origin.x.0.round())
+        };
+        assert_eq!(x(0), Some(0.0));
+        assert_eq!(x(2), Some(20.0));
+        assert_eq!(x(3), Some(100.0));
+        assert_eq!(x(5), Some(120.0));
+
+        let mut rects = Vec::new();
+        engine.range_rects(&layout, 2..3, &mut rects);
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].origin.x.0.round(), 20.0);
+        assert_eq!(rects[0].size.width.0.round(), 80.0);
+
+        assert_eq!(engine.hit_test(&layout, point(px(19.0), px(5.0))).offset, 2);
+        assert_eq!(engine.hit_test(&layout, point(px(50.0), px(5.0))).offset, 2);
+        assert_eq!(engine.hit_test(&layout, point(px(70.0), px(5.0))).offset, 3);
+        assert_eq!(
+            engine.hit_test(&layout, point(px(101.0), px(5.0))).offset,
+            3
+        );
+        assert_eq!(
+            engine.hit_test(&layout, point(px(118.0), px(5.0))).offset,
+            5
+        );
     }
 }

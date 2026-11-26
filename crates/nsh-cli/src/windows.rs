@@ -74,7 +74,7 @@ pub(crate) fn package(
     if let Some(json) = built.capabilities_json() {
         fs::write(resources.join("capabilities.json"), json)?;
     }
-    for asset in &built.assets {
+    for asset in built.assets_for(options.target.asset_target()) {
         let dest = resources.join("assets").join(&asset.path);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
@@ -92,13 +92,33 @@ pub(crate) fn package(
     }
     let archive = options.out.join(format!("{name}.zip"));
     zip_dir(&dir, name, &archive).with_context(|| format!("create {}", archive.display()))?;
-    crate::updater::copy_archive(config, name, &archive, options.out)?;
+    crate::updater::copy_archive(config, name, &update_platform(), &archive, options.out)?;
     step.done(format!(
         "packaged {} and {}",
         ui::path(&dir),
         ui::path(&archive)
     ));
     installer(options.out, name, id, version, &dir, &exe)?;
+    if options.format == crate::android::Format::Msix {
+        let msix = options.out.join(format!("{name}.msix"));
+        let step = ui::Step::start(format!("packaging {}", ui::path(&msix)));
+        let executable = exe.file_name().unwrap().to_string_lossy().into_owned();
+        let identity =
+            crate::msix::Identity::new(config, name, id, executable, crate::msix::arch(&exe)?)?;
+        crate::msix::write(
+            &dir,
+            &identity,
+            config.icon(crate::package::PackageTarget::Windows),
+            &msix,
+            options.sign.map(Path::new),
+        )?;
+        step.done(format!(
+            "packaged {} ({} {})",
+            ui::path(&msix),
+            identity.name,
+            identity.version
+        ));
+    }
     if options.run {
         Command::new(&exe)
             .current_dir(&dir)
@@ -615,9 +635,32 @@ fn zip_dir(dir: &Path, root: &str, archive: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The updater's name of the platform a Windows package runs on: the runner
+/// is built for this machine on Windows, else cross-compiled for
+/// `x86_64-pc-windows-msvc`, whose archive must not be named after the
+/// machine that built it.
+fn update_platform() -> String {
+    if cfg!(windows) {
+        nsh_updater::platform()
+    } else {
+        "windows-x86_64".to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A package cross-built on Linux or macOS is the update of Windows, not
+    /// of the machine that built it.
+    #[test]
+    fn update_archives_are_named_for_windows() {
+        assert!(
+            update_platform().starts_with("windows-"),
+            "{}",
+            update_platform()
+        );
+    }
 
     #[test]
     fn installer_scripts_install_per_user_and_upgrade_by_id() {

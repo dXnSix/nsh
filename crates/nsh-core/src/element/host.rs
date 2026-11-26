@@ -16,11 +16,11 @@ use super::{
     },
 };
 use crate::{
-    AudioSession, AutoCapitalize, AutoFill, Color, EventKind, HeaderSlot, Hsla, JsonValue,
-    KeyboardAppearance, KeyboardType, ModalAnimation, ModalPresentation, ModalProp, NativeProp,
-    OverlayProp, PasteBehavior, PasteEvent, Points, Prop, ResizeMode, ReturnKeyType, Rgba,
-    ScreenAnimation, ScreenProp, ScrollProp, Size, StatusBarSetting, SubmitBehavior, Tag,
-    WebSource,
+    AudioSession, AutoCapitalize, AutoFill, Color, EventKind, HeaderSlot, HeaderTitleAlign, Hsla,
+    JsonValue, KeyboardAppearance, KeyboardType, ModalAnimation, ModalPresentation, ModalProp,
+    NativeProp, OverlayProp, PasteBehavior, PasteEvent, Points, Prop, ResizeMode, ReturnKeyType,
+    Rgba, ScreenAnimation, ScreenProp, ScrollProp, SheetDetent, Size, StatusBarSetting,
+    SubmitBehavior, Tag, WebSource,
     canvas::{
         CanvasFont, CanvasGradient, CanvasImage, CanvasOp, CanvasTextAlign, CanvasTextBaseline,
         Composite, Drawing, FillRule, LineCap, LineJoin, Num, Paint, Path, PathOp, ViewPaint,
@@ -67,6 +67,9 @@ crate::static_reactive!(crate::HeaderItem: crate::HeaderItem);
 crate::static_reactive!(Vec<crate::HeaderItem>: Vec<crate::HeaderItem>);
 crate::static_reactive!(super::header::HeaderItem: super::header::HeaderItem);
 crate::static_reactive!(Vec<super::header::HeaderItem>: Vec<super::header::HeaderItem>);
+crate::static_reactive!(Vec<super::desktop::MenuItem>: Vec<super::desktop::MenuItem>);
+crate::static_reactive!(SheetDetent: SheetDetent);
+crate::static_reactive!(Vec<SheetDetent>: Vec<SheetDetent>);
 crate::static_reactive!(KeyboardAppearance: KeyboardAppearance);
 crate::static_reactive!(KeyboardType: KeyboardType);
 crate::static_reactive!(ModalAnimation: ModalAnimation);
@@ -241,6 +244,13 @@ host_element! {
 }
 
 host_element! {
+    /// A view whose box a renderer of the app's own draws with the GPU,
+    /// under its children (`<gpuview>`, TS: `gpuView` of `nsh`), made by
+    /// [`gpu_view`] ([`crate::gpu`]).
+    GpuView
+}
+
+host_element! {
     /// Its children on top of the root view it is in (`<overlay>`, TS:
     /// `Overlay` of `nsh`), made by [`overlay`]: the surface, or the dialog
     /// around it; outside its parent's layout and clipping, while it stays
@@ -250,6 +260,7 @@ host_element! {
 
 impl ParentElement for Overlay {}
 impl ParentElement for ShaderView {}
+impl ParentElement for GpuView {}
 impl ParentElement for Scroll {}
 impl ParentElement for Stack {}
 impl ParentElement for Screen {}
@@ -365,8 +376,9 @@ pub fn input_accessory_view(native_id: &str) -> InputAccessoryView {
 pub fn canvas(painter: impl IntoReactive<Painter>) -> CanvasView {
     let mut node = ElNode::new(Tag::Canvas);
     node.bind_attr(painter, |attrs, painter: Painter| {
-        attrs.drawing = Some(Arc::new(painter.drawing));
-        attrs.bound = painter.nodes;
+        let r = attrs.rare_mut();
+        r.drawing = Some(Arc::new(painter.drawing));
+        r.bound = painter.nodes;
     });
     CanvasView(node)
 }
@@ -399,7 +411,11 @@ pub fn svg(src: impl IntoReactive<super::ImageSrc>) -> Svg {
         let shown = svg_drawing(src);
         node.bind_attr(
             move || shown.get(),
-            |attrs, drawing| attrs.drawing = drawing,
+            |attrs, drawing: Option<Arc<crate::canvas::Drawing>>| {
+                if drawing.is_some() || attrs.rare.is_some() {
+                    attrs.rare_mut().drawing = drawing;
+                }
+            },
         );
         Svg(node)
     }
@@ -410,7 +426,7 @@ pub fn svg(src: impl IntoReactive<super::ImageSrc>) -> Svg {
             crate::StyleKey::ObjectFit,
             crate::PropertyValue::ObjectFit(Some(ResizeMode::Contain)),
         );
-        node.bind_attr(src, |attrs, src| attrs.src = Some(src));
+        node.bind_attr(src, |attrs, src| attrs.rare_mut().src = Some(src));
         // The platform draws it: its `currentColor` is the text color.
         set(
             &mut node,
@@ -470,18 +486,25 @@ fn svg_drawing(
     shown
 }
 
+/// A shader view of `tag`, noting that the app uses shaders
+/// ([`crate::shader::USE_MARKER`]).
+fn shader_view(tag: Tag) -> ShaderView {
+    crate::shader::note_use();
+    ShaderView(ElNode::new(tag))
+}
+
 /// A view whose box a shader draws, under its children: give it the
 /// program with [`ShaderView::source`] and its uniforms with
 /// [`ShaderView::uniform`]. Without a program it draws nothing of its own.
 pub fn shader() -> ShaderView {
-    ShaderView(ElNode::new(Tag::Shader))
+    shader_view(Tag::Shader)
 }
 
 /// A view whose children draw through a shader: give it the program with
 /// [`ShaderView::source`], which reads what they draw with
 /// `sample_content`. Without a program the children draw as they are.
 pub fn shader_effect() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ShaderEffect))
+    shader_view(Tag::ShaderEffect)
 }
 
 /// A view whose children change through a shader when its
@@ -489,20 +512,20 @@ pub fn shader_effect() -> ShaderView {
 /// drew, `sample_to` what they draw now, `nsh.progress` how far it is.
 /// Without a program it cross-fades ([`ShaderView::fallback`]).
 pub fn shader_transition() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ShaderTransition))
+    shader_view(Tag::ShaderTransition)
 }
 
 /// The whole surface drawn through a shader, which reads it with
 /// `sample_content`. It takes no space and has no children.
 pub fn screen_effect() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ScreenEffect))
+    shader_view(Tag::ScreenEffect)
 }
 
 /// The whole surface changing through a shader when its
 /// [`ShaderView::value`] changes, as [`shader_transition`] does for its
 /// children. It takes no space and has no children.
 pub fn screen_transition() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ScreenTransition))
+    shader_view(Tag::ScreenTransition)
 }
 
 crate::static_reactive!(crate::shader::Shader: crate::shader::Shader);
@@ -575,7 +598,7 @@ impl ShaderView {
                 let value = match node.live() {
                     Some(node) => {
                         let id = node.id();
-                        self.0.attrs.bound.push(node);
+                        self.0.attrs.rare_mut().bound.push(node);
                         crate::shader::UniformValue::Animated(id)
                     }
                     None => crate::shader::UniformValue::Number(0.0),
@@ -620,7 +643,7 @@ impl ShaderView {
         let progress = match value.animated_node().live() {
             Some(node) => {
                 let id = node.id();
-                self.0.attrs.bound.push(node);
+                self.0.attrs.rare_mut().bound.push(node);
                 crate::shader::ShaderProgress::Animated(id)
             }
             None => crate::shader::ShaderProgress::Number(Percentage(0.0)),
@@ -675,6 +698,14 @@ pub fn video(url: impl IntoReactive<String>) -> Video {
     Video(ElNode::new(Tag::Video)).bind_prop(url, |url: String| {
         Prop::Native(NativeProp::Source(WebSource::Uri(url.into())))
     })
+}
+
+/// A view whose box a renderer of the app's own draws with the GPU, under
+/// its children: give it the renderer with `nsh-gpu`'s `GpuViewExt::renderer`
+/// (or one a UI set registered, [`GpuView::renderer_named`]) and its props
+/// with [`GpuView::prop`]. Without a renderer it draws nothing of its own.
+pub fn gpu_view() -> GpuView {
+    GpuView(ElNode::new(Tag::GpuView))
 }
 
 /// The embedder's native component registered as `name`.
@@ -747,7 +778,8 @@ impl Input {
         self.bind_prop(mode, |mode: AutoCapitalize| Prop::AutoCapitalize(mode))
     }
 
-    /// Spelling correction (default on).
+    /// The system's corrections (default on): spelling and, on iOS and
+    /// macOS, smart quotes, dashes and text replacement.
     pub fn auto_correct(self, on: impl IntoReactive<bool>) -> Self {
         self.bind_prop(on, |on: bool| Prop::AutoCorrect(on))
     }
@@ -763,12 +795,19 @@ impl Input {
     }
 
     /// Whether a multiline input's scroll bar shows (default yes): the
-    /// platform's indicator, or the app's built-in bar once it set one.
-    pub fn scrollbar(self, shows: impl IntoReactive<bool>) -> Self {
-        self.bind_prop(shows, |shows: bool| Prop::Scrollbar(shows.into()))
+    /// platform's indicator, or the app's built-in bar once it set one; or
+    /// a built-in bar of this input's own theme (TS `scrollbar={theme}`:
+    /// `nsh_base::ScrollbarTheme` converts into a setting). The built-in
+    /// bar lies over the input's frame, padding included, while the text
+    /// stays in the content box.
+    pub fn scrollbar(self, setting: impl IntoReactive<crate::ScrollbarSetting>) -> Self {
+        self.bind_prop(setting, Prop::Scrollbar)
     }
 
-    /// At most `length` characters.
+    /// At most `length` characters, counted as Unicode scalar values
+    /// (Rust's `char`; an emoji such as 😀 is one) on every platform. A
+    /// longer paste goes in cut to what fits, between user-perceived
+    /// characters.
     pub fn max_length(self, length: impl IntoReactive<u32>) -> Self {
         self.bind_prop(length, |length: u32| Prop::MaxLength(Some(length)))
     }
@@ -792,6 +831,14 @@ impl Input {
         self.bind_prop(behavior, Prop::PasteBehavior)
     }
 
+    /// Reads pasted files of at most `bytes` bytes (`pasteMaxSize`); a
+    /// larger one reaches [`Self::on_paste`] in
+    /// [`PasteEvent::too_large`], its name, type and size only. Default:
+    /// every file is read.
+    pub fn paste_max_size(self, bytes: impl IntoReactive<u64>) -> Self {
+        self.bind_prop(bytes, |bytes: u64| Prop::PasteMaxSize(Some(bytes)))
+    }
+
     /// The user pasted: the text, the files with their bytes (a
     /// screenshot) and local files' URLs, before the text it inserts is
     /// reported.
@@ -802,6 +849,13 @@ impl Input {
     /// Focused when it appears.
     pub fn auto_focus(self, focus: impl IntoReactive<bool>) -> Self {
         self.bind_prop(focus, |focus: bool| Prop::AutoFocus(focus))
+    }
+
+    /// Selects the whole text when the input takes the focus (TS:
+    /// `selectTextOnFocus`); a click that drags or extends a selection keeps
+    /// the user's.
+    pub fn select_text_on_focus(self, select: impl IntoReactive<bool>) -> Self {
+        self.bind_prop(select, |select: bool| Prop::SelectTextOnFocus(select))
     }
 
     /// The caret is drawn (default yes; TS: `caret`).
@@ -865,7 +919,8 @@ impl Input {
         )
     }
 
-    /// A key was pressed: the character, `Backspace` or `Enter`.
+    /// A key was pressed: the character, `Backspace`, `Enter`, `Escape`,
+    /// `ArrowUp` or `ArrowDown`.
     pub fn on_key_press<M>(self, listener: impl IntoListener<str, M>) -> Self {
         self.listen(EventKind::KeyPress, listener.into_listener(), events::key)
     }
@@ -897,9 +952,11 @@ impl Scroll {
         self.set(Prop::Horizontal(true))
     }
 
-    /// Whether the scroll indicator shows (default yes).
-    pub fn scrollbar(self, shows: impl IntoReactive<bool>) -> Self {
-        self.bind_prop(shows, |shows: bool| Prop::Scrollbar(shows.into()))
+    /// Whether the scroll indicator shows (default yes); or a built-in bar
+    /// of this view's own theme (TS `scrollbar={theme}`:
+    /// `nsh_base::ScrollbarTheme` converts into a setting).
+    pub fn scrollbar(self, setting: impl IntoReactive<crate::ScrollbarSetting>) -> Self {
+        self.bind_prop(setting, Prop::Scrollbar)
     }
 
     /// Pinch zoom between `min` and `max`.
@@ -988,6 +1045,33 @@ impl Screen {
     pub fn header_transparent(self, transparent: impl IntoReactive<bool>) -> Self {
         self.bind_prop(transparent, |v| {
             Prop::Screen(ScreenProp::HeaderTransparent(v))
+        })
+    }
+
+    /// The hairline under the header (iOS; on by default, as UIKit's opaque
+    /// bars draw it). Off matches iOS 26's bars, which separate the
+    /// content by the scroll edge effect instead (TS: `headerShadowVisible`).
+    pub fn header_shadow_visible(self, visible: impl IntoReactive<bool>) -> Self {
+        self.bind_prop(visible, |v| {
+            Prop::Screen(ScreenProp::HeaderShadowVisible(v))
+        })
+    }
+
+    /// Where the title sits in the header (TS: `headerTitleAlign`): at the
+    /// start (the default) or centered. Android's header follows it; iOS's
+    /// system bar always centers the title and ignores the value.
+    pub fn header_title_align(self, align: impl IntoReactive<HeaderTitleAlign>) -> Self {
+        self.bind_prop(align, |a| Prop::Screen(ScreenProp::HeaderTitleAlign(a)))
+    }
+
+    /// With [`Self::header_transparent`], the header stays clear while the
+    /// content rests at its top and shows its background (UIKit's default,
+    /// or [`Self::header_style_with`]'s color) once the content scrolls
+    /// under it, as UIKit's own bars do (iOS; off by default; TS:
+    /// `headerBackgroundOnScroll`).
+    pub fn header_background_on_scroll(self, on: impl IntoReactive<bool>) -> Self {
+        self.bind_prop(on, |v| {
+            Prop::Screen(ScreenProp::HeaderBackgroundOnScroll(v))
         })
     }
 
@@ -1126,6 +1210,7 @@ impl Screen {
         shader: impl IntoReactive<Option<crate::shader::TransitionShader>>,
     ) -> Self {
         self.bind_prop(shader, |s: Option<crate::shader::TransitionShader>| {
+            crate::shader::note_use();
             Prop::TransitionShader(s.map(Into::into))
         })
     }
@@ -1366,6 +1451,7 @@ impl Modal {
         shader: impl IntoReactive<Option<crate::shader::TransitionShader>>,
     ) -> Self {
         self.bind_prop(shader, |s: Option<crate::shader::TransitionShader>| {
+            crate::shader::note_use();
             Prop::TransitionShader(s.map(Into::into))
         })
     }
@@ -1418,6 +1504,59 @@ impl Modal {
     /// Swiping a sheet down closes it natively (default true).
     pub fn close_on_swipe(self, close: impl IntoReactive<bool>) -> Self {
         self.bind_prop(close, |v: bool| Prop::Modal(ModalProp::CloseOnSwipe(v)))
+    }
+
+    /// The heights an iOS sheet ([`ModalPresentation::PageSheet`] /
+    /// [`ModalPresentation::FormSheet`]) rests at (none by default: the
+    /// system's full height): the user drags it between them, the system
+    /// way, and past the smallest it closes when [`Self::close_on_swipe`]
+    /// allows. Ignored on other platforms and presentations, where
+    /// `nsh_base::sheet` rests at detents.
+    pub fn detents(self, detents: impl IntoReactive<Vec<SheetDetent>>) -> Self {
+        self.bind_prop(detents, |v: Vec<SheetDetent>| {
+            Prop::Modal(ModalProp::Detents(v))
+        })
+    }
+
+    /// The detent of [`Self::detents`] the sheet rests at: it moves there
+    /// when the value changes. The user's moves stand even when the app
+    /// does not follow them; follow [`Self::on_detent_change`] to keep the
+    /// value in step.
+    pub fn detent(self, detent: impl IntoReactive<Option<SheetDetent>>) -> Self {
+        self.bind_prop(detent, |v: Option<SheetDetent>| {
+            Prop::Modal(ModalProp::Detent(v))
+        })
+    }
+
+    /// The detent it opens at without [`Self::detent`] (default the
+    /// smallest).
+    pub fn default_detent(self, detent: impl IntoReactive<Option<SheetDetent>>) -> Self {
+        self.bind_prop(detent, |v: Option<SheetDetent>| {
+            Prop::Modal(ModalProp::DefaultDetent(v))
+        })
+    }
+
+    /// The sheet shows the system's grabber at its top (default false).
+    pub fn grabber(self, grabber: impl IntoReactive<bool>) -> Self {
+        self.bind_prop(grabber, |v: bool| Prop::Modal(ModalProp::Grabber(v)))
+    }
+
+    /// Up to this detent of [`Self::detents`], what is behind the sheet is
+    /// not dimmed and takes touches (default: dimmed at every detent).
+    pub fn largest_undimmed_detent(self, detent: impl IntoReactive<Option<SheetDetent>>) -> Self {
+        self.bind_prop(detent, |v: Option<SheetDetent>| {
+            Prop::Modal(ModalProp::LargestUndimmedDetent(v))
+        })
+    }
+
+    /// The user moved the sheet to another of its [`Self::detents`]
+    /// (dragging it, its grabber, a scroll at its edge, a screen reader).
+    pub fn on_detent_change<M>(self, listener: impl IntoListener<SheetDetent, M>) -> Self {
+        self.listen(
+            EventKind::DetentChange,
+            listener.into_listener(),
+            events::sheet_detent,
+        )
     }
 
     /// The user tried to close it (Escape or back, a backdrop press, a
@@ -1494,6 +1633,18 @@ impl WebView {
         })
     }
 
+    /// One more origin the web view may show and navigate to besides
+    /// `webview.hosts`, known only while the app runs
+    /// (`scheme://host[:port]`, matched exactly): needs
+    /// `"runtimeOrigin": true` in `capabilities.webview`
+    /// ([`crate::access::WebOrigin`]). Set with the source, it applies to
+    /// it; changed later, from the next navigation.
+    pub fn allow_origin(self, origin: impl IntoReactive<String>) -> Self {
+        self.bind_prop(origin, |origin: String| {
+            Prop::Native(NativeProp::AllowOrigin(Some(origin.into())))
+        })
+    }
+
     /// Runs before each page's own scripts.
     pub fn injected_java_script_before_content(self, script: impl IntoReactive<String>) -> Self {
         self.bind_prop(script, |script: String| {
@@ -1535,6 +1686,14 @@ impl WebView {
     /// when the web view is made, so it takes a value, not a signal.
     pub fn incognito(self, incognito: bool) -> Self {
         self.set(Prop::Native(NativeProp::Incognito(incognito)))
+    }
+
+    /// Lets the person pinch to zoom the page, also past its viewport's
+    /// scale limits (default no: each platform's own behavior, see the
+    /// `zoomable` prop). Read when the web view is made, as
+    /// [`incognito`](Self::incognito).
+    pub fn zoomable(self, zoomable: bool) -> Self {
+        self.set(Prop::Native(NativeProp::Zoomable(zoomable)))
     }
 
     /// Serves the page the URLs of `scheme` (`"app-image"` for
@@ -1644,10 +1803,11 @@ impl WebView {
         )
     }
 
-    /// A download started, finished or failed (the platform's existing
-    /// `onDownload` lifecycle). Registering it makes automatic downloads
-    /// write into the app's data directory (`downloads/<id>/<filename>`),
-    /// unless [`on_download_pending`](Self::on_download_pending) is also
+    /// A download started, finished, failed or was cancelled (the core's
+    /// `onDownload` lifecycle). Registering it makes automatic
+    /// downloads write into the app's data directory
+    /// (`downloads/<id>/<filename>`), unless
+    /// [`on_download_pending`](Self::on_download_pending) is also
     /// registered, which makes every destination the app's.
     pub fn on_download<M>(
         self,
@@ -1658,17 +1818,16 @@ impl WebView {
             listener.into_listener(),
             events::web_download,
         )
+        .set(Prop::Native(NativeProp::DeferDownloads(true)))
     }
 
     /// The page asked to download a file and waits for the app's
     /// destination. Registering this listener is what asks for that: the
-    /// platform writes nothing until the app answers
-    /// ([`WebDownloadPending::accept`](crate::webview::WebDownloadPending::accept)
-    /// or [`cancel`](crate::webview::WebDownloadPending::cancel)), and a
+    /// platform holds the transfer and writes nothing until the app answers
+    /// ([`accept`](crate::webview::WebDownloadPending::accept) or
+    /// [`cancel`](crate::webview::WebDownloadPending::cancel)), and a
     /// download the app never answers is cancelled after a bounded wait.
     /// Without this listener the platform keeps its automatic behavior.
-    /// Only desktops report pending downloads; elsewhere a download never
-    /// bypasses this choice.
     pub fn on_download_pending<M>(
         self,
         listener: impl IntoListener<crate::webview::WebDownloadPending, M>,
@@ -1683,6 +1842,14 @@ impl WebView {
 }
 
 impl Video {
+    /// An image (a URL or `asset:/` URI) shown while the video loads,
+    /// until its first frame is ready.
+    pub fn poster(self, url: impl IntoReactive<String>) -> Self {
+        self.bind_prop(url, |url: String| {
+            Prop::Native(NativeProp::Poster(Some(url.into())))
+        })
+    }
+
     /// Paused.
     pub fn paused(self, paused: impl IntoReactive<bool>) -> Self {
         self.bind_prop(paused, |paused: bool| {
@@ -1794,12 +1961,59 @@ impl NativeView {
                 &mut self.0,
                 Prop::ComponentPropBinding(name.into(), Some(node.id())),
             );
-            self.0.attrs.bound.push(node);
+            self.0.attrs.rare_mut().bound.push(node);
         }
         self
     }
 
     /// It emitted an event.
+    pub fn on_native_event<M>(self, listener: impl IntoListener<NativeEvent, M>) -> Self {
+        self.listen(
+            EventKind::NativeEvent,
+            listener.into_listener(),
+            events::native,
+        )
+    }
+}
+
+impl GpuView {
+    /// Its renderer (`nsh-gpu` makes the source: `GpuViewExt::renderer`).
+    pub fn source(self, source: crate::gpu::GpuSource) -> Self {
+        self.set(Prop::GpuRenderer(Some(source)))
+    }
+
+    /// The renderer a UI set registered as `name`
+    /// ([`super::Registry::gpu_renderer_source`]), as TSX's `gpuView(name)`
+    /// names it.
+    pub fn renderer_named(self, name: &str) -> Self {
+        self.set(Prop::Component(name.into()))
+    }
+
+    /// Its renderer's prop `name` (any JSON value), handed to the renderer
+    /// before its next frame; a bound one is handed again when it changes.
+    pub fn prop(self, name: &str, value: impl IntoReactive<JsonValue>) -> Self {
+        let name: Arc<str> = name.into();
+        self.bind_prop(value, move |value| {
+            Prop::ComponentProp(name.clone(), Some(value))
+        })
+    }
+
+    /// Binds its renderer's prop `name` to an animated value: the platform
+    /// hands the renderer the value (a number or a color) on every frame it
+    /// changes, with no engine work per frame. A value set with
+    /// [`Self::prop`] under that name waits until the binding goes.
+    pub fn bind_animated_prop(mut self, name: &str, value: &impl super::Animated) -> Self {
+        if let Some(node) = value.animated_node().live() {
+            set(
+                &mut self.0,
+                Prop::ComponentPropBinding(name.into(), Some(node.id())),
+            );
+            self.0.attrs.rare_mut().bound.push(node);
+        }
+        self
+    }
+
+    /// Its renderer emitted an event.
     pub fn on_native_event<M>(self, listener: impl IntoListener<NativeEvent, M>) -> Self {
         self.listen(
             EventKind::NativeEvent,
@@ -2575,6 +2789,7 @@ impl From<Drawing> for Painter {
 }
 
 crate::static_reactive!(ScreenAnimation: ScreenAnimation);
+crate::static_reactive!(HeaderTitleAlign: HeaderTitleAlign);
 
 /// A program where an optional one goes (`.transition_shader(wipe)`).
 impl IntoReactive<Option<crate::shader::TransitionShader>> for crate::shader::TransitionShader {
@@ -2586,6 +2801,13 @@ impl IntoReactive<Option<crate::shader::TransitionShader>> for crate::shader::Tr
 /// A backdrop where an optional one goes (`.macos_backdrop(backdrop)`).
 impl IntoReactive<Option<crate::MacOsBackdrop>> for crate::MacOsBackdrop {
     fn into_reactive(self) -> super::Reactive<Option<crate::MacOsBackdrop>> {
+        super::Reactive::Static(Some(self))
+    }
+}
+
+/// A backdrop where an optional one goes (`.windows_backdrop(backdrop)`).
+impl IntoReactive<Option<crate::WindowsBackdrop>> for crate::WindowsBackdrop {
+    fn into_reactive(self) -> super::Reactive<Option<crate::WindowsBackdrop>> {
         super::Reactive::Static(Some(self))
     }
 }
@@ -2696,7 +2918,7 @@ mod tests {
         let id = wave.node().live().expect("live").id();
         assert_eq!(value(&set, "wave"), Some(UniformValue::Animated(id)));
         assert_eq!(
-            node.attrs.bound.len(),
+            node.attrs.bound().len(),
             1,
             "the element holds the animated node"
         );

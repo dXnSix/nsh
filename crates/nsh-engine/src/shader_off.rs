@@ -14,6 +14,8 @@ use nsh_core::{
     shader::{ShaderInput, ShaderLayer},
 };
 
+#[cfg(windows)]
+pub use crate::shader_frame::SharedTexture;
 pub use crate::shader_frame::{Frame, MAX_SIDE, PixelFormat};
 
 /// This build has no renderer: a platform reports `Environment::shaders`
@@ -33,7 +35,33 @@ pub struct Renderer {
 impl Renderer {
     /// `None`: this build has no renderer.
     pub fn new(_format: PixelFormat) -> Option<Renderer> {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            log::warn!(
+                "a shader view draws nothing: this runtime was built without the NSH platform crate's feature `shader`"
+            )
+        });
         None
+    }
+
+    /// Calls `done(None)` at once: this build has no renderer.
+    pub fn open(_format: PixelFormat, done: impl FnOnce(Option<Renderer>) + Send + 'static) {
+        done(None);
+    }
+
+    /// Does nothing: no pipeline is ever compiled (`f` is dropped).
+    pub fn on_pipeline_ready(&self, f: impl Fn() + Send + Sync + 'static) {
+        drop(f);
+    }
+
+    /// `false`: no pipeline is ever compiled.
+    pub fn compiling(&self) -> bool {
+        false
+    }
+
+    /// `true` at once: no pipeline is ever compiled.
+    pub fn wait_for_pipelines(&self, _timeout: Duration) -> bool {
+        true
     }
 
     /// The format of the frames.
@@ -117,6 +145,11 @@ impl ShaderView {
         false
     }
 
+    /// `false`: nothing compiles.
+    pub fn compiling(&self) -> bool {
+        false
+    }
+
     /// `false`: there are no frames.
     pub fn pending(&self) -> bool {
         false
@@ -138,8 +171,14 @@ impl ShaderView {
     }
 
     /// Does nothing: there are no frames.
-    #[cfg(target_vendor = "apple")]
-    pub fn show_on_surfaces(&mut self) {}
+    #[cfg(any(target_vendor = "apple", windows))]
+    pub fn show_on_surfaces(&mut self, _on: bool) {}
+
+    /// `None`: there are no frames.
+    #[cfg(windows)]
+    pub fn surface(&self) -> Option<SharedTexture> {
+        None
+    }
 
     /// `None`: there are no frames.
     #[cfg(target_vendor = "apple")]

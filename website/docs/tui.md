@@ -1,6 +1,6 @@
 ---
 title: TUI
-description: "Run Rust and TSX NSH apps in a terminal: the Cell layout, keyboard and mouse input, the terminal's colors, how components and popups look on the grid, detecting the terminal in app code, testing, and embedding AppView in a ratatui app."
+description: "Run TSX and Rust NSH apps in a terminal: the Cell layout, keyboard and mouse input, the terminal's colors, how components and popups look on the grid, detecting the terminal in app code, testing, and embedding AppView in a ratatui app."
 order: 16.5
 group: platforms
 ---
@@ -78,8 +78,8 @@ frame is whole Cells, and spacing designed in points for a screen becomes the Ce
 Every control is reachable from the keyboard. Tab and Shift+Tab visit pressable and editable views in document order,
 as on the desktops; the arrows move to the nearest control in that direction, scrolling to reach it. A control
 scrolled into view by the keyboard is centered in its scroll view. While a dialog or a sheet is open over its
-backdrop, Tab stays in it, and closing it gives the focus back to the control it came from. Tab always moves to the
-next control: in a `DataTable` it leaves the table, and the arrows move between its columns. A click gives the focus
+backdrop, Tab stays in it, and closing it gives the focus back to the control it came from. In a `DataTable` Tab and
+the arrows move between its cells, as on the desktops, and Escape gives the keyboard back so Tab moves on. A click gives the focus
 to the control it is on, or the one around it, and Tab goes on from there.
 
 | Keys | Do |
@@ -102,6 +102,24 @@ the kitty keyboard protocol report Ctrl+I, Ctrl+M and Ctrl+[ apart from Tab, Ent
 releases, and Super as Cmd, so `cmd+` shortcuts work there; on macOS terminals without it, a Ctrl shortcut that no
 binding takes is tried again as Cmd, and menus and hints (`keymap.label`, `Command`) show those shortcuts with
 Ctrl, the key to press there (`⌃O` for `mod+o`).
+
+**Raw key events.** A focused custom view can hear the keys themselves, as on the desktops: `onKeyDown` /
+`onKeyUp` (a Rust view's `on_key_down` / `on_key_up`) report a `KeyEvent` whose `key` is the logical key the
+terminal names (`a`, `A`, `ArrowLeft`, `Enter`), with the modifiers the terminal reports and the `repeat` flag.
+`code` is always empty: a terminal reports no hardware key identity, and the host never derives one from the
+character a key types. `defaultPrevented` is the capture rule's (`capture_keys`) decision, matched on the same
+canonical shortcuts as the app's keymap; a captured key is marked and runs none of the terminal's defaults,
+while listeners still hear it. The app's own shortcuts keep their priority, and a text field or the Minibuffer
+keeps its keys. A dialog (`Modal`) is the keyboard boundary, while a sheet is an overlay in the same window,
+so its keys follow the view that declared it, as on the desktops.
+
+What the terminal reports varies; nothing is invented when it reports less:
+
+| Terminal | What a `KeyEvent` gets |
+|---|---|
+| Plain text / legacy terminal | Presses only: a key down per stroke, no release, and an auto-repeat arrives as another press; no physical code |
+| Kitty keyboard protocol | The standalone host negotiates it: releases and auto-repeats for the keys sent as escape codes (arrows, function keys, modified keys); Enter, Tab, Backspace and plain text stay presses; no physical code |
+| Windows console | Crossterm reads the console's key-up records, so releases arrive; auto-repeats arrive as the console reports them; no physical code |
 
 **Search.** Ctrl+S and Ctrl+R search the text on screen as you type, as readline and Emacs do. The query shows on the
 bottom row after `/` (forward) or `?` (backward), the match is highlighted and focus moves to the control it belongs
@@ -196,7 +214,7 @@ accent. The app's focus styles still apply on top.
 | Component | In the terminal |
 |---|---|
 | `Checkbox` | `[✓]`, `[ ]` or `[–]`, then its label |
-| `Radio` | `(●)` or `( )`, then its label |
+| `Radio` | `[●]` or `[ ]`, then its label |
 | `Switch` | `[✓]` on, `[ ]` off, as a checkbox |
 | `Slider` | a row of `─`, filled with `━` up to the value, a `●` per thumb |
 | `Progress` | a heavy line `━` in the indicator's color, then a light `─` in the line color |
@@ -234,36 +252,25 @@ while it is pressed and while the pointer is over its slot. For a mark of your o
 three Cells wide and one Cell high (24 × 16 points at the default size) with the glyph centered. With `controlsRight`,
 `NumberInput` sets its steppers side by side in a terminal, the decrement first (` −  + `).
 
-**Media elements keep their space in the layout.** An `Image`, `Video`, `WebView` or shader view larger than an icon
-keeps its box, so the text and controls around it stay where the design puts them; the terminal shows text and
-lines, so the box is blank Cells. Images, videos, web views, shaders and canvases of icon size (48 × 48 points or
-smaller) give their room to the content around them. With surfaces, a view in the image role whose background is a color (a color
-swatch) shows that color.
+**Images show their pictures.** An `Image` larger than an icon draws its picture in its box, fitted with its
+`objectFit` and `objectPosition` and tinted with its `tintColor`. In kitty and Ghostty the picture is shown at the
+terminal's own pixels, through the kitty graphics protocol; elsewhere, at 256 colors or more, each Cell shows two
+pixels in half blocks (`▀`), including inside tmux. Images show at every size: a small SVG, a logo or an avatar's
+portrait takes the Cells its box rounds to, and a picture that stays transparent until it loads (an avatar's) loads all
+the same. PNG, JPEG, GIF, WebP and SVG files, assets, remote URLs and `data:` /
+`blob:` sources load as on the other platforms, `onLoad`, `onError` and the other load events report, and
+`Image.getSize` and `Image.prefetch` answer. An animated image shows its first frame. With 16 colors or none the box
+shows the image's label in brackets (`[Green mountains]`, or `[Image]` without one), dim.
+
+**Other media keep their space in the layout.** A `Video`, `WebView` or shader view larger than an icon keeps its
+box, so the text and controls around it stay where the design puts them; the box is blank Cells. Videos, web views,
+shaders and canvases of icon size (48 × 48 points or smaller) give their room to the content around them. With
+surfaces, a view in the image role whose background is a color (a color swatch) shows that color.
 
 ## Laying out for the terminal
 
 Most apps need no change: desktop behavior applies, and the layout rules above fit a desktop design to the grid.
 Where the terminal should get a layout of its own, the idiom says so:
-
-```rust tabs
-use nsh_core::{platform::Idiom, prelude::*};
-
-#[component]
-pub fn Shell() -> impl IntoElement {
-    // The terminal gets one compact column; windows get a sidebar.
-    view()
-        .flex_1()
-        .child(if idiom() == Idiom::Terminal { compact_layout() } else { sidebar_layout() })
-}
-
-fn compact_layout() -> AnyElement {
-    view().flex_1().flex_col().into_element()
-}
-
-fn sidebar_layout() -> AnyElement {
-    view().flex_1().flex_row().into_element()
-}
-```
 
 ```tsx tabs
 import { View, platform } from "nsh";
@@ -283,6 +290,26 @@ function CompactLayout() {
 
 function SidebarLayout() {
   return <View class="flex-1 flex-row" />;
+}
+```
+
+```rust tabs
+use nsh_core::{platform::Idiom, prelude::*};
+
+#[component]
+pub fn Shell() -> impl IntoElement {
+    // The terminal gets one compact column; windows get a sidebar.
+    view()
+        .flex_1()
+        .child(if idiom() == Idiom::Terminal { compact_layout() } else { sidebar_layout() })
+}
+
+fn compact_layout() -> AnyElement {
+    view().flex_1().flex_col().into_element()
+}
+
+fn sidebar_layout() -> AnyElement {
+    view().flex_1().flex_row().into_element()
 }
 ```
 

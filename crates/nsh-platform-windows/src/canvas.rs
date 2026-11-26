@@ -93,18 +93,18 @@ use windows::{
             D2D1_PROPERTY_TYPE_FLOAT, D2D1_PROPERTY_TYPE_VECTOR4,
             D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES, D2D1_SHADOW_PROP_BLUR_STANDARD_DEVIATION,
             D2D1_SHADOW_PROP_COLOR, D2D1_STROKE_STYLE_PROPERTIES1,
-            D2D1_STROKE_TRANSFORM_TYPE_NORMAL, D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Bitmap1,
-            ID2D1Brush, ID2D1CommandList, ID2D1DeviceContext, ID2D1Factory1, ID2D1Geometry,
-            ID2D1Image, ID2D1StrokeStyle1,
+            D2D1_STROKE_TRANSFORM_TYPE_NORMAL, D2D1_TEXT_ANTIALIAS_MODE_ALIASED,
+            D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, ID2D1Bitmap1, ID2D1Brush, ID2D1CommandList,
+            ID2D1DeviceContext, ID2D1Factory1, ID2D1Geometry, ID2D1Image, ID2D1StrokeStyle1,
         },
         DirectWrite::{
             DWRITE_FONT_FEATURE, DWRITE_FONT_FEATURE_TAG, DWRITE_FONT_STRETCH_NORMAL,
             DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
             DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_LINE_METRICS, DWRITE_MATRIX,
-            DWRITE_MEASURING_MODE, DWRITE_STRIKETHROUGH, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE,
-            DWRITE_UNDERLINE, DWRITE_WORD_WRAPPING_NO_WRAP, IDWriteInlineObject,
-            IDWritePixelSnapping_Impl, IDWriteTextLayout, IDWriteTextRenderer,
-            IDWriteTextRenderer_Impl,
+            DWRITE_MEASURING_MODE, DWRITE_RENDERING_MODE_ALIASED, DWRITE_STRIKETHROUGH,
+            DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_UNDERLINE, DWRITE_WORD_WRAPPING_NO_WRAP,
+            IDWriteInlineObject, IDWritePixelSnapping_Impl, IDWriteRenderingParams,
+            IDWriteTextLayout, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
         },
     },
     core::{HSTRING, Interface},
@@ -113,7 +113,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::{
     gfx::{self, Gfx},
-    image::Frame,
+    image::CanvasBitmap,
     render::{DrawCx, color_f, rect_f},
     surface::Surface,
     view::{NshView, ViewState},
@@ -143,7 +143,7 @@ pub(crate) struct CanvasState {
     args: Vec<Option<AnimationValue>>,
     /// The images the drawing names, by URI: `None` while loading (or
     /// when they failed to load).
-    images: FxHashMap<Arc<str>, Option<Arc<Frame>>>,
+    images: FxHashMap<Arc<str>, Option<CanvasBitmap>>,
     /// What was recorded (made while drawing, which only sees the state).
     cache: RefCell<Cache>,
     /// Where the operations reading changed slots paint ([`DamageScan`]):
@@ -175,6 +175,10 @@ struct Cache {
     split: usize,
     /// The device generation `list` belongs to.
     generation: u64,
+    /// The text rendering params `list` and `head` were recorded with.
+    text_params: Option<IDWriteRenderingParams>,
+    /// Also invalidates recordings using system defaults (no custom params).
+    text_params_generation: u64,
     /// DirectWrite layouts of `fillText` / `strokeText`.
     text: TextCache,
 }
@@ -257,10 +261,12 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, drawing: Arc<Drawing>) 
         c.stale();
     }
     let id = view.id();
+    // An SVG is rasterized for the screen it shows on.
+    let scale = surface.scale();
     for uri in load {
         let weak = Rc::downgrade(surface);
         let key = uri.clone();
-        crate::image::load_bitmap(surface, &uri, move |result| {
+        crate::image::load_bitmap(surface, &uri, scale, move |result| {
             let frame = match result {
                 Ok(frame) => frame,
                 Err(e) => {
@@ -892,22 +898,30 @@ fn draw_canvas(cx: &mut DrawCx<'_>, state: &ViewState) {
     }
     let mut cache = canvas.cache.borrow_mut();
     let generation = gfx::generation();
-    if cache.generation != generation {
+    let text_params_generation = crate::text::rendering_params_generation();
+    if cache.generation != generation
+        || cache.text_params != cx.text_params
+        || cache.text_params_generation != text_params_generation
+    {
         cache.generation = generation;
+        cache.text_params = cx.text_params.clone();
+        cache.text_params_generation = text_params_generation;
         cache.list = None;
         cache.head = None;
     }
     let cache = &mut *cache;
+    let text_params = cx.text_params.as_ref();
     if cache.head.is_none() {
         cache.split = split(drawing);
         let head = (cache.split > 0).then(|| {
-            record(
+            record_with_params(
                 cx.gfx,
                 &drawing.ops[..cache.split],
                 0,
                 &canvas.args,
                 &canvas.images,
                 &mut cache.text,
+                text_params,
             )
             .map_err(|e| log::warn!("canvas: not recorded: {e}"))
             .ok()
@@ -917,13 +931,14 @@ fn draw_canvas(cx: &mut DrawCx<'_>, state: &ViewState) {
         cache.list = None;
     }
     if cache.list.is_none() {
-        let recorded = record(
+        let recorded = record_with_params(
             cx.gfx,
             &drawing.ops,
             cache.split,
             &canvas.args,
             &canvas.images,
             &mut cache.text,
+            text_params,
         );
         let list = recorded
             .map_err(|e| log::warn!("canvas: not recorded: {e}"))
@@ -967,8 +982,21 @@ fn record(
     ops: &[CanvasOp],
     from: usize,
     args: &[Option<AnimationValue>],
-    images: &FxHashMap<Arc<str>, Option<Arc<Frame>>>,
+    images: &FxHashMap<Arc<str>, Option<CanvasBitmap>>,
     text: &mut TextCache,
+) -> windows::core::Result<ID2D1CommandList> {
+    let text_params = crate::text::rendering_params(windows::Win32::Foundation::HWND::default());
+    record_with_params(gfx, ops, from, args, images, text, text_params.as_ref())
+}
+
+fn record_with_params(
+    gfx: &Gfx,
+    ops: &[CanvasOp],
+    from: usize,
+    args: &[Option<AnimationValue>],
+    images: &FxHashMap<Arc<str>, Option<CanvasBitmap>>,
+    text: &mut TextCache,
+    text_params: Option<&IDWriteRenderingParams>,
 ) -> windows::core::Result<ID2D1CommandList> {
     // The pool leaves the thread-local while recording, which never
     // records another canvas.
@@ -988,6 +1016,7 @@ fn record(
         args,
         images,
         text,
+        text_params,
         state: State::default(),
         stack: Vec::new(),
         path: PathBuf::default(),
@@ -1010,17 +1039,19 @@ fn record(
     result.and(list)
 }
 
-/// A device context for recording, made on `gfx`'s device.
-fn recorder(gfx: &Gfx) -> windows::core::Result<ID2D1DeviceContext> {
-    // SAFETY: COM calls on the live device.
+/// Applies the recording's text settings to a pooled context.
+fn set_recording_text_params(dc: &ID2D1DeviceContext, params: Option<&IDWriteRenderingParams>) {
+    // ClearType needs a background, which a command list does not have.
+    // Grayscale is incompatible with aliased DirectWrite params.
+    // SAFETY: COM calls on the live context and rendering params.
     unsafe {
-        let dc = gfx
-            .device
-            .CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
-        // ClearType needs to know what is behind the text, which a command
-        // list does not.
-        dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-        Ok(dc)
+        let mode = if params.is_some_and(|p| p.GetRenderingMode() == DWRITE_RENDERING_MODE_ALIASED) {
+            D2D1_TEXT_ANTIALIAS_MODE_ALIASED
+        } else {
+            D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE
+        };
+        dc.SetTextAntialiasMode(mode);
+        dc.SetTextRenderingParams(params);
     }
 }
 
@@ -1198,8 +1229,12 @@ struct Replay<'a> {
     /// The main list being recorded.
     main: Option<ID2D1CommandList>,
     args: &'a [Option<AnimationValue>],
-    images: &'a FxHashMap<Arc<str>, Option<Arc<Frame>>>,
+    images: &'a FxHashMap<Arc<str>, Option<CanvasBitmap>>,
     text: &'a mut TextCache,
+    /// DirectWrite rendering params applied before each command-list draw so
+    /// pooled recording contexts follow the active monitor and live setting
+    /// changes.
+    text_params: Option<&'a IDWriteRenderingParams>,
     state: State,
     /// Saved states and how many clips each had.
     stack: Vec<(State, usize)>,
@@ -1251,7 +1286,13 @@ impl<'a> Replay<'a> {
     /// The recording context of level `depth`, made if new.
     fn level(&mut self, depth: usize) -> windows::core::Result<ID2D1DeviceContext> {
         while self.pool.dcs.len() <= depth {
-            self.pool.dcs.push(recorder(self.gfx)?);
+            // SAFETY: a COM call on the live device.
+            let dc = unsafe {
+                self.gfx
+                    .device
+                    .CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?
+            };
+            self.pool.dcs.push(dc);
         }
         Ok(self.pool.dcs[depth].clone())
     }
@@ -1879,6 +1920,7 @@ impl<'a> Replay<'a> {
         unsafe {
             let list = dc.CreateCommandList()?;
             dc.SetTarget(&list);
+            set_recording_text_params(&dc, self.text_params);
             dc.BeginDraw();
             dc.SetTransform(&Matrix3x2::identity());
             self.main = Some(list);
@@ -1954,6 +1996,7 @@ impl<'a> Replay<'a> {
         unsafe {
             let list = dc.CreateCommandList()?;
             dc.SetTarget(&list);
+            set_recording_text_params(&dc, self.text_params);
             dc.BeginDraw();
             dc.SetTransform(&Matrix3x2::identity());
             if clipped {
@@ -2322,9 +2365,12 @@ impl<'a> Replay<'a> {
     // --- Images ---
 
     /// The bitmap of the image `uri`, once loaded.
-    fn bitmap(&self, uri: &str) -> Option<ID2D1Bitmap1> {
-        let frame = self.images.get(uri)?.as_ref()?;
-        frame.bitmap(&self.pool.dcs[0])
+    /// The bitmap of image `uri`, and its pixels per unit of the image's
+    /// own size ([`CanvasBitmap::scale`]).
+    fn bitmap(&self, uri: &str) -> Option<(ID2D1Bitmap1, f64)> {
+        let image = self.images.get(uri)?.as_ref()?;
+        let bitmap = image.frame.bitmap(&self.pool.dcs[0])?;
+        Some((bitmap, f64::from(image.scale)))
     }
 
     fn image(
@@ -2342,12 +2388,14 @@ impl<'a> Replay<'a> {
         if self.paints_nothing(None) {
             return Ok(());
         }
-        let Some(bitmap) = self.bitmap(uri) else {
+        let Some((bitmap, scale)) = self.bitmap(uri) else {
             return Ok(());
         };
         // SAFETY: a COM call on a live bitmap.
         let size = unsafe { bitmap.GetPixelSize() };
-        let (iw, ih) = (size.width as f64, size.height as f64);
+        // The source rectangle and the default size are in the image's own
+        // units: an SVG drawn sharp has `scale` pixels to each.
+        let (iw, ih) = (size.width as f64 / scale, size.height as f64 / scale);
         let [sx, sy, sw, sh] = source.map_or([0.0, 0.0, iw, ih], |s| s.map(f64::from));
         if sw == 0.0 || sh == 0.0 {
             return Ok(());
@@ -2357,7 +2405,7 @@ impl<'a> Replay<'a> {
         if dw == 0.0 || dh == 0.0 {
             return Ok(());
         }
-        let src = normalized(sx, sy, sw, sh);
+        let src = normalized(sx * scale, sy * scale, sw * scale, sh * scale);
         let dst = normalized(dx, dy, dw, dh);
         let (alpha, composite) = (self.state.alpha as f32, self.state.composite);
         self.emit(true, composite, alpha, &|r, alpha| {

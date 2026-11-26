@@ -273,8 +273,11 @@ pub struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
+        // One runtime per engine: its id is the engine's.
+        let mut data = RustData::default();
+        data.ambient.engine_id = Some(super::EngineId::next());
         Self {
-            graph: Box::new(UnsafeCell::new(r::Graph::new(RustData::default()))),
+            graph: Box::new(UnsafeCell::new(r::Graph::new(data))),
         }
     }
 }
@@ -389,6 +392,28 @@ impl Node {
     #[track_caller]
     pub(crate) fn with<T: 'static, R>(self, what: &str, f: impl FnOnce(&T) -> R) -> R {
         read_value(self.0.expect(what), true, f)
+    }
+
+    /// `f` of its value, subscribing nothing (`what` names it if it is
+    /// gone).
+    #[track_caller]
+    pub(crate) fn with_untracked<T: 'static, R>(self, what: &str, f: impl FnOnce(&T) -> R) -> R {
+        read_value(self.0.expect(what), false, f)
+    }
+
+    /// Whether it is a memo that runs again before its value is current
+    /// (what it reads changed). False once it is gone.
+    pub(crate) fn is_outdated(self) -> bool {
+        self.0.live() && graph().outdated(self.0.id)
+    }
+
+    /// Brings the memo it names up to date now, subscribing nothing: what
+    /// its run writes is written before the caller reads it. Nothing when
+    /// it is current or gone.
+    pub(crate) fn bring_up_to_date(self) {
+        if self.is_outdated() {
+            untracked(|| drop(r::read(Rust, self.0.id)));
+        }
     }
 
     /// Writes `value` to it (a signal's node): what read it runs again,
@@ -1268,6 +1293,7 @@ static_reactive!(i128: i128);
 static_reactive!(isize: isize);
 static_reactive!((u32, u32): (u32, u32));
 static_reactive!(String: String);
+static_reactive!(Vec<String>: Vec<String>);
 static_reactive!(std::time::Duration: std::time::Duration);
 
 impl IntoReactive<String> for &str {

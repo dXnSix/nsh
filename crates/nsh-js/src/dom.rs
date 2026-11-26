@@ -62,6 +62,9 @@ pub(crate) const MAX_DEPTH: u32 = 64;
 /// at each level of nesting.
 pub(crate) const MAX_ARRAY_ITEMS: u32 = 1 << 20;
 
+/// The host owns the surface: mount plain content without an implicit window.
+pub(crate) struct InlineRoot;
+
 /// The renderer's part of a context's state.
 pub(crate) struct Dom {
     shared: Rc<Shared>,
@@ -73,6 +76,7 @@ pub(crate) struct Dom {
     nodes: RefCell<nsh_core::id_table::IdTable<*mut NodeData>>,
     /// The root view's object (owned).
     root: Cell<JsValue>,
+    inline_root: bool,
     /// The platform: `ios={{…}}` / `android={{…}}` / `web={{…}}` props
     /// apply on it only.
     os: Cell<Os>,
@@ -100,6 +104,10 @@ pub(crate) struct Dom {
     /// whose they are (not owned: a row taken out of its `each`, or the
     /// object's finalizer, takes its entry out).
     pending_rows: RefCell<FxHashMap<NodeId, JsValue>>,
+    /// How many `<Window>` scenes the app root declared while it mounted,
+    /// open or not (reset by `mount`): one that starts closed is still the
+    /// app's window, not a plain root.
+    declared_windows: Cell<u32>,
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +136,8 @@ struct NodeData {
     /// Has a `panActivation`: becomes the responder when the platform
     /// activates its pan, and is not asked before.
     pan_gated: bool,
+    /// It was given a `selectionMenu`, whose functions go with it.
+    selection_menu: bool,
     /// Values of props that may hold native animation nodes (`style`,
     /// `pan`, ...), kept alive with the view (owned).
     retained: Vec<(std::borrow::Cow<'static, str>, JsValue)>,
@@ -152,6 +162,27 @@ fn dom<'a>(cx: *mut JsContext) -> &'a Dom {
     // SAFETY: a projection of the state's field; the renderer is only ever
     // reached by shared reference.
     unsafe { &(*crate::state::state(cx)).dom }
+}
+
+/// Whether a plain app root mounts in the host surface.
+pub(crate) fn inline_root(cx: *mut JsContext) -> bool {
+    dom(cx).inline_root
+}
+
+/// Starts counting the app root's `<Window>` declarations.
+pub(crate) fn reset_declared_windows(cx: *mut JsContext) {
+    dom(cx).declared_windows.set(0);
+}
+
+/// The app root declared a `<Window>` (open or not).
+pub(crate) fn note_declared_window(cx: *mut JsContext) {
+    let d = dom(cx);
+    d.declared_windows.set(d.declared_windows.get() + 1);
+}
+
+/// How many `<Window>` scenes the app root declared while it mounted.
+pub(crate) fn declared_windows(cx: *mut JsContext) -> u32 {
+    dom(cx).declared_windows.get()
 }
 
 /// The node data an object holds, or null for other values.
@@ -224,17 +255,25 @@ pub(crate) fn string_arg(cx: *mut JsContext, v: JsValue) -> Option<String> {
 
 /// A JS value's string (`ToString`), or `None` when that throws.
 fn to_string(cx: *mut JsContext, v: JsValue) -> Option<String> {
-    // SAFETY: a live value; the C string is freed below.
+    with_str(cx, v, str::to_owned)
+}
+
+/// `f` with a JS value's string (`ToString`), borrowed; `None` when that
+/// throws.
+pub(crate) fn with_str<R>(cx: *mut JsContext, v: JsValue, f: impl FnOnce(&str) -> R) -> Option<R> {
+    // SAFETY: a live value; the C string is freed after `f`.
     unsafe {
         let mut len = 0usize;
         let p = qjs::JS_ToCStringLen(cx, &mut len, v);
         if p.is_null() {
             return None;
         }
-        let s =
-            String::from_utf8_lossy(std::slice::from_raw_parts(p.cast::<u8>(), len)).into_owned();
+        let r = f(&String::from_utf8_lossy(std::slice::from_raw_parts(
+            p.cast::<u8>(),
+            len,
+        )));
         qjs::JS_FreeCString(cx, p);
-        Some(s)
+        Some(r)
     }
 }
 
@@ -300,6 +339,7 @@ impl Dom {
             next_id: Cell::new(2),
             nodes: RefCell::new(nsh_core::id_table::IdTable::new()),
             root: Cell::new(UNDEFINED),
+            inline_root: nsh_core::element::engine_context::<InlineRoot>().is_some(),
             os: Cell::new(Os::Ios),
             desktop: Cell::new(false),
             rtl: Cell::new(None),
@@ -309,6 +349,7 @@ impl Dom {
             dialogs: Cell::new(0),
             lazy_rows: Cell::new(false),
             pending_rows: RefCell::new(FxHashMap::default()),
+            declared_windows: Cell::new(0),
         }
     }
 
@@ -377,12 +418,22 @@ impl Dom {
         Ok(())
     }
 
+    /// The live node `id`, or null. Only that node: JS's ids are even and
+    /// index `nodes` halved, so an odd id (a Rust component's node, whose
+    /// late events reach JS once the component no longer has it) would
+    /// otherwise find the JS node one below it.
     fn by_id(&self, id: NodeId) -> *mut NodeData {
-        self.nodes
+        let p = self
+            .nodes
             .borrow()
             .get((id >> 1) as usize)
             .copied()
-            .unwrap_or(ptr::null_mut())
+            .unwrap_or(ptr::null_mut());
+        // SAFETY: a live node's data, read briefly.
+        if p.is_null() || unsafe { (*p).id } != id {
+            return ptr::null_mut();
+        }
+        p
     }
 }
 
@@ -403,6 +454,14 @@ pub(crate) const NODE_METHODS: &[(&str, c_int, &str, &str)] = &[
         0,
         decl!("(): void"),
         decl!("Unfocuses an `<Input>`, or takes the keyboard focus off a view that takes presses."),
+    ),
+    (
+        "clearSelection",
+        0,
+        decl!("(): void"),
+        decl!(
+            "Clears the selection of a `selectable` view, or of the selectable texts inside the view: the highlight goes and the selectable view hears `onSelectionChange` with `\"\"`."
+        ),
     ),
     (
         "setSelection",
@@ -476,6 +535,14 @@ pub(crate) const NODE_METHODS: &[(&str, c_int, &str, &str)] = &[
         decl!("(): Promise<{ index: number; offset: number } | null>"),
         decl!(
             "`List`: where its viewport starts among its rows once this turn's changes are laid out, as the list lays them out (measured rows at their sizes, the others at their estimates): `index` the first item of the row there, `offset` how far past the row's start (negative in a header before the first row). Read it as the list scrolls (`onScroll`) to keep a reading position; `scrollToIndex({ index, viewOffset: -offset })` puts the viewport's start back there, in a list made anew too. Along the list's axis from the side item 0 is on (the bottom of an inverted list). `null` for a list without items."
+        ),
+    ),
+    (
+        "animateLayout",
+        1,
+        decl!("(transition?: LayoutAnimationAnimation): void"),
+        decl!(
+            "Animates the frames this view's change moves in this turn, with `transition` (a phase of `LayoutAnimation.configureNext`: `type`, `duration`, `delay`, `springDamping`, a physical spring's `stiffness` / `damping` / `mass`, `bezier`; easing in and out over 300 ms without one): its own frame and its subtree's, its siblings' and its ancestors' siblings' that it pushes, and the content of those that it resizes. The rest of the turn (a list that updates, live data) changes at once, as it would without it, and a view that gains or loses children does not carry the change into them. Insertions and removals are not animated. A `LayoutAnimation.configureNext` in the same turn animates every frame instead. E.g. a header that collapses over a list that keeps updating."
         ),
     ),
     (
@@ -638,6 +705,17 @@ unsafe extern "C" fn node_method(
                 qjs::JS_SetPropertyStr(cx, o, c"animated".as_ptr(), field(a0, c"animated"));
                 ("scrollTo", o)
             }
+            // The phase `update` of a layout animation sent to this node.
+            "animateLayout" => {
+                let o = qjs::JS_NewObject(cx);
+                let update = if qjs::JS_IsObject(a0) {
+                    qjs::JS_DupValue(cx, a0)
+                } else {
+                    qjs::JS_NewObject(cx)
+                };
+                qjs::JS_SetPropertyStr(cx, o, c"update".as_ptr(), update);
+                ("layoutAnimation", o)
+            }
             "scrollToEnd" if qjs::JS_IsUndefined(a0) => ("scrollToEnd", qjs::JS_NewObject(cx)),
             other => (
                 NODE_METHODS
@@ -681,6 +759,7 @@ fn new_node(cx: *mut JsContext, id: NodeId, text: bool, tag: Option<Tag>) -> JsV
         popped: UNDEFINED,
         touch: Vec::new(),
         pan_gated: false,
+        selection_menu: false,
         retained: Vec::new(),
         parent: DETACHED,
         children: Vec::new(),
@@ -970,8 +1049,9 @@ unsafe extern "C" fn node_finalize(rt: *mut qjs::JSRuntime, obj: JsValue) {
             // Not the op queue: a finalizer may run while it is borrowed.
             d.shared.releases.borrow_mut().push(data.id);
         }
-        // Trailing header bar handlers live as long as the page.
-        if data.tag == Some(Tag::Screen) {
+        // Trailing header bar handlers live as long as the page, a
+        // selection menu's as long as its view.
+        if data.tag == Some(Tag::Screen) || data.selection_menu {
             crate::desktop::clear_header_rt(rt, data.id);
         }
         if data.tag == Some(Tag::Modal) {
@@ -1439,7 +1519,7 @@ fn set_prop(
         }
         // SAFETY: live node data.
         "component" | "componentSlot" => unsafe { (*p).places = true },
-        "ios" | "android" | "macos" | "desktop" | "web" => {
+        "ios" | "android" | "macos" | "windows" | "desktop" | "web" => {
             return platform_props(cx, node, name, value, prev);
         }
         "contentStyle" | "contentClass" if unsafe { (*p).tag } == Some(Tag::Scroll) => {
@@ -1453,6 +1533,11 @@ fn set_prop(
         }
         "tooltip" if followed(cx, name, value) => return bind_prop_with(cx, node, name, value),
         _ => {}
+    }
+    if name == "selectionMenu" {
+        // SAFETY: live node data.
+        unsafe { (*p).selection_menu = true };
+        return crate::desktop::set_selection_menu(cx, id, value);
     }
     if name == "headerRightItems" {
         return crate::desktop::set_header_right_items(cx, id, value);
@@ -1687,8 +1772,8 @@ pub(crate) fn is_ancestor_of(cx: *mut JsContext, node: NodeId, of: NodeId) -> bo
     is_ancestor(cx, node, of)
 }
 
-/// `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `web={{…}}` /
-/// `desktop={{…}}`: the props of this platform only, each set (or cleared)
+/// `ios={{…}}` / `android={{…}}` / `macos={{…}}` / `windows={{…}}` /
+/// `web={{…}}` / `desktop={{…}}`: the props of this platform only, each set (or cleared)
 /// on its own. Desktop props apply on the desktop OSes and in
 /// desktop-class browsers.
 fn platform_props(
@@ -1743,18 +1828,25 @@ fn platform_props(
             let k = std::ffi::CString::new(key).unwrap_or_default();
             qjs::JS_GetPropertyStr(cx, obj, k.as_ptr())
         };
+        let set = |key: &str, value, old| {
+            if name == "windows" {
+                set_prop(cx, node, &format!("windows.{key}"), value, old)
+            } else {
+                set_prop(cx, node, key, value, old)
+            }
+        };
         let next_keys = keys(value);
         for key in keys(prev) {
             if !next_keys.contains(&key) {
                 let old = get(prev, &key);
-                let r = set_prop(cx, node, &key, UNDEFINED, old);
+                let r = set(&key, UNDEFINED, old);
                 qjs::JS_FreeValue(cx, old);
                 r?;
             }
         }
         for key in next_keys {
             let (v, old) = (get(value, &key), get(prev, &key));
-            let r = set_prop(cx, node, &key, v, old);
+            let r = set(&key, v, old);
             qjs::JS_FreeValue(cx, v);
             qjs::JS_FreeValue(cx, old);
             r?;
@@ -2285,6 +2377,17 @@ unsafe extern "C" fn item_run(
     if unsafe { !qjs::JS_IsException(r) && qjs::JS_IsFunction(cx, r) } && node_ptr(cx, r).is_null()
     {
         return item_memo(cx, r);
+    }
+    // An array holding functions (a component's `children` shown beside a
+    // branch of its own, `{cond ? a : b}{props.children}`): each gets a memo
+    // too, as `insert_run` gives them, or the array's effect would call
+    // them all, and make their nodes again, when any one of them changes.
+    if unsafe { qjs::JS_IsArray(r) }
+        && let Some(memos) = memoize_run(cx, r)
+    {
+        // SAFETY: the copy holds what it needs of `r`.
+        unsafe { qjs::JS_FreeValue(cx, r) };
+        return memos;
     }
     r
 }
@@ -3537,33 +3640,91 @@ pub(crate) unsafe extern "C" fn mount(
         return dispose;
     }
     let root = d.root.get();
+    let windowed = {
+        let env = crate::env::current(cx);
+        !d.inline_root && env.os.is_desktop() && env.idiom != nsh_core::platform::Idiom::Terminal
+    };
     // SAFETY: reads of the root's children; dups for the dispose function.
     let before: Vec<JsValue> = unsafe { &(*node_ptr(cx, root)).children }
         .iter()
         .map(|&v| unsafe { qjs::JS_DupValue(cx, v) })
         .collect();
-    let (owner, result) = reactive::with_root(cx, || {
-        let props = if unsafe { qjs::JS_IsObject(props) } {
-            unsafe { qjs::JS_DupValue(cx, props) }
-        } else {
-            unsafe { qjs::JS_NewObject(cx) }
-        };
-        let mut args = [props];
-        let out = reactive::untracked_with(cx, || unsafe {
-            qjs::JS_Call(cx, app, UNDEFINED, 1, args.as_mut_ptr())
-        });
-        unsafe { qjs::JS_FreeValue(cx, props) };
-        if unsafe { qjs::JS_IsException(out) } {
-            return Err(out);
+    let (owner, result) = reactive::with_root(
+        cx,
+        || -> Result<Option<crate::window::Implicit>, JsValue> {
+            // A standalone desktop app root is a host: its content is top-level
+            // `<Window>` scenes, each with a root of its own. A released
+            // app that returns views instead is the content of its first
+            // window, as it was the main window's before: the runtime
+            // opens that window (`main`) around it, unless the root turns
+            // out to declare windows of its own.
+            let mut implicit = if windowed {
+                Some(crate::window::begin_implicit(cx)?)
+            } else {
+                None
+            };
+            reset_declared_windows(cx);
+            // The first window's node joins the app root before the root
+            // renders: what the root inserts, and the effects its dynamics
+            // make, go into it rather than the invisible host. A root that
+            // declares windows keeps the node as their home, unopened.
+            let joined = match implicit.as_ref() {
+                Some(implicit) => insert_value(cx, root, implicit.node, None),
+                None => Ok(()),
+            };
+            if let Err(e) = joined {
+                if let Some(implicit) = implicit.take() {
+                    crate::window::discard_implicit(cx, implicit);
+                }
+                return Err(e);
+            }
+            let props = if unsafe { qjs::JS_IsObject(props) } {
+                unsafe { qjs::JS_DupValue(cx, props) }
+            } else {
+                unsafe { qjs::JS_NewObject(cx) }
+            };
+            let mut args = [props];
+            let out = reactive::untracked_with(cx, || unsafe {
+                qjs::JS_Call(cx, app, UNDEFINED, 1, args.as_mut_ptr())
+            });
+            unsafe { qjs::JS_FreeValue(cx, props) };
+            if unsafe { qjs::JS_IsException(out) } {
+                if let Some(implicit) = implicit.take() {
+                    crate::window::discard_implicit(cx, implicit);
+                }
+                return Err(out);
+            }
+            let parent = implicit.as_ref().map_or(root, |implicit| implicit.node);
+            let r = insert_value(cx, parent, out, None);
+            unsafe { qjs::JS_FreeValue(cx, out) };
+            if let Err(e) = r {
+                if let Some(implicit) = implicit.take() {
+                    crate::window::discard_implicit(cx, implicit);
+                }
+                return Err(e);
+            }
+            Ok(implicit)
+        },
+    );
+    let implicit = match result {
+        Ok(implicit) => implicit,
+        Err(e) => {
+            free_values(cx, before);
+            reactive::dispose_owner(cx, owner);
+            return e;
         }
-        let r = insert_value(cx, root, out, None);
-        unsafe { qjs::JS_FreeValue(cx, out) };
-        r
-    });
-    if let Err(e) = result {
-        free_values(cx, before);
-        reactive::dispose_owner(cx, owner);
-        return e;
+    };
+    if let Some(implicit) = implicit {
+        if declared_windows(cx) > 0 {
+            // The root declares the app's windows: they live in its node,
+            // which stays unopened. The old model's main window was not
+            // one of an app's windows either.
+            crate::window::forget_implicit(cx, implicit);
+        } else {
+            // Views and text, or nothing: the main window a released app
+            // rendered in, opened around its content.
+            crate::window::finish_implicit(cx, implicit, owner);
+        }
     }
     let mut data = [qjs::JS_NewFloat64(owner as f64), new_array(cx, before)];
     // SAFETY: the function keeps dups of `data`.
@@ -3610,8 +3771,8 @@ unsafe extern "C" fn unmount(
 /// `setup(tailwind, theme, appearance, statusBar, app)`: the app's Tailwind
 /// theme and the theme of the Rust components (JSON strings, or null), its
 /// appearance (`"light"` / `"dark"`, or null), the status bar's default
-/// (`nsh.json` `"statusBar"` as JSON, or null) and what `appInfo()` reports
-/// (JSON, or null), before anything renders.
+/// (`nsh.json` `"statusBar"` as a JSON string, or null) and what `appInfo()`
+/// reports (JSON, or null), before anything renders.
 unsafe extern "C" fn setup(
     cx: *mut JsContext,
     _this: JsValue,
@@ -3645,7 +3806,11 @@ unsafe extern "C" fn setup(
         crate::env::take_theme(cx, &json);
     }
     // What this runtime cannot read (a newer NSH's) is left out.
-    let status_bar = string_arg(cx, arg(argc, argv, 3))
+    let status_bar = arg(argc, argv, 3);
+    // SAFETY: an inline tag check.
+    let status_bar = (unsafe { qjs::JS_IsString(status_bar) })
+        .then(|| string_arg(cx, status_bar))
+        .flatten()
         .and_then(|json| serde_json::from_str(&json).ok())
         .map(|v| nsh_core::StatusBarSetting::from_json(&v));
     if let Some(setting) = status_bar
@@ -3853,6 +4018,17 @@ unsafe extern "C" fn each_component(
         }
         r
     }
+}
+
+/// The owner node `id` was made under, if it is still live: what is
+/// rendered into the node later sees that owner's context.
+pub(crate) fn owner_of_node(cx: *mut JsContext, id: NodeId) -> u32 {
+    let p = dom(cx).by_id(id);
+    if p.is_null() {
+        return reactive::NONE_OWNER;
+    }
+    // SAFETY: live node data.
+    reactive::live_owner(cx, unsafe { (*p).owner })
 }
 
 /// Hands the pending exception of a listener of node `id` to the error
@@ -4165,9 +4341,74 @@ unsafe extern "C" fn font(
 
 #[cfg(test)]
 mod tests {
-    use nsh_core::{EventKind, EventPayload, NodeId, Op};
+    use nsh_core::{
+        Command, EventKind, EventPayload, NodeId, Op, ROOT_ID, StatusBarSetting, StatusBarStyle,
+    };
 
     use crate::Host;
+
+    #[test]
+    fn inline_root_keeps_its_window_ref_after_opening_a_detached_main() {
+        use nsh_core::platform::{Environment, Idiom, Os};
+
+        let context = crate::with_inline_root(nsh_core::element::EngineContext::default());
+        let _context = context.enter();
+        let host = Host::new().unwrap();
+        host.set_environment(&Environment {
+            os: Os::MacOs,
+            idiom: Idiom::Desktop,
+            ..Environment::default()
+        });
+        host.eval_source(
+            r#"
+            import { mount } from "nsh";
+            import { currentWindow, Window } from "nsh/desktop";
+            import { element } from "nsh:rt";
+            mount(() => {
+                const surface = currentWindow();
+                Window.open(() => null, { id: "main" });
+                if (currentWindow() !== surface) {
+                    throw new Error("the detached main window replaced the inline root's ref");
+                }
+                return element("view");
+            });
+            "#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn setup_only_sets_the_status_bar_from_a_json_string() {
+        let host = Host::new().unwrap();
+        host.eval_source(
+            r#"
+            import { setup } from "nsh:rt";
+            setup(null, null, null, null, '{"name":"Status bar test"}');
+            setup(null, null, null, '{"foreground":"light","hidden":true}');
+            "#,
+        )
+        .unwrap();
+
+        let mut ops = Vec::new();
+        host.take_ops(&mut ops);
+        let settings: Vec<_> = ops
+            .into_iter()
+            .filter_map(|op| match op {
+                Op::Command {
+                    id,
+                    command: Command::SetStatusBar(setting),
+                } => Some((id, setting)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            settings,
+            [(
+                ROOT_ID,
+                StatusBarSetting::from(StatusBarStyle::Light).hidden(true)
+            )]
+        );
+    }
 
     /// The ops since the last call, one line each (`Release` and the root's
     /// layout direction left out unless `all`).
@@ -5067,6 +5308,9 @@ mod tests {
             const v = element("view");
             v.focus();
             v.blur();
+            // The frames its change moves, with its own transition.
+            v.animateLayout({ type: "bezier", bezier: [0.3, 0, 0, 1], duration: 200 });
+            v.animateLayout();
             globalThis.keep = [s, i, v];
             "#,
         )
@@ -5085,6 +5329,8 @@ mod tests {
                 "Command { id: 4, command: InsertText(\"pasted\") }",
                 "Command { id: 6, command: Focus }",
                 "Command { id: 6, command: Blur }",
+                "Command { id: 6, command: LayoutAnimation(LayoutAnimation { create: None, update: Some(LayoutTransition { curve: Bezier([0.3, 0.0, 0.0, 1.0]), property: Opacity, duration_ms: 200.0, delay_ms: 0.0 }), delete: None }) }",
+                "Command { id: 6, command: LayoutAnimation(LayoutAnimation { create: None, update: Some(LayoutTransition { curve: EaseInEaseOut, property: Opacity, duration_ms: 300.0, delay_ms: 0.0 }), delete: None }) }",
             ]
         );
     }

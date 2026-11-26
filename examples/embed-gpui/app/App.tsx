@@ -2,6 +2,9 @@
 // Kit window. Its controls are its own (`ui.tsx`) and follow the host's
 // light or dark mode (`AppView::set_appearance`).
 //
+// The host sets `AppOptions::inline_root` so `mount(App)` renders
+// in the pane. `<Window>` would open a separate OS window.
+//
 // The host provides the rest by name, at run time, so this app builds with
 // the stock `nsh build`: its desk (`nativeModule("host/trading")`, Rust
 // functions the host registers) and two GPUI Kit widgets (`nativeComponent`).

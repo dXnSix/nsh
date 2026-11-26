@@ -25,8 +25,8 @@ pub fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
-    let data_dir = options.data_dir.clone().or_else(nsh_engine::data_dir);
-    let launch = nsh_engine::updates::launch(bundle, &dir, data_dir.as_deref());
+    let support_dir = nsh_engine::support_dir();
+    let launch = nsh_engine::updates::launch(bundle, &dir, support_dir.as_deref());
     options.asset_base = Some(AssetBase::Directory(launch.assets));
     run_app(AppSource::Bundle(launch.bundle), options)
 }
@@ -88,6 +88,15 @@ fn setup() -> (std::path::PathBuf, nsh_platform_macos::AppOptions) {
     if let Some(id) = field("id") {
         options.app_id = id;
     }
+    // `nsh.json` `"dataDir"`: the app's data directory (its storage, logs
+    // and `${dataDir}`) rather than the one under its id.
+    options.data_dir = field("dataDir")
+        .as_deref()
+        .and_then(nsh_engine::resolve_data_dir);
+    // `nsh.json` `"logDir"`: where the log files go, apart from `dataDir`.
+    let log_dir = field("logDir")
+        .as_deref()
+        .and_then(nsh_engine::resolve_data_dir);
     if let Some(name) = field("name") {
         options.title = name;
     }
@@ -102,6 +111,11 @@ fn setup() -> (std::path::PathBuf, nsh_platform_macos::AppOptions) {
     if field("activationPolicy").as_deref() == Some("accessory") {
         options.activation_policy = ActivationPolicy::Accessory;
     }
+    // `nsh run` of a Rust app runs the runner outside an app bundle and
+    // names the app's icon; a packaged app's bundle has its own.
+    if developing {
+        options.icon = field("icon").map(std::path::PathBuf::from);
+    }
     // `open -a <App> --args --fps` shows the performance monitor, and so
     // does `NSHPerformanceMonitor` (a boolean) in the bundle's Info.plist:
     // a build that opens with it however it is launched (the Dock, Finder,
@@ -111,7 +125,12 @@ fn setup() -> (std::path::PathBuf, nsh_platform_macos::AppOptions) {
     // app's own runtime-delivered modules (the bundle's resources are
     // read-only).
     options.chunks = std::env::var_os("NSH_CHUNK_DIR").map(std::path::PathBuf::from);
-    install_logger(developing, &options.app_id);
+    install_logger(
+        developing,
+        &options.app_id,
+        options.data_dir.as_deref(),
+        log_dir.as_deref(),
+    );
     (dir, options)
 }
 
@@ -123,14 +142,19 @@ fn setup() -> (std::path::PathBuf, nsh_platform_macos::AppOptions) {
 /// app that installed its own logger (from its native module, which runs
 /// first) keeps it, and its level.
 #[cfg(target_os = "macos")]
-fn install_logger(development: bool, app_id: &str) {
+fn install_logger(
+    development: bool,
+    app_id: &str,
+    data_dir: Option<&std::path::Path>,
+    log_dir: Option<&std::path::Path>,
+) {
     let mut unified = nsh_platform_apple::unified_log::Options::default();
     unified.development = development;
     unified.filtered = true;
     let unified = nsh_platform_apple::unified_log::logger(unified);
     let mut logging = nsh_engine::logging::LogOptions::default();
     logging.development = development;
-    logging.directory = nsh_engine::logging::log_dir(app_id);
+    logging.directory = nsh_engine::logging::log_directory(app_id, data_dir, log_dir);
     logging.output = Some(Box::new(move |r: &log::Record<'_>| unified.log(r)));
     nsh_engine::logging::install(logging);
 }

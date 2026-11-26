@@ -347,7 +347,7 @@ impl Rv {
                 }
             },
         };
-        self.set_selection(selection, false);
+        self.set_pointer_selection(selection, false);
         self.close_edit_menu();
         let range = {
             let state = self.session.state();
@@ -459,7 +459,7 @@ impl Rv {
             return;
         }
         let range = (selection.from(), selection.to());
-        self.set_selection(selection, true);
+        self.set_pointer_selection(selection, true);
         self.touch.inner.borrow_mut().range = Some(range);
         self.touch.bump();
     }
@@ -570,7 +570,7 @@ impl Rv {
             return;
         }
         // Near the viewport's edge the dragged end scrolls into view.
-        self.set_selection(selection, true);
+        self.set_pointer_selection(selection, true);
         let mut inner = self.touch.inner.borrow_mut();
         inner.range = Some(range);
         inner.drag = Some(drag);
@@ -656,17 +656,6 @@ impl Rv {
             Point::new(b.origin.x, y0),
             Size::new(b.size.width, y1 - y0),
         ))
-    }
-
-    /// The box of the block node at `pos` (a node selection's), in the
-    /// content box.
-    fn node_box(&self, pos: usize) -> Option<Bounds<Points>> {
-        let tree = self.tree.borrow();
-        let geo = self.geo.borrow();
-        let block = tree.children.values().flatten().find(|b| b.pos == pos)?;
-        let origin = geo.origin(block.id)?;
-        let (_, frame) = geo.frames.get(&block.id)?;
-        Some(Bounds::new(origin, frame.size))
     }
 
     /// An action chosen from the edit menu: as the keyboard's commands do

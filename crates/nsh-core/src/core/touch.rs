@@ -207,7 +207,7 @@ impl<M: TextEngine> Core<M> {
     }
 
     fn responder_event_now(&self, about: &TouchPoint, touch: &TouchEvent) -> ResponderEvent {
-        ResponderEvent::new(about, touch.timestamp, self.components.touch.gesture)
+        ResponderEvent::new(about, touch, self.components.touch.gesture)
     }
 
     /// Asks the nodes of `path` (innermost first) whether one claims the
@@ -387,6 +387,14 @@ impl<T: TextEngine> Core<T> {
     pub(super) fn cancel_press(&mut self, id: NodeId) {
         let Ok(outer) = self.key(id) else { return };
         self.components.touch.cancelled = Some(id);
+        let cancelled: Vec<super::Key> = self
+            .pressed_impulses
+            .iter()
+            .map(|&(k, _, _)| k)
+            .filter(|&k| self.is_within(k, outer))
+            .collect();
+        self.pressed_impulses
+            .retain(|&(k, _, _)| !cancelled.contains(&k));
         // The slab's occupied entries: `len` counts them, and a removed
         // node leaves its key vacant below the highest one.
         let pressed: Vec<super::Key> = (self.nodes.iter())

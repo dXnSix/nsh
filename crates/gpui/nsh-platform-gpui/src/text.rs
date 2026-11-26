@@ -56,7 +56,10 @@ use nsh_core::{
 use rustc_hash::FxHashMap;
 use unicode_bidi::{Level, ParagraphBidiInfo};
 
+use tiny_skia as sk;
+
 use crate::{
+    decor::shape::Pt,
     render::DrawCx,
     view::{NshView, ViewState},
 };
@@ -200,34 +203,62 @@ const FANTASY: &[&str] = &["Impact", "Papyrus"];
 /// The families a `fontFamily` value names, in order of preference: a
 /// comma-separated stack, CSS generic names and Apple's font names as fonts
 /// this platform has; `""` is the UI font.
-fn family_candidates(name: &str) -> Vec<&str> {
-    use nsh_core::FamilyName;
+fn family_candidates(name: &str) -> Vec<std::borrow::Cow<'_, str>> {
+    use std::borrow::Cow;
+
+    if name.contains('\\') {
+        let mut out = Vec::new();
+        nsh_core::for_each_font_family(name, |family| {
+            let mut candidates = Vec::new();
+            family_candidate(family, &mut candidates);
+            out.extend(candidates.into_iter().map(|f| Cow::Owned(f.into_owned())));
+        });
+        if out.is_empty() {
+            out.push(Cow::Borrowed(""));
+        }
+        return out;
+    }
     let mut out = Vec::new();
     for family in nsh_core::font_families(name) {
-        match family {
-            FamilyName::Monospace => out.extend_from_slice(MONOSPACE),
-            FamilyName::Serif => out.extend_from_slice(SERIF),
-            FamilyName::Named("cursive") => out.extend_from_slice(CURSIVE),
-            FamilyName::Named("fantasy") => out.extend_from_slice(FANTASY),
-            FamilyName::Named(f) => {
-                out.push(f);
-                // What apps written for Apple platforms name, as what
-                // this platform has (when it lacks the font itself).
-                out.extend_from_slice(match f {
-                    "Menlo" | "Monaco" | "SF Mono" | "Courier" | "Courier New" => MONOSPACE,
-                    "Times" | "New York" | "Georgia" => SERIF,
-                    "Helvetica" | "Helvetica Neue" | "Arial" => SANS,
-                    _ => &[],
-                });
-            }
-            // The system font, and its rounded design (which GPUI lacks).
-            _ => out.push(""),
-        }
+        family_candidate(family, &mut out);
     }
     if out.is_empty() {
-        out.push("");
+        out.push(Cow::Borrowed(""));
     }
     out
+}
+
+fn family_candidate<'a>(
+    family: nsh_core::FamilyName<'a>,
+    out: &mut Vec<std::borrow::Cow<'a, str>>,
+) {
+    use std::borrow::Cow;
+
+    use nsh_core::FamilyName;
+    match family {
+        FamilyName::Monospace => out.extend(MONOSPACE.iter().copied().map(Cow::Borrowed)),
+        FamilyName::Serif => out.extend(SERIF.iter().copied().map(Cow::Borrowed)),
+        FamilyName::Named("cursive") => {
+            out.extend(CURSIVE.iter().copied().map(Cow::Borrowed));
+        }
+        FamilyName::Named("fantasy") => {
+            out.extend(FANTASY.iter().copied().map(Cow::Borrowed));
+        }
+        FamilyName::Named(f) => {
+            // What apps written for Apple platforms name, as what
+            // this platform has (when it lacks the font itself).
+            let aliases = match f {
+                "Menlo" | "Monaco" | "SF Mono" | "Courier" | "Courier New" => MONOSPACE,
+                "Times" | "New York" | "Georgia" => SERIF,
+                "Helvetica" | "Helvetica Neue" | "Arial" => SANS,
+                _ => &[],
+            };
+            out.push(Cow::Borrowed(f));
+            out.extend(aliases.iter().copied().map(Cow::Borrowed));
+        }
+        // The system font, and its rounded design (which GPUI lacks).
+        _ => out.push(Cow::Borrowed("")),
+    }
 }
 
 /// The family of the UI font among the `installed` ones (by lowercase
@@ -865,8 +896,9 @@ impl Prepared {
             let s = &self.spans[i];
             nsh_core::FontExtent::new(Points(s.ascent), Points(s.descent), Points(s.x))
         };
-        let (up, down) = a.extent(font, alignments.get(a.index));
-        (a.ascent(font, alignments.get(a.index)).0, up.0, down.0)
+        // By its own baseline where it has one (the first baseline of the text in it).
+        let (up, down) = alignments.extent(a, font);
+        (alignments.ascent(a, font).0, up.0, down.0)
     }
 
     /// The width of clusters `start..end` without trailing whitespace.
@@ -1390,6 +1422,12 @@ impl TextEngine for GpuiTextEngine {
         }
     }
 
+    fn uniform_input_line_height(&self) -> bool {
+        // A plain input has one span. Its line box uses that span's font
+        // extents even when individual glyphs use a fallback font.
+        true
+    }
+
     fn measure(&self, p: &Prepared, max_width: Option<Points>) -> Size<Points> {
         let max = match max_width.map(|m| m.0) {
             Some(m) if !p.text.no_wrap => m.max(0.0),
@@ -1869,6 +1907,18 @@ impl GpuiTextEngine {
             (left, right) = (at, at);
         }
         let width = right - left;
+        // Whitespace hanging past the end of a paragraph's last line is
+        // not drawn and takes no room in the box, but a caret after it
+        // stands past it: that line reports it in its width. A line broken
+        // inside its paragraph does not: a caret after its break-space
+        // stands at the next line's start, and its width stays within the
+        // box (a justified line fills it exactly). A clamped line's
+        // ellipsis takes the whitespace's place.
+        let hanging: f32 = if row.last && !row.ellipsis {
+            advances[trailing..].iter().sum()
+        } else {
+            0.0
+        };
         let free = avail - width;
         let start_right = t.rtl || p.rtl;
         let x0 = match t.align {
@@ -1930,7 +1980,7 @@ impl GpuiTextEngine {
                 end,
                 x: Points(x0),
                 y: Points(y),
-                width: Points(width),
+                width: Points(width + hanging),
                 height: Points(ascent + descent),
                 ascender: Points(ascent),
                 descender: Points(descent),
@@ -2269,8 +2319,24 @@ type Painted = (
     Option<gpui::Hsla>,
 );
 
-/// Paints `glyphs`.
-fn paint_glyphs(cx: &mut DrawCx<'_>, mut glyphs: Vec<Painted>) {
+/// A glyph to paint: origin (view coordinates), font, glyph, size
+/// (points), color (`None` for an emoji, painted in its own colors).
+type Placed = (f32, f32, FontId, GlyphId, f32, Option<gpui::Hsla>);
+
+/// Paints `glyphs`: as GPUI's glyph sprites, which stay upright, unless the
+/// transform turns, flips, skews or projects them, which fills the outlines of
+/// those whose font's file gives them as paths ([`fill_outlines`]).
+fn paint_glyphs(cx: &mut DrawCx<'_>, glyphs: Vec<Placed>) {
+    let glyphs = if cx.unflipped() {
+        glyphs
+    } else {
+        fill_outlines(cx, glyphs)
+    };
+    let k = cx.transform_scale();
+    let mut glyphs: Vec<Painted> = glyphs
+        .into_iter()
+        .map(|(x, y, font, id, size, color)| (cx.map(x, y), font, id, px(size * k), color))
+        .collect();
     // GPUI clips glyphs to rectangles only: under a rounded or rotated
     // clip, a glyph shows when its middle (above the baseline) does.
     if cx.has_clip_polygon() {
@@ -2298,6 +2364,111 @@ fn paint_glyphs(cx: &mut DrawCx<'_>, mut glyphs: Vec<Painted>) {
     });
 }
 
+/// Fills the outlines of `glyphs` (not emoji) through the transform, so
+/// they turn, skew and project with the view as its other content does;
+/// returns those whose font's file gives no outline (emoji, a font GPUI
+/// fell back to, any before the system's fonts are found), which are
+/// painted upright at their origins.
+fn fill_outlines(cx: &mut DrawCx<'_>, glyphs: Vec<Placed>) -> Vec<Placed> {
+    let system = cx.app.text_system().clone();
+    // Device pixels a point of the text covers.
+    let px_per_pt = cx.scale * cx.transform_scale();
+    let mut rest = Vec::new();
+    let mut contours: Vec<Vec<Pt>> = Vec::new();
+    let mut color: Option<gpui::Hsla> = None;
+    for glyph in glyphs {
+        let (x, y, font, id, size, c) = glyph;
+        let Some(c) = c else {
+            rest.push(glyph);
+            continue;
+        };
+        let Some((outline, upem)) = crate::canvas::glyph_outline(&system, font, id.0 as u16) else {
+            rest.push(glyph);
+            continue;
+        };
+        // Glyphs of one color are one path.
+        if let Some(was) = color
+            && was != c
+        {
+            cx.fill_polygons(&contours, was, gpui::FillRule::NonZero);
+            contours.clear();
+        }
+        color = Some(c);
+        let k = size / upem.max(1) as f32;
+        flatten(
+            &outline,
+            |ux, uy| (x + ux * k, y - uy * k),
+            px_per_pt,
+            &mut contours,
+        );
+    }
+    if let Some(c) = color {
+        cx.fill_polygons(&contours, c, gpui::FillRule::NonZero);
+    }
+    rest
+}
+
+/// Adds the contours of `path` (mapped by `to` to view coordinates) to
+/// `out` as polygons, curves in steps of a few device pixels
+/// (`px_per_pt`).
+fn flatten(path: &sk::Path, to: impl Fn(f32, f32) -> Pt, px_per_pt: f32, out: &mut Vec<Vec<Pt>>) {
+    let mut contour: Vec<Pt> = Vec::new();
+    let mut last: Pt = (0.0, 0.0);
+    // Steps for a curve whose control points span `len` points: its
+    // flattening error falls with the square of the steps.
+    let steps = |len: f32| ((len * px_per_pt / 2.0).sqrt().ceil() as usize).clamp(1, 24);
+    let dist = |a: Pt, b: Pt| (b.0 - a.0).hypot(b.1 - a.1);
+    let end = |contour: &mut Vec<Pt>, out: &mut Vec<Vec<Pt>>| {
+        if contour.len() >= 3 {
+            out.push(std::mem::take(contour));
+        } else {
+            contour.clear();
+        }
+    };
+    for segment in path.segments() {
+        match segment {
+            sk::PathSegment::MoveTo(p) => {
+                end(&mut contour, out);
+                last = to(p.x, p.y);
+                contour.push(last);
+            }
+            sk::PathSegment::LineTo(p) => {
+                last = to(p.x, p.y);
+                contour.push(last);
+            }
+            sk::PathSegment::QuadTo(c, p) => {
+                let (c, p) = (to(c.x, c.y), to(p.x, p.y));
+                let n = steps(dist(last, c) + dist(c, p));
+                for i in 1..=n {
+                    let t = i as f32 / n as f32;
+                    let u = 1.0 - t;
+                    contour.push((
+                        u * u * last.0 + 2.0 * u * t * c.0 + t * t * p.0,
+                        u * u * last.1 + 2.0 * u * t * c.1 + t * t * p.1,
+                    ));
+                }
+                last = p;
+            }
+            sk::PathSegment::CubicTo(c1, c2, p) => {
+                let (c1, c2, p) = (to(c1.x, c1.y), to(c2.x, c2.y), to(p.x, p.y));
+                let n = steps(dist(last, c1) + dist(c1, c2) + dist(c2, p));
+                for i in 1..=n {
+                    let t = i as f32 / n as f32;
+                    let u = 1.0 - t;
+                    let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                    contour.push((
+                        a * last.0 + b * c1.0 + c * c2.0 + d * p.0,
+                        a * last.1 + b * c1.1 + c * c2.1 + d * p.1,
+                    ));
+                }
+                last = p;
+            }
+            sk::PathSegment::Close => end(&mut contour, out),
+        }
+    }
+    end(&mut contour, out);
+}
+
 /// Draws a text view's text shadow (view coordinates set on `cx`): before
 /// the view's content is clipped to its bounds, as a shadow spreads past
 /// them.
@@ -2316,7 +2487,6 @@ pub(crate) fn draw_shadow(cx: &mut DrawCx<'_>, state: &ViewState) {
         drawn.content.origin.x.0 + shadow.offset_x.0,
         drawn.content.origin.y.0 + shadow.offset_y.0,
     );
-    let k = cx.transform_scale();
     // GPUI blurs no glyphs: a blurred shadow is the glyphs painted on
     // rings out to the blur's radius, each faint, which spreads them as a
     // blur does.
@@ -2341,8 +2511,14 @@ pub(crate) fn draw_shadow(cx: &mut DrawCx<'_>, state: &ViewState) {
     let mut glyphs = Vec::with_capacity(layout.glyphs.len() * offsets.len());
     for &(dx, dy) in &offsets {
         for g in layout.shown_glyphs(&drawn.text) {
-            let o = cx.map(ox + dx + g.x, oy + dy + g.y);
-            glyphs.push((o, g.font, g.id, px(g.size * k), Some(color)));
+            glyphs.push((
+                ox + dx + g.x,
+                oy + dy + g.y,
+                g.font,
+                g.id,
+                g.size,
+                Some(color),
+            ));
         }
     }
     paint_glyphs(cx, glyphs);
@@ -2384,7 +2560,6 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
     if layout.boxes.is_empty() {
         return;
     }
-    let k = cx.transform_scale();
     let default = ResolvedTextStyle::default();
     let style = |index: u32| {
         text.spans
@@ -2399,7 +2574,6 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
         .or_else(|| state.live.as_ref()?.text_color());
     let mut glyphs = Vec::with_capacity(layout.glyphs.len());
     for g in layout.shown_glyphs(text) {
-        let o = cx.map(ox + g.x, oy + g.y);
         let color = if g.emoji {
             None
         } else {
@@ -2409,7 +2583,7 @@ pub(crate) fn draw(cx: &mut DrawCx<'_>, state: &ViewState) {
             }
             Some(cx.color(c))
         };
-        glyphs.push((o, g.font, g.id, px(g.size * k), color));
+        glyphs.push((ox + g.x, oy + g.y, g.font, g.id, g.size, color));
     }
     paint_glyphs(cx, glyphs);
     decorate(cx, text, layout, ox, oy, animated);
@@ -2584,15 +2758,13 @@ pub(crate) fn draw_silhouette(
     if cx.culled() || color.is_transparent() {
         return;
     }
-    let k = cx.transform_scale();
     let (ox, oy) = (drawn.content.origin.x.0, drawn.content.origin.y.0);
     let tint = Some(cx.color(color));
     let mut glyphs = Vec::with_capacity(layout.glyphs.len() * offsets.len());
     // Emoji draw in their own colors: they cast no silhouette.
     for g in layout.shown_glyphs(&drawn.text).filter(|g| !g.emoji) {
         for &(dx, dy) in offsets {
-            let o = cx.map(ox + g.x + dx, oy + g.y + dy);
-            glyphs.push((o, g.font, g.id, px(g.size * k), tint));
+            glyphs.push((ox + g.x + dx, oy + g.y + dy, g.font, g.id, g.size, tint));
         }
     }
     paint_glyphs(cx, glyphs);
@@ -2937,8 +3109,8 @@ pub(crate) fn context_menu(surface: &Rc<crate::surface::Surface>, view: &NshView
     );
 }
 
-/// The selected text of `view`, without attachments' placeholders and
-/// hidden runs.
+/// The selected text of `view` as a copy gives it
+/// ([`nsh_core::AttributedText::copied_text`]).
 fn selected_text(view: &NshView) -> Option<String> {
     let (a, b) = view_selection(view)?.range.get()?;
     let state = view.state();
@@ -3220,7 +3392,41 @@ mod tests {
     }
 
     #[test]
+    fn single_line_inputs_keep_the_field_samples_height() {
+        let Some(engine) = engine() else { return };
+        for style in [
+            plain(15.0),
+            ResolvedTextStyle {
+                line_height: Points(28.0),
+                ..plain(18.0)
+            },
+        ] {
+            let sample = engine.measure(
+                &engine.prepare(&text(&[("00000000000000000000", style)])),
+                None,
+            );
+            for value in [
+                "\u{200b}",
+                "a long line that does not fit",
+                "第二行🙂",
+                "ab\ncd",
+            ] {
+                let mut field = text(&[(value, style)]);
+                field.max_lines = 1;
+                let value = engine.prepare(&field);
+                for width in [None, Some(Points(5.0)), Some(Points(80.0))] {
+                    assert_eq!(engine.measure(&value, width).height, sample.height);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn families() {
+        let plain = family_candidates("Inter");
+        assert!(matches!(plain[0], std::borrow::Cow::Borrowed("Inter")));
+        assert_eq!(family_candidates(r#"'A\\B', 'A\"B'"#), [r"A\B", "A\"B"]);
+
         assert_eq!(family_candidates("Inter"), ["Inter"]);
         assert_eq!(family_candidates("system-ui"), [""]);
         assert_eq!(family_candidates(" , "), [""]);
@@ -3517,9 +3723,10 @@ mod tests {
         let style = ResolvedTextStyle::default();
         // The first line's top of a 30 pt attachment after "Ax", and the
         // line's extent above and below its baseline.
-        let place = |align| {
+        let place_by = |align, baseline: Option<f32>| {
             let mut t = text(&[("Ax", style)]);
             let mut alignments = nsh_core::AttachmentAlignments::default();
+            alignments.set_baseline(t.len_utf16(), baseline.map(Points));
             alignments.push(
                 &mut t,
                 nsh_core::geometry::size(Points(10.0), Points(30.0)),
@@ -3533,6 +3740,7 @@ mod tests {
             let top = engine.attachments(&layout)[0].expect("shown").y.0;
             (top, line.ascender.0, line.descender.0)
         };
+        let place = |align| place_by(align, None);
         let near = |a: f32, b: f32| (a - b).abs() < 0.01;
         // Its bottom on the baseline.
         let (top, up, _) = place(nsh_core::VerticalAlign::Baseline);
@@ -3549,6 +3757,10 @@ mod tests {
         // Its middle above the baseline.
         let (top, up, _) = place(nsh_core::VerticalAlign::Middle);
         assert!(top + 15.0 < up, "{top} {up}");
+        // By a baseline of its own 22 below its top (the first baseline of the text in it): that
+        // one stands on the line's, the 8 under it in the line's descent.
+        let (top, up, down) = place_by(nsh_core::VerticalAlign::Baseline, Some(22.0));
+        assert!(near(top + 22.0, up) && down > 7.99, "{top} {up} {down}");
     }
 
     /// A text's first baseline (what `align-items: baseline` lines it up
@@ -3763,6 +3975,29 @@ mod tests {
     }
 
     #[test]
+    fn trailing_spaces_hang_in_the_line_width() {
+        let Some(engine) = engine() else {
+            return;
+        };
+        let width = |s: &str| {
+            let (_, layout) = layout_of(&engine, &text(&[(s, plain(20.0))]), None);
+            engine.lines(&layout)[0].width.0
+        };
+        let (word, spaced) = (width("Hx"), width("Hx  "));
+        // A caret after the spaces (`RichEditor` puts one at the line's
+        // width) stands past them.
+        assert!(spaced > word + 5.0, "{word} {spaced}");
+        // A line broken at a space keeps its width within the box.
+        let (size, layout) = layout_of(&engine, &text(&[("Hx Hx", plain(20.0))]), Some(word + 1.0));
+        let lines = engine.lines(&layout);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(
+            lines[0].width.0 <= size.width.0 + 0.01,
+            "{lines:?} {size:?}"
+        );
+    }
+
+    #[test]
     fn alignment() {
         let Some(engine) = engine() else {
             return;
@@ -3932,6 +4167,8 @@ mod tests {
                 color: Color(0xeeee_eeff),
                 radius: Points(4.0),
                 node: 4,
+                top: Default::default(),
+                bottom: Default::default(),
             }),
             ..style
         };

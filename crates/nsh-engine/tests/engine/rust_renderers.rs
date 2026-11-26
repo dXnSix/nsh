@@ -141,7 +141,25 @@ fn until_text(rx: &Receiver<MountBatch>, wanted: &str) -> Vec<MountBatch> {
 
 #[test]
 fn the_apps_function_renders_each_key_and_lets_it_go() {
-    let (_engine, rx) = crate::rust_classes::start(APP, vec![registry()]);
+    renders_each_key_and_lets_it_go(APP);
+}
+
+/// Keys holding a NUL are keys like the others: each renders its own value
+/// and lets it go.
+#[test]
+fn keys_holding_a_nul_render_and_go_as_others() {
+    let app = APP
+        .replace("\"a:", "\"a\\u0000x:")
+        .replace("\"b:", "\"a\\u0000y:");
+    assert!(app.contains("a\\u0000y:Banana"));
+    renders_each_key_and_lets_it_go(&app);
+}
+
+/// Runs `app` ([`APP`] or one with other keys): the three values render
+/// under the component's context, a key's new value into the holder of
+/// its old one, and nothing of them is left.
+fn renders_each_key_and_lets_it_go(app: &str) {
+    let (_engine, rx) = crate::rust_classes::start(app, vec![registry()]);
     let batches = until_text(&rx, "end");
     let items = || batches.iter().flat_map(|b| &b.items);
     let texts: Vec<&str> = items()
@@ -166,8 +184,9 @@ fn the_apps_function_renders_each_key_and_lets_it_go() {
             _ => None,
         })
         .collect();
-    // Each value rendered once.
-    assert_eq!(holders.len(), 3, "Apple, Banana, Avocado");
+    // One holder per key: Avocado, key `a`'s new value, renders into
+    // Apple's holder.
+    assert_eq!(holders.len(), 2, "a (Apple, then Avocado), b (Banana)");
     // Nothing of them is left: every view made is deleted but the end's.
     let mut live = HashSet::new();
     for item in items() {

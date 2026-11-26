@@ -7,13 +7,51 @@ demo: el-number-input
 
 # NumberInput
 
-A number input holds a number the user types or steps: a quantity, a price, a size. It owns its behavior: its field
-takes a number, or the text on the way to one (`-`, `1.`), and refuses anything else, other keyboards' digits and signs
-included; its buttons, Up and Down and a screen reader's increment and decrement step the number by `step`, keeping its
-decimals, and stop at `min` and `max`; leaving the field holds a typed number to them. The look is the app's: a
-`NumberInput` has no colors, sizes, borders, icons or strings of its own. It is made of the decrement button, the field
-between the app's `prefix` and `suffix`, and the increment button (or the field between them and a column with both
-buttons, `controlsRight`), and the app styles each part and fills the buttons.
+A number input holds a number that the user types or steps, such as a quantity, a price or a size.
+
+`NumberInput` handles the behavior:
+
+- The field accepts a number, or text on the way to one (`-`, `1.`). It refuses anything else, including digits and
+  signs from other keyboards.
+- The buttons, Up, Down and a screen reader's increment and decrement change the number by `step`. They keep the
+  step's decimals and stop at `min` and `max`.
+- When the field loses focus, a typed number is clamped to `min` and `max`.
+
+Your app owns the look. A `NumberInput` has no colors, sizes, borders, icons or strings of its own. Its parts are the
+decrement button, the field between your `prefix` and `suffix`, and the increment button. With `controlsRight`, the
+field comes first and both buttons sit in a column after it. You style each part and fill the buttons.
+
+
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { NumberInput } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const tickets = signal<number | null>(2);
+  return (
+    <NumberInput
+      value={tickets()}
+      onChange={({ value }) => tickets.set(value)}
+      min={1}
+      max={10}
+      accessibilityLabel="Tickets"
+      class="h-8 flex-row overflow-hidden rounded-lg border border-input bg-field focus-within:outline-2 focus-within:outline-ring"
+      inputClass="flex-1 text-center text-foreground"
+      decrementButtonClass="w-8 items-center justify-center enabled:hover:bg-accent active:bg-muted disabled:opacity-40"
+      incrementButtonClass="w-8 items-center justify-center enabled:hover:bg-accent active:bg-muted disabled:opacity-40"
+      decrementButton={<Text>−</Text>}
+      incrementButton={<Text>+</Text>}
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_base::{number_input, theme};
@@ -37,32 +75,6 @@ fn tickets(count: Signal<Option<f64>>) -> impl IntoElement {
         .decrement_button(text("−"))
         .increment_button(text("+"))
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { NumberInput } from "nsh/base";
-
-function App() {
-  const tickets = signal<number | null>(2);
-  return (
-    <NumberInput
-      value={tickets()}
-      onChange={({ value }) => tickets.set(value)}
-      min={1}
-      max={10}
-      accessibilityLabel="Tickets"
-      class="h-8 flex-row overflow-hidden rounded-lg border border-input bg-field focus-within:outline-2 focus-within:outline-ring"
-      inputClass="flex-1 text-center text-foreground"
-      decrementButtonClass="w-8 items-center justify-center enabled:hover:bg-accent active:bg-muted disabled:opacity-40"
-      incrementButtonClass="w-8 items-center justify-center enabled:hover:bg-accent active:bg-muted disabled:opacity-40"
-      decrementButton={<Text>−</Text>}
-      incrementButton={<Text>+</Text>}
-    />
-  );
-}
-
-mount(App);
 ```
 
 `NumberInput` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. In Rust, `number_input()`

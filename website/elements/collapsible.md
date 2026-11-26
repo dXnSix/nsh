@@ -13,6 +13,40 @@ the trigger that flips it (one of the children), and the look is the app's: a `C
 label of its own. With `reveal`, the content opens and closes with motion: its region's height springs from nothing to
 the content's own and back, and what follows the collapsible moves along.
 
+```tsx tabs
+import { mount, signal, Text, View } from "nsh";
+import { Collapsible } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const open = signal(false);
+  return (
+    <Collapsible
+      open={open()}
+      reveal
+      class="gap-2"
+      content={<Text class="text-muted-foreground">Photos 120 GB · Apps 54 GB · System 38 GB</Text>}
+    >
+      <View
+        role="button"
+        accessibilityState={{ expanded: open() }}
+        onPress={() => open.set(!open())}
+        class="flex-row items-center justify-between active:opacity-70"
+      >
+        <Text class="font-medium">Storage</Text>
+        <Text class={`transition-transform ${open() ? "rotate-90" : ""}`}>›</Text>
+      </View>
+    </Collapsible>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{collapsible, theme};
 use nsh_core::{AccessibilityState, prelude::*};
@@ -43,35 +77,6 @@ fn storage() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, signal, Text, View } from "nsh";
-import { Collapsible } from "nsh/base";
-
-function App() {
-  const open = signal(false);
-  return (
-    <Collapsible
-      open={open()}
-      reveal
-      class="gap-2"
-      content={<Text class="text-muted-foreground">Photos 120 GB · Apps 54 GB · System 38 GB</Text>}
-    >
-      <View
-        role="button"
-        accessibilityState={{ expanded: open() }}
-        onPress={() => open.set(!open())}
-        class="flex-row items-center justify-between active:opacity-70"
-      >
-        <Text class="font-medium">Storage</Text>
-        <Text class={`transition-transform ${open() ? "rotate-90" : ""}`}>›</Text>
-      </View>
-    </Collapsible>
-  );
-}
-
-mount(App);
-```
-
 `Collapsible` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. The value is the app's:
 its trigger flips `open`, and the collapsible shows the value the app passes. In Rust, `collapsible()` makes one with a
 setter per prop (`.open(..)`, `.reveal(..)`, `.content(..)`), the typed style methods for the region and `.child(..)` for what shows
@@ -83,6 +88,7 @@ always.
 |---|---|---|---|---|
 | `open` | `.open(..)` | `boolean` | `false` | Expanded: the `content` is in the tree, after the children. The app owns the value. |
 | `reveal` | `.reveal(..)` | `boolean` | `false` | Opens and closes with a reveal: the content sits in a region that clips it, whose height springs from zero to the content's own as `open` turns on and back as it turns off, critically damped (about 265 ms, no overshoot). What follows the collapsible moves with it, and the content stays in the tree until the region has closed. With reduced motion it opens and closes at once. The region is in the layout while closed too, zero high, so a `gap` of the collapsible's also comes before it. |
+| `revealSpring` | `.reveal_spring(..)` | `{ stiffness?, damping?, mass? }` (Rust `Spring`) | none | The spring the reveal moves on, the options of `AnimatedValue.spring` with its defaults (stiffness 170, damping 26, mass 1 for those left out): an app's own motion token (`{ stiffness: 620, damping: 36 }` overshoots a little and settles in about 384 ms). Without it, the critically damped spring above. The content leaves the tree once this spring has settled. Used only with `reveal`; with reduced motion the region still opens and closes at once. |
 | `content` | `.content(..)` | `JSX.Element` | none | What expands. It is made once and kept while collapsed, so what is inside keeps its state (an input's text, a scroll position, a switch) from one opening to the next. |
 | `children` | `.child(..)` | `JSX.Element` | none | What shows either way: a summary, the trigger that flips `open`. |
 | `class`, `style` | style methods | `string`, `StyleProp<ViewStyle>` | none | The region around the children and the content (`gap-2` spaces them). |

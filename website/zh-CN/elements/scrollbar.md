@@ -13,6 +13,39 @@ demo: el-scrollbar
 会滚动内容，按压轨道会让滑块中点移到那里；它在内容滚动时、指针悬停时或始终显示，并以原生动画淡入淡出。外观和时长属于应用：
 `Scrollbar` 没有自己的颜色、尺寸或圆角，应用不给时长时，它的淡入淡出不占时间。
 
+```tsx tabs
+import { mount, Scroll, Text, View, type YNode } from "nsh";
+import { Scrollbar } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  let list: YNode | undefined;
+  return (
+    <View class="relative flex-1">
+      <Scroll ref={list} scrollbar={false} class="flex-1">
+        {Array.from({ length: 60 }, (_, i) => (
+          <Text class="px-4 py-3">{`消息 ${i + 1}`}</Text>
+        ))}
+      </Scroll>
+      <Scrollbar
+        scroll={list}
+        mode="hover"
+        motion={{ enter: 300, exit: 500, thumbHoverEntrance: "slideAndFade" }}
+        accessibilityLabel="消息"
+        class="absolute inset-y-0 right-0 w-4 items-end p-1"
+        thumbClass="w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2 hover:opacity-90 active:w-2 active:opacity-100"
+      />
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{ScrollbarEntrance, ScrollbarMode, ScrollbarMotion, scrollbar, theme};
 use nsh_core::prelude::*;
@@ -54,34 +87,6 @@ fn inbox(rows: impl IntoElement) -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, Scroll, Text, View, type YNode } from "nsh";
-import { Scrollbar } from "nsh/base";
-
-function App() {
-  let list: YNode | undefined;
-  return (
-    <View class="relative flex-1">
-      <Scroll ref={list} scrollbar={false} class="flex-1">
-        {Array.from({ length: 60 }, (_, i) => (
-          <Text class="px-4 py-3">{`消息 ${i + 1}`}</Text>
-        ))}
-      </Scroll>
-      <Scrollbar
-        scroll={list}
-        mode="hover"
-        motion={{ enter: 300, exit: 500, thumbHoverEntrance: "slideAndFade" }}
-        accessibilityLabel="消息"
-        class="absolute inset-y-0 right-0 w-4 items-end p-1"
-        thumbClass="w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2 hover:opacity-90 active:w-2 active:opacity-100"
-      />
-    </View>
-  );
-}
-
-mount(App);
-```
-
 `Scrollbar` 来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate。在 Rust 中，`scrollbar()` 创建一个滚动条，每个
 prop 一个 setter（`.scroll(..)`、`.thumb_style(..)`），滚动条本身用类型化的样式方法；它的 `scroll` 接受 `ElementRef`（或
 `ScrollbarTarget`）。
@@ -93,6 +98,23 @@ prop 一个 setter（`.scroll(..)`、`.thumb_style(..)`），滚动条本身用�
 每个滚动视图和列表都可以用 `Scrollbar` 代替平台的滚动指示器，无需自己放置滚动条：在应用启动的地方调用一次 `Scrollbar.setTheme`，
 所有 `scrollbar` 为 `true` 的视图的滚动条就都采用应用的外观。每个视图在自己的视口上得到一个滚动条，内容滚动时它停在原处（与 sticky
 视图一样在主线程上完成），绘制在内容之上；它跟随、滚动和淡入淡出的方式与应用自己放置的 `Scrollbar` 相同。
+
+```tsx tabs
+import { Scrollbar } from "nsh/base";
+
+Scrollbar.setTheme({
+  mode: "hover",
+  motion: { enter: 300, exit: 500 },
+  vertical: {
+    class: "absolute inset-y-0 right-0 w-4 items-end p-1",
+    thumbClass: "w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2",
+  },
+  horizontal: {
+    class: "absolute inset-x-0 bottom-0 h-4 items-end p-1",
+    thumbClass: "h-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:h-2",
+  },
+});
+```
 
 ```rust tabs
 use nsh_base::{ScrollbarLook, ScrollbarMode, ScrollbarTheme, set_scrollbar_theme};
@@ -114,23 +136,6 @@ fn use_app_scrollbars() {
 }
 ```
 
-```tsx tabs
-import { Scrollbar } from "nsh/base";
-
-Scrollbar.setTheme({
-  mode: "hover",
-  motion: { enter: 300, exit: 500 },
-  vertical: {
-    class: "absolute inset-y-0 right-0 w-4 items-end p-1",
-    thumbClass: "w-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:w-2",
-  },
-  horizontal: {
-    class: "absolute inset-x-0 bottom-0 h-4 items-end p-1",
-    thumbClass: "h-1.5 rounded-full bg-muted-foreground opacity-60 transition-all duration-300 hover:h-2",
-  },
-});
-```
-
 `ScrollbarTheme` 包含所有视图共用的滚动条属性，以及每个方向的外观：
 
 | 字段 | 类型 | 默认值 | 说明 |
@@ -142,7 +147,7 @@ Scrollbar.setTheme({
 
 之后再调用 `setTheme` 会重新设置这些滚动条的样式，`Scrollbar.setTheme(null)` 让视图恢复平台的滚动指示器。单个视图可以用
 `scrollbar` 属性设置自己的主题（`<Scroll scrollbar={{ mode: "always", vertical: { … } }}>`），无论应用是否设置了主题；
-`scrollbar={false}` 让视图没有滚动条。在父视图视口中布局的列表（`viewport="parent"`）随那个视图及其滚动条一起滚动。多行 `Input` 也会在文本上显示纵向外观的滚动条，像文本视图自己的指示器一样滚动文本。
+`scrollbar={false}` 让视图没有滚动条。在父视图视口中布局的列表（`viewport="parent"`）随那个视图及其滚动条一起滚动。多行 `Input` 也会在文本上显示纵向外观的滚动条，像文本视图自己的指示器一样滚动文本。滚动条铺满整个输入框（含内边距），文字在各平台上都只在内边距以内显示。在 Rust 中，滚动视图和多行输入框的 `.scrollbar(theme)` 接受 `ScrollbarTheme`，与 `.scrollbar(true)`、`.scrollbar(false)` 并用。
 
 ## 它滚动的滚动视图
 
@@ -155,6 +160,8 @@ Scrollbar.setTheme({
 - 拖动滑块时，内容滚动的量与滑块移动的量相对应。按压轨道会让滑块中点移到指针下方，之后的拖动从那里继续。
 - 纵向滚动条跟随纵向滚动视图；`axis="horizontal"` 为横向滚动视图提供滚动条（沿底边放置）。每个方向一个滚动条。
 - 列表同样适用：随着行被测量和加入，滑块跟随列表的总长度。
+- 多行 `Input` 也一样：用 `scrollbar={false}` 关闭它自己的滚动条，在 `scroll` 中指明它；滚动条跟随并滚动它的文字。只有在有滚动条跟随时，
+  输入框才上报自己的滚动。
 
 ## 何时显示
 
@@ -164,8 +171,8 @@ Scrollbar.setTheme({
 | `"hover"` | 指针在滚动条上时（它显示的位置，隐藏时也算），以及 `"scrolling"` 显示的时候。 |
 | `"always"` | 始终。 |
 
-在任何模式下，拖动滑块时它都显示，并在最后一次滚动、拖动或悬停之后保持 `motion.idle`。内容能完整放进视口时，它保持隐藏。隐藏时
-滚动条的 `opacity` 为 0，按压穿过它交给下面的视图。
+在任何模式下，拖动滑块时它都显示，并在最后一次滚动、拖动或悬停之后保持 `motion.idle`。内容能完整放进视口时，它保持隐藏，整个滚动条在所有模式下都将指针事件传递给下面的内容。
+隐藏的滚动条 `opacity` 为 0；桌面上的 `"hover"` 模式在内容可滚动时由轨道接收指针事件。
 
 ## 动效
 

@@ -143,6 +143,7 @@ pub(crate) fn decode_command<'js>(name: &str, arg: Value<'js>) -> compat::Result
     Ok(Some(match name {
         "focus" => Command::Focus,
         "blur" => Command::Blur,
+        "clearSelection" => Command::ClearSelection,
         "reload" => Command::Reload,
         "goBack" => Command::GoBack,
         "goForward" => Command::GoForward,
@@ -859,8 +860,8 @@ fn decode_animation(r: &mut Reader<'_, '_>) -> compat::Result<AnimationOp> {
         ANIMATION_DIFF_CLAMP => AnimationOp::CreateDiffClamp {
             node,
             input: r.int()? as nsh_core::animation::NodeId,
-            min: r.number()?,
-            max: r.number()?,
+            min: r.operand()?,
+            max: r.operand()?,
             snap: r.value()?.as_bool().unwrap_or(false),
         },
         ANIMATION_START_COMPOSITE => {

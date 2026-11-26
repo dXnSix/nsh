@@ -85,16 +85,23 @@ pub struct MouseInput {
 pub enum Input {
     /// Mouse input.
     Mouse(MouseInput),
-    /// A key name as in NSH's keymap (`Enter`, `Escape`, or a character).
+    /// A key as the terminal names it: a character, or the key's name
+    /// (`Enter`, `Escape`, `ArrowLeft`, `F5`; the keymap's `Left` and the
+    /// DOM's `ArrowLeft` both name the same key). `release` is true when
+    /// the source reported the key coming up: only the kitty keyboard
+    /// protocol, or crossterm's Windows console input, reports that.
     Key {
         /// Key name.
         key: String,
         /// Held modifiers.
         modifiers: Modifiers,
-        /// True for a release when the terminal reports it.
+        /// True for a release when the source reports it: the kitty keyboard
+        /// protocol, or crossterm's Windows console input.
         release: bool,
     },
-    /// A repeated key press identified by the terminal protocol.
+    /// An auto-repeat the terminal reported (the kitty keyboard protocol):
+    /// a press the key's being held repeated. A terminal without the
+    /// protocol sends its repeats as presses of their own.
     KeyRepeat {
         /// Key name, as for `Key`.
         key: String,
@@ -175,6 +182,8 @@ struct Drag {
     velocity: nsh_core::input::VelocityTracker,
     activated: Option<NodeId>,
     scroll_start: Points,
+    /// The modifier keys held when the button went down.
+    modifiers: Modifiers,
 }
 
 impl Drag {
@@ -188,6 +197,7 @@ impl Drag {
             EventPayload::Touch(Box::new(nsh_core::TouchEvent {
                 phase,
                 timestamp: self.started.elapsed().as_secs_f64() * 1000.0,
+                modifiers: self.modifiers,
                 activated: self.activated,
                 points: vec![nsh_core::TouchPoint {
                     id: 0,
@@ -201,6 +211,12 @@ impl Drag {
                     location: self.page - self.origin,
                     changed: true,
                     pointer_type: nsh_core::PointerType::Mouse,
+                    pressure: nsh_core::TouchPoint::default_pressure(phase, true),
+                    tilt_x: 0.0,
+                    tilt_y: 0.0,
+                    coalesced: Vec::new(),
+                    eraser: false,
+                    barrel: false,
                 }],
             })),
         );
@@ -268,6 +284,7 @@ impl Pointer {
             velocity: Default::default(),
             activated: None,
             scroll_start: Points::ZERO,
+            modifiers: mouse.modifiers,
         };
         touch.report(cx.control, nsh_core::TouchPhase::Start);
         touch.report(cx.control, nsh_core::TouchPhase::Cancel);
@@ -482,14 +499,7 @@ impl Pointer {
             && let Some(control) = control
         {
             if let Some((id, nsh_core::input::Candidate::Pan { .. })) = drag.active {
-                pan_event(
-                    tree,
-                    control,
-                    id,
-                    EventKind::PanEnd,
-                    drag.page - drag.start,
-                    &drag.velocity,
-                );
+                pan_event(tree, control, id, EventKind::PanEnd, &drag);
             }
             drag.report(control, nsh_core::TouchPhase::Cancel);
         }
@@ -583,7 +593,7 @@ impl Pointer {
             if tree.responder.is_some()
                 && let Some((id, nsh_core::input::Candidate::Pan { .. })) = drag.active
             {
-                pan_event(tree, control, id, EventKind::PanEnd, moved, &drag.velocity);
+                pan_event(tree, control, id, EventKind::PanEnd, &drag);
                 drag.active = None;
             }
             drag.activated =
@@ -608,14 +618,7 @@ impl Pointer {
                 }
                 if let Some((id, nsh_core::input::Candidate::Pan { .. })) = drag.active {
                     tree.animator.pan_began(id);
-                    pan_event(
-                        tree,
-                        control,
-                        id,
-                        EventKind::PanStart,
-                        Point::default(),
-                        &drag.velocity,
-                    );
+                    pan_event(tree, control, id, EventKind::PanStart, &drag);
                 }
             }
             if let Some((id, candidate)) = drag.active {
@@ -641,7 +644,7 @@ impl Pointer {
                 return Handled::Yes;
             }
             if let Some((id, nsh_core::input::Candidate::Pan { .. })) = drag.active {
-                pan_event(tree, control, id, EventKind::PanEnd, moved, &drag.velocity);
+                pan_event(tree, control, id, EventKind::PanEnd, &drag);
             }
             self.release_states(tree, Some(control));
             drag.report(control, nsh_core::TouchPhase::End);
@@ -689,6 +692,13 @@ impl Pointer {
                 self.cancel(tree, Some(control));
                 if let Some(hit) = hit {
                     let mut grab = nsh_core::input::Grab::default();
+                    // An edge pan's edges are the terminal area's.
+                    let surface = nsh_core::Size::new(
+                        cells.width() * f32::from(area.width),
+                        cells.height() * f32::from(area.height),
+                    );
+                    let options = nsh_core::input::GrabOptions::new(true, false, false, true)
+                        .start(page, surface);
                     let mut node = Some(hit.node);
                     while let Some(id) = node {
                         let Some(view) = tree.get(id) else {
@@ -705,7 +715,7 @@ impl Pointer {
                                     view.scroll.as_ref().map(|s| s.horizontal),
                                     view.props.pan_activation,
                                 ),
-                                nsh_core::input::GrabOptions::new(true, false, false, true),
+                                options,
                             );
                         }
                         node = if id == scope { None } else { view.parent };
@@ -735,6 +745,7 @@ impl Pointer {
                             velocity: Default::default(),
                             activated: None,
                             scroll_start: Points::ZERO,
+                            modifiers: mouse.modifiers,
                         };
                         drag.velocity.add(0.0, page);
                         drag.report(control, nsh_core::TouchPhase::Start);
@@ -842,23 +853,22 @@ pub(crate) fn dispatch(
     );
 }
 
-fn pan_event(
-    tree: &Mounter,
-    control: &EngineControl,
-    id: NodeId,
-    kind: EventKind,
-    translation: Point<Points>,
-    velocity: &nsh_core::input::VelocityTracker,
-) {
+fn pan_event(tree: &Mounter, control: &EngineControl, id: NodeId, kind: EventKind, drag: &Drag) {
     if !tree.get(id).is_some_and(|view| view.events.contains(kind)) {
         return;
     }
     let (value_x, value_y) = tree.animator.pan_values(id);
-    let (velocity_x, velocity_y) = velocity.velocity();
+    let (velocity_x, velocity_y) = drag.velocity.velocity();
+    // The start reports no translation: the finger moved past the slop.
+    let translation = match kind {
+        EventKind::PanStart => Point::default(),
+        _ => drag.page - drag.start,
+    };
     control.dispatch_event(
         id,
         kind,
         EventPayload::Pan {
+            origin: drag.start,
             translation,
             velocity_x,
             velocity_y,

@@ -10,15 +10,21 @@
   Native). Animated images: iOS decodes up to 600 frames into an animated `UIImage` (frames repeated by their delays' common
   divisor) played by a discrete `CAKeyframeAnimation` on `contents` (a tinted animated image shows its first frame); Android
   (API 28+) uses `ImageDecoder` → `AnimatedImageDrawable`, not cached (each view plays its own copy; no blur); a GIF below
-  API 30 (from API 26) plays from a `Movie` of its own (see the pitfall in `pitfalls.md`). `onLoad` reports the
-  source's size in pixels on both platforms, whatever size the view decodes at. Downloads are shared per URI (also between
+  API 30 (from API 26) plays from a `Movie` of its own (see the pitfall in `pitfalls.md`). Windows, Linux and GPUI decode
+  GIF and WebP with `nsh_core::image::animation` at the view's size bucket: frames over 48 MiB stream on Windows and
+  Linux (the encoded file kept, a worker decoding two frames ahead of the one showing while the view is drawn, streams
+  sharing 128 MiB of working memory, four at once), so an enlarged screen recording keeps its detail; GPUI, which draws
+  an animation as one image of every frame, and an animation too large to stream decode as small as the frames fit. `onLoad` reports the
+  source's size in pixels on both platforms, whatever size the view decodes at. On iOS and macOS only the formats that
+  animate (GIF, APNG, WebP, HEIF and AVIF sequences, JPEG XL) play their images as frames; a still file of several
+  images shows one, the icon size that fits for ICO, ICNS and CUR and the primary image otherwise (a TIFF's first
+  page), and `onLoad` reports that image's size (`nsh_platform_apple::image_source`). Downloads are shared per URI (also between
   views decoding at different sizes) and report `onProgress` at most every 100ms; `Image.getSize` / `Image.prefetch` (Rust,
   `nsh_core::runtime`) ask with `Command::ImageInfo`, are answered by the root's `ImageInfo` event (which the core
   resolves, never JS) and keep the downloaded bytes in a data cache (32 MB) until a view
-  decodes them; in a terminal (`Idiom::Terminal`) the core answers them at once and sends no command, and `Image`'s
-  functions reject with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`. Android `ImageBox` draws its borders above the
+  decodes them; the terminal answers them as Linux does (`nsh-platform-tui` `image.rs`, `docs/dev/tui.md`). Android `ImageBox` draws its borders above the
   image (as Core Animation's layer border).
-- **Loading and memory** (`nsh_core::image`, the design in `image-loading-design.md`; Linux, Windows, macOS and
+- **Loading and memory** (`nsh_core::image`, the design in `image-loading-design.md`; Linux, Windows, macOS, the terminal and
   GPUI: iOS and Android keep their own loaders, above). One loader per process (`image::loader`) reads every view's, canvas's, `getSize` / `prefetch`'s and `element::svg`'s bytes: a
   `Location` (`http(s)`, a file, `asset:/` by the surface's `AssetBase` — the dev server, a directory, or
   `Directories` looked in in order — or the engine's `Assets` reader, bytes in memory) named by one source key (`Location::key`); one read per key in flight, later requests waiting on it; reads
@@ -164,8 +170,16 @@
   straight RGBA buffer (no copy) and reports it through `ImageData::rgba()`. The source goes by a fresh
   `data:image/png;nsh-key=<random>` key per buffer (no digest of megabytes of pixels per frame; the key's form is one
   `ImageSource::inline` turns into `data:,` when an app writes it, as for digests), and its natural size is the
-  buffer's (`Images::decode` reads it from `rgba()`, not a header). Windows, macOS, Linux and GPUI take the pixels in
-  their decoder closures (`from_rgba`: a copy into their own format, no decode, no downsampling); every other path
+  buffer's (`Images::decode` reads it from `rgba()`, not a header). `ImageSrc::size(Size<Points>)` declares the
+  natural layout size of `image()` independently: a 200×100 buffer drawn at 2× can lay out at 100×50 points.
+  Without it, `rgba` lays out at its pixel width and height in points. The builder sets the source's existing
+  size metadata, as `ImageAsset::size` does; the key, pixel data and reported pixel dimensions stay the same.
+  Windows, macOS, Linux and GPUI take the pixels in their decoder closures (`from_rgba`: no decode or
+  downsampling). macOS scans the alpha bytes: fully opaque buffers become sRGB `NoneSkipLast` CGImages over a
+  data provider holding the original `ImageData`, with no pixel copy or premultiplication; the provider releases
+  its source when its last image reference goes away. Buffers with transparency still copy and premultiply into
+  bitmap storage. The existing budget reservation remains conservative (backing storage plus a display copy).
+  The other backends copy into their own format; every other path
   reading `ImageData::bytes()` (iOS's `NSData`, Android's `Native.imageBytes`, the web's `image_bytes`, `getSize`)
   gets an uncompressed PNG (stored deflate blocks) built once on first use. Old frames leave the caches as any
   unshown source does (L3 never keeps in-memory bytes; L4 entries without a lease are evicted).

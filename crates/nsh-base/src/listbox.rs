@@ -593,6 +593,18 @@ impl Listbox {
                 }
             });
         });
+        // The search field went away (searchable turned off, the list
+        // open or not): what it held filters nothing any more, so every
+        // item shows again.
+        effect(move || {
+            if !lb.searchable.get() {
+                untracked(|| {
+                    if !lb.own_query.get().is_empty() {
+                        lb.own_query.set(String::new());
+                    }
+                });
+            }
+        });
         // The app's query changed while the list is open (it followed the
         // field, or set its own): as a typed one, the first match.
         let last = stored(None::<SharedString>);
@@ -1055,8 +1067,8 @@ pub(crate) struct Hooks {
     /// It is all there (`true`) or all gone (`false`).
     pub(crate) shown: Rc<dyn Fn(bool)>,
     /// The desktops: it closed and starts to go; where the keyboard focus
-    /// goes ([`Presence::back`]).
-    pub(crate) back: Rc<dyn Fn()>,
+    /// goes from the popup it is given ([`Presence::back`]).
+    pub(crate) back: Rc<dyn Fn(ElementRef)>,
 }
 
 /// The list while it is open, in its component's dropdown
@@ -1164,6 +1176,10 @@ fn content(lb: Listbox, sheet: bool, parts: Parts, hooks: Hooks) -> Vec<AnyEleme
         .element_ref(&lb.listbox)
         .flex_shrink(1.0)
         .min_h(px(0.0))
+        // An option acts on the first tap while the software keyboard is
+        // up (a combobox's own field, or an input outside): it does not
+        // only dismiss the keyboard.
+        .keyboard_taps(KeyboardTaps::Handled)
         .when(is_terminal(), |v| v.min_w(move || Length::from(widest())))
         .app_class(parts.list_class)
         .inline_style(parts.list_style)
@@ -1380,7 +1396,7 @@ fn item_row(lb: Listbox, entry: Memo<Option<Row>>, parts: Parts, hooks: Hooks) -
         // popup lays over the trigger.
         .when_some(parts.cover, |row, cover| {
             row.child(when(
-                move || selected.get(),
+                move || selected.get() && cover.on.get(),
                 move || {
                     view()
                         .absolute()

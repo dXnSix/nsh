@@ -1,6 +1,6 @@
 ---
 title: 元素
-description: 构成每个 NSH 应用的原语和基础组件，附 Rust 与 TSX 示例，以及它们共有的属性、事件和 ref 方法。
+description: 构成每个 NSH 应用的原语和基础组件，附 TSX 与 Rust 示例，以及它们共有的属性、事件和 ref 方法。
 order: 1
 ---
 
@@ -8,7 +8,30 @@ order: 1
 
 Native Shell 用一小组元素构建每个界面：`View`、`Text`、`Image` 等原语，以及 `Button`、`Dialog`、`NavStack` 等基础组件。每个原语都对应一个原生视图（iOS 和 Mac Catalyst 上是 UIView 子类，Android 上是 `View`，桌面上是 AppKit、GTK 或 Win32 视图），由 NSH 运行时创建并布局。应用显示的一切都由它们组成：应用的按钮、卡片、列表行和页面都是它自己的组件，用这些元素绘制、由应用设置样式，因此应用的外观完全由应用决定。
 
-这些页面上的每个示例都同时给出 Rust 和 TSX：选择一个标签页，页面上的所有示例都会随之切换。
+这些页面上的每个示例都同时给出 TSX 和 Rust：选择一个标签页，页面上的所有示例都会随之切换。
+
+```tsx tabs
+import { mount, signal, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const count = signal(0);
+  return (
+    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }}>
+      <Text style={{ fontSize: 24 }}>已点击 {count()} 次</Text>
+      <View onPress={() => count.update((n) => n + 1)} class="rounded-lg bg-blue-600 px-4 py-2 active:opacity-60">
+        <Text class="text-white">点我</Text>
+      </View>
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -32,24 +55,6 @@ fn app() -> impl IntoElement {
                 .child(text("点我").text_color(white())),
         )
 }
-```
-
-```tsx tabs
-import { mount, signal, Text, View } from "nsh";
-
-function App() {
-  const count = signal(0);
-  return (
-    <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 12 }}>
-      <Text style={{ fontSize: 24 }}>已点击 {count()} 次</Text>
-      <View onPress={() => count.update((n) => n + 1)} class="rounded-lg bg-blue-600 px-4 py-2 active:opacity-60">
-        <Text class="text-white">点我</Text>
-      </View>
-    </View>
-  );
-}
-
-mount(App);
 ```
 
 在 Rust 中，原语是 `nsh_core::prelude` 中的函数（`view()`、`text(..)`、`image(..)`），基础组件来自 `nsh_base` crate。样式是有类型的方法（`.flex_1()`、`.gap_3()`、`.px(px(20.0))`、`.bg(..)`），状态样式接收一个闭包（`.active(|s| s.opacity(0.6))`），监听器是接收事件的闭包（`.on_press(move || ..)`、`.on_change(move |text: &str| ..)`），`.child(..)` 添加子元素。一段 UI 就是一个返回 `impl IntoElement` 的普通函数，只运行一次；它在闭包里读取的 signal（`text(move || ..)`、`.bg(move || ..)`）会更新所绑定的内容。参见[用 Rust 构建](../docs/rust.md)。
@@ -92,7 +97,7 @@ TSX 从 `nsh/base` 导入，Rust 从 `nsh_base` crate 导入。它们负责行�
 | `<Accordion>` 及其部件 | `nsh_base::accordion()`、`accordion_item()` 等 | 在各自标题下展开和收起的一组分区，一次一个或同时多个 | [Accordion](./accordion.md) |
 | `<Avatar>`、`<AvatarGroup>` | `nsh_base::avatar()`、`avatar_group()` | 一个人的头像，加载中或失败时显示后备内容；以及只显示前几个的一排头像 | [Avatar](./avatar.md) |
 | `<Button>` | `nsh_base::button()` | 带有状态和角色的可按压控件 | [Button](./button.md) |
-| `<Carousel>` 及其部件 | `nsh_base::carousel()`、`carousel_content()` 等 | 一次显示一个位置的幻灯片，原生滑动，带上一张 / 下一张、分页、按键和无缝循环 | [Carousel](./carousel.md) |
+| `<Carousel>` 及其部件 | `nsh_base::carousel()`、`carousel_content()` 等 | 一次显示一个位置的幻灯片，原生滑动，带上一张 / 下一张按钮、分页、键盘操作和无缝循环 | [Carousel](./carousel.md) |
 | `<Checkbox>` | `nsh_base::checkbox()` | 带指示器的勾选 / 未勾选 / 半选控件 | [Checkbox](./checkbox.md) |
 | `<Collapsible>` | `nsh_base::collapsible()` | 内容可展开和收起的区域 | [Collapsible](./collapsible.md) |
 | `<Command>` | `nsh_base::command()` | 命令面板：在原生过滤的命令之上放一个搜索框，虚拟化列表，Cmd+K 面板的按键 | [Command](./command.md) |
@@ -120,11 +125,13 @@ TSX 从 `nsh/base` 导入，Rust 从 `nsh_base` crate 导入。它们负责行�
 | `<Select>` | `nsh_base::select()` | 从一组条目中选出一个值，支持键盘、搜索和分组 | [Select](./select.md) |
 | `<Sheet>` | `nsh_base::sheet()` | 位于屏幕一侧边缘、覆盖在背景层之上的面板 | [Sheet](./sheet.md) |
 | `<Slider>` | `nsh_base::slider()` | 沿轨道选取一个值或两个值组成的范围 | [Slider](./slider.md) |
+| `<SplitView>` | `nsh_base::split_view()` | 并排显示的导航栈分栏，空间紧凑时一次显示一栏：iOS 上是 `UISplitViewController` | [SplitView](./split-view.md) |
 | `<Switch>` | `nsh_base::switch()` | 带轨道和滑块的开 / 关控件 | [Switch](./switch.md) |
 | `<Table>` 及其部件 | `nsh_base::table()`、`table_row()` 等 | 由应用写出行和单元格的表格，带有表格的角色 | [Table](./table.md) |
 | `<Tab>`、`<Tabs>` | `nsh_base::tab()`、`tabs()` | 标签列表中的一个标签页，以及这个列表 | [Tabs](./tabs.md) |
 | `<TextView>` | `nsh_base::text_view()` | 用文本和视图显示 Markdown 或 HTML 文档 | [TextView](./text-view.md) |
 | `<Toast>`、`<ToastStack>` | `nsh_base::toast()`、`toast_stack()` | toast 的语义根；从一侧边缘排成层叠的 toast | [Toast](./toast.md) |
+| `<TitleBar>` | `nsh_base::title_bar()` | 应用自绘的窗口标题栏，只在碰到窗口按钮的地方让开 | [TitleBar](./title-bar.md) |
 | `<Toggle>`、`<ToggleGroup>` | `nsh_base::toggle()`、`toggle_group()` | 一个处于开或关的按钮，以及由它们组成的工具栏 | [Toggle](./toggle.md) |
 | `<Toolbar>`、`<ToolbarGroup>`、`<ToolbarSeparator>` | `nsh_base::toolbar()`、`toolbar_group()`、`toolbar_separator()` | 由按钮、开关按钮和链接组成的一栏，在键盘焦点里只占一站 | [Toolbar](./toolbar.md) |
 | `<Tooltip>` | `nsh_base::tooltip()` | 悬停或手指按住时显示在触发元素旁的提示 | [Tooltip](./tooltip.md) |
@@ -147,7 +154,7 @@ TSX 从 `nsh/base` 导入，Rust 从 `nsh_base` crate 导入。它们负责行�
 
 ### 按压与反馈
 
-按压处理在原生侧完成：由平台识别按压并应用应用设定的按压样式，应用代码只在事后收到通知。只有最内层可按压的视图会响应；在滚动视图内，按下会等待约 130 ms，让滚动有机会先开始。
+按压处理在原生侧完成：由平台识别按压并应用应用设定的按压样式，应用代码只在事后收到通知。只有最内层可按压的视图会响应，但只监听 `onLongPress` 的视图会把点击留给外层的可按压视图；在滚动视图内，按下会等待约 130 ms，让滚动有机会先开始。
 
 | 属性 | Rust | 类型 | 默认值 | 说明 |
 |---|---|---|---|---|
@@ -184,6 +191,12 @@ TSX 从 `nsh/base` 导入，Rust 从 `nsh_base` crate 导入。它们负责行�
 | `expandedStyle` | `.expanded(\|s\| ..)`、`.expanded_style(style)` | `aria-expanded:` | `accessibilityState.expanded` 为 `true` 时（弹出层打开时 `Popover`、`Menu` 的触发器）。 |
 | `pressedStyle` | `.aria_pressed(\|s\| ..)`、`.pressed_style(style)` | `aria-pressed:` | `accessibilityState.pressed` 为 `true` 时（处于开启状态的切换按钮；`"mixed"` 不算按下）。不同于 `activeStyle`（正在按压）。 |
 
+```tsx tabs
+<View onPress={save} activeStyle={{ opacity: 0.6 }} hoverStyle={{ backgroundColor: "#1d4ed8" }} class="rounded-lg bg-blue-600 px-4 py-2">
+  <Text class="text-white">保存</Text>
+</View>
+```
+
 ```rust tabs
 view()
     .rounded_lg()
@@ -194,12 +207,6 @@ view()
     .hover(|s| s.bg(rgb(0x1d4ed8)))
     .on_press(save)
     .child(text("保存").text_color(white()))
-```
-
-```tsx tabs
-<View onPress={save} activeStyle={{ opacity: 0.6 }} hoverStyle={{ backgroundColor: "#1d4ed8" }} class="rounded-lg bg-blue-600 px-4 py-2">
-  <Text class="text-white">保存</Text>
-</View>
 ```
 
 ### 悬停
@@ -218,6 +225,17 @@ view()
 每个组件都接受这些事件，`nsh/base` 的组件和应用自己 crate 中的组件都一样：`<Button onMouseEnter>`、`<Switch onMouseMove>`、`<Avatar onMouseUp>`，Rust 中为 `button().on_mouse_enter(..)`。它们以同样的 `MouseEvent` 报告鼠标在组件根视图上的情况，在组件自己处理之后到达；只有应用监听时，组件才监听。
 
 `MouseEvent` 像 GPUI 的 `MouseMoveEvent` 一样给出鼠标的位置：`position` 是在视图中的位置（一个 `Point`，单位为点，已去掉视图的变换），`pagePosition` 是在视图所在根视图中的位置（与触摸相同），按住的 `modifiers`（`control`、`alt`、`shift`、`platform`：Apple 平台上是 Command，其他平台是 Windows 键），`pressedButton`：按下的按键（`"left"`、`"right"`、`"middle"`、`"back"` 或 `"forward"`，即 GPUI 的 `MouseButton`），没有按键或松开时为 `null`，以及 `button`：本次事件中变化的按键，即 `onMouseUp` 上松开的按键，移动时为 `null`；Rust 中为 `position`、`page_position`、`modifiers`、`pressed_button` 和 `button`。在桌面平台和 Web 上，拖动同时也是触摸（`onTouchMove`、响应者系统），它的移动带着 `pressedButton` 到达 `onMouseMove`：只跟随悬停的反馈跳过这些移动即可；iOS 和 Android 的悬停报告的是没有按键按下的指针。移动事件每帧最多一次，总是最新的那次，并且一定在随后的 `onMouseLeave` 之前到达，因此处理函数可以在每次移动时重绘：
+
+```tsx tabs
+// 图表上的十字线。
+const at = signal<number | null>(null);
+
+<View onMouseMove={(e) => at.set(e.position.x)} onMouseLeave={() => at.set(null)} style={{ height: 200 }}>
+  <If when={at() !== null}>
+    <View style={{ position: "absolute", left: at()!, top: 0, bottom: 0, width: 1, backgroundColor: "#888" }} />
+  </If>
+</View>
+```
 
 ```rust tabs
 // 图表上的十字线。
@@ -238,26 +256,30 @@ view()
     }))
 ```
 
-```tsx tabs
-// 图表上的十字线。
-const at = signal<number | null>(null);
-
-<View onMouseMove={(e) => at.set(e.position.x)} onMouseLeave={() => at.set(null)} style={{ height: 200 }}>
-  <If when={at() !== null}>
-    <View style={{ position: "absolute", left: at()!, top: 0, bottom: 0, width: 1, backgroundColor: "#888" }} />
-  </If>
-</View>
-```
-
 ### 滚轮
 
-`onWheel` 在鼠标滚轮或触控板在视图上滚动时触发：macOS、Windows、Linux、GPUI 后端和 Web 都支持（DOM 的 `wheel`、GPUI 的 `ScrollWheelEvent`）。指针下方视图及其外层中，最近的监听者收到它。若该视图比指针下方所有滚动视图都更近，它就接管这次滚轮：系统不再滚动、缩放或捏合，因此页面里的画布可以在 Control + 滚轮时缩放、其他时候平移。监听的滚动视图，或包着滚动视图的外层视图，只是旁观：滚动视图照常滚动。一次滚动始终留在它去的地方，与滚动视图相同：接管了它的视图会收到这次滚动剩下的部分（触控板手势及其惯性、连续滚动的滚轮），即使指针离开了它；滚动视图已经开始的滚动，也不会被中途移到指针下的监听者抢走，那个监听者只是旁观。JS 无法事后取消原生滚动（主线程不等待 JS），所以是否接管由挂载的内容决定，与 `onContextMenu` 相同。
+`onWheel` 在鼠标滚轮或触控板在视图上滚动时触发：macOS、Windows、Linux、GPUI 后端和 Web 都支持（DOM 的 `wheel`、GPUI 的 `ScrollWheelEvent`）。指针下方视图及其外层中，最近的监听者收到它。若该视图比指针下方所有滚动视图都更近，它就接管这次滚轮：系统不再滚动、缩放或捏合，因此页面里的画布可以在 Control + 滚轮时缩放、其他时候平移。若监听者的 `panActivation` 只指定了一个方向（如 `{ activeOffsetX, failOffsetY }`，Rust 为 `PanActivation::horizontal(..)`），它只接管这个方向的滚轮和 Control + 滚轮，其他方向交给外层的滚动视图，与横向滚动视图让纵向滚轮滚动页面相同：纵向页面里的时间轴接管横向滚轮，纵向滚轮照常滚动页面。监听的滚动视图，或包着滚动视图的外层视图，只是旁观：滚动视图照常滚动。一次滚动始终留在它去的地方，与滚动视图相同：接管了它的视图会收到这次滚动剩下的部分（触控板手势及其惯性、连续滚动的滚轮），即使指针离开了它；滚动视图已经开始的滚动，也不会被中途移到指针下的监听者抢走，那个监听者只是旁观。JS 无法事后取消原生滚动（主线程不等待 JS），所以是否接管由挂载的内容决定，与 `onContextMenu` 相同。
 
 | 属性 | Rust | 类型 | 说明 |
 |---|---|---|---|
 | `onWheel` | `.on_wheel(..)` | `(e: WheelEvent) => void` | 鼠标滚轮或触控板在视图或其内部的视图上滚动。 |
 
 `WheelEvent` 与 `MouseEvent` 一样带有 `position` 和 `pagePosition`，以及按住的 `modifiers`、`delta`（一个 `Point`：`y` 为正向下、朝末尾滚动，`x` 为正向右，与 DOM 的 `deltaX` / `deltaY` 相同）和 `deltaMode`：鼠标滚轮的刻度为 `"lines"`，精确设备（触控板、妙控鼠标；AppKit 的 `hasPreciseScrollingDeltas`、DOM 的 `DOM_DELTA_PIXEL`）为 `"points"`。Rust 中 `delta` 是 `WheelDelta`：`Lines(Point<f32>)` 或 `Points(Point<Points>)`，与 GPUI 的 `ScrollDelta` 相同；`delta.points(line_height)` 总是给出点数。
+
+```tsx tabs
+// 画布：Control + 滚轮缩放，滚轮平移。
+const zoom = signal(1);
+const offset = signal({ x: 0, y: 0 });
+
+<View
+  style={{ flex: 1 }}
+  onWheel={(e) => {
+    const unit = e.deltaMode === "lines" ? 16 : 1;
+    if (e.modifiers.control) zoom.update((z) => z * Math.min(2, Math.max(0.5, 1 - (e.delta.y * unit) / 200)));
+    else offset.update((o) => ({ x: o.x - e.delta.x * unit, y: o.y - e.delta.y * unit }));
+  }}
+/>
+```
 
 ```rust tabs
 // 画布：Control + 滚轮缩放，滚轮平移。
@@ -274,21 +296,6 @@ view()
             offset.update(|o| *o = point(o.x - d.x, o.y - d.y));
         }
     })
-```
-
-```tsx tabs
-// 画布：Control + 滚轮缩放，滚轮平移。
-const zoom = signal(1);
-const offset = signal({ x: 0, y: 0 });
-
-<View
-  style={{ flex: 1 }}
-  onWheel={(e) => {
-    const unit = e.deltaMode === "lines" ? 16 : 1;
-    if (e.modifiers.control) zoom.update((z) => z * Math.min(2, Math.max(0.5, 1 - (e.delta.y * unit) / 200)));
-    else offset.update((o) => ({ x: o.x - e.delta.x * unit, y: o.y - e.delta.y * unit }));
-  }}
-/>
 ```
 
 `onPinch` 在触控板于视图上捏合时触发，与 GPUI 的 `on_pinch` 相同：macOS、Linux、GPUI 后端和 Safari 都支持。Windows 和其他浏览器把触控板捏合报告为 Control + 滚轮，由 `onWheel` 收到，所以需要缩放的视图要同时监听两者。指针下方视图及其外层中，最近的监听者从捏合开始到结束一直收到它；若该视图比所有原生捏合的视图（`pinch` 值、`onPinchStart`）都更近，它就接管这次捏合，系统不再原生缩放。在捏合中途才开始监听的视图收到其余部分，没有开始事件。触摸屏上的手指捏合属于原生手势（`onPinchStart`，见[触摸与手势](../docs/touch-and-gestures.md)）。
@@ -317,6 +324,19 @@ const offset = signal({ x: 0, y: 0 });
 |---|---|---|---|
 | `tooltip` | `.tooltip(..)` | `JSX.Element` | 提示，一个由应用设置样式的元素：`nsh/base` 的 [`Tooltip`](tooltip.md) 就是工具提示本身，带有它的位置、延迟和事件；其他元素按原样显示。 |
 
+```tsx tabs
+<View
+  onPress={save}
+  tooltip={
+    <Tooltip class="rounded-md bg-gray-900 px-2 py-1">
+      <Text class="text-white">保存文档</Text>
+    </Tooltip>
+  }
+>
+  <Text>💾</Text>
+</View>
+```
+
 ```rust tabs
 view()
     .on_press(save)
@@ -331,24 +351,17 @@ view()
     .child(text("💾"))
 ```
 
-```tsx tabs
-<View
-  onPress={save}
-  tooltip={
-    <Tooltip class="rounded-md bg-gray-900 px-2 py-1">
-      <Text class="text-white">保存文档</Text>
-    </Tooltip>
-  }
->
-  <Text>💾</Text>
-</View>
-```
-
 `Tooltip` 决定自己的外观、位置、延迟和事件，与 GPUI 的 `.tooltip(..)` 相同。提示较多的应用可以写一个自己的小组件，把文字包进它的 `Tooltip`。
 
 ### 上下文菜单
 
 `onContextMenu` 告诉视图：鼠标的辅助按钮在它上面按下了——右键单击、macOS 上的 Control 单击、触控板的双指单击、iPad 指针的辅助点按；在浏览器里还有获得焦点的视图上的 Shift+F10 和键盘的菜单键；在 macOS 和 Windows 上还有读屏软件的「显示菜单」操作（VoiceOver 的 VO-Shift-M、UI Automation 的对应操作）。在这里打开应用自己的菜单；在 TSX 中，[`Menu.popup`](../modules/nsh-desktop.md) 显示系统菜单：
+
+```tsx tabs
+import { Menu } from "nsh/desktop";
+
+<View onContextMenu={(e) => Menu.popup(rowMenu(row), e.pagePosition)}>…</View>
+```
 
 ```rust tabs
 // 应用自己的菜单，放在点击的位置。
@@ -357,12 +370,6 @@ let menu_at = signal(None::<Point<Points>>);
 view()
     .on_context_menu(move |e: &ContextMenuEvent| menu_at.set(Some(e.page_position)))
     .child(text(row.name.clone()))
-```
-
-```tsx tabs
-import { Menu } from "nsh/desktop";
-
-<View onContextMenu={(e) => Menu.popup(rowMenu(row), e.pagePosition)}>…</View>
 ```
 
 | 属性 | Rust | 类型 | 说明 |
@@ -375,7 +382,7 @@ import { Menu } from "nsh/desktop";
 
 ### 键盘焦点
 
-在 macOS 和 Web 上，Tab 按视图树的顺序在停靠点之间移动键盘焦点：输入框、可按压的视图，以及所有设置了 `focusable` 的视图。焦点样式（`focus:`、`.focus(..)`）为获得焦点的视图设置样式；它可按压时，按 Return 或空格会按下它。点击会按下视图但不让它获得焦点，所以焦点样式只在键盘聚焦时生效。
+在 macOS、Windows、Web 和 Android 上，Tab 按视图树的顺序在停靠点之间移动键盘焦点：输入框、可按压的视图，以及所有设置了 `focusable` 的视图；在 macOS 和 `nsh test` 中，Tab 会越过禁用的输入框和设置了 `focusable={false}` 的输入框，与对这类视图的处理一致。焦点样式（`focus:`、`.focus(..)`）为获得焦点的视图设置样式；它可按压时，按 Return 或空格会按下它。点击会按下视图但不让它获得焦点，所以焦点样式只在键盘聚焦时生效。在 Android 上，可按压的视图是硬件键盘的停靠点，而触摸模式下的点击只会聚焦显式设置了 `focusable` 的视图（或由 ref 聚焦的视图），所以点按钮不会让正在编辑的输入框失去焦点；在第一个和最后一个停靠点上，Tab 和 Shift+Tab 会交给嵌入它的 Android 宿主，而不是绕回。在 Android 上，应用里没有视图获得焦点时（比如启动时和点按之后），第一次按方向键会把焦点移到屏幕上的第一个停靠点，此后方向键按各自的方向移动焦点；嵌入它的 Android 宿主会保留用来移动自身焦点或滚动自身的方向键。
 
 焦点到达的视图会在外层的滚动视图和列表里滚进视野。Tab 会走遍列表的每一行，包括还没渲染的行：焦点到达时列表渲染出下一行，走过最后一行后焦点才离开列表。
 
@@ -392,6 +399,25 @@ ref 的 `focus()` 像 Tab 一样把键盘焦点移到停靠点上（显示它的
 | `onBlur` | `.on_blur(..)` | `() => void` | | 键盘焦点离开了视图。 |
 | `onKeyDown` / `onKeyUp` | `.on_key_down(..)` / `.on_key_up(..)` | `(e: KeyEvent) => void` | | 硬件按键在聚焦视图或其内部按下 / 在聚焦视图上抬起。`KeyEvent` 为 `{ key, code, modifiers, repeat, defaultPrevented }`；一个事件沿原生窗口内的已启用监听祖先各传播一次（[硬件按键](./keyboard.md#自定义视图的硬件按键)）。 |
 | `captureKeys` | `.capture_keys(..)` | `"none" \| "all" \| readonly string[]` | `"none"` | 该视图或聚焦后代在原生默认行为之前消费的按键：规范的按键序列，如 `["mod+k", "escape"]`。`defaultPrevented` 报告该决定；应用快捷键优先，原生输入框保留用于编辑的按键（[硬件按键](./keyboard.md#自定义视图的硬件按键)）。 |
+
+```tsx tabs
+<View class="rounded-lg p-3 focus:bg-sky-100" onPress={open}>
+  <Text>打开</Text>
+</View>
+
+{/* 浮层的背景层：点击关闭浮层，Tab 直接越过它进入内容。 */}
+<View class="absolute inset-0" focusable={false} onPress={close} />
+
+{/* 卡片里的图表：Tab 停在图表上，点击打开卡片的详情页。 */}
+<View onPress={openPage}>
+  <View
+    class="h-40 focus:bg-sky-100"
+    focusable
+    onFocus={() => focused.set(true)}
+    onBlur={() => focused.set(false)}
+  />
+</View>
+```
 
 ```rust tabs
 view()
@@ -415,25 +441,6 @@ view().on_press(open_page).child(
 )
 ```
 
-```tsx tabs
-<View class="rounded-lg p-3 focus:bg-sky-100" onPress={open}>
-  <Text>打开</Text>
-</View>
-
-{/* 浮层的背景层：点击关闭浮层，Tab 直接越过它进入内容。 */}
-<View class="absolute inset-0" focusable={false} onPress={close} />
-
-{/* 卡片里的图表：Tab 停在图表上，点击打开卡片的详情页。 */}
-<View onPress={openPage}>
-  <View
-    class="h-40 focus:bg-sky-100"
-    focusable
-    onFocus={() => focused.set(true)}
-    onBlur={() => focused.set(false)}
-  />
-</View>
-```
-
 ### 布局与标识
 
 | 属性 | Rust | 类型 | 说明 |
@@ -442,6 +449,7 @@ view().on_press(open_page).child(
 | `ref` | `.element_ref(&handle)` | `ViewRef \| (node: ViewRef) => void` | 元素的 ref（参见 [ref 方法](#ref-方法)）：`ViewRef`，或元素自己基于它的类型。`ref={el}` 赋值给变量，`ref={fn}` 调用函数。 |
 | `nativeID` | `.native_id(id)` | `string` | 为视图命名，供其他元素引用，例如输入框引用的 `InputAccessoryView`。 |
 | `testID` | `.test_id(id)` | `string` | UI 测试使用的标识（在 Android 上是视图的 resource id）。 |
+| `copyText` | `.copy_text(text)` | `string` | 用在文本中的视图或图片（行内附件）上：复制这段文本时在它的位置给出的文字（例如行内公式的源码）。不设置时复制结果不包含它。嵌套的文本片段和不在文本中的元素会忽略它。见[行内视图和图片](./text.md#行内视图和图片)。 |
 | `key` | `.key(key)` | `string` | 元素在兄弟元素之间的标识。 |
 
 ### 页面的标记
@@ -457,6 +465,13 @@ view().on_press(open_page).child(
 
 链接的按压归 `Link`：普通点击触发它的 `onOpen`（配合 `openWith="app"`，应用照常导航）；爬虫跟随 `href`，按住修饰键点击或用鼠标中键点击时像浏览器链接一样打开它。
 
+```tsx tabs
+<Link href="/notes/q3-earnings" openWith="app" onOpen={() => nav.push({ name: "note", slug: "q3-earnings" })}>
+  <Text role="header" accessibilityLevel={2}>Q3 earnings</Text>
+  <Text web={{ element: "p" }}>Revenue grew 12%.</Text>
+</Link>
+```
+
 ```rust tabs
 use nsh_base::{LinkOpenWith, link};
 use nsh_core::{WebElement, prelude::*};
@@ -467,13 +482,6 @@ link()
     .on_open(move |_: &SharedString| routes.update(|r| r.push(Route::Note("q3-earnings".into()))))
     .child(text("Q3 earnings").role(AccessibilityRole::Header).accessibility_level(2))
     .child(text("Revenue grew 12%.").web_element(WebElement::P))
-```
-
-```tsx tabs
-<Link href="/notes/q3-earnings" openWith="app" onOpen={() => nav.push({ name: "note", slug: "q3-earnings" })}>
-  <Text role="header" accessibilityLevel={2}>Q3 earnings</Text>
-  <Text web={{ element: "p" }}>Revenue grew 12%.</Text>
-</Link>
 ```
 
 [Web](../docs/web.md#搜索引擎) 展示了用这种方式构建的完整站点。
@@ -492,7 +500,7 @@ link()
 | `rotation` | `.rotation_value(&angle)` | `{ angle?: AnimatedValue }` | 双指旋转驱动 `angle`（角度）。 |
 | `onRotationStart` / `onRotationEnd` | `.on_rotation_start(..)` / `.on_rotation_end(..)` | `(e: { rotation: number; velocity: number }) => void` | 旋转开始 / 结束。 |
 
-`PanEvent` 为 `{ cancelled, translation, velocity, value? }`（Rust 中为 `cancelled`、`translation`、`velocity_x`、`velocity_y`、`value_x`、`value_y`）：系统是否取消了拖动、自开始以来的位移和以点每秒计的速度（`Point`），以及此刻所绑定值的数值，即 `pan` 绑定的轴的 `{ x?, y? }`（拖动可能在动画中途抓住一个值）。
+`PanEvent` 为 `{ cancelled, origin, translation, velocity, value? }`（Rust 中为 `cancelled`、`origin`、`translation`、`velocity_x`、`velocity_y`、`value_x`、`value_y`）：系统是否取消了拖动、手指按下的位置（在 surface 中，与触摸的 page 位置相同）、自开始以来的位移和以点每秒计的速度（`Point`），以及此刻所绑定值的数值，即 `pan` 绑定的轴的 `{ x?, y? }`（拖动可能在动画中途抓住一个值）。视图的 `panActivation` 决定拖动何时开始：超过它的偏移、只朝一个 `direction`，或者从屏幕的某条 `edge` 开始（[触摸与手势](../docs/touch-and-gestures.md#单向拖动与屏幕边缘拖动)）。
 
 ### 原始触摸与响应者系统
 
@@ -524,6 +532,7 @@ stopPropagation() }`）；`…ShouldSetResponder` 回调还会收到 `gestureSta
 | `accessibilityDescribedBy` | `.accessibility_described_by(..)` | `ViewRef \| null` | 文字用来说明这个元素的元素：输入框的错误提示行（[无障碍](../docs/accessibility.md#说明另一个元素的元素)）。 |
 | `accessibilityValue` | `.accessibility_value(..)` | `{ min?, max?, now?, text? }` | 范围类或文本类元素的值。 |
 | `accessibilityElementsHidden` | | `boolean` | 对辅助技术隐藏该视图及其子树。 |
+| `accessibilityLiveRegion` | `.accessibility_live_region(..)` | `"none" \| "polite" \| "assertive"` | 视图的变化如何自动播报：Android 上的 TalkBack、macOS 上的 VoiceOver、web 的 `aria-live`、Windows 上的实时区域。 |
 | `importantForAccessibility` | | `"auto" \| "yes" \| "no" \| "no-hide-descendants"` | 是否暴露该视图。 |
 | `accessibilityActions` | | `{ name: string; label?: string }[]` | 提供给辅助技术的自定义操作。 |
 | `onAccessibilityAction` | `.on_accessibility_action(..)` | `(e: { actionName: string }) => void` | 用户触发了 `accessibilityActions` 中的某个操作。 |
@@ -545,13 +554,19 @@ stopPropagation() }`）；`…ShouldSetResponder` 回调还会收到 `gestureSta
 |---|---|---|---|
 | `ripple` | `.ripple(Ripple { .. })` | `{ color?, borderless?, radius?, foreground? }` | 按下时的 Material 水波纹。 |
 | `elevation` | `.elevation(px(2.0))` | `number` | 根据视图形状生成的 Material 阴影（单位为点）。 |
-| `accessibilityLiveRegion` | | `"none" \| "polite" \| "assertive"` | 视图变化如何播报给 TalkBack。 |
+| `accessibilityLiveRegion` | | `"none" \| "polite" \| "assertive"` | 在 Android 上的播报方式；不带 bag 的同名 prop 在其他平台也一样。 |
 
 | `desktop` 键 | Rust | 类型 | 说明 |
 |---|---|---|---|
 | `windowDrag` | `.window_drag(..)` | `boolean` | 按住视图拖动窗口，像按住标题栏一样；`false` 让可拖动视图中的一部分保持可点击。见[自定义标题栏](../modules/nsh-desktop.md#自定义标题栏)。 |
 | `windowControl` | `.window_control(..)` | `"minimize" \| "maximize" \| "close"` | 这个视图就是应用自绘标题栏中对应的窗口按钮：平台执行它的按下动作，辅助技术把它识别为该按钮。 |
 | `windowResize` | `.window_resize(..)` | `"top" \| "bottom" \| "left" \| "right" \| "topLeft" \| "topRight" \| "bottomLeft" \| "bottomRight"` | 按住这个视图从对应的边或角调整无边框窗口的大小。 |
+
+```tsx tabs
+<View onPress={save} android={{ ripple: { color: "#00000022" }, elevation: 2 }} class="rounded-lg bg-white p-4">
+  <Text>保存</Text>
+</View>
+```
 
 ```rust tabs
 use nsh_core::Ripple;
@@ -566,12 +581,6 @@ view()
     .child(text("保存"))
 ```
 
-```tsx tabs
-<View onPress={save} android={{ ripple: { color: "#00000022" }, elevation: 2 }} class="rounded-lg bg-white p-4">
-  <Text>保存</Text>
-</View>
-```
-
 参见[平台相关代码](../docs/platform-specific.md)。
 
 ## ref 方法
@@ -584,7 +593,7 @@ view()
 | `measure()` | `measure()` | `ViewRef` | [视图的位置](../docs/touch-and-gestures.md)。 |
 | `reveal({ vertical?, horizontal?, animated? })` | `reveal(options)` | `ViewRef` | [滚动视图外围的滚动视图](../docs/scrolling.md#把视图滚到可见处)，让它显示出来。 |
 | `setSelection(start, end?)` | `set_selection(start, end)` | `InputRef` | 选中 `start..end`（UTF-16 单位）；省略 `end` 时为光标。 |
-| `insertText(text)` | `insert_text(text)` | `InputRef` | 以用户编辑的方式用 `text` 替换选区，是撤销历史中的一步（Linux、Web、无头测试）。 |
+| `insertText(text)` | `insert_text(text)` | `InputRef` | 以用户编辑的方式用 `text` 替换选区，是撤销历史中的一步（iOS、macOS、Linux、Web、无头测试）。 |
 | `scrollTo({ x?, y?, animated? })` | `scroll_to(point, animated)` | `ScrollRef`、`ListRef` | 滚动到某个偏移量。 |
 | `zoomTo({ scale, x?, y?, animated? })` | `zoom_to(scale, center, animated)` | `ScrollRef`（可缩放的 `<Scroll>`） | 围绕内容中的某点缩放到 `scale`。 |
 | `scrollToOffset({ offset, animated? })` | `scroll_to_offset(offset, animated)` | `ListRef` | 沿列表方向滚动到某个偏移量。 |
@@ -595,14 +604,6 @@ view()
 | `seek(seconds)` | `seek(seconds)` | `VideoRef` | 跳转到某个时间点。 |
 | `command(name, args?)` | `command(name, args)` | `NativeComponentRef` | 调用已注册原生组件的命令（[`nativeComponent`](../modules/nsh.md#nativecomponent-and-nativemodule)）。 |
 
-```rust tabs
-let field = element_ref();
-
-view()
-    .on_press(move || field.focus())
-    .child(input().element_ref(&field).placeholder("点击这一行开始输入"))
-```
-
 ```tsx tabs
 import { type InputRef, View } from "nsh";
 import { Input } from "nsh/base";
@@ -611,6 +612,14 @@ let input!: InputRef;
 <View onPress={() => input.focus()}>
   <Input ref={input} placeholder="点击这一行开始输入" />
 </View>;
+```
+
+```rust tabs
+let field = element_ref();
+
+view()
+    .on_press(move || field.focus())
+    .child(input().element_ref(&field).placeholder("点击这一行开始输入"))
 ```
 
 ## 为什么处理函数不会阻塞 UI

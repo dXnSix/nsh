@@ -10,7 +10,11 @@
 //! attachments in it), a node view's element where the app renders nodes
 //! of a type itself.
 
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use nsh_core::{
     PropertyValue, StyleDecl, StyleKey,
@@ -20,8 +24,8 @@ use nsh_core::{
 use serde_json::Value;
 
 use super::{
-    controller::{BlockItem, Rv, slot_id},
-    geometry::{DOC, InlineMap, Run},
+    controller::{BlockItem, Rv},
+    geometry::{COMPOSITION_SIDE, DOC, InlineMap, Run, slot_id},
     node_view::{MarkView, NodeView, NodeViewCx},
     parts::{self, Part},
     table,
@@ -30,10 +34,12 @@ use crate::{
     input,
     link_hint::{HintAt, link_hint},
     rich_editor::{
-        model::{DomOutputSpec, Mark, Node, utf16_len},
+        model::{DomOutputSpec, Mark, Node, utf16_len, utf16_slice},
         state::{Decoration, DecorationKind},
-        tables::{CellSelection, TableRole, table_role},
+        tables::{TableRole, table_role},
     },
+    syntax::Token,
+    text_view::{highlight::Tokens, merge_styles},
     theme,
 };
 
@@ -69,13 +75,9 @@ pub(crate) fn parts<E: Element>(el: E, rv: &Rv, list: &'static [Part]) -> E {
         })
     })
     .inline_style(move || {
-        props.styles.with(|s| {
-            Style::from_decls(
-                list.iter()
-                    .filter_map(|p| s.part(*p))
-                    .flat_map(|s| s.decls().iter().cloned()),
-            )
-        })
+        props
+            .styles
+            .with(|s| merge_styles(list.iter().filter_map(|p| s.part(*p))))
     })
 }
 
@@ -122,7 +124,12 @@ pub(crate) fn render(rv: Rv) -> impl IntoElement {
                         scroll_rv.scrolled.set(e.offset.y);
                         scroll_rv.viewport.set(e.size);
                     })
-                    .on_layout(move |b: &Bounds<Points>| layout_rv.viewport.set(b.size))
+                    .on_layout(move |b: &Bounds<Points>| {
+                        layout_rv.viewport.set(b.size);
+                        // The viewport moving moves the content on the page
+                        // with no layout of the content's own.
+                        layout_rv.place();
+                    })
                     .child(content(rv.clone())),
             )
             .child(sink(rv)),
@@ -135,6 +142,8 @@ fn content(rv: Rv) -> impl IntoElement {
     let (down, tap, mov, up, end) = (rv.clone(), rv.clone(), rv.clone(), rv.clone(), rv.clone());
     let (long, lift, armed, sweep) = (rv.clone(), rv.clone(), rv.clone(), rv.clone());
     let over = rv.clone();
+    let hovered = rv.hovered_table_cell;
+    let dropped = rv.clone();
     let claim = rv.clone();
     let placed = rv.clone();
     let height = rv.content_height;
@@ -147,7 +156,11 @@ fn content(rv: Rv) -> impl IntoElement {
             })
             .relative()
             .min_h(relative(1.0))
-            .cursor(Cursor::Text),
+            .cursor(Cursor::Text)
+            // The presses below are the pointer's: a press focuses the
+            // sink, which takes the keys and is the editor's one stop of
+            // Tab, not this box.
+            .focusable(false),
         &rv,
         Part::Content,
     )
@@ -161,10 +174,23 @@ fn content(rv: Rv) -> impl IntoElement {
             _ => {}
         }
     })
+    // Text dragged in from another app or view goes in where it is let go
+    // (backends that deliver text drops: iOS).
+    .on(EventKind::TextDrop, move |p: &EventPayload| {
+        if let EventPayload::TextDrop(drop) = p {
+            dropped.drop_text(&drop.text, &drop.html, drop.page_position);
+        }
+    })
     // Where the pointer is, for drags the app starts from a page point.
     .on(EventKind::MouseMove, move |p: &EventPayload| {
         if let EventPayload::Mouse(e) = p {
             over.note_pointer(e.position, e.page_position);
+            over.clear_table_hover_outside(e.position);
+        }
+    })
+    .on_mouse_leave(move |_: &MouseEvent| {
+        if hovered.get_untracked().is_some() {
+            hovered.set(None);
         }
     })
     .on(EventKind::Press, move |p: &EventPayload| {
@@ -219,18 +245,41 @@ fn content(rv: Rv) -> impl IntoElement {
         false => up.end_sweep(),
     })
     .on_responder_terminate(move |_: &ResponderEvent| match desktop {
-        true => end.release(),
+        true => {
+            end.cancel_table_press();
+            end.release()
+        }
         false => end.end_sweep(),
     })
-    .child(blocks(rv.clone(), DOC))
+    // Keep the intrinsic extent separate from the content box, whose
+    // min-height fills the viewport. In particular, a parent must be able
+    // to shrink an overestimated height and discover offscreen blocks
+    // without progressively enlarging the editor.
+    .child(
+        view()
+            .flex_shrink_0()
+            .on_layout({
+                let extent = rv.clone();
+                move |bounds: &Bounds<Points>| {
+                    // Root blocks are now relative to this wrapper, including
+                    // padding on Part::Content, rather than directly to content.
+                    extent.set_inset(DOC, bounds.origin);
+                    if extent.document_size.get_untracked() != bounds.size {
+                        extent.document_size.set(bounds.size);
+                    }
+                }
+            })
+            .children(doc_blocks(rv.clone())),
+    )
     .child(table::controls(rv.clone()))
+    .child(table::drop_line(rv.clone()))
     .child(gap_cursor(rv.clone()))
     .child(drop_cursor(rv.clone()))
     .child(caret(rv.clone()))
     // The touch selection's handles take touches of their own.
     .child(super::touch::handles(rv.clone()))
     .child(content_layer(rv.clone()))
-    .children(bubble_menu(rv))
+    .child(bubble_menu(rv))
 }
 
 /// The app's layer over the document (`contentLayer`): a box over the
@@ -252,45 +301,46 @@ fn content_layer(rv: Rv) -> impl IntoElement {
 
 /// The app's bubble menu: an overlay against an empty box over the
 /// selection, which scrolls with the text, so the menu follows it.
-fn bubble_menu(rv: Rv) -> [AnyElement; 2] {
-    let anchor = element_ref();
+fn bubble_menu(rv: Rv) -> impl IntoElement {
     let props = rv.props;
-    let place = move || {
-        rv.sel_rev.get();
-        rv.layout_rev.get();
-        rv.doc_rev.get();
-        let b = rv.selection_box().unwrap_or_default();
-        let at = |key: StyleKey, value: Points| {
-            let value = key.number_value(value.0);
-            (key, value.unwrap_or(PropertyValue::Default))
-        };
-        Style::from_decls(
-            [
-                at(StyleKey::Left, b.origin.x),
-                at(StyleKey::Top, b.origin.y),
-                at(StyleKey::Width, b.size.width),
-                at(StyleKey::Height, b.size.height),
-            ]
-            .map(|(key, value)| StyleDecl::Set(key, value)),
-        )
-    };
-    let box_ = view()
-        .element_ref(&anchor)
-        .absolute()
-        .pointer_events(PointerEvents::None)
-        .inline_style(place);
-    let menu = when(
+    when(
         move || props.bubble_menu.get().is_some(),
         move || {
-            overlay()
+            let rv = rv.clone();
+            let anchor = element_ref();
+            let place = move || {
+                rv.sel_rev.get();
+                rv.layout_rev.get();
+                rv.doc_rev.get();
+                let b = rv.selection_box().unwrap_or_default();
+                let at = |key: StyleKey, value: Points| {
+                    let value = key.number_value(value.0);
+                    (key, value.unwrap_or(PropertyValue::Default))
+                };
+                Style::from_decls(
+                    [
+                        at(StyleKey::Left, b.origin.x),
+                        at(StyleKey::Top, b.origin.y),
+                        at(StyleKey::Width, b.size.width),
+                        at(StyleKey::Height, b.size.height),
+                    ]
+                    .map(|(key, value)| StyleDecl::Set(key, value)),
+                )
+            };
+            let box_ = view()
+                .element_ref(&anchor)
+                .absolute()
+                .pointer_events(PointerEvents::None)
+                .inline_style(place);
+            let menu = overlay()
                 .anchor_content(&anchor)
                 .placement(props.bubble_menu_placement)
                 .align(Align::Center)
                 .offset(props.bubble_menu_offset)
-                .child(props.bubble_menu.place(|slot| slot))
+                .child(props.bubble_menu.place(|slot| slot));
+            [box_.into_element(), menu.into_element()]
         },
-    );
-    [box_.into_element(), menu.into_element()]
+    )
 }
 
 /// The blocks of container `parent`, by id.
@@ -311,6 +361,178 @@ fn blocks(rv: Rv, parent: u64) -> AnyElement {
         |b: &BlockItem| b.id,
         move |item, _| block(rv.clone(), item),
     )
+}
+
+/// Documents with more top-level blocks than this mount only those near
+/// the viewport (the code `Editor` and `List` do the same); shorter ones
+/// mount every block.
+const WINDOWED_BLOCKS: usize = 300;
+
+/// The viewport heights mounted above and below the visible part.
+const OVERSCAN: f32 = 1.5;
+
+/// Top-level blocks are mounted in steps of this many, so scrolling within
+/// a step changes nothing.
+const WINDOW_STEP: usize = 16;
+
+/// The top-level blocks' window: the blocks mounted, and the heights of
+/// the spacers standing for those before and after them.
+#[derive(Clone, PartialEq, Default)]
+struct Window {
+    start: usize,
+    end: usize,
+    above: f32,
+    below: f32,
+}
+
+/// Where the top-level blocks are, from their last measured frames
+/// (estimated from the measured ones where never mounted): the window of
+/// those within [`OVERSCAN`] viewports of the visible part, and the
+/// selection's blocks, so the caret's geometry is always there.
+fn doc_window(rv: &Rv, items: &[BlockItem]) -> Window {
+    let n = items.len();
+    if n <= WINDOWED_BLOCKS {
+        return Window {
+            start: 0,
+            end: n,
+            above: 0.0,
+            below: 0.0,
+        };
+    }
+    let geo = rv.geo.borrow();
+    let frame = |i: usize| {
+        geo.frames
+            .get(&items[i].id)
+            .filter(|(parent, _)| *parent == Some(DOC))
+            .map(|(_, b)| b)
+    };
+    // The gap between blocks (their margins, the box's gap), from
+    // neighbours measured in one layout.
+    let (mut sum, mut count, mut gaps, mut gap_count) = (0.0f32, 0usize, 0.0f32, 0usize);
+    for i in 0..n {
+        if let Some(b) = frame(i) {
+            sum += b.size.height.0;
+            count += 1;
+            if let Some(next) = (i + 1 < n).then(|| frame(i + 1)).flatten() {
+                let gap = next.origin.y.0 - (b.origin.y.0 + b.size.height.0);
+                if (0.0..200.0).contains(&gap) {
+                    gaps += gap;
+                    gap_count += 1;
+                }
+            }
+        }
+    }
+    let average = if count > 0 { sum / count as f32 } else { 24.0 };
+    let gap = if gap_count > 0 {
+        gaps / gap_count as f32
+    } else {
+        0.0
+    };
+    let pitch = |i: usize| frame(i).map_or(average, |b| b.size.height.0) + gap;
+    let viewport = rv.viewport.get().height.0;
+    let viewport = if viewport > 0.0 { viewport } else { 1000.0 };
+    let top = rv.scroll_y.get().0 - viewport * OVERSCAN;
+    let bottom = rv.scroll_y.get().0 + viewport * (1.0 + OVERSCAN);
+    let (mut y, mut start, mut end) = (0.0f32, n, n);
+    for i in 0..n {
+        let h = pitch(i);
+        if start == n && y + h >= top {
+            start = i;
+        }
+        if y > bottom {
+            end = i;
+            break;
+        }
+        y += h;
+    }
+    let mut start = start.min(n.saturating_sub(1)) / WINDOW_STEP * WINDOW_STEP;
+    let mut end = end.div_ceil(WINDOW_STEP) * WINDOW_STEP;
+    // The selection's blocks stay mounted: the caret, the keys and the
+    // input method need their text. A selection far from the viewport
+    // widens the window to it only when it is near; otherwise scrolling to
+    // the caret (which every edit does) brings it in.
+    let selection = rv.st.borrow().selection().clone();
+    let tree = rv.tree.borrow();
+    for pos in [selection.from(), selection.to()] {
+        let at = items.iter().position(|it| {
+            tree.pos(it.id)
+                .is_some_and(|p| p <= pos && pos <= p + it.node.node_size())
+        });
+        if let Some(i) = at
+            && i + WINDOW_STEP * 4 >= start
+            && i <= end + WINDOW_STEP * 4
+        {
+            start = start.min(i / WINDOW_STEP * WINDOW_STEP);
+            end = end.max((i + 1).div_ceil(WINDOW_STEP) * WINDOW_STEP);
+        }
+    }
+    let end = end.min(n);
+    let above = (0..start).map(pitch).sum();
+    let below = (end..n).map(pitch).sum();
+    Window {
+        start,
+        end,
+        above,
+        below,
+    }
+}
+
+/// The document's blocks: every one, or, in a long document, those near
+/// the viewport between two spacers ([`doc_window`]).
+fn doc_blocks(rv: Rv) -> Vec<AnyElement> {
+    let window_rv = rv.clone();
+    let window = computed(move || {
+        window_rv.doc_rev.get();
+        window_rv.layout_rev.get();
+        window_rv.sel_rev.get();
+        let tree = window_rv.tree.borrow();
+        let items = tree
+            .children
+            .get(&DOC)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let items = items.to_vec();
+        drop(tree);
+        doc_window(&window_rv, &items)
+    });
+    let list_rv = rv.clone();
+    let list = computed(move || {
+        list_rv.doc_rev.get();
+        let w = window.get();
+        let tree = list_rv.tree.borrow();
+        let items = tree
+            .children
+            .get(&DOC)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        items[w.start.min(items.len())..w.end.min(items.len())].to_vec()
+    });
+    // A spacer is there only while it stands for blocks, so a short
+    // document's box has its blocks alone, as before.
+    let spacer = move |above: bool| {
+        let height = move || {
+            let w = window.get();
+            if above { w.above } else { w.below }
+        };
+        let shown = computed(move || height() > 0.0);
+        dynamic(move || {
+            shown.get().then(|| {
+                view()
+                    .flex_shrink_0()
+                    .h(move || Length::from(px(height())))
+                    .into_element()
+            })
+        })
+    };
+    vec![
+        spacer(true),
+        each(
+            list,
+            |b: &BlockItem| b.id,
+            move |item, _| block(rv.clone(), item),
+        ),
+        spacer(false),
+    ]
 }
 
 /// What the block's view is.
@@ -347,42 +569,43 @@ fn block(rv: Rv, item: ReadSignal<BlockItem>) -> AnyElement {
             .child(crate::terminal::rule_line())
             .into_element();
     }
-    let (class_rv, style_rv, layout_rv) = (rv.clone(), rv.clone(), rv.clone());
-    let wrapper = view()
-        .on_layout(move |b: &Bounds<Points>| layout_rv.set_frame(id, Some(parent), *b))
-        .app_class(move || {
-            let it = item.get();
-            class_rv.deco_rev.get();
-            let selected = node_selected(&class_rv, &it);
-            let focused = node_focused(&class_rv, &it);
-            let decorations = node_decoration_classes(&class_rv, &it);
-            props.classes.with(|c| {
-                let mut list = parts::node_classes(c, &it.node);
-                list.extend(decorations);
-                if selected && let Some(s) = c.part(Part::SelectedNode) {
-                    list.push(s.to_string());
-                }
-                if focused && let Some(s) = c.part(Part::FocusedNode) {
-                    list.push(s.to_string());
-                }
-                parts::join(list)
-            })
-        })
-        .inline_style(move || {
-            let it = item.get();
-            let selected = node_selected(&style_rv, &it);
-            let focused = node_focused(&style_rv, &it);
-            props.styles.with(|s| {
-                let mut list = parts::node_styles(s, &it.node);
-                if selected && let Some(style) = s.part(Part::SelectedNode) {
-                    list.push(style.clone());
-                }
-                if focused && let Some(style) = s.part(Part::FocusedNode) {
-                    list.push(style.clone());
-                }
-                parts::merge(&list)
-            })
-        });
+    let (class_rv, layout_rv) = (rv.clone(), rv.clone());
+    let active = rv.watch_block(id);
+    // A node view's slot is framed in its block (`slot`): the block's ref
+    // measures it there, and its size, which changes when the view's own
+    // parts around the slot do, has it measured again.
+    let slotted = match &kind {
+        Kind::View(v) if v.editable_content_slot() => {
+            Some((element_ref(), signal(Size::default())))
+        }
+        _ => None,
+    };
+    let scroll_table =
+        table_role(first.node.ty()) == Some(TableRole::Table) && !matches!(kind, Kind::View(_));
+    let scroll_frame = scroll_table.then(|| {
+        signal((
+            Bounds::<Points>::default(),
+            Bounds::<Points>::default(),
+            px(0.),
+        ))
+    });
+    let wrapper = match slotted {
+        Some((block_ref, _)) => view().element_ref(&block_ref),
+        None => view(),
+    };
+    let wrapper = wrapper.on_layout(move |b: &Bounds<Points>| {
+        if let Some(frame) = scroll_frame {
+            frame.update(|parts| parts.1 = *b);
+            update_scrolled_table(&layout_rv, id, parent, frame);
+        } else {
+            layout_rv.set_frame(id, Some(parent), *b);
+        }
+        if let Some((_, size)) = slotted
+            && size.get_untracked() != b.size
+        {
+            size.set(b.size);
+        }
+    });
     // A list's item carries its marker, placed in the indent before it;
     // a terminal's goes in flow before the content instead, as TextView
     // sets its markers, since its Cells round the indent down.
@@ -399,9 +622,52 @@ fn block(rv: Rv, item: ReadSignal<BlockItem>) -> AnyElement {
         (Some(TableRole::Cell | TableRole::HeaderCell), _) => table::cell(wrapper, &rv, item),
         _ => wrapper,
     };
+    // The parts' classes and styles after the block's own styles: a table's
+    // theme colors are bound, and an app's typed part style bound before
+    // them would be covered by them.
+    let wrapper = wrapper
+        .app_class(move || {
+            let it = item.get();
+            let (selected, focused) = active.get();
+            class_rv.deco_rev.get();
+            let decorations = if class_rv.decorations.borrow().is_empty() {
+                Vec::new()
+            } else {
+                class_rv.doc_rev.get();
+                node_decoration_classes(&class_rv, &it)
+            };
+            props.classes.with(|c| {
+                let mut list = parts::node_classes(c, &it.node);
+                list.extend(decorations);
+                if selected && let Some(s) = c.part(Part::SelectedNode) {
+                    list.push(s.to_string());
+                }
+                if focused && let Some(s) = c.part(Part::FocusedNode) {
+                    list.push(s.to_string());
+                }
+                parts::join(list)
+            })
+        })
+        .inline_style(move || {
+            let it = item.get();
+            let (selected, focused) = active.get();
+            props.styles.with(|s| {
+                let mut list = parts::node_styles(s, &it.node);
+                if selected && let Some(style) = s.part(Part::SelectedNode) {
+                    list.push(style.clone());
+                }
+                if focused && let Some(style) = s.part(Part::FocusedNode) {
+                    list.push(style.clone());
+                }
+                merge_styles(&list)
+            })
+        });
     let task = render_kind(&first.node) == Some("task");
     let content = match kind {
-        Kind::View(view) => Some(node_view_block(rv.clone(), item, view).into_element()),
+        Kind::View(view) => {
+            let slot_in = slotted.map(|(block_ref, size)| (block_ref, size.read_only()));
+            Some(node_view_block(rv.clone(), item, view, slot_in).into_element())
+        }
         Kind::Text => Some(text_block(rv.clone(), item, id).into_element()),
         Kind::Image => Some(dynamic(move || image_of(&item.get().node)).into_element()),
         Kind::Atom => None,
@@ -435,7 +701,58 @@ fn block(rv: Rv, item: ReadSignal<BlockItem>) -> AnyElement {
     if marked && terminal {
         return wrapper.child(holder(content)).into_element();
     }
-    wrapper.children(content).into_element()
+    let block = wrapper.children(content);
+    if let Some(frame) = scroll_frame {
+        let layout_rv = rv.clone();
+        let geo = rv.geo.clone();
+        let handle = element_ref();
+        geo.borrow_mut().table_scroll_handles.insert(id, handle);
+        cleanup(move || {
+            let mut geo = geo.borrow_mut();
+            geo.table_scroll.remove(&id);
+            geo.table_scroll_handles.remove(&id);
+        });
+        return scroll()
+            .element_ref(&handle)
+            .horizontal()
+            .w_full()
+            .flex_shrink_0()
+            .keyboard_taps(KeyboardTaps::Always)
+            .test_id("rich-editor-table-scroll")
+            .on_layout(move |b: &Bounds<Points>| {
+                frame.update(|parts| parts.0 = *b);
+                update_scrolled_table(&layout_rv, id, parent, frame);
+            })
+            .on_scroll(move |e: &ScrollEvent| {
+                if frame.with_untracked(|parts| parts.2 == e.offset.x) {
+                    return;
+                }
+                frame.update(|parts| parts.2 = e.offset.x);
+                update_scrolled_table(&rv, id, parent, frame);
+                rv.cx.emit(super::RichEditorEvent::TableScroll);
+            })
+            .child(block)
+            .into_element();
+    }
+    block.into_element()
+}
+
+fn update_scrolled_table(
+    rv: &Rv,
+    id: u64,
+    parent: u64,
+    frame: Signal<(Bounds<Points>, Bounds<Points>, Points)>,
+) {
+    let (viewport, grid, offset) = frame.get_untracked();
+    let visible = (offset, viewport.size.width);
+    if rv.geo.borrow_mut().table_scroll.insert(id, visible) != Some(visible) {
+        rv.table_moved(id, Some(parent));
+    }
+    let origin = Point::new(
+        viewport.origin.x + grid.origin.x - offset,
+        viewport.origin.y + grid.origin.y,
+    );
+    rv.set_frame(id, Some(parent), Bounds::new(origin, grid.size));
 }
 
 /// The tag of the element the node's spec renders as (`to_dom`), when it
@@ -538,38 +855,13 @@ fn task_checkbox(rv: Rv, item: ReadSignal<BlockItem>) -> impl IntoElement {
             crate::checkbox()
                 .checked(checked)
                 .disabled(move || !props.editable.get())
-                .on_change(move |next: &bool| press_rv.set_checked(item.get_untracked().pos, *next))
+                .on_change(move |next: &bool| {
+                    if let Some(pos) = press_rv.block_pos(item.get_untracked().id) {
+                        press_rv.set_checked(pos, *next);
+                    }
+                })
                 .size_full(),
         )
-}
-
-/// Whether the block takes the `focusedNode` part: the editor has the
-/// focus and the selection is in the block, as `focusMode` picks
-/// (Tiptap's focus extension).
-fn node_focused(rv: &Rv, it: &BlockItem) -> bool {
-    if !rv.focused.get() || !rv.props.editable.get() {
-        return false;
-    }
-    rv.sel_rev.get();
-    let mode = rv.props.focus_mode.get();
-    let state = rv.st.borrow();
-    let sel = state.selection();
-    let (from, to) = (sel.from(), sel.to());
-    let end = it.pos + it.node.node_size();
-    let inside = if from == to {
-        it.pos < from && end > from
-    } else {
-        it.pos < to && end > from
-    };
-    if !inside {
-        return false;
-    }
-    let depth = |pos: usize| state.doc().resolve(pos).map(|r| r.depth).unwrap_or(0);
-    match mode.as_deref() {
-        Some("shallowest") => depth(it.pos) == 0,
-        Some("deepest") => depth(it.pos) + 1 == depth(from).max(1),
-        _ => true,
-    }
 }
 
 /// What marks the children of a node whose spec's `extra.listMarker` is
@@ -582,8 +874,9 @@ enum ListMarker {
 
 /// The marker kind of `it`'s parent, if it marks its children.
 fn list_marker(rv: &Rv, it: &BlockItem) -> Option<ListMarker> {
+    let pos = rv.block_pos(it.id)?;
     let state = rv.st.borrow();
-    let at = state.doc().resolve(it.pos).ok()?;
+    let at = state.doc().resolve(pos).ok()?;
     marker_kind(at.parent())
 }
 
@@ -602,8 +895,9 @@ fn marker_kind(node: &Node) -> Option<ListMarker> {
 /// right-aligned to the list's widest and a space follows the marker, so
 /// the items' content lines up after it.
 fn marker_text(rv: &Rv, it: &BlockItem, terminal: bool) -> Option<String> {
+    let pos = rv.block_pos(it.id)?;
     let state = rv.st.borrow();
-    let at = state.doc().resolve(it.pos).ok()?;
+    let at = state.doc().resolve(pos).ok()?;
     let list = at.parent();
     match marker_kind(list)? {
         ListMarker::Ordered => {
@@ -777,22 +1071,17 @@ fn first_line_class(class: &str) -> bool {
         || matches!(utility, "italic" | "not-italic")
 }
 
-/// Whether a node selection holds the block (subscribes to the
-/// selection).
-fn node_selected(rv: &Rv, it: &BlockItem) -> bool {
-    rv.sel_rev.get();
-    let state = rv.st.borrow();
-    state.selection().as_node().is_some() && state.selection().from() == it.pos
-}
-
 /// The classes node decorations give the block (`class` of their
 /// attributes).
 fn node_decoration_classes(rv: &Rv, it: &BlockItem) -> Vec<String> {
-    let end = it.pos + it.node.node_size();
+    let Some(pos) = rv.block_pos(it.id) else {
+        return Vec::new();
+    };
+    let end = pos + it.node.node_size();
     rv.decorations
         .borrow()
         .iter()
-        .filter(|d| d.from == it.pos && d.to == end)
+        .filter(|d| d.from == pos && d.to == end)
         .filter_map(|d| match &d.kind {
             DecorationKind::Node { attrs } => class_of(attrs),
             _ => None,
@@ -810,11 +1099,13 @@ fn class_of(attrs: &std::collections::BTreeMap<String, Value>) -> Option<String>
 /// A piece of a textblock's text.
 #[derive(Debug, Clone, PartialEq)]
 enum Piece {
-    /// Text with its marks and its inline decorations' classes.
+    /// Text with its marks, its inline decorations' classes and, in a
+    /// highlighted code block, its token.
     Text {
         text: String,
         marks: Vec<Mark>,
         classes: Vec<String>,
+        token: Option<Token>,
     },
     /// An inline leaf node at `offset` of the content, drawn as `text`
     /// where it has one ([`Rv::leaf_text`]).
@@ -841,18 +1132,23 @@ struct Inline {
 
 /// The pieces of textblock `node` whose content starts at `start`, under
 /// `decorations`, with `composition` (its position and text) where it is
-/// in the block; `leaf_text` is the text an inline leaf is drawn as.
+/// in the block; `leaf_text` is the text an inline leaf is drawn as;
+/// `tokens` color a code block's text (offsets in its content).
 fn inline_of(
     node: &Node,
     start: usize,
     decorations: &[Decoration],
     composition: Option<(usize, &str)>,
+    tokens: &[(usize, usize, Token)],
     leaf_text: impl Fn(&Node) -> Option<String>,
 ) -> Inline {
     let size = node.content().size();
     let end = start + size;
-    // Where inline decorations start and end, and widgets sit.
+    // Where inline decorations and tokens start and end, and widgets sit.
     let mut cuts: Vec<usize> = Vec::new();
+    for (a, b, _) in tokens {
+        cuts.extend([*a, *b]);
+    }
     let mut inline: Vec<(usize, usize, Option<String>)> = Vec::new();
     // A widget's class, or the composition's text.
     let mut widgets: Vec<(usize, i32, Result<Option<String>, String>)> = Vec::new();
@@ -880,15 +1176,16 @@ fn inline_of(
             _ => {}
         }
     }
-    // After the caret's position, so the caret (and the input method's
-    // candidates at it) stays at the composition's start.
+    // After the caret's position, so the caret's offset (and the input
+    // method's candidates at it) stays at the composition's start; the
+    // drawn caret goes past it (`Geometry::caret_glyph_rect`).
     if let Some((pos, text)) = composition
         && pos >= start
         && pos <= end
         && !text.is_empty()
     {
         cuts.push(pos - start);
-        widgets.push((pos - start, i32::MAX, Err(text.to_owned())));
+        widgets.push((pos - start, COMPOSITION_SIDE, Err(text.to_owned())));
     }
     crate::sort::sort_by_key(&mut widgets, |w| (w.0, w.1));
     let mut out = Inline::default();
@@ -934,12 +1231,20 @@ fn inline_of(
                 let mut from = offset;
                 for to in points.into_iter().chain([offset + len]) {
                     emit_widgets(&mut out, &mut text_at, from, true);
-                    let piece = utf16_slice(text, from - offset, to - offset);
+                    let piece = if from == offset && to == offset + len {
+                        text.to_owned()
+                    } else {
+                        utf16_slice(text, from - offset, to - offset).to_owned()
+                    };
                     let classes = inline
                         .iter()
                         .filter(|(a, b, _)| *a <= from && *b >= to)
                         .filter_map(|(_, _, c)| c.clone())
                         .collect();
+                    let token = tokens
+                        .iter()
+                        .find(|(a, b, _)| *a <= from && *b >= to)
+                        .map(|(_, _, t)| *t);
                     let n = (to - from) as u32;
                     out.map.runs.push(Run {
                         doc: from,
@@ -953,6 +1258,7 @@ fn inline_of(
                         text: piece,
                         marks: child.marks().to_vec(),
                         classes,
+                        token,
                     });
                     from = to;
                 }
@@ -995,23 +1301,31 @@ fn inline_of(
     out
 }
 
-/// Code units `from..to` of `text`.
-fn utf16_slice(text: &str, from: usize, to: usize) -> String {
-    let units: Vec<u16> = text.encode_utf16().collect();
-    String::from_utf16_lossy(&units[from.min(units.len())..to.min(units.len())])
-}
-
 /// A textblock's text, its lines and frame reported to the geometry
 /// (`owner`: the box its frame is in).
 fn text_block(rv: Rv, item: ReadSignal<BlockItem>, owner: u64) -> impl IntoElement {
     let id = item.get_untracked().id;
     let inline_rv = rv.clone();
+    // A code block's code and its tokens, once highlighted off the engine
+    // thread, and the code being highlighted there.
+    let highlighted: Signal<Option<(String, Tokens)>> = signal(None);
+    let pending: Rc<RefCell<Option<String>>> = Rc::default();
     let content = computed(move || {
         inline_rv.deco_rev.get();
         let it = item.get();
-        let start = it.pos + 1;
-        let decorations = inline_rv.decorations_in(start, start + it.node.content().size());
         let composition = inline_rv.composition.get();
+        let has_decos = !inline_rv.decorations.borrow().is_empty();
+        let start = if has_decos || composition.is_some() {
+            inline_rv.doc_rev.get();
+            inline_rv.block_pos(id).unwrap_or(0) + 1
+        } else {
+            1
+        };
+        let decorations = if has_decos {
+            inline_rv.decorations_in(start, start + it.node.content().size())
+        } else {
+            Vec::new()
+        };
         let head = composition
             .as_ref()
             .map(|_| inline_rv.st.borrow().selection().head());
@@ -1020,15 +1334,10 @@ fn text_block(rv: Rv, item: ReadSignal<BlockItem>, owner: u64) -> impl IntoEleme
             start,
             &decorations,
             head.zip(composition.as_deref()),
+            &code_tokens(&inline_rv, &it.node, highlighted, &pending),
             |n| inline_rv.leaf_text(n),
         );
         if let Some(geo) = inline_rv.geo.borrow_mut().texts.get_mut(&id) {
-            // Its views moved within it: they report their widths anew.
-            // A move of the whole block (an edit in another) keeps them;
-            // its spans are not drawn again.
-            if geo.map != inline.map {
-                geo.widths.clear();
-            }
             geo.map = inline.map.clone();
         }
         inline
@@ -1041,15 +1350,15 @@ fn text_block(rv: Rv, item: ReadSignal<BlockItem>, owner: u64) -> impl IntoEleme
     let (frame_rv, lines_rv, spans_rv, sel_rv) = (rv.clone(), rv.clone(), rv.clone(), rv);
     // The text's box: its selection boxes, then the text over them.
     let text = text("")
-        .on(EventKind::TextLayout, move |p: &EventPayload| {
-            if let EventPayload::TextLayout(lines) = p {
-                lines_rv.set_lines(id, lines.clone());
-            }
+        // The engine's layout: its lines without the placeholders of
+        // spans' padding, so their offsets are the text's, and its own hit
+        // testing, caret edges and range boxes.
+        .on_text_layout(move |g: &nsh_core::TextGeometry| {
+            lines_rv.set_lines(id, g.lines(), g.clone());
         })
         .child(dynamic(move || {
             let inline = content.get();
-            let start = item.get_untracked().pos + 1;
-            let mut list = spans(&spans_rv, inline.pieces.clone(), id, start);
+            let mut list = spans(&spans_rv, inline.pieces.clone(), id);
             if inline.pieces == [Piece::Filler]
                 && let Some(label) = placeholder.get()
             {
@@ -1069,6 +1378,106 @@ fn text_block(rv: Rv, item: ReadSignal<BlockItem>, owner: u64) -> impl IntoEleme
         .on_layout(move |b: &Bounds<Points>| frame_rv.set_text_frame(id, owner, *b))
         .child(selection_rects(sel_rv, id))
         .child(text)
+}
+
+/// The tokens coloring code block `node`'s text, as offsets in its
+/// content, when the editor highlights code blocks (`codeBlockHighlight`)
+/// and the block names a language: those that cost little now (as
+/// `TextView`'s code blocks), the rest set in `highlighted` from off the
+/// engine thread.
+fn code_tokens(
+    rv: &Rv,
+    node: &Node,
+    highlighted: Signal<Option<(String, Tokens)>>,
+    pending: &Rc<RefCell<Option<String>>>,
+) -> Vec<(usize, usize, Token)> {
+    use crate::rich_editor::extensions::code_block::highlights_code_blocks;
+    if !node.ty().spec().code
+        || !node.content().iter().all(Node::is_text)
+        || !highlights_code_blocks(&rv.st.borrow())
+    {
+        return Vec::new();
+    }
+    let Some(language) = node.attrs().get("language").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    let code = node.text_content();
+    let tokens = match crate::text_view::highlight::tokens_now(language, &code) {
+        None => return Vec::new(),
+        Some(Ok(tokens)) => tokens,
+        Some(Err(partial)) => {
+            let known = highlighted.with(|h| match h {
+                Some((done, tokens)) if *done == code => Some(tokens.clone()),
+                _ => None,
+            });
+            if let Some(tokens) = known {
+                tokens
+            } else {
+                if pending.borrow().as_deref() != Some(code.as_str()) {
+                    *pending.borrow_mut() = Some(code.clone());
+                    let (language, code, pending) =
+                        (language.to_owned(), code.clone(), pending.clone());
+                    spawn(async move {
+                        let tokens =
+                            crate::text_view::highlight::tokens_later(language, code.clone()).await;
+                        if pending.borrow().as_deref() == Some(code.as_str()) {
+                            *pending.borrow_mut() = None;
+                        }
+                        if let Some(tokens) = tokens {
+                            highlighted.set(Some((code, tokens)));
+                        }
+                    });
+                }
+                // Until the new ones come, the last tokens of this block
+                // before what changed (typing does not flash it plain).
+                let stale = highlighted.with_untracked(|h| {
+                    let Some((old, tokens)) = h else {
+                        return Tokens::new();
+                    };
+                    let same = old
+                        .bytes()
+                        .zip(code.bytes())
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                    tokens
+                        .iter()
+                        .take_while(|(range, _)| range.end <= same)
+                        .cloned()
+                        .collect()
+                });
+                if partial.is_empty() { stale } else { partial }
+            }
+        }
+    };
+    utf16_tokens(&code, &tokens)
+}
+
+/// `tokens` (byte ranges of `code`) as UTF-16 offsets in its text.
+fn utf16_tokens(code: &str, tokens: &Tokens) -> Vec<(usize, usize, Token)> {
+    let mut out = Vec::with_capacity(tokens.len());
+    let (mut byte, mut unit) = (0usize, 0usize);
+    let mut chars = code.char_indices();
+    let mut at = |target: usize| -> Option<usize> {
+        while byte < target {
+            let (i, c) = chars.next()?;
+            byte = i + c.len_utf8();
+            unit += c.len_utf16();
+        }
+        (byte == target).then_some(unit)
+    };
+    for (range, token) in tokens {
+        if range.start >= code.len() {
+            break;
+        }
+        let end = range.end.min(code.len());
+        let (Some(a), Some(b)) = (at(range.start), at(end)) else {
+            continue;
+        };
+        if a < b {
+            out.push((a, b, *token));
+        }
+    }
+    out
 }
 
 /// The placeholder of an empty textblock that shows one (Tiptap's
@@ -1094,6 +1503,9 @@ fn placeholder_text(rv: &Rv, it: &BlockItem) -> Option<String> {
     let include_children = props.include_children.get();
     let only_current = props.show_only_current.get();
     let composing = rv.composition.with(Option::is_some);
+    if only_current || composing || !include_children {
+        rv.doc_rev.get();
+    }
     if only_current || composing {
         rv.sel_rev.get();
     }
@@ -1113,10 +1525,11 @@ fn placeholder_text(rv: &Rv, it: &BlockItem) -> Option<String> {
             return None;
         }
     }
-    if !include_children && state.doc().resolve(it.pos).ok()?.depth != 0 {
+    let pos = rv.block_pos(it.id)?;
+    if !include_children && state.doc().resolve(pos).ok()?.depth != 0 {
         return None;
     }
-    let inside = |pos: usize| pos >= it.pos && pos <= it.pos + it.node.node_size();
+    let inside = |at: usize| at >= pos && at <= pos + it.node.node_size();
     if only_current && !inside(state.selection().anchor()) {
         return None;
     }
@@ -1126,10 +1539,12 @@ fn placeholder_text(rv: &Rv, it: &BlockItem) -> Option<String> {
     Some(label)
 }
 
-/// The spans of a textblock's pieces (textblock `id`, its content at
-/// `start`).
-fn spans(rv: &Rv, pieces: Vec<Piece>, id: u64, start: usize) -> Vec<AnyElement> {
+/// The spans of textblock `id`'s pieces.
+fn spans(rv: &Rv, pieces: Vec<Piece>, id: u64) -> Vec<AnyElement> {
     let props = rv.props;
+    // Inline leaves by their order in the block: a node view's key that
+    // typing before it does not change.
+    let mut leaves = 0usize;
     pieces
         .into_iter()
         .map(|piece| match piece {
@@ -1137,6 +1552,7 @@ fn spans(rv: &Rv, pieces: Vec<Piece>, id: u64, start: usize) -> Vec<AnyElement> 
                 text: t,
                 marks,
                 classes,
+                token,
             } => {
                 if let Some((mark, view)) = marks
                     .iter()
@@ -1162,31 +1578,36 @@ fn spans(rv: &Rv, pieces: Vec<Piece>, id: u64, start: usize) -> Vec<AnyElement> 
                             HintAt::Pointer,
                         )
                     });
-                text(t)
-                    .app_class(move || {
-                        props.classes.with(|c| {
-                            let mut list: Vec<String> = marks
-                                .iter()
-                                .flat_map(|m| parts::mark_classes(c, m))
-                                .collect();
-                            list.extend(classes.iter().cloned());
-                            parts::join(list)
-                        })
+                let mut span = text(t);
+                if let Some(token) = token {
+                    *span.style() = token.style();
+                }
+                span.app_class(move || {
+                    props.classes.with(|c| {
+                        let mut list: Vec<String> = marks
+                            .iter()
+                            .flat_map(|m| parts::mark_classes(c, m))
+                            .collect();
+                        list.extend(classes.iter().cloned());
+                        parts::join(list)
                     })
-                    .inline_style(move || {
-                        props.styles.with(|s| {
-                            let list: Vec<Style> = style_marks
-                                .iter()
-                                .flat_map(|m| parts::mark_styles(s, m))
-                                .collect();
-                            parts::merge(&list)
-                        })
+                })
+                .inline_style(move || {
+                    props.styles.with(|s| {
+                        let list: Vec<Style> = style_marks
+                            .iter()
+                            .flat_map(|m| parts::mark_styles(s, m))
+                            .collect();
+                        merge_styles(&list)
                     })
-                    .when_some(hint, |t, hint| t.child(hint))
-                    .into_element()
+                })
+                .when_some(hint, |t, hint| t.child(hint))
+                .into_element()
             }
             Piece::Leaf { node, offset, text } => {
-                leaf(rv, node, (id, offset), start + offset, text)
+                leaves += 1;
+                let key = SharedString::from(format!("i{id}.{leaves}"));
+                leaf(rv, node, (id, offset), text, key)
             }
             Piece::Widget { class } => view()
                 .app_class(class.map(SharedString::from))
@@ -1213,19 +1634,17 @@ fn link_destination(marks: &[Mark]) -> Option<(SharedString, Option<SharedString
     Some((attr("href")?, attr("title")))
 }
 
-/// The box of an inline view or image at `offset` in textblock `id`'s
-/// content: it reports its width, which its attachment character stands
-/// for when the geometry places the caret and finds the position at a
-/// point.
-fn inline_box(rv: &Rv, el: View, (id, offset): (u64, usize)) -> View {
-    let width_rv = rv.clone();
-    el.on_layout(move |b: &Bounds<Points>| width_rv.set_inline_width(id, offset, b.size.width))
-}
-
 /// An inline leaf: its one-character text (a line break), its node view,
 /// the text it is drawn as (`drawn`, [`Rv::leaf_text`]), else a box of its
-/// part.
-fn leaf(rv: &Rv, node: Node, at: (u64, usize), pos: usize, drawn: Option<String>) -> AnyElement {
+/// part. Its position is its textblock's current one plus its offset: an
+/// edit in a block before it moves it without drawing it again.
+fn leaf(
+    rv: &Rv,
+    node: Node,
+    at: (u64, usize),
+    drawn: Option<String>,
+    key: SharedString,
+) -> AnyElement {
     let props = rv.props;
     let classes_node = node.clone();
     let styled = move |el: View| {
@@ -1239,29 +1658,51 @@ fn leaf(rv: &Rv, node: Node, at: (u64, usize), pos: usize, drawn: Option<String>
         .inline_style(move || {
             props
                 .styles
-                .with(|s| parts::merge(&parts::node_styles(s, &style_node)))
+                .with(|s| merge_styles(&parts::node_styles(s, &style_node)))
         })
     };
     if let Some(view) = rv.node_view(node.ty().name()) {
-        let get_pos: Rc<dyn Fn() -> Option<usize>> = Rc::new(move || Some(pos));
+        let (block_id, offset) = at;
+        let live = Rc::new(Cell::new(true));
+        let get_pos: Rc<dyn Fn() -> Option<usize>> = {
+            let live = live.clone();
+            let pos_rv = rv.clone();
+            Rc::new(move || {
+                live.get()
+                    .then(|| Some(pos_rv.block_pos(block_id)? + 1 + offset))?
+            })
+        };
+        let selected = signal(false);
+        {
+            let rv = rv.clone();
+            effect(move || {
+                let is_sel = match rv.node_sel_pos.get() {
+                    Some(sel_pos) => {
+                        rv.doc_rev.get();
+                        rv.block_pos(block_id)
+                            .is_some_and(|p| p + 1 + offset == sel_pos)
+                    }
+                    None => false,
+                };
+                selected.set(is_sel);
+            });
+        }
+        cleanup(move || live.set(false));
         let cx = NodeViewCx::new(
             rv.session.clone(),
             get_pos,
             signal(node.clone()).read_only(),
-            signal(false).read_only(),
+            selected.read_only(),
             signal(Vec::new()).read_only(),
             None,
-        );
+        )
+        .rendered_at(rv.cx.__host(), key, rv.doc_rev.read_only());
         let el = view.create(&cx, &node);
         cleanup(move || view.destroy());
-        return inline_box(rv, styled(view_box()), at)
-            .child(el)
-            .into_element();
+        return styled(view_box()).child(el).into_element();
     }
     if render_kind(&node) == Some("image") {
-        return inline_box(rv, styled(view_box()), at)
-            .child(image_of(&node))
-            .into_element();
+        return styled(view_box()).child(image_of(&node)).into_element();
     }
     if let Some(drawn) = drawn {
         let (class_node, style_node) = (node.clone(), node);
@@ -1274,7 +1715,7 @@ fn leaf(rv: &Rv, node: Node, at: (u64, usize), pos: usize, drawn: Option<String>
             .inline_style(move || {
                 props
                     .styles
-                    .with(|s| parts::merge(&parts::node_styles(s, &style_node)))
+                    .with(|s| merge_styles(&parts::node_styles(s, &style_node)))
             })
             .into_element();
     }
@@ -1298,22 +1739,34 @@ fn view_box() -> View {
 }
 
 /// A node view's element for a block, made again when the view's
-/// `update` refuses a new node.
-fn node_view_block(rv: Rv, item: ReadSignal<BlockItem>, view: Arc<dyn NodeView>) -> AnyElement {
+/// `update` refuses a new node. `slot_in`: the block's ref and size, for
+/// a view with an editable content slot (`slot`).
+fn node_view_block(
+    rv: Rv,
+    item: ReadSignal<BlockItem>,
+    view: Arc<dyn NodeView>,
+    slot_in: Option<(ElementRef, ReadSignal<Size<Points>>)>,
+) -> AnyElement {
     let first = item.get_untracked();
     let id = first.id;
     let node = signal(first.node.clone());
-    let selected = signal(false);
+    let active = rv.watch_block(id);
+    let selected = signal(active.get_untracked().0);
     let decorations = signal(Vec::<Decoration>::new());
     let generation = signal(0u64);
-    let pos = Rc::new(Cell::new(Some(first.pos)));
+    let live = Rc::new(Cell::new(true));
     {
-        let (rv, view, pos) = (rv.clone(), view.clone(), pos.clone());
+        let (rv, view) = (rv.clone(), view.clone());
         effect(move || {
             let it = item.get();
             rv.deco_rev.get();
-            pos.set(Some(it.pos));
-            let list = rv.decorations_in(it.pos, it.pos + it.node.node_size());
+            let list = if rv.decorations.borrow().is_empty() {
+                Vec::new()
+            } else {
+                rv.doc_rev.get();
+                let pos = rv.block_pos(id).unwrap_or(0);
+                rv.decorations_in(pos, pos + it.node.node_size())
+            };
             let current = node.get_untracked();
             if !it.node.ptr_eq(&current) {
                 if !untracked(|| view.update(&it.node, &list)) {
@@ -1325,27 +1778,26 @@ fn node_view_block(rv: Rv, item: ReadSignal<BlockItem>, view: Arc<dyn NodeView>)
         });
     }
     {
-        let rv = rv.clone();
         effect(move || {
-            let it = item.get();
-            selected.set(node_selected(&rv, &it));
+            selected.set(active.get().0);
         });
     }
     {
-        let pos = pos.clone();
-        cleanup(move || pos.set(None));
+        let live = live.clone();
+        cleanup(move || live.set(false));
     }
     dynamic(move || {
         generation.get();
         let rv = rv.clone();
         let view = view.clone();
-        let pos = pos.clone();
+        let live = live.clone();
         untracked(move || {
             let current = node.get_untracked();
-            let content = view
-                .editable_content_slot()
-                .then(|| slot(rv.clone(), item, id, &current));
-            let get_pos: Rc<dyn Fn() -> Option<usize>> = Rc::new(move || pos.get());
+            let content = slot_in
+                .map(|(block, resized)| slot(rv.clone(), item, id, &current, block, resized));
+            let pos_rv = rv.clone();
+            let get_pos: Rc<dyn Fn() -> Option<usize>> =
+                Rc::new(move || live.get().then(|| pos_rv.block_pos(id))?);
             let cx = NodeViewCx::new(
                 rv.session.clone(),
                 get_pos,
@@ -1353,6 +1805,11 @@ fn node_view_block(rv: Rv, item: ReadSignal<BlockItem>, view: Arc<dyn NodeView>)
                 selected.read_only(),
                 decorations.read_only(),
                 content,
+            )
+            .rendered_at(
+                rv.cx.__host(),
+                SharedString::from(format!("b{id}")),
+                rv.doc_rev.read_only(),
             );
             let el = view.create(&cx, &current);
             let destroyed = view.clone();
@@ -1362,12 +1819,58 @@ fn node_view_block(rv: Rv, item: ReadSignal<BlockItem>, view: Arc<dyn NodeView>)
     })
 }
 
-/// The editable content of a node view's node: measured in the content
-/// box, since the view's element is the app's.
-fn slot(rv: Rv, item: ReadSignal<BlockItem>, id: u64, node: &Node) -> AnyElement {
+/// The editable content of a node view's node, framed in its block (the
+/// view's element is the app's, so the slot is measured there, `block`):
+/// a block moved by an edit before it carries its slot along, though the
+/// slot's frame in its own parent is unchanged and reports nothing. The
+/// slot is measured again when its frame in its parent changes and when
+/// the block's size does (`resized`); a move inside the block that changes
+/// neither is not seen (`NodeView::editable_content_slot`).
+fn slot(
+    rv: Rv,
+    item: ReadSignal<BlockItem>,
+    id: u64,
+    node: &Node,
+    block: ElementRef,
+    resized: ReadSignal<Size<Points>>,
+) -> AnyElement {
     let sid = slot_id(id);
     let r = element_ref();
-    let measure_rv = rv.clone();
+    // Once a tick, however many layouts ask (the slot's and the block's
+    // report in the same one), under the slot's owner: the effect's would
+    // end the task when it runs again and leave `pending` set.
+    let measure = {
+        let (rv, owner, pending) = (rv.clone(), Owner::current(), Rc::new(Cell::new(false)));
+        move || {
+            if pending.replace(true) {
+                return;
+            }
+            let (rv, pending) = (rv.clone(), pending.clone());
+            owner.run(|| {
+                spawn(async move {
+                    pending.set(false);
+                    // Both asked before either is awaited: one commit's layout.
+                    let (slot, block) = (r.measure(), block.measure());
+                    let (Some(slot), Some(block)) = (slot.await, block.await) else {
+                        return;
+                    };
+                    let origin = Point::new(slot.page.x - block.page.x, slot.page.y - block.page.y);
+                    rv.set_frame(sid, Some(id), Bounds::new(origin, slot.frame.size));
+                })
+            });
+        }
+    };
+    {
+        // The slot's own first layout measures it; the block's size counts
+        // from its next change.
+        let (measure, seen) = (measure.clone(), Cell::new(false));
+        effect(move || {
+            resized.get();
+            if seen.replace(true) {
+                measure();
+            }
+        });
+    }
     let inner = if node.is_textblock() {
         text_block(rv, item, sid).into_element()
     } else {
@@ -1375,17 +1878,7 @@ fn slot(rv: Rv, item: ReadSignal<BlockItem>, id: u64, node: &Node) -> AnyElement
     };
     view()
         .element_ref(&r)
-        .on_layout(move |_: &Bounds<Points>| {
-            let rv = measure_rv.clone();
-            spawn(async move {
-                let (Some(slot), Some(content)) = (r.measure().await, rv.content.measure().await)
-                else {
-                    return;
-                };
-                let origin = Point::new(slot.page.x - content.page.x, slot.page.y - content.page.y);
-                rv.set_frame(sid, None, Bounds::new(origin, slot.frame.size));
-            });
-        })
+        .on_layout(move |_: &Bounds<Points>| measure())
         .child(inner)
         .into_element()
 }
@@ -1395,22 +1888,10 @@ fn slot(rv: Rv, item: ReadSignal<BlockItem>, id: u64, node: &Node) -> AnyElement
 /// background of its own (a code block) would hide boxes drawn under all
 /// the blocks.
 fn selection_rects(rv: Rv, id: u64) -> impl IntoElement {
+    let rects = rv.watch_selection_rects(id);
     dynamic(move || {
-        rv.sel_rev.get();
-        rv.layout_rev.get();
-        rv.doc_rev.get();
-        let (from, to, text) = {
-            let state = rv.st.borrow();
-            let s = state.selection();
-            // Selected cells are painted in the cells (`selectedCell`).
-            let cells = s.as_custom::<CellSelection>().is_some();
-            (s.from(), s.to(), s.as_node().is_none() && !cells)
-        };
-        if from == to || !text {
-            return Vec::new();
-        }
-        let rects = rv.geo.borrow().text_range_rects(id, from, to);
         rects
+            .get()
             .into_iter()
             .map(|b| {
                 part(
@@ -1499,7 +1980,7 @@ fn caret(rv: Rv) -> impl IntoElement {
         rv.sel_rev.get();
         rv.layout_rev.get();
         rv.doc_rev.get();
-        if rv.composition.get().is_some() || !rv.props.editable.get() {
+        if !rv.props.editable.get() {
             return None;
         }
         let empty_text = {
@@ -1522,6 +2003,13 @@ fn caret(rv: Rv) -> impl IntoElement {
             return None;
         }
         let b = rv.caret_glyph_rect()?;
+        if let Some(table) =
+            crate::rich_editor::tables::find_table(rv.st.borrow().selection().resolved_head())
+            && let Some(visible) = rv.session.table_viewport(table.pos)
+            && (b.origin.x < visible.origin.x || b.origin.x > visible.origin.x + visible.size.width)
+        {
+            return None;
+        }
         // On whole device pixels: a caret between pixels is drawn smeared
         // over two, wider or narrower as it moves (gpui-kit's fix).
         let snap = nsh_core::element::round_to_nearest_pixel;
@@ -1531,6 +2019,7 @@ fn caret(rv: Rv) -> impl IntoElement {
                 Point::new(snap(b.origin.x - width * 0.5), snap(b.origin.y)),
                 Size::new(width, snap(b.size.height)),
             ))
+            .test_id("rich-editor-caret")
             .bg(move || theme().foreground)
             .opacity(visible),
             &rv,
@@ -1549,7 +2038,13 @@ fn sink(rv: Rv) -> impl IntoElement {
         computed(move || {
             rv.sel_rev.get();
             rv.layout_rev.get();
-            let caret = rv.caret_rect().unwrap_or_default();
+            // A selected block atom has no caret: the sink is at its box, or
+            // the platform would scroll the page to the editor's top as
+            // it focuses the sink.
+            let caret = rv
+                .caret_rect()
+                .or_else(|| rv.node_selection_box())
+                .unwrap_or_default();
             let size = rv.viewport.get();
             // At the bottom of the caret's line: input methods open their
             // candidates under the field's line, which would cover the
@@ -1577,6 +2072,7 @@ fn sink(rv: Rv) -> impl IntoElement {
         rv.clone(),
     );
     let menu = rv.clone();
+    let moved = rv.clone();
     let value = rv.sink_value;
     input()
         .element_ref(&rv.input)
@@ -1596,12 +2092,23 @@ fn sink(rv: Rv) -> impl IntoElement {
         // see: a thumb here would show at the caret once the text it
         // holds overflows.
         .scrollbar(false)
+        .auto_focus(props.auto_focus)
         .auto_correct(false)
         .auto_capitalize(AutoCapitalize::None)
         .paste_behavior(PasteBehavior::Report)
         .value(move || value.get())
         .label(move || props.accessibility_label.get().unwrap_or_default())
+        // The keyboard is the sink's, so the editor's accessory is too;
+        // unset, the empty id (as the label's).
+        .input_accessory(move || {
+            props
+                .input_accessory
+                .with(|id| id.as_deref().unwrap_or_default().to_owned())
+        })
         .on_change(move |text: &str| change.sink_changed(text))
+        .on_selection_change(move |selection: &nsh_core::element::Selection| {
+            moved.sink_selection(selection)
+        })
         .on_composition_change(move |c: &Composition| {
             composition.composition_changed(c.composing, &c.text)
         })
@@ -1643,21 +2150,7 @@ impl Rv {
         }
         geo.frames.insert(id, (parent, frame));
         drop(geo);
-        self.layout_rev.update(|r| *r += 1);
-    }
-
-    /// The width of the inline view or image at `offset` in textblock
-    /// `id`'s content (see `TextGeo::widths`).
-    fn set_inline_width(&self, id: u64, offset: usize, width: Points) {
-        let mut geo = self.geo.borrow_mut();
-        let Some(text) = geo.texts.get_mut(&id) else {
-            return;
-        };
-        if text.widths.get(&offset) == Some(&width) {
-            return;
-        }
-        text.widths.insert(offset, width);
-        drop(geo);
+        self.table_moved(id, parent);
         self.layout_rev.update(|r| *r += 1);
     }
 
@@ -1670,6 +2163,7 @@ impl Rv {
         }
         geo.insets.insert(id, origin);
         drop(geo);
+        self.table_moved(id, None);
         self.layout_rev.update(|r| *r += 1);
     }
 
@@ -1685,6 +2179,7 @@ impl Rv {
         text.frame = frame;
         text.owner = Some(owner);
         drop(geo);
+        self.refresh_block_selection_rects(id);
         self.layout_rev.update(|r| *r += 1);
     }
 
@@ -1724,11 +2219,17 @@ impl Rv {
         None
     }
 
-    /// Textblock `id`'s lines.
-    fn set_lines(&self, id: u64, lines: Vec<nsh_core::TextLine>) {
-        if let Some(text) = self.geo.borrow_mut().texts.get_mut(&id) {
+    /// Textblock `id`'s final layout and lines (`Text::on_text_layout`).
+    fn set_lines(&self, id: u64, lines: Vec<nsh_core::TextLine>, geometry: nsh_core::TextGeometry) {
+        {
+            let mut geo = self.geo.borrow_mut();
+            let Some(text) = geo.texts.get_mut(&id) else {
+                return;
+            };
             text.lines = lines;
+            text.geometry = Some(geometry);
         }
+        self.refresh_block_selection_rects(id);
         self.layout_rev.update(|r| *r += 1);
     }
 }
@@ -1768,7 +2269,7 @@ mod tests {
             Decoration::inline(2, 4, attrs),
             Decoration::widget(4, "w", -1),
         ];
-        let inline = inline_of(&p, 1, &decorations, None, |_| None);
+        let inline = inline_of(&p, 1, &decorations, None, &[], |_| None);
         let texts: Vec<_> = inline
             .pieces
             .iter()
@@ -1785,12 +2286,60 @@ mod tests {
     }
 
     #[test]
+    fn tokens_take_utf16_offsets_and_split_the_text() {
+        let code = "é😀 fn";
+        // Bytes: é 0..2, 😀 2..6, space 6..7, fn 7..9.
+        let tokens = vec![
+            (0..1, Token::Title),
+            (2..6, Token::String),
+            (7..9, Token::Keyword),
+        ];
+        // 😀 is two UTF-16 units; a range off a character boundary is
+        // dropped.
+        assert_eq!(
+            utf16_tokens(code, &tokens),
+            [(1, 3, Token::String), (4, 6, Token::Keyword)]
+        );
+        let schema = starter::schema();
+        let doc = schema
+            .node_from_json(&json!({"type": "doc", "content": [
+                {"type": "codeBlock", "content": [{"type": "text", "text": code}]}
+            ]}))
+            .unwrap();
+        let inline = inline_of(
+            &doc.child(0).clone(),
+            1,
+            &[],
+            None,
+            &utf16_tokens(code, &tokens),
+            |_| None,
+        );
+        let pieces: Vec<_> = inline
+            .pieces
+            .iter()
+            .map(|p| match p {
+                Piece::Text { text, token, .. } => (text.as_str(), *token),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            pieces,
+            [
+                ("é", None),
+                ("😀", Some(Token::String)),
+                (" ", None),
+                ("fn", Some(Token::Keyword))
+            ]
+        );
+    }
+
+    #[test]
     fn an_empty_textblock_has_a_filler() {
         let schema = starter::schema();
         let p = schema
             .node("paragraph", None, Default::default(), vec![])
             .unwrap();
-        let inline = inline_of(&p, 1, &[], None, |_| None);
+        let inline = inline_of(&p, 1, &[], None, &[], |_| None);
         assert_eq!(inline.pieces, [Piece::Filler]);
         assert_eq!(inline.map.to_text(0), 1);
     }

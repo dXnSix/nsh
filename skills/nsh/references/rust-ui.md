@@ -233,7 +233,7 @@ fn fruit_select() -> impl IntoElement {
 | Full native modal (own window layer) | `dialog()` | In `when(open, ..)`; leaving it out dismisses |
 | Panel sliding from an edge | `sheet()` | Always in the tree, `.open(..)` |
 | Anchored content | `popover()` | `.trigger(..)`, `.child(..)` |
-| Commands on a trigger, or on right-click | `menu()`, `context_menu()` | `.trigger(..)`, `menu_item()` children |
+| Commands on a trigger, or on right-click | `menu()`, `context_menu()` | `.trigger(..)`, `menu_item()` and `submenu()` children |
 | Hint on hover | `tooltip()` | Wraps the anchor (`website/elements/tooltip.md`) |
 | Transient message | `toast_stack()`, `toast()`, `ToastManager` | Mounted once, app-level |
 
@@ -328,6 +328,9 @@ fn file_menu() -> impl IntoElement {
   when something else must open it, and then follow `on_open_change`.
 - Inside a menu, `menu_item().on_select` closes the menu after running. `.close_on_select(false)` keeps it for toggles,
   with `.checked(..)` and `.indicator(..)`.
+- A group under one row of a menu is a `submenu()` (`.trigger(..)` ending in a chevron, `.back(..)` for a phone's
+  sheet): it cascades beside its row on the desktops. Never expand nested items in place inside a menu; a few
+  always-visible choices are a flat section of checked items under a title.
 - Toasts have no one-call API in `nsh_base`. `ToastManager` is headless storage, and `toast_stack` and `toast` draw them.
   Build one `toast("Copied")`-style helper around them in your `ui/`, as `website/elements/toast.md` shows. Advance the
   manager on an interval and pass `state.is_expanded()` so a hover pauses the timeouts.
@@ -650,6 +653,9 @@ fn quotes() -> impl IntoElement {
 - `DataTableRows` is by column, each of one type. `key` joins a column to its field; a wrong key is an empty column.
 - Sorting is yours. `on_sort_change` reports the request; sort your data and set `.sort(..)` and `.data(..)`.
 - Lines, colors and selection feedback come from `.classes(..)` and `.styles(..)`; with none, the table has no dividers.
+- Several cells or columns are the app's. `.select_on_modifier_press(false)` leaves the table's selection when Shift
+  or the command key is held. `.on_row_press` and `.on_column_press` report the press, `.cell_classes(..)` paints
+  cells, and a column's `header_class` / `cell_class` paints that column. The table's own selection stays one item.
 - A table's own width: `table_cell` and `table_head` take the widths. A static table does not virtualize or scroll by
   itself; put it in a `scroll().horizontal()` when it can overflow.
 - `.render_cell(|cell: &DataTableCell| ..)` runs per visible cell. Keep it light.

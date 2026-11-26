@@ -15,6 +15,42 @@ Escape) work, and are decided natively. Rust makes one with `nsh_base::dialog()`
 The dialog owns its behavior and leaves its look to the app: its styles style the popup (the view holding the
 children), and in TSX `backdropClass` / `backdropStyle` add a backdrop behind it.
 
+On macOS and Linux, closing a dialog returns keyboard focus to the input or control that had it before opening,
+including `Editor` and `RichEditor`, while that control remains visible in the current scope. If another
+control has already taken focus, it keeps it.
+
+```tsx tabs
+import { signal, Text, View } from "nsh";
+import { Button, Dialog } from "nsh/base";
+
+function Example() {
+  const open = signal(false);
+  return (
+    <View style={{ flex: 1, justifyContent: "center", padding: 24 }}>
+      <Button onPress={() => open.set(true)} class="items-center rounded-lg bg-blue-600 px-4 py-3 active:opacity-70">
+        <Text class="font-semibold text-white">Open</Text>
+      </Button>
+      <Dialog open={open()} presentation="pageSheet" onOpenChange={(e) => open.set(e.open)} class="flex-1 bg-white">
+        <View
+          style={{
+            flex: 1,
+            gap: 12,
+            paddingHorizontal: 20,
+            paddingTop: "calc(env(safe-area-inset-top) + 20px)",
+            paddingBottom: "calc(env(safe-area-inset-bottom) + 20px)",
+          }}
+        >
+          <Text style={{ fontSize: 24, fontWeight: "700" }}>A sheet</Text>
+          <Button onPress={() => open.set(false)} class="items-center rounded-lg bg-blue-600 px-4 py-3 active:opacity-70">
+            <Text class="font-semibold text-white">Close</Text>
+          </Button>
+        </View>
+      </Dialog>
+    </View>
+  );
+}
+```
+
 ```rust tabs
 use nsh_base::{button, dialog};
 use nsh_core::prelude::*;
@@ -59,38 +95,6 @@ fn example() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { signal, Text, View } from "nsh";
-import { Button, Dialog } from "nsh/base";
-
-function Example() {
-  const open = signal(false);
-  return (
-    <View style={{ flex: 1, justifyContent: "center", padding: 24 }}>
-      <Button onPress={() => open.set(true)} class="items-center rounded-lg bg-blue-600 px-4 py-3 active:opacity-70">
-        <Text class="font-semibold text-white">Open</Text>
-      </Button>
-      <Dialog open={open()} presentation="pageSheet" onOpenChange={(e) => open.set(e.open)} class="flex-1 bg-white">
-        <View
-          style={{
-            flex: 1,
-            gap: 12,
-            paddingHorizontal: 20,
-            paddingTop: "calc(env(safe-area-inset-top) + 20px)",
-            paddingBottom: "calc(env(safe-area-inset-bottom) + 20px)",
-          }}
-        >
-          <Text style={{ fontSize: 24, fontWeight: "700" }}>A sheet</Text>
-          <Button onPress={() => open.set(false)} class="items-center rounded-lg bg-blue-600 px-4 py-3 active:opacity-70">
-            <Text class="font-semibold text-white">Close</Text>
-          </Button>
-        </View>
-      </Dialog>
-    </View>
-  );
-}
-```
-
 In TSX, the dialog is shown while `open` is not `false` and closed when it becomes `false`. In Rust, it is presented
 while it is in the view and dismissed when it leaves it, so `when` holds it. Either way it gives its content the dialog's
 safe-area insets, which the [`env(safe-area-inset-*)`](./safe-area.md) variables and `safeAreaInsets()` (`cx.insets()` in a Rust
@@ -111,6 +115,11 @@ and the explicit import takes its place. For the system's alert or action sheet,
 | `closeOnEscape` | `.close_on_escape(..)` | `boolean` | `true` | Escape and the Android back button close it natively. |
 | `closeOnBackdropPress` | `.close_on_backdrop_press(..)` | `boolean` | `true` | A press on the backdrop closes it. |
 | `closeOnSwipe` | `.close_on_swipe(..)` | `boolean` | `true` | Swiping a sheet down (iOS, phone browsers) closes it natively. |
+| `detents` | `.detents(vec![SheetDetent::Medium, SheetDetent::Large])` | `SheetDetent[]` | `[]` | iOS sheets (`pageSheet`, `formSheet`): the heights it rests at, `"medium"` (about half the screen), `"large"`, `{ height }` in points or `{ fraction }` of the large one (the `SheetDetent` values [`Sheet`](./sheet.md) takes). None: the system's full height. See [A sheet at half height](#a-sheet-at-half-height). |
+| `detent` | `.detent(..)` | `SheetDetent` | | The detent it rests at: it moves there when the value changes. The user's moves stand even when the app does not follow them. |
+| `defaultDetent` | `.default_detent(..)` | `SheetDetent` | the smallest | The detent it opens at without `detent`. |
+| `grabber` | `.grabber(..)` | `boolean` | `false` | The system's grabber at the top of the sheet. |
+| `largestUndimmedDetent` | `.largest_undimmed_detent(..)` | `SheetDetent` | none | Up to this detent, what is behind the sheet stays undimmed and takes touches. |
 | `statusBar` | `.status_bar(..)` | `{ foreground?, hidden?, animated? }` | none | iOS and Android: the status bar while the dialog is open, over the pages' ([Status bar](../modules/nsh-base.md#status-bar)). |
 | `accessibilityLabel` | `.label(..)` | `string` | none | What screen readers call the dialog as the focus enters it: its title. |
 | `accessibilityDescription` | `.accessibility_description(..)` | `string` | none | What screen readers read after its name: its message. |
@@ -118,6 +127,7 @@ and the explicit import takes its place. For the system's alert or action sheet,
 | `onOpen` | `.on_open(..)` | `() => void` | | It finished appearing. |
 | `onClose` | `.on_close(..)` | `() => void` | | It went away: the user closed it, or the app removed it. |
 | `onCancel` | `.on_cancel(..)` | `() => void` | | The user tried to close it (Escape, back, a backdrop press, a swipe down), whether or not a `closeOn*` flag let it close. |
+| `onDetentChange` | `.on_detent_change(..)` | `(e: { detent: SheetDetent }) => void` | | The user moved the sheet to another detent (a drag, the grabber, a scroll at its edge, a screen reader). |
 | `onOpenChange` | `.on_cancel(..)` | `(e: { open: boolean; reason: "cancel" \| "backdropPress" \| "swipe" }) => void` | | The user closed it: keep `open` in sync here. In Rust, `on_cancel` removes the dialog from the view. |
 | `class`, `style` | `Styled` methods | `string`, `StyleProp<ViewStyle>` | | The popup: the view holding the children. |
 | `backdropClass`, `backdropStyle` | a child view filling the dialog | `string`, `StyleProp<ViewStyle>` | | A backdrop filling the dialog behind the popup, present when either is set. |
@@ -142,15 +152,6 @@ the user to confirm something, such as a deletion, is an alert dialog: `role="al
 macOS, a semantic group named by the title on iOS, UI Automation's dialog pane on Windows, AT-SPI's dialog on Linux,
 a dialog with `aria-modal` on the web.
 
-```rust tabs
-dialog()
-    .role(AccessibilityRole::AlertDialog)
-    .label("Delete this item?")
-    .accessibility_description("This can't be undone.")
-    .on_cancel(move || confirm.set(false))
-    .child(card())
-```
-
 ```tsx tabs
 <Dialog
   open={confirm()}
@@ -163,6 +164,15 @@ dialog()
 </Dialog>
 ```
 
+```rust tabs
+dialog()
+    .role(AccessibilityRole::AlertDialog)
+    .label("Delete this item?")
+    .accessibility_description("This can't be undone.")
+    .on_cancel(move || confirm.set(false))
+    .child(card())
+```
+
 ## Opening and closing
 
 The dialog's state is the app's. When the user closes the dialog (Escape, the Android back button, a press on the
@@ -173,18 +183,6 @@ opens again when `open` goes from `false` to `true`.
 Each `closeOn*` flag is read natively when the user acts, since the main thread never waits for the app's code. To
 confirm before closing, set the flags to `false`: the attempt then calls `onCancel`, and the app closes the dialog
 itself (in TSX by setting `open` to `false`, in Rust by taking it out of the view):
-
-```rust tabs
-dialog()
-    .presentation(ModalPresentation::PageSheet)
-    .close_on_escape(false)
-    .close_on_backdrop_press(false)
-    .close_on_swipe(false)
-    .on_cancel(move || ask_to_discard.set(true))
-    .flex_1()
-    .bg(white())
-    .child(form())
-```
 
 ```tsx tabs
 <Dialog
@@ -200,12 +198,80 @@ dialog()
 </Dialog>
 ```
 
+```rust tabs
+dialog()
+    .presentation(ModalPresentation::PageSheet)
+    .close_on_escape(false)
+    .close_on_backdrop_press(false)
+    .close_on_swipe(false)
+    .on_cancel(move || ask_to_discard.set(true))
+    .flex_1()
+    .bg(white())
+    .child(form())
+```
+
 `onCancel` is called on every attempt, whether the flags let the dialog close or not.
+
+## A sheet at half height
+
+On iOS, a `pageSheet` or `formSheet` dialog with `detents` rests at those heights: the user drags it between them,
+the system way, and past the smallest it closes when `closeOnSwipe` allows. A [`NavStack`](./nav-stack.md) inside
+it pushes pages with the system's header, back button and swipe back, inside the sheet:
+
+```tsx tabs
+<Dialog
+  open={open()}
+  presentation="pageSheet"
+  detents={["medium", "large"]}
+  detent={detent()}
+  onDetentChange={(e) => detent.set(e.detent)}
+  grabber
+  onOpenChange={(e) => open.set(e.open)}
+  class="flex-1"
+>
+  <NavStack state={pages} class="flex-1">
+    {(route) => <NavPage title={route}>…</NavPage>}
+  </NavStack>
+</Dialog>
+```
+
+```rust tabs
+dialog()
+    .presentation(ModalPresentation::PageSheet)
+    .detents(vec![SheetDetent::Medium, SheetDetent::Large])
+    .detent(move || Some(detent.get()))
+    .on_detent_change(move |d: &SheetDetent| detent.set(*d))
+    .grabber(true)
+    .on_cancel(move || open.set(false))
+    .flex_1()
+    .child(nav_stack().flex_1().child(nav_page().key("settings").child(settings())))
+```
+
+`detent` moves the sheet when its value changes, and follows the user with `onDetentChange` as above; a drag the app
+does not follow stays where the user left it.
+
+The content is laid out at the height the sheet rests at. Elsewhere the detents are ignored and the dialog keeps its
+form there; for a bottom sheet that rests at detents on every platform, use [`Sheet`](./sheet.md).
 
 ## A dialog with a backdrop
 
 A dialog with the default `fullScreen` presentation shows what the app draws: here a dimmed backdrop and a card centered
 over it. A press on the backdrop closes it:
+
+```tsx tabs
+<Dialog
+  open={confirm()}
+  animation="fade"
+  onOpenChange={({ open }) => confirm.set(open)}
+  backdropClass="bg-black/40"
+  class="m-auto w-80 gap-3 rounded-2xl bg-white p-5"
+>
+  <Text style={{ fontSize: 20, fontWeight: "700" }}>Delete this item?</Text>
+  <Button onPress={remove} class="items-center rounded-lg bg-red-600 px-4 py-3 active:opacity-70">
+    <Text class="font-semibold text-white">Delete</Text>
+  </Button>
+</Dialog>
+```
 
 ```rust tabs
 when(confirm, move || {
@@ -245,21 +311,6 @@ when(confirm, move || {
 })
 ```
 
-```tsx tabs
-<Dialog
-  open={confirm()}
-  animation="fade"
-  onOpenChange={({ open }) => confirm.set(open)}
-  backdropClass="bg-black/40"
-  class="m-auto w-80 gap-3 rounded-2xl bg-white p-5"
->
-  <Text style={{ fontSize: 20, fontWeight: "700" }}>Delete this item?</Text>
-  <Button onPress={remove} class="items-center rounded-lg bg-red-600 px-4 py-3 active:opacity-70">
-    <Text class="font-semibold text-white">Delete</Text>
-  </Button>
-</Dialog>
-```
-
 For the system's alert or action sheet, use [`AlertDialog`](./alert-dialog.md) from `nsh/base`.
 
 ## Ref methods
@@ -270,10 +321,13 @@ None.
 
 - iOS and Mac Catalyst: `presentation` picks the form. `fullScreen` presents over the full screen with a clear
   background; `pageSheet` and `formSheet` are system sheets with the system background, which follow the finger when
-  swiped down (`closeOnSwipe`).
+  swiped down (`closeOnSwipe`). A sheet rests at its `detents`, with the system's grabber when `grabber` is set;
+  custom heights need iOS 16, and iOS 15 takes the nearer of medium and large.
 - Android: the dialog fills the window and shows the app's popup and backdrop. The back button goes to the topmost
   dialog first, before stacks and `BackHandler` listeners.
 - Desktops (macOS, Windows, Linux, GPUI) and the web: the dialog is a transparent layer over the whole window that
   shows the app's popup and backdrop. Escape is a close attempt.
+- `detents`, `detent`, `defaultDetent`, `grabber`, `largestUndimmedDetent` and `onDetentChange` are iOS's: Android,
+  the desktops and the web have no system sheet, so they are ignored there (use [`Sheet`](./sheet.md)).
 - `supportedOrientations` is iOS's; `statusBarTranslucent` is Android's. An Android dialog's content starts below the
   status bar unless `statusBarTranslucent` is set.

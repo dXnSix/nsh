@@ -75,11 +75,13 @@ const VK_ESCAPE: u16 = 0x1B;
 const VK_LEFT: u16 = 0x25;
 const VK_BROWSER_BACK: u16 = 0xA6;
 
-/// The window's color, under a screen's content (the platform's, so a
-/// screen moving over another hides it).
+/// Windows 11's window color, under a screen's content, so a screen
+/// moving over another hides it: the system's, as the other desktops draw
+/// theirs there, rather than the color the app's window clears to
+/// ([`crate::system::window_background`], the default theme's).
 fn window_color(dark: bool) -> Color {
     if dark {
-        Color::rgba(0, 0, 0, 255)
+        Color::rgba(32, 32, 32, 255)
     } else {
         Color::rgba(255, 255, 255, 255)
     }
@@ -243,6 +245,7 @@ fn record(surface: &Surface, view: &NshView) -> Option<Picture> {
         let previous = dc.GetTarget().ok();
         dc.SetTarget(&list);
         dc.SetDpi(96.0 * scale, 96.0 * scale);
+        dc.SetTextRenderingParams(crate::text::rendering_params(surface.hwnd()).as_ref());
         dc.BeginDraw();
         dc.SetTransform(&Matrix3x2::identity());
         let drawn = match DrawCx::new(&gfx, scale, dark, surface.now()) {
@@ -251,7 +254,7 @@ fn record(surface: &Surface, view: &NshView) -> Option<Picture> {
                 // As it shows when settled: a transition's fade is not
                 // part of it.
                 let fade = std::mem::replace(&mut view.state_mut().fade, 1.0);
-                crate::render::draw_view(&mut cx, view, Mat4::new(), (0.0, 0.0));
+                crate::render::draw_view(&mut cx, view, Mat4::new(), Mat4::new());
                 view.state_mut().fade = fade;
                 true
             }
@@ -1378,6 +1381,7 @@ impl Nav {
     /// Sizes modal `id` to the surface and reports it (with the surface's
     /// safe area).
     fn size_modal(&mut self, surface: &Surface, id: NodeId) {
+        let presenting = self.presenting.contains(&id);
         let Some(m) = self.modals.get_mut(&id) else {
             return;
         };
@@ -1386,6 +1390,13 @@ impl Nav {
         let frame = rect(0.0, 0.0, f.size.width.0, f.size.height.0);
         set_frame(view, frame);
         let size = frame.size;
+        // Reported once its batch is applied ([`end_batch`]): a window
+        // of the app's own (`Window.open`) is presented first and only
+        // claimed by the batch's commands, and must not be laid out at the
+        // surface's size in between.
+        if presenting {
+            return;
+        }
         report(surface, id, &mut m.reported, size, safe_area(surface));
     }
 
@@ -1551,7 +1562,7 @@ pub(crate) fn modal_config(surface: &Rc<Surface>, view: &NshView, config: &Modal
     }
     let mut nav = surface.nav.borrow_mut();
     let id = view.id();
-    nav.modals.entry(id).or_default().config = *config;
+    nav.modals.entry(id).or_default().config = config.clone();
     nav.size_modal(surface, id);
 }
 
@@ -1733,6 +1744,7 @@ pub(crate) fn end_batch(surface: &Rc<Surface>) {
         nav.reconcile(surface, stack);
     }
     for id in std::mem::take(&mut nav.presenting) {
+        nav.size_modal(surface, id);
         nav.show_modal(surface, id);
     }
     // Screen sizes change with the app's layout.

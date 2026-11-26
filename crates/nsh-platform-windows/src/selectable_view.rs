@@ -27,7 +27,8 @@ use nsh_core::{
     AttributedText, Bounds, EventKind, EventPayload, NodeId, PayloadValue, Point, Points,
     geometry::point,
     selection::{
-        KeptRows, SelectionModel, SelectionTexts, autoscroll_step, reading_order, reorder,
+        KeptRows, SelectionModel, SelectionTexts, autoscroll_step, marker_of, reading_order,
+        reorder,
     },
 };
 
@@ -56,6 +57,11 @@ struct Texts {
     frames: Vec<Bounds<Points>>,
     /// Each text view's transform to the root.
     to_root: Vec<Mat4>,
+    /// The list marker beside each text (`selection::marker_of`).
+    markers: Vec<Option<String>>,
+    /// The last text left out (`selectable={false}`) while listing, its
+    /// content and frame: maybe the marker of the next.
+    chrome: Option<(String, Bounds<Points>)>,
     /// The area's transform to the root.
     area: Mat4,
 }
@@ -68,6 +74,8 @@ impl Texts {
             texts: Vec::new(),
             frames: Vec::new(),
             to_root: Vec::new(),
+            markers: Vec::new(),
+            chrome: None,
             area: area.to_root().unwrap_or_default(),
         };
         if area.attached() {
@@ -94,6 +102,7 @@ impl Texts {
             reorder(&mut self.texts, start, &order);
             reorder(&mut self.frames, start, &order);
             reorder(&mut self.to_root, start, &order);
+            reorder(&mut self.markers, start, &order);
         }
     }
 
@@ -102,7 +111,7 @@ impl Texts {
         let (text, content) = {
             let s = view.state();
             match &s.text {
-                Some(d) if takes_part(&d.text) => (d.text.clone(), d.content),
+                Some(d) => (d.text.clone(), d.content),
                 _ => return,
             }
         };
@@ -112,6 +121,13 @@ impl Texts {
         let Some(frame) = self.to_area(&to_root, content) else {
             return;
         };
+        if !takes_part(&text) {
+            // A list marker, maybe: the next text's copy starts with it.
+            self.chrome = Some((text.text.to_string(), frame));
+            return;
+        }
+        self.markers
+            .push(marker_of(self.chrome.take().as_ref(), frame));
         self.views.push(view.clone());
         self.texts.push(text);
         self.frames.push(frame);
@@ -148,6 +164,10 @@ impl SelectionTexts for Texts {
         self.texts[i].copied_text(range)
     }
 
+    fn attributed(&self, i: usize) -> Option<&AttributedText> {
+        Some(&self.texts[i])
+    }
+
     fn frame(&self, i: usize) -> Bounds<Points> {
         self.frames[i]
     }
@@ -167,6 +187,10 @@ impl SelectionTexts for Texts {
 
     fn continues(&self, i: usize) -> bool {
         self.views[i].state().props.continues_text
+    }
+
+    fn marker(&self, i: usize) -> Option<&str> {
+        self.markers[i].as_deref()
     }
 
     fn range_bounds(&self, i: usize, range: Range<u32>) -> Option<Bounds<Points>> {
@@ -214,7 +238,7 @@ pub(crate) fn is_area_text(view: &NshView) -> bool {
         .text
         .as_ref()
         .is_some_and(|d| takes_part(&d.text));
-    part && area_of(view).is_some()
+    part && area_of(view).is_some() && !in_control(view)
 }
 
 /// The current area: its selection and the mouse's press on it.
@@ -341,9 +365,7 @@ pub(crate) fn menu_role(
     }
     match role {
         MenuRole::Copy => {
-            if let Some(text) = selected_text(surface.key(), Some(area)) {
-                crate::system::set_clipboard_text(&text);
-            }
+            copy(surface.key(), Some(area));
             true
         }
         MenuRole::SelectAll => {
@@ -439,6 +461,30 @@ fn send(surface: &Surface, id: NodeId, selected: Selected) {
         fields.push(("bounds", PayloadValue::Bounds(bounds)));
     }
     surface.event(id, EventKind::SelectionChange, EventPayload::Map(fields));
+}
+
+/// `ref.clearSelection()` on `view` (`Command::ClearSelection`): ends the
+/// current area's selection when the area is `view`, inside it or around
+/// it.
+pub(crate) fn clear_in(view: &NshView) {
+    let within = |inner: &NshView, outer: &NshView| {
+        let mut at = Some(inner.clone());
+        while let Some(v) = at {
+            if &v == outer {
+                return true;
+            }
+            at = v.parent_view();
+        }
+        false
+    };
+    let hit = CURRENT.with_borrow(|current| {
+        current
+            .as_ref()
+            .is_some_and(|c| within(&c.area, view) || within(view, &c.area))
+    });
+    if hit {
+        clear();
+    }
 }
 
 /// Ends the current area's selection (a single text was selected).
@@ -704,6 +750,23 @@ fn autoscroll(surface: Weak<Surface>) {
     schedule(surface);
 }
 
+/// Copies the selection of `area`, if it is current and has one: its text
+/// and, with bold, italic or links, its HTML (`SelectionModel::html`).
+fn copy(surface: u64, area: Option<&NshView>) {
+    let Some(current) = take(surface, area) else {
+        return;
+    };
+    let copied = (!current.model.is_empty()).then(|| {
+        let texts = Texts::of(&current.area);
+        (current.model.text(&texts), current.model.html(&texts))
+    });
+    put(current);
+    // A selection of hidden characters only copies nothing.
+    if let Some((text, html)) = copied.filter(|(t, _)| !t.is_empty()) {
+        crate::system::set_clipboard_item(&text, html.as_deref());
+    }
+}
+
 /// The selected text of `area`, if it is current and has a selection.
 fn selected_text(surface: u64, area: Option<&NshView>) -> Option<String> {
     let current = take(surface, area)?;
@@ -736,35 +799,77 @@ fn select_all(surface: u64, area: &NshView) {
     put(current);
 }
 
-/// A right click in `area`: Copy (its selection) and Select All.
+/// The app's items of `area`'s selection menu (`selectionMenu`), after a
+/// separator: each reports its id as the root's `Menu` event.
+fn app_items(area: &NshView, out: &mut Vec<crate::chrome::LocalItem>) {
+    use nsh_core::desktop::MenuItem;
+
+    use crate::chrome::LocalItem;
+    let menu = area.state().props.selection_menu.clone();
+    if menu.is_empty() {
+        return;
+    }
+    out.push(LocalItem::Separator);
+    for item in menu.iter() {
+        match item {
+            MenuItem::Action(action) => {
+                let id = action.id;
+                out.push(LocalItem::Item {
+                    role: None,
+                    label: action.label.clone(),
+                    enabled: action.enabled,
+                    action: Rc::new(move |s| {
+                        if id != 0 {
+                            s.event(
+                                nsh_core::ROOT_ID,
+                                EventKind::Menu,
+                                EventPayload::Map(vec![("id", PayloadValue::Number(id as f64))]),
+                            );
+                        }
+                    }),
+                });
+            }
+            MenuItem::Separator => out.push(LocalItem::Separator),
+            MenuItem::Submenu { .. } => {}
+        }
+    }
+}
+
+/// A right click in `area`: Copy (its selection), Select All and the app's items.
 pub(crate) fn context_menu(surface: &Rc<Surface>, area: &NshView) {
     use nsh_core::desktop::MenuRole;
 
     use crate::chrome::LocalItem;
     let key = surface.key();
     let selected = selected_text(key, Some(area)).is_some_and(|t| !t.is_empty());
-    let (copy, all) = (area.clone(), area.clone());
-    crate::chrome::popup_actions(
-        surface,
-        vec![
-            LocalItem::Item {
-                role: Some(MenuRole::Copy),
-                label: String::new(),
-                enabled: selected,
-                action: Rc::new(move |s| {
-                    if let Some(text) = selected_text(s.key(), Some(&copy)) {
-                        crate::system::set_clipboard_text(&text);
-                    }
-                }),
-            },
-            LocalItem::Item {
-                role: Some(MenuRole::SelectAll),
-                label: String::new(),
-                enabled: true,
-                action: Rc::new(move |s| select_all(s.key(), &all)),
-            },
-        ],
-    );
+    let (copied, all) = (area.clone(), area.clone());
+    let mut items = vec![
+        LocalItem::Item {
+            role: Some(MenuRole::Copy),
+            label: String::new(),
+            enabled: selected,
+            action: Rc::new(move |s| {
+                copy(s.key(), Some(&copied));
+            }),
+        },
+        LocalItem::Item {
+            role: Some(MenuRole::SelectAll),
+            label: String::new(),
+            enabled: true,
+            action: Rc::new(move |s| select_all(s.key(), &all)),
+        },
+    ];
+    app_items(area, &mut items);
+    crate::chrome::popup_actions(surface, items);
+}
+
+/// True when the current area of `surface` has a selection, which [`key`]
+/// copies. Only looks: nothing is taken out or reported.
+pub(crate) fn has_selection(surface: &Surface) -> bool {
+    CURRENT.with_borrow(|c| {
+        c.as_ref()
+            .is_some_and(|c| c.surface == surface.key() && c.area.attached() && !c.model.is_empty())
+    })
 }
 
 /// Keys for the current area's selection (Ctrl+C / Ctrl+Insert, Ctrl+A,
@@ -790,9 +895,7 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
     let ctrl = event.modifiers.ctrl && !event.modifiers.alt;
     match event.vk {
         VK_C | VK_INSERT if ctrl && !empty => {
-            if let Some(text) = selected_text(key, Some(&area)) {
-                crate::system::set_clipboard_text(&text);
-            }
+            copy(key, Some(&area));
         }
         VK_A if ctrl => select_all(key, &area),
         VK_ESCAPE if !empty => {
@@ -806,4 +909,27 @@ pub(crate) fn key(surface: &Rc<Surface>, event: &KeyEvent) -> bool {
         _ => return false,
     }
     true
+}
+
+/// Whether `view` sits in a control (a button, link, tab…) inside its
+/// area, or in a view that takes presses: its text then keeps the control's pointer, not the I-beam.
+fn in_control(view: &NshView) -> bool {
+    let mut current = Some(view.clone());
+    while let Some(v) = current {
+        let s = v.state();
+        if s.props.selectable_view {
+            return false;
+        }
+        // A role, or a press handler on a row the app built itself.
+        if s.props.accessibility.role.is_control()
+            || [EventKind::Press, EventKind::LongPress, EventKind::PressDown]
+                .iter()
+                .any(|&k| s.events.contains(k))
+        {
+            return true;
+        }
+        drop(s);
+        current = v.parent_view();
+    }
+    false
 }

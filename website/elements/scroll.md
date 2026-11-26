@@ -12,6 +12,14 @@ demo: el-scroll
 children as its content and scrolls them natively: scrolling, flinging, bouncing and snapping run on the platform, at
 the display's rate. Rust makes one with `scroll()`, TSX with `<Scroll>` from `nsh`.
 
+```tsx tabs
+<Scroll style={{ flex: 1 }}>
+  <View style={{ padding: 16, gap: 8 }}>
+    <Each of={rows}>{(row) => <Text>{row().title}</Text>}</Each>
+  </View>
+</Scroll>
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -22,14 +30,6 @@ scroll().flex_1().child(
         |row, _index| text(move || row.get().title),
     )),
 )
-```
-
-```tsx tabs
-<Scroll style={{ flex: 1 }}>
-  <View style={{ padding: 16, gap: 8 }}>
-    <Each of={rows}>{(row) => <Text>{row().title}</Text>}</Each>
-  </View>
-</Scroll>
 ```
 
 A scroll view creates every child, which suits pages of moderate size. For long or unbounded data use a
@@ -51,6 +51,8 @@ are methods of the `Scrollable` trait, which lists share.
 | `scrollable` | `.scrollable(..)` | `boolean` | `true` | The user can scroll it. |
 | `scrollbar` | `.scrollbar(..)` | `boolean \| ScrollbarTheme` | `true` | The scroll indicator shows: the platform's, or the app's [built-in bar](./scrollbar.md#built-in-bars) once it set a theme; an object is a theme of the view's own. |
 | `bounces` | `.bounces(..)` | `boolean` | `true` | Overscroll past the edges. |
+| `smoothWheel` | `.smooth_wheel(..)` | `boolean` | `false` | A mouse wheel's notches glide to where they point, eased in and out over 100–200 ms as in Chrome, a run of notches one motion. macOS, Windows, Linux and GPUI (not while the system reduces motion); iOS, Android and the web keep the system's and the browser's scrolling. Trackpads are unchanged. |
+| `wheelLineHeight` | `.wheel_line_height(px(..))` | `number` | `0` | How far a mouse wheel's line scrolls, in points; 0 keeps the platform's (10 on macOS, 16 on Windows, a length after the view's on Linux). 40 is what Chrome and Safari scroll a line on macOS. The desktops. |
 | `pagingEnabled` | `.paging(..)` | `boolean` | `false` | Stops at multiples of the viewport. |
 | `snapToInterval` | `.snap_interval(px(..))` | `number` | `0` | Stops at multiples of this length (0: off). |
 | `snapToOffsets` | `.snap_offsets(..)` | `number[]` | | Stops at these offsets. |
@@ -58,6 +60,7 @@ are methods of the `Scrollable` trait, which lists share.
 | `disableIntervalMomentum` | `.disable_interval_momentum(..)` | `boolean` | `false` | A fling moves one snap point at most. |
 | `decelerationRate` | `.deceleration(rate)` | `"normal" \| "fast" \| number` | platform | How fast a fling slows down: the velocity kept per millisecond (`normal` 0.998, `fast` 0.99). |
 | `contentInset` | `.content_inset(EdgeInsets { .. })` | `Partial<Edges>` | | Room around the content. |
+| `scrollbarInset` | `.scrollbar_inset(EdgeInsets { .. })` | `Partial<Edges>` | | Keeps the scroll indicator this far from the view's edges, clear of bars floating over it; the content still scrolls under them. |
 | `contentOffset` | `.content_offset(point(..))` | `{ x?, y? }` | | Where it starts. |
 | `contentStyle` | the content view's own styles | `ViewStyle` | | The style of a view around the children that scrolls with them; `flexGrow: 1` makes it at least as tall as the viewport (a centered empty state). |
 | `contentClass` | the content view's own styles | `string` | | The same as classes, e.g. `"grow justify-center p-4"`. |
@@ -75,6 +78,19 @@ are methods of the `Scrollable` trait, which lists share.
 | `refreshIndicator` | `.refresh_indicator(Some(height))` | `{ height: number }` | The app draws its own indicator, `height` points tall: the platform's spinner is hidden, a pull refreshes once it reaches `height`, and refreshing keeps `height` above the content. A height of 0 or less is none. |
 | `pullValue` | `.pull_value(&value)` | `AnimatedValue` | An animated value fed with how far the view is pulled past its top (0 at rest, growing with the pull; the room kept above the content while it refreshes: `height` with `refreshIndicator`), for the app's indicator. |
 
+```tsx tabs
+const refreshing = signal(false);
+async function reload() {
+  refreshing.set(true);
+  await load();
+  refreshing.set(false);
+}
+
+<Scroll style={{ flex: 1 }} refreshing={refreshing()} onRefresh={reload}>
+  …
+</Scroll>;
+```
+
 ```rust tabs
 let refreshing = signal(false);
 
@@ -91,19 +107,6 @@ scroll()
     .child(content())
 ```
 
-```tsx tabs
-const refreshing = signal(false);
-async function reload() {
-  refreshing.set(true);
-  await load();
-  refreshing.set(false);
-}
-
-<Scroll style={{ flex: 1 }} refreshing={refreshing()} onRefresh={reload}>
-  …
-</Scroll>;
-```
-
 ### Zooming
 
 Setting `maximumZoomScale` above `minimumZoomScale` (`.zoom_range(min, max)` in Rust) makes the content zoomable with a
@@ -117,6 +120,13 @@ pinch; zoomed in, it scrolls both ways. Lists keep their scale.
 | `bouncesZoom` | `.bounces_zoom(..)` | `boolean` | `true` | Pinching may go past the limits and springs back. |
 | `zoomable` | `.zoomable(..)` | `boolean` | `true` | The user can pinch to zoom. |
 | `centerContent` | `.center_content(..)` | `boolean` | `false` | Content smaller than the viewport (zoomed out) is centered. |
+
+```tsx tabs
+let photo!: ScrollRef;
+<Scroll ref={photo} maximumZoomScale={4} centerContent style={{ flex: 1, backgroundColor: "#000" }}>
+  <Image src={picture} style={{ width: 390, height: 520 }} onPress={() => photo.zoomTo({ scale: 1, animated: true })} />
+</Scroll>;
+```
 
 ```rust tabs
 let photo = element_ref();
@@ -133,13 +143,6 @@ scroll()
             .h(px(520.0))
             .on_press(move || photo.zoom_to(1.0, None, true)),
     )
-```
-
-```tsx tabs
-let photo!: ScrollRef;
-<Scroll ref={photo} maximumZoomScale={4} centerContent style={{ flex: 1, backgroundColor: "#000" }}>
-  <Image src={picture} style={{ width: 390, height: 520 }} onPress={() => photo.zoomTo({ scale: 1, animated: true })} />
-</Scroll>;
 ```
 
 ## Events
@@ -168,17 +171,17 @@ zooms).
 | `scrollTo({ x?, y?, animated? })` | `scroll_to(point(x, y), animated)` | Scrolls to an offset. |
 | `zoomTo({ scale, x?, y?, animated? })` | `zoom_to(scale, Some(point(x, y)), animated)` | Zooms to `scale` (clamped to the limits) with the content point (`x`, `y`, unzoomed points) in the middle of the viewport, or around the middle. E.g. a double tap zooming in on the tapped point. |
 
+```tsx tabs
+let scroller!: ScrollRef;
+<Scroll ref={scroller}>…</Scroll>;
+scroller.scrollTo({ y: 0, animated: true });
+```
+
 ```rust tabs
 let scroller = element_ref();
 scroll().element_ref(&scroller).child(content());
 
 scroller.scroll_to(point(px(0.0), px(0.0)), true);
-```
-
-```tsx tabs
-let scroller!: ScrollRef;
-<Scroll ref={scroller}>…</Scroll>;
-scroller.scrollTo({ y: 0, animated: true });
 ```
 
 ## Keyboard
@@ -199,4 +202,8 @@ changes; their children are mirrored.
 - Android zooms with NSH's own scroll view, which scales the content around its top left and scrolls both ways.
   Pinches start after Android's minimum span between the fingers (about 27 mm).
 - On Mac Catalyst (Mac idiom), NSH detects the pull and shows its spinner.
+- `scrollbarInset`: iOS adds the keyboard's room to its bottom, as it does to the content's. Touch browsers inset the
+  indicator only along the axis it scrolls, and browsers that cannot style their scroll bars (Firefox) ignore it.
+  On Android, while every edge is 0 the indicator stays within `contentInset` as before; once any edge is set, it
+  follows `scrollbarInset` alone, as on the other platforms.
 - iOS redraws texts and canvases at the zoomed resolution when a zoom ends.

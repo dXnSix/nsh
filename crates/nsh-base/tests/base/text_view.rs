@@ -1,18 +1,22 @@
 //! Typed root parts reach the document's text before classes and styles;
-//! inline links are stops of Tab, pressed with Return; a link's press
-//! reports the modifier keys held.
+//! a table's grid takes the app's frame; inline links are stops of Tab,
+//! pressed with Return; a link's press reports the modifier keys held;
+//! blocks' `first:` and `last:` read their place among the blocks.
+
+use std::sync::{Arc, Mutex};
 
 use nsh_base::{
-    TextViewClasses, TextViewLinkPressEvent, TextViewPart, TextViewParts, TextViewStyles, text_view,
+    TextViewClasses, TextViewLinkPressEvent, TextViewPart, TextViewParts, TextViewStyles,
+    TextViewTaskPressEvent, text_view,
 };
 use nsh_core::{
-    StyleKey,
-    element::{Root, Style},
+    Color, MountItem, StyleKey,
+    element::Style,
     platform::{Idiom, Os},
     prelude::*,
 };
 use nsh_engine::EngineConfig;
-use nsh_testing::Headless;
+use nsh_testing::{DragOptions, Headless};
 
 #[component]
 fn AnnotatedCode() -> impl IntoElement {
@@ -58,7 +62,10 @@ fn AnnotatedCode() -> impl IntoElement {
 
 #[test]
 fn annotated_code_shows_its_spans_and_hands_its_block_to_actions() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<AnnotatedCode>())).unwrap();
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<AnnotatedCode>(),
+    ))
+    .unwrap();
     app.wait_for("prefix 日本語 suffix").unwrap();
     assert_eq!(
         app.screen().span_style("text:日本語").unwrap().font_weight,
@@ -75,7 +82,10 @@ fn annotated_code_shows_its_spans_and_hands_its_block_to_actions() {
 
 #[test]
 fn code_content_that_does_not_spell_the_code_is_ignored() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<AnnotatedCode>())).unwrap();
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<AnnotatedCode>(),
+    ))
+    .unwrap();
     app.wait_for("literal <tag>").unwrap();
     assert!(!app.shows("replacement"));
 }
@@ -121,7 +131,8 @@ fn DefaultRoot() -> impl IntoElement {
 
 #[test]
 fn typed_root_styles_are_inherited_by_paragraphs() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<TypedRoot>())).unwrap();
+    let mut app =
+        Headless::start(EngineConfig::new(nsh_testing::windowed_root::<TypedRoot>())).unwrap();
     app.wait_for("Another paragraph").unwrap();
     for text in ["Hello", "Another paragraph"] {
         assert_eq!(app.screen().span_style(text).unwrap().font_size, px(11.0));
@@ -130,7 +141,10 @@ fn typed_root_styles_are_inherited_by_paragraphs() {
 
 #[test]
 fn root_classes_override_typed_parts_and_inline_styles_override_classes() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<RootOverrides>())).unwrap();
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<RootOverrides>(),
+    ))
+    .unwrap();
     app.wait_for("Style wins").unwrap();
     assert_eq!(
         app.screen().span_style("Class wins").unwrap().font_size,
@@ -144,11 +158,123 @@ fn root_classes_override_typed_parts_and_inline_styles_override_classes() {
 
 #[test]
 fn root_without_typed_parts_keeps_the_default_typography() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<DefaultRoot>())).unwrap();
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<DefaultRoot>(),
+    ))
+    .unwrap();
     app.wait_for("Default text").unwrap();
     assert_eq!(
         app.screen().span_style("Default text").unwrap().font_size,
         px(15.0)
+    );
+}
+
+/// Text in colors the HTML gives it, and the same over the app's
+/// `textStyle` part.
+#[component]
+fn ColoredText() -> impl IntoElement {
+    let classes = TextViewClasses {
+        text_style: Some("text-[#0000ff]".into()),
+        ..Default::default()
+    };
+    view()
+        .child(text_view().html(
+            r##"<p>Plain <span style="color: #e54545">red words</span> and <font color="#00aa00">green words</font></p>"##,
+        ))
+        .child(
+            text_view()
+                .html(r##"<p>Then <span style="color: #e54545">the app's color</span></p>"##)
+                .classes(classes),
+        )
+}
+
+#[test]
+fn text_takes_the_documents_colors_under_the_apps_text_style_part() {
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<ColoredText>(),
+    ))
+    .unwrap();
+    app.wait_for("Then the app's color").unwrap();
+    let color = |selector: &str| app.screen().span_style(selector).unwrap().color;
+    assert_eq!(color("text:red words"), Color(0xe545_45ff));
+    assert_eq!(color("text:green words"), Color(0x00aa_00ff));
+    // The text around keeps the view's color; the part's classes win.
+    assert_ne!(color("text:Plain"), Color(0xe545_45ff));
+    assert_eq!(color("text:the app's color"), Color(0x0000_ffff));
+}
+
+/// Paragraphs whose `classes` read their place among the blocks:
+/// `first:` and `last:` match the first and last block, as each block
+/// is the one its row shows.
+#[component]
+fn PlacedParagraphs() -> impl IntoElement {
+    text_view()
+        .markdown("Alpha\n\nBravo\n\nCharlie")
+        .classes(TextViewClasses {
+            paragraph: Some("text-[#ff0000] first:text-[#00ff00] last:text-[#0000ff]".into()),
+            ..Default::default()
+        })
+}
+
+#[test]
+fn blocks_take_their_place_among_the_blocks() {
+    let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root::<
+        PlacedParagraphs,
+    >()))
+    .unwrap();
+    app.wait_for("Charlie").unwrap();
+    let color = |selector: &str| app.screen().span_style(selector).unwrap().color;
+    assert_eq!(color("text:Alpha"), Color(0x00ff_00ff));
+    assert_eq!(color("text:Bravo"), Color(0xff00_00ff));
+    assert_eq!(color("text:Charlie"), Color(0x0000_ffff));
+}
+
+/// A table whose grid the app frames by `classes`: a border on every
+/// side and a background.
+#[component]
+fn FramedTable() -> impl IntoElement {
+    text_view()
+        .markdown("| Name | Size |\n|------|-----:|\n| Alpha | 12 |")
+        .classes(TextViewClasses {
+            table_grid: Some("border-2 border-[#ff0000] bg-[#00ff00]".into()),
+            ..Default::default()
+        })
+}
+
+#[test]
+fn a_tables_grid_takes_the_apps_frame() {
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<FramedTable>(),
+    ))
+    .unwrap();
+    let styles = Arc::new(Mutex::new(Vec::new()));
+    let into = styles.clone();
+    app.observe(move |_, batch| {
+        for item in &batch.items {
+            if let MountItem::ViewStyle { id, style } = item {
+                into.lock().unwrap().push((*id, style.clone()));
+            }
+        }
+    });
+    app.first_render().unwrap();
+    app.wait_for("Alpha").unwrap();
+    let styles = styles.lock().unwrap();
+    let grid: Vec<_> = styles
+        .iter()
+        .filter(|(_, style)| style.background_color == Color(0x00ff_00ff))
+        .collect();
+    // One view, the grid: not its cells or rows.
+    assert!(!grid.is_empty(), "no view has the grid's background");
+    assert!(grid.iter().all(|(id, _)| *id == grid[0].0), "{grid:?}");
+    // The app's border on every side: over the top and left lines the
+    // grid draws itself, and on the right and bottom, which it leaves to
+    // the cells.
+    let borders = &grid.last().unwrap().1.borders;
+    assert_eq!(borders.colors, [Color(0xff00_00ff); 4]);
+    let widths = borders.widths;
+    assert_eq!(
+        [widths.top, widths.right, widths.bottom, widths.left],
+        [px(2.0); 4]
     );
 }
 
@@ -181,7 +307,7 @@ fn Links() -> impl IntoElement {
 
 #[test]
 fn tab_reaches_a_documents_links_in_order_and_return_presses_them() {
-    let mut config = EngineConfig::new(Root::of::<Links>());
+    let mut config = EngineConfig::new(nsh_testing::windowed_root::<Links>());
     config.environment.os = Os::MacOs;
     config.environment.idiom = Idiom::Desktop;
     let mut app = Headless::start(config).unwrap();
@@ -216,7 +342,7 @@ fn HoveredLinks() -> impl IntoElement {
 const LONG: &str = "https://example.com/archive/2026/11/09/a-very-long-article-name-that-goes-on-and-on?utm_source=newsletter&page=2";
 
 fn desktop<C: Component<Props = ()>>() -> Headless {
-    let mut config = EngineConfig::new(Root::of::<C>());
+    let mut config = EngineConfig::new(nsh_testing::windowed_root::<C>());
     config.clock = nsh_engine::Clock::manual(std::time::SystemTime::UNIX_EPOCH);
     config.environment.os = Os::Linux;
     config.environment.idiom = Idiom::Desktop;
@@ -265,7 +391,7 @@ fn a_long_links_hint_keeps_its_host_and_the_end_of_its_url() {
 
 #[test]
 fn a_phone_shows_no_hint_for_a_link() {
-    let mut config = EngineConfig::new(Root::of::<HoveredLinks>());
+    let mut config = EngineConfig::new(nsh_testing::windowed_root::<HoveredLinks>());
     config.environment.os = Os::Web;
     config.environment.idiom = Idiom::Phone;
     let mut app = Headless::start(config).unwrap();
@@ -324,7 +450,7 @@ fn LinkModifiers() -> impl IntoElement {
 
 #[test]
 fn a_link_press_reports_the_modifier_keys_held() {
-    let mut config = EngineConfig::new(Root::of::<LinkModifiers>());
+    let mut config = EngineConfig::new(nsh_testing::windowed_root::<LinkModifiers>());
     config.environment.os = Os::MacOs;
     config.environment.idiom = Idiom::Desktop;
     let mut app = Headless::start(config).unwrap();
@@ -352,6 +478,51 @@ fn a_link_press_reports_the_modifier_keys_held() {
     .unwrap();
 }
 
+/// A paragraph with a link to a page, one to a heading of the document and
+/// one around emphasis, to a path of the app's.
+#[component]
+fn LinkDestinations() -> impl IntoElement {
+    text_view().markdown(
+        "See [the guide](https://example.com/guide), [the notes](#notes) or [*this*](/this).",
+    )
+}
+
+#[test]
+fn each_link_of_a_paragraph_carries_its_url_to_the_platform() {
+    let mut core = nsh_core::Core::new(nsh_core::ApproxTextEngine, Size::new(px(400.0), px(200.0)));
+    core.mount_root(&nsh_core::element::Root::of::<LinkDestinations>());
+    let batch = core.commit().expect("initial batch");
+    let text = batch
+        .items
+        .iter()
+        .find_map(|item| match item {
+            MountItem::Text { text, .. } if text.text.starts_with("See") => Some(text.clone()),
+            _ => None,
+        })
+        .expect("the paragraph");
+    // Each link's characters and where they go (the web draws them as an
+    // `<a href>`): the URL as written, whatever it is.
+    let links: Vec<_> = text
+        .links
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            (
+                &text.text[l.start as usize..l.end as usize],
+                text.link_href(i),
+            )
+        })
+        .collect();
+    assert_eq!(
+        links,
+        [
+            ("the guide", Some("https://example.com/guide")),
+            ("the notes", Some("#notes")),
+            ("this", Some("/this")),
+        ]
+    );
+}
+
 /// An image at the end of a paragraph that wraps in a narrow column.
 #[component]
 fn WrappedInlineImage() -> impl IntoElement {
@@ -362,7 +533,10 @@ fn WrappedInlineImage() -> impl IntoElement {
 
 #[test]
 fn an_image_in_a_wrapped_line_is_inside_the_column() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<WrappedInlineImage>())).unwrap();
+    let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root::<
+        WrappedInlineImage,
+    >()))
+    .unwrap();
     app.wait_for("label:Dot").unwrap();
     let id = app.screen().id("label:Dot").unwrap();
     let nodes = app.screen().layout_nodes();
@@ -402,20 +576,64 @@ fn WideCustomImages() -> impl IntoElement {
                  Text ![Inline](https://example.com/c.png) after\n\n\
                  | A | B |\n|---|---|\n| ![Cell](https://example.com/f.png) | x |",
             )
-            .render_image(|image: &nsh_base::text_view::Image| {
-                if image.alt == "Inline" {
-                    view().test_id("card:Inline").w(px(20.0)).h(px(10.0))
-                } else if image.alt == "Full" {
-                    view().test_id("card:Full").w_full().h(px(40.0))
-                } else if image.alt == "Cell" {
-                    view().test_id("card:Cell").w(px(60.0)).h(px(20.0))
-                } else if image.alt == "Small" {
-                    view().test_id("card:Small").w(px(100.0)).h(px(40.0))
-                } else {
-                    wide_card(image)
-                }
-            }),
+            .render_image(
+                |InContext(image, _): &InContext<
+                    nsh_base::text_view::Image,
+                    nsh_base::TextViewImageContext,
+                >| {
+                    if image.alt == "Inline" {
+                        view().test_id("card:Inline").w(px(20.0)).h(px(10.0))
+                    } else if image.alt == "Full" {
+                        view().test_id("card:Full").w_full().h(px(40.0))
+                    } else if image.alt == "Cell" {
+                        view().test_id("card:Cell").w(px(60.0)).h(px(20.0))
+                    } else if image.alt == "Small" {
+                        view().test_id("card:Small").w(px(100.0)).h(px(40.0))
+                    } else {
+                        wide_card(image)
+                    }
+                },
+            ),
     )
+}
+
+/// The same image alone and in a link: the app's `renderImage` tells
+/// them apart by the link beside the image.
+#[component]
+fn LinkedCustomImages() -> impl IntoElement {
+    text_view()
+        .markdown(
+            "Alone: ![badge](https://example.com/badge.svg)\n\n\
+             In a link: [![badge](https://example.com/badge.svg)](https://example.com/run \"Run\")",
+        )
+        .render_image(
+            |InContext(image, context): &InContext<
+                nsh_base::text_view::Image,
+                nsh_base::TextViewImageContext,
+            >| {
+                let id = match &context.link {
+                    Some(link) => format!(
+                        "image:{} in {} ({})",
+                        image.alt,
+                        link.url,
+                        link.title.as_deref().unwrap_or("")
+                    ),
+                    None => format!("image:{}", image.alt),
+                };
+                view().test_id(&id).w(px(20.0)).h(px(20.0))
+            },
+        )
+}
+
+#[test]
+fn an_apps_image_in_a_link_gets_the_link() {
+    let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root::<
+        LinkedCustomImages,
+    >()))
+    .unwrap();
+    app.wait_for("id:image:badge").unwrap();
+    app.wait_for("id:image:badge in https://example.com/run (Run)")
+        .unwrap();
 }
 
 /// A wide image of the document's own, on its own.
@@ -438,7 +656,10 @@ fn bounds_of(app: &Headless, test_id: &str) -> Bounds<Points> {
 
 #[test]
 fn an_apps_image_on_its_own_is_at_most_as_wide_as_the_text() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<WideCustomImages>())).unwrap();
+    let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root::<
+        WideCustomImages,
+    >()))
+    .unwrap();
     app.wait_for("label:Inline").unwrap();
     for card in ["card:Alone", "card:Linked"] {
         let bounds = bounds_of(&app, card);
@@ -462,7 +683,8 @@ fn an_apps_image_on_its_own_is_at_most_as_wide_as_the_text() {
 
 #[test]
 fn a_wide_image_on_its_own_is_at_most_as_wide_as_the_text() {
-    let mut app = Headless::start(EngineConfig::new(Root::of::<WideImage>())).unwrap();
+    let mut app =
+        Headless::start(EngineConfig::new(nsh_testing::windowed_root::<WideImage>())).unwrap();
     app.wait_for("label:Wide").unwrap();
     let id = app.screen().id("label:Wide").unwrap();
     let bounds = app
@@ -478,4 +700,1459 @@ fn a_wide_image_on_its_own_is_at_most_as_wide_as_the_text() {
         px(75.0),
         "the aspect ratio kept: {bounds:?}"
     );
+}
+
+mod streaming {
+    //! A reply arriving in a `TextView`, 24 bytes at a time: what each
+    //! update costs from the press that adds the text to the batch of mount
+    //! items (reading the Markdown, the rows, layout), and how many items
+    //! it sends.
+
+    use std::{
+        cell::RefCell,
+        time::{Duration, Instant},
+    };
+
+    use nsh_base::{MarkdownOptions, text_view};
+    use nsh_core::{
+        ApproxTextEngine, Core, EventKind, EventPayload, MountItem, ROOT_ID, Size, prelude::*,
+    };
+
+    thread_local! {
+        /// The reply the view streams.
+        static REPLY: RefCell<String> = const { RefCell::new(String::new()) };
+    }
+
+    /// Shows 24 bytes more of [`REPLY`] with each press.
+    #[component]
+    fn Streamed() -> impl IntoElement {
+        let shown = signal(0usize);
+        view()
+            .flex_1()
+            .on_press(move || shown.update(|n| *n += 24))
+            .child(
+                text_view()
+                    .markdown(move || {
+                        let shown = shown.get();
+                        Some(REPLY.with_borrow(|reply| {
+                            SharedString::from(reply[..shown.min(reply.len())].to_owned())
+                        }))
+                    })
+                    .options(MarkdownOptions {
+                        streaming: true,
+                        ..MarkdownOptions::default()
+                    }),
+            )
+    }
+
+    fn reply(bytes: usize) -> String {
+        let section = "## Section\n\nSome **bold** text with `code`, a [link](https://example.com) and $x^2$.\n\n- item one\n- item two with *emphasis*\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> [!NOTE]\n> A note.\n\n";
+        section.repeat(bytes / section.len() + 1)[..bytes].to_owned()
+    }
+
+    fn table(rows: usize) -> String {
+        let mut text =
+            String::from("Here are the fields:\n\n| Name | Type | Notes |\n|---|---|---|\n");
+        for n in 0..rows {
+            text.push_str(&format!("| `field_{n}` | `Option<u32>` | see `docs` |\n"));
+        }
+        text
+    }
+
+    fn list(items: usize) -> String {
+        let mut text = String::from("Intro.\n\n");
+        for n in 0..items {
+            text.push_str(&format!("- `item_{n}`: calls `foo()` then `bar()`\n"));
+        }
+        text
+    }
+
+    fn program(lines: usize) -> String {
+        let mut text = String::from("Here is the program:\n\n```rust\n");
+        for n in 0..lines {
+            text.push_str(&format!(
+                "    let value_{n} = compute(&items[{n}], Some(\"x\"))?;\n"
+            ));
+        }
+        text.push_str("```\n");
+        text
+    }
+
+    /// `source` streamed: the time of every update and the mount items it
+    /// sent.
+    fn stream(source: &str) -> (Vec<Duration>, Vec<usize>) {
+        REPLY.set(source.to_owned());
+        let mut core = Core::new(ApproxTextEngine, Size::new(px(390.0), px(844.0)));
+        core.mount_root(&nsh_testing::windowed_root_with::<Streamed>(|| ()));
+        let batch = core.commit().expect("the first frame");
+        let host = batch
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::Insert {
+                    parent: ROOT_ID,
+                    child,
+                    ..
+                } => Some(*child),
+                _ => None,
+            })
+            .expect("the root's host");
+        let (mut times, mut items) = (Vec::new(), Vec::new());
+        for _ in 0..source.len().div_ceil(24) {
+            let start = Instant::now();
+            assert!(core.component_event(host, EventKind::Press, &EventPayload::None));
+            let batch = core.commit();
+            times.push(start.elapsed());
+            items.push(batch.map_or(0, |b| b.items.len()));
+        }
+        (times, items)
+    }
+
+    /// `cargo test --release -p nsh-base --test base bench_text_view_streaming
+    /// -- --ignored --nocapture`; the numbers are in `docs/dev/performance.md`.
+    /// With `NSH_BENCH_ITEMS=<file>` the mount items of every update are
+    /// written there, to compare two builds.
+    #[test]
+    #[ignore]
+    fn bench_text_view_streaming() {
+        let mut counts = String::new();
+        println!("total ms over the stream / average ms of the last 10 updates / mount items");
+        for (name, source) in [
+            ("typical, 20 KB", reply(20_000)),
+            ("typical, 40 KB", reply(40_000)),
+            ("ends in a 400-row table", table(400)),
+            ("ends in a 400-item list", list(400)),
+            ("ends in 400 lines of code", program(400)),
+        ] {
+            let (times, items) = stream(&source);
+            let ms = |d: &Duration| d.as_secs_f64() * 1000.0;
+            let total: f64 = times.iter().map(ms).sum();
+            let last = &times[times.len().saturating_sub(10)..];
+            let last: f64 = last.iter().map(ms).sum::<f64>() / last.len() as f64;
+            println!(
+                "{name:<26} {:>5} updates | {total:>9.1} / {last:>7.3} | {:>7} items",
+                times.len(),
+                items.iter().sum::<usize>()
+            );
+            counts.push_str(&format!("{name}: {items:?}\n"));
+        }
+        if let Ok(path) = std::env::var("NSH_BENCH_ITEMS") {
+            std::fs::write(path, counts).unwrap();
+        }
+    }
+}
+
+mod word_fade {
+    //! A paragraph whose words fade in as they arrive, as a chat app's
+    //! streamed reply does: a plugin splits the newest text into word
+    //! spans, hidden until their turn and then fading from transparent by
+    //! their text color; a word done fading joins the plain text again.
+    //! Measured on the engine thread, from the press that adds the words or
+    //! advances a frame to the finished batch of mount items, with a text
+    //! engine that draws colors from the text, as the desktop platforms'.
+
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeMap,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
+
+    use nsh_base::{
+        MarkdownOptions, MarkdownPlugin, MarkdownPlugins, text_view,
+        text_view::{CustomNode, Inline, ParseContext, mdast::Node},
+    };
+    use nsh_core::{
+        ApproxTextEngine, AttributedText, Core, EventKind, EventPayload, MountItem, Points,
+        ROOT_ID, Size, TextEngine, TextLayout, TextLine, element::Root, prelude::*,
+    };
+
+    /// [`ApproxTextEngine`] drawing the colors and hidden runs from the
+    /// mounted text, as the macOS, Windows, Linux and GPUI engines do; it
+    /// counts the characters it typesets ([`TYPESET`]), what a platform's
+    /// engine spends its time on.
+    struct ColorsAtDraw;
+
+    thread_local! {
+        /// Characters prepared and laid out by [`ColorsAtDraw`].
+        static TYPESET: Cell<usize> = const { Cell::new(0) };
+    }
+
+    impl TextEngine for ColorsAtDraw {
+        type Prepared = <ApproxTextEngine as TextEngine>::Prepared;
+
+        fn prepare(&self, text: &AttributedText) -> Self::Prepared {
+            TYPESET.set(TYPESET.get() + text.text.len());
+            ApproxTextEngine.prepare(text)
+        }
+
+        fn measure(&self, prepared: &Self::Prepared, max_width: Option<Points>) -> Size<Points> {
+            TYPESET.set(TYPESET.get() + prepared.chars());
+            ApproxTextEngine.measure(prepared, max_width)
+        }
+
+        fn draws_colors_from_text(&self) -> bool {
+            true
+        }
+
+        fn breaks_lines_greedily(&self) -> bool {
+            ApproxTextEngine.breaks_lines_greedily()
+        }
+
+        fn layout(&self, prepared: &Self::Prepared, size: Size<Points>) -> TextLayout {
+            TYPESET.set(TYPESET.get() + prepared.chars());
+            ApproxTextEngine.layout(prepared, size)
+        }
+
+        fn lines(&self, layout: &TextLayout) -> Vec<TextLine> {
+            ApproxTextEngine.lines(layout)
+        }
+
+        fn attachments(&self, layout: &TextLayout) -> Vec<Option<Point<Points>>> {
+            ApproxTextEngine.attachments(layout)
+        }
+    }
+
+    /// Milliseconds a frame (about 30 a second).
+    const FRAME: f32 = 33.0;
+    /// Milliseconds between two words' starts (60 words a second).
+    const GAP: f32 = 1000.0 / 60.0;
+    /// Milliseconds a word takes to fade in.
+    const FADE: f32 = 280.0;
+    const WORD: &str = "fade-word";
+    const VOCABULARY: [&str; 8] = [
+        "streamed ",
+        "words ",
+        "fade ",
+        "in ",
+        "one ",
+        "after ",
+        "another ",
+        "here ",
+    ];
+
+    /// When each word (by its byte offset) starts, and up to where the
+    /// text has been seen.
+    #[derive(Default)]
+    struct Pacer {
+        starts: RefCell<BTreeMap<usize, f32>>,
+        seen: Cell<usize>,
+        last_start: Cell<f32>,
+        now: Cell<f32>,
+        fading: Cell<bool>,
+    }
+
+    impl Pacer {
+        fn alpha(&self, start: usize) -> f32 {
+            self.starts
+                .borrow()
+                .get(&start)
+                .map_or(1.0, |&at| ((self.now.get() - at) / FADE).clamp(0.0, 1.0))
+        }
+    }
+
+    struct Fade {
+        pacer: Rc<Pacer>,
+        frame: Signal<u64>,
+    }
+
+    impl MarkdownPlugin for Fade {
+        fn name(&self) -> &str {
+            "word-fade"
+        }
+
+        fn inline(&self, node: &Node, _: &mut ParseContext<'_>) -> Option<Inline> {
+            let Node::Text(text) = node else {
+                return None;
+            };
+            let base = text.position.as_ref().map_or(0, |p| p.start.offset);
+            let pacer = &*self.pacer;
+            let now = pacer.now.get();
+            let mut starts = pacer.starts.borrow_mut();
+            starts.retain(|_, at| now < *at + FADE);
+            let mut out: Vec<Inline> = Vec::new();
+            let mut at = 0;
+            for piece in text.value.split_inclusive(' ') {
+                let start = base + at;
+                at += piece.len();
+                if start >= pacer.seen.get() && pacer.fading.get() {
+                    let begin = (pacer.last_start.get() + GAP).max(now);
+                    pacer.last_start.set(begin);
+                    starts.insert(start, begin);
+                }
+                if starts.contains_key(&start) {
+                    out.push(Inline::Custom(
+                        CustomNode::new(WORD)
+                            .with_text(piece)
+                            .with_attribute("start", start.to_string()),
+                    ));
+                } else if let Some(Inline::Text { text }) = out.last_mut() {
+                    text.push_str(piece);
+                } else {
+                    out.push(Inline::text(piece));
+                }
+            }
+            pacer
+                .seen
+                .set(pacer.seen.get().max(base + text.value.len()));
+            match out.len() {
+                1 => out.pop(),
+                _ => Some(Inline::Custom(CustomNode::new("group").with_content(out))),
+            }
+        }
+
+        fn render(&self, node: &CustomNode) -> Option<AnyElement> {
+            if node.name != WORD {
+                return None;
+            }
+            let start: usize = node.attributes.get("start")?.parse().ok()?;
+            let (color, queued) = (self.pacer.clone(), self.pacer.clone());
+            let frame = self.frame;
+            Some(
+                text(node.text.clone())
+                    .test_id(&format!("word-{start}"))
+                    .text_color(move || {
+                        frame.get();
+                        hsla(0.0, 0.0, 0.1, color.alpha(start))
+                    })
+                    .style_when(
+                        move || {
+                            frame.get();
+                            queued.alpha(start) <= 0.0
+                        },
+                        |s| s.invisible(),
+                    )
+                    .into_element(),
+            )
+        }
+    }
+
+    thread_local! {
+        static PACER: RefCell<Rc<Pacer>> = RefCell::new(Rc::default());
+        static WORDS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// A paragraph of [`WORDS`] words. Presses take turns: one adds two
+    /// words, the next advances a frame.
+    #[component]
+    fn Paragraph() -> impl IntoElement {
+        let pacer = PACER.with_borrow(Rc::clone);
+        let frame = signal(0u64);
+        let source = signal(
+            (0..WORDS.get())
+                .map(|i| VOCABULARY[i % VOCABULARY.len()])
+                .collect::<String>(),
+        );
+        // What was there at first shows at once.
+        pacer.seen.set(source.get_untracked().len());
+        provide_context(MarkdownPlugins::new().with(Fade {
+            pacer: pacer.clone(),
+            frame,
+        }));
+        let added = Cell::new(WORDS.get());
+        let words_next = Cell::new(true);
+        view()
+            .flex_1()
+            .on_press(move || {
+                if words_next.replace(!words_next.get()) {
+                    source.update(|s| {
+                        for _ in 0..2 {
+                            s.push_str(VOCABULARY[added.get() % VOCABULARY.len()]);
+                            added.set(added.get() + 1);
+                        }
+                    });
+                } else {
+                    pacer.now.set(pacer.now.get() + FRAME);
+                    frame.update(|f| *f += 1);
+                }
+            })
+            .child(
+                text_view()
+                    .markdown(move || Some(SharedString::from(source.get())))
+                    .options(MarkdownOptions {
+                        streaming: true,
+                        ..MarkdownOptions::default()
+                    }),
+            )
+    }
+
+    /// What a frame costs on average: two words added, then a frame
+    /// advanced.
+    #[derive(Default, Clone, Copy)]
+    struct Cost {
+        /// Engine time of the words: reading the Markdown and building the
+        /// elements, then the commit.
+        event: Duration,
+        commit: Duration,
+        /// Engine time of the frame.
+        tick: Duration,
+        /// Characters typeset ([`TYPESET`]) for the words, for the frame.
+        typeset_add: usize,
+        typeset_tick: usize,
+        /// Mount items of both.
+        items: usize,
+    }
+
+    impl Cost {
+        fn total(&self) -> Duration {
+            self.event + self.commit + self.tick
+        }
+    }
+
+    /// The average [`Cost`] of `frames` frames of a paragraph of `words`
+    /// words at first, after a second of warming up (the words in flight
+    /// reach their steady count).
+    fn run(words: usize, fading: bool, frames: usize) -> Cost {
+        WORDS.set(words);
+        let pacer = Rc::new(Pacer {
+            fading: Cell::new(fading),
+            last_start: Cell::new(f32::NEG_INFINITY),
+            ..Pacer::default()
+        });
+        PACER.with_borrow_mut(|p| *p = pacer);
+        let mut core = Core::new(ColorsAtDraw, Size::new(px(720.0), px(900.0)));
+        core.mount_root(&Root::new::<Paragraph>(|| ()));
+        let batch = core.commit().expect("the first frame");
+        let host = batch
+            .items
+            .iter()
+            .find_map(|i| match i {
+                MountItem::Insert {
+                    parent: ROOT_ID,
+                    child,
+                    ..
+                } => Some(*child),
+                _ => None,
+            })
+            .expect("the root's host");
+        let mut sum = Cost::default();
+        let warm = 30;
+        for f in 0..warm + frames {
+            let (start, typeset) = (Instant::now(), TYPESET.get());
+            core.component_event(host, EventKind::Press, &EventPayload::None);
+            let event = start.elapsed();
+            let added = core.commit();
+            let commit = start.elapsed() - event;
+            let typeset_add = TYPESET.get() - typeset;
+            let (start, typeset) = (Instant::now(), TYPESET.get());
+            core.component_event(host, EventKind::Press, &EventPayload::None);
+            let ticked = core.commit();
+            let (tick, typeset_tick) = (start.elapsed(), TYPESET.get() - typeset);
+            if f >= warm {
+                sum.event += event;
+                sum.commit += commit;
+                sum.tick += tick;
+                sum.typeset_add += typeset_add;
+                sum.typeset_tick += typeset_tick;
+                sum.items +=
+                    added.map_or(0, |b| b.items.len()) + ticked.map_or(0, |b| b.items.len());
+            }
+        }
+        let n = frames as u32;
+        Cost {
+            event: sum.event / n,
+            commit: sum.commit / n,
+            tick: sum.tick / n,
+            typeset_add: sum.typeset_add / frames,
+            typeset_tick: sum.typeset_tick / frames,
+            items: sum.items / frames,
+        }
+    }
+
+    #[test]
+    fn fading_words_typeset_the_paragraph_only_for_new_words() {
+        let (off, on) = (run(400, false, 20), run(400, true, 20));
+        // A frame only changes colors and hidden runs: the layout stands.
+        assert_eq!(on.typeset_tick, 0);
+        // New words typeset the paragraph once, as without fading.
+        assert_eq!(on.typeset_add, off.typeset_add);
+        // The frame mounts the text again, with the layout drawn.
+        assert_eq!(on.items, off.items + 1);
+    }
+
+    /// `cargo test --release -p nsh-base --test base bench_word_fade -- --ignored --nocapture`;
+    /// the numbers are in `docs/dev/performance.md`. Medians of three
+    /// rounds, fading off and on in turn.
+    #[test]
+    #[ignore]
+    fn bench_word_fade() {
+        let frames = 90;
+        let us = |d: Duration| d.as_secs_f64() * 1e6;
+        println!(
+            "words | fade | words: event + commit µs (chars typeset) | frame µs (chars typeset) | items | extra µs"
+        );
+        for words in [200, 800, 1600, 3200] {
+            let mut rounds: Vec<(Cost, Cost)> = (0..3)
+                .map(|_| (run(words, false, frames), run(words, true, frames)))
+                .collect();
+            rounds.sort_by_key(|(off, on)| on.total().saturating_sub(off.total()));
+            let (off, on) = rounds[1];
+            for (name, c) in [("off", off), ("on", on)] {
+                print!(
+                    "{words:>5} | {name:>4} | {:>7.1} + {:>6.1} ({:>6}) | {:>6.1} ({:>5}) | {:>5}",
+                    us(c.event),
+                    us(c.commit),
+                    c.typeset_add,
+                    us(c.tick),
+                    c.typeset_tick,
+                    c.items
+                );
+                match name {
+                    "on" => println!(" | {:>+6.1}", us(on.total()) - us(off.total())),
+                    _ => println!(" |"),
+                }
+            }
+        }
+    }
+}
+
+const TASKS: &str = "- [ ] first\n- [x] second\n  - [ ] nested\n\n<details>\n<summary>More</summary>\n\n\
+                     - [x] hidden\n\n</details>\n\n> - [ ] last";
+
+/// Task items at the top, nested, in a closed disclosure and in a quote
+/// after it; what their boxes' presses reported.
+#[component]
+fn PressableTasks() -> impl IntoElement {
+    let pressed = signal(Vec::<String>::new());
+    view()
+        .child(
+            text_view()
+                .markdown(TASKS)
+                .on_task_press(move |e: &TextViewTaskPressEvent| {
+                    let report = format!("{}:{}", e.index, e.checked);
+                    pressed.update(|p| p.push(report));
+                }),
+        )
+        .child(text(move || {
+            format!("Pressed: {}", pressed.get().join(" "))
+        }))
+}
+
+#[test]
+fn a_pressed_task_box_reports_its_place_in_the_document_and_the_state_asked_for() {
+    let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root::<
+        PressableTasks,
+    >()))
+    .unwrap();
+    app.wait_for("first").unwrap();
+    app.press("label:second").unwrap();
+    app.press("label:nested").unwrap();
+    // The closed disclosure's task keeps its place before the one after it.
+    app.press("label:last").unwrap();
+    app.wait_for("Pressed: 1:false 2:true 4:true").unwrap();
+    // Opened, closed and opened again, its task is counted from the same place.
+    app.press("More").unwrap();
+    app.press("label:hidden").unwrap();
+    app.press("More").unwrap();
+    app.press("More").unwrap();
+    app.press("label:hidden").unwrap();
+    app.press("label:first").unwrap();
+    app.wait_for("Pressed: 1:false 2:true 4:true 3:false 3:false 0:true")
+        .unwrap();
+}
+
+/// A numbered list with a bulleted one nested in its second item.
+#[component]
+fn NestedLists() -> impl IntoElement {
+    view().child(text_view().markdown("1. one\n2. two\n   - nested\n3. three"))
+}
+
+#[test]
+fn a_lists_markers_come_before_their_items_in_tree_order() {
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<NestedLists>(),
+    ))
+    .unwrap();
+    app.wait_for("three").unwrap();
+    // Screen readers and tree traversal still see each marker before its
+    // item's text and nested list, even though markers stay out of text
+    // selection (`userSelect: "none"`).
+    assert_eq!(
+        app.screen().texts(),
+        ["1.", "one", "2.", "two", "◦", "nested", "3.", "three"]
+    );
+}
+
+const REPRO_LIST_QUOTE: &str = "\
+- **不想辩论、礼貌结束话题版：**
+
+  > “每个人对安全感的定义不一样，你觉得岗位不动才稳，我觉得自己一直在涨本事才稳。”
+";
+
+#[component]
+fn ReproListQuote() -> impl IntoElement {
+    use nsh_base::{TextSelectionFormat, TextSelectionOptions, TextView, TextViewApi};
+    let doc_ref = component_ref::<TextView>();
+    let selected = signal(String::new());
+    let markdown = signal(String::new());
+    view()
+        .flex_col()
+        .p(px(16.0))
+        .gap(px(12.0))
+        .child(
+            text_view()
+                .component_ref(&doc_ref)
+                .selectable(true)
+                .markdown(REPRO_LIST_QUOTE)
+                .on_selection_change(move |e: &nsh_base::TextViewSelectionEvent| {
+                    selected.set(e.text.to_string());
+                    let md = doc_ref
+                        .api::<TextViewApi>()
+                        .map(|r| {
+                            r.selected_text(Some(TextSelectionOptions::format(
+                                TextSelectionFormat::Markdown,
+                            )))
+                        })
+                        .unwrap_or_default();
+                    markdown.set(md);
+                }),
+        )
+        .child(text(move || format!("Selected: {}", selected.get())))
+        .child(text(move || format!("Markdown: {}", markdown.get())))
+}
+
+#[test]
+fn list_item_blockquote_overshoot_drag_does_not_select_marker() {
+    let mut config = EngineConfig::new(nsh_testing::windowed_root::<ReproListQuote>());
+    config.environment.os = Os::MacOs;
+    config.environment.idiom = Idiom::Desktop;
+    // Wide enough for the blockquote to lay out on one line so `center()` lands
+    // in the middle of the quote and dragging `(+200, +40)` overshoots both its
+    // right and bottom edges.
+    config.viewport = Size::new(px(640.0), px(480.0));
+    let mut app = Headless::start(config).unwrap();
+    let quote = "“每个人对安全感的定义不一样，你觉得岗位不动才稳，我觉得自己一直在涨本事才稳。”";
+    app.wait_for(quote).unwrap();
+    // Tree/reading order puts the bullet before its item's paragraphs.
+    let doc_texts: Vec<&str> = app
+        .screen()
+        .texts()
+        .into_iter()
+        .take_while(|t| !t.starts_with("Selected:"))
+        .collect();
+    assert_eq!(doc_texts, ["•", "不想辩论、礼貌结束话题版：", quote]);
+    // Dragging inside the blockquote and slightly past its bottom/right must
+    // select only the blockquote text, never the bullet marker at top-left.
+    app.drag(
+        &format!("text:{quote}"),
+        point(px(220.0), px(40.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
+    let chosen = app
+        .screen()
+        .texts()
+        .into_iter()
+        .find_map(|t| t.strip_prefix("Selected: "))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!chosen.is_empty(), "expected a non-empty selection");
+    assert!(
+        !chosen.contains('•'),
+        "list marker leaked into selection: {chosen:?}"
+    );
+    assert!(
+        quote.contains(&chosen),
+        "selection should stay inside the blockquote: {chosen:?}"
+    );
+    let md = app
+        .screen()
+        .texts()
+        .into_iter()
+        .find_map(|t| t.strip_prefix("Markdown: "))
+        .unwrap_or_default()
+        .to_owned();
+    // The selection's Markdown is the quote's line under its list item, not
+    // escaped plain text.
+    assert_eq!(md, format!("- > {chosen}"));
+}
+
+const KITCHEN_SINK: &str = "\
+# Heading
+
+- Bullet one
+  - Nested bullet
+- Bullet two
+
+1. First ordered
+2. Second ordered
+
+- [x] Done task
+- [ ] Open task
+
+> [!NOTE]
+> Alert body
+
+<details open>
+<summary>Toggle summary</summary>
+
+Details body
+
+</details>
+
+```rs
+let x = 1;
+```
+
+| ColA | ColB |
+| --- | --- |
+| Val1 | Val2 |
+
+Ref[^1]
+
+[^1]: Footnote body
+";
+
+#[component]
+fn KitchenSinkSelectable() -> impl IntoElement {
+    use nsh_base::{
+        TextSelectionFormat, TextSelectionOptions, TextView, TextViewApi, TextViewCodeAction,
+    };
+    let doc_ref = component_ref::<TextView>();
+    let selected = signal(String::new());
+    let markdown = signal(String::new());
+    let html = signal(String::new());
+    view()
+        .flex_col()
+        .p(px(16.0))
+        .gap(px(8.0))
+        .child(
+            text_view()
+                .component_ref(&doc_ref)
+                .selectable(true)
+                .markdown(KITCHEN_SINK)
+                .code_block_actions(vec![
+                    TextViewCodeAction::new("copy").with_label("Copy code"),
+                    TextViewCodeAction::new("run").with_label("Run code"),
+                ])
+                .render_table_actions(|_| text("TableAction"))
+                .on_selection_change(move |e: &nsh_base::TextViewSelectionEvent| {
+                    selected.set(e.text.to_string());
+                    if let Some(r) = doc_ref.api::<TextViewApi>() {
+                        markdown.set(r.selected_text(Some(TextSelectionOptions::format(
+                            TextSelectionFormat::Markdown,
+                        ))));
+                        html.set(r.selected_text(Some(TextSelectionOptions::format(
+                            TextSelectionFormat::Html,
+                        ))));
+                    }
+                }),
+        )
+        .child(text(move || format!("Selected: {}", selected.get())))
+        .child(text(move || format!("Markdown: {}", markdown.get())))
+        .child(text(move || format!("Html: {}", html.get())))
+}
+
+/// A text under a batch's selectable view: its content, its `userSelect`
+/// and its top in the view's points.
+struct AreaText {
+    text: String,
+    selectable: Option<bool>,
+    top: Points,
+}
+
+/// The texts under the selectable view of a first mount batch, in tree
+/// order, rebuilt from its `Insert`, `ViewProps`, `Text` and `Frame` items.
+fn selectable_area_texts(items: &[MountItem]) -> Vec<AreaText> {
+    use std::collections::HashMap;
+
+    use nsh_core::{AttributedText, NodeId};
+
+    let mut texts: HashMap<NodeId, &Arc<AttributedText>> = HashMap::new();
+    let mut frames: HashMap<NodeId, Bounds<Points>> = HashMap::new();
+    let mut children: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+    let mut area = None;
+    for item in items {
+        match item {
+            MountItem::Insert {
+                parent,
+                child,
+                before,
+            } => {
+                let kids = children.entry(*parent).or_default();
+                match before.and_then(|b| kids.iter().position(|&id| id == b)) {
+                    Some(at) => kids.insert(at, *child),
+                    None => kids.push(*child),
+                }
+            }
+            MountItem::ViewProps { id, props } if props.selectable_view => area = Some(*id),
+            MountItem::Text { id, text, .. } => {
+                texts.insert(*id, text);
+            }
+            MountItem::Frame { id, frame } => {
+                frames.insert(*id, *frame);
+            }
+            _ => {}
+        }
+    }
+    let area = area.expect("a selectable view");
+    let mut out = Vec::new();
+    let mut stack = vec![(area, Points::ZERO)];
+    while let Some((id, parent_top)) = stack.pop() {
+        let top = match id == area {
+            true => Points::ZERO,
+            false => parent_top + frames.get(&id).copied().unwrap_or_default().origin.y,
+        };
+        if let Some(t) = texts.get(&id) {
+            out.push(AreaText {
+                text: t.text.clone(),
+                selectable: t.selectable,
+                top,
+            });
+        }
+        if let Some(kids) = children.get(&id) {
+            stack.extend(kids.iter().rev().map(|&kid| (kid, top)));
+        }
+    }
+    out
+}
+
+/// Architectural invariant: every generated chrome/marker node in `TextView`
+/// carries `userSelect: "none"`, every selectable content node is in
+/// non-decreasing visual `top` order, and real drags across lists/tasks/
+/// alerts/code/footnotes produce clean text and structured Markdown/HTML.
+#[test]
+fn selectable_text_view_excludes_all_generated_chrome_and_keeps_visual_order() {
+    let mut config = EngineConfig::new(nsh_testing::windowed_root::<KitchenSinkSelectable>());
+    config.environment.os = Os::MacOs;
+    config.environment.idiom = Idiom::Desktop;
+    let mut app = Headless::start(config).unwrap();
+    app.wait_for("Footnote body").unwrap();
+
+    // The mounted tree and frames, straight from `Core`.
+    let mut core =
+        nsh_core::Core::new(nsh_core::ApproxTextEngine, Size::new(px(640.0), px(2000.0)));
+    core.mount_root(&nsh_core::element::Root::of::<KitchenSinkSelectable>());
+    let batch = core.commit().expect("initial batch");
+    let all_texts: Vec<(String, Option<bool>, Points)> = selectable_area_texts(&batch.items)
+        .into_iter()
+        .map(|t| (t.text, t.selectable, t.top))
+        .collect();
+
+    // 1. Every chrome/marker text MUST be excluded (`selectable == Some(false)`).
+    for chrome in [
+        "•",
+        "◦",
+        "1.",
+        "2.",
+        "✓",
+        "i",
+        "▾ ",
+        "Run code",
+        "TableAction",
+    ] {
+        let matches: Vec<_> = all_texts.iter().filter(|(t, _, _)| t == chrome).collect();
+        assert!(
+            !matches.is_empty(),
+            "expected chrome text {chrome:?} in {all_texts:?}"
+        );
+        for (t, sel, _) in matches {
+            assert_eq!(
+                *sel,
+                Some(false),
+                "chrome text {t:?} must have userSelect: none"
+            );
+        }
+    }
+
+    // 2. Every selectable text MUST appear in non-decreasing visual `top` order
+    // (no out-of-flow/absolute selectable element placed after lower content).
+    let selectable_texts: Vec<&(String, Option<bool>, Points)> = all_texts
+        .iter()
+        .filter(|(_, sel, _)| *sel != Some(false))
+        .collect();
+    for pair in selectable_texts.windows(2) {
+        assert!(
+            pair[0].2 <= pair[1].2,
+            "selectable texts out of visual order: {:?} (y={}) before {:?} (y={})",
+            pair[0].0,
+            pair[0].2.0,
+            pair[1].0,
+            pair[1].2.0
+        );
+    }
+
+    // 3. The selectable texts' content matches the document's content alone.
+    let selectable_strings: Vec<&str> = selectable_texts
+        .iter()
+        .map(|(t, _, _)| t.as_str())
+        .collect();
+    assert_eq!(
+        selectable_strings,
+        [
+            "Heading",
+            "Bullet one",
+            "Nested bullet",
+            "Bullet two",
+            "First ordered",
+            "Second ordered",
+            "Done task",
+            "Open task",
+            "Alert body",
+            "Toggle summary",
+            "Details body",
+            "let x = 1;",
+            "ColA",
+            "ColB",
+            "Val1",
+            "Val2",
+            "Ref1",
+            "Footnote body",
+        ]
+    );
+
+    // 4. Dragging across list items reports clean plain text AND valid
+    // structured Markdown/HTML (not escaped plain text fallback).
+    app.drag(
+        "text:Bullet one",
+        point(px(0.0), px(65.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
+    let sel = app
+        .screen()
+        .texts()
+        .into_iter()
+        .find_map(|t| t.strip_prefix("Selected: "))
+        .unwrap_or_default()
+        .to_owned();
+    // Whole list items copy with their markers (#3284); markers never
+    // leak as tabs or mid-line fragments.
+    assert!(!sel.contains('\t'), "got {sel:?}");
+    assert!(
+        sel.lines().all(|l| !(l.contains('•') || l.contains('◦'))
+            || l.starts_with('•')
+            || l.starts_with('◦')),
+        "got {sel:?}"
+    );
+    let md = app
+        .screen()
+        .texts()
+        .into_iter()
+        .find_map(|t| t.strip_prefix("Markdown: "))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(md.contains("- "), "expected Markdown list, got {md:?}");
+    let html = app
+        .screen()
+        .texts()
+        .into_iter()
+        .find_map(|t| t.strip_prefix("Html: "))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        html.contains("<ul><li>"),
+        "expected HTML list, got {html:?}"
+    );
+
+    // 5. Dragging past the bottom of a code block with floating text actions
+    // must never select the floating "Run code" button text.
+    app.drag(
+        "text:let x = 1;",
+        point(px(120.0), px(20.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
+    let code_sel = app
+        .screen()
+        .texts()
+        .into_iter()
+        .find_map(|t| t.strip_prefix("Selected: "))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        !code_sel.contains("Run code"),
+        "floating code action leaked into code selection: {code_sel:?}"
+    );
+}
+
+#[component]
+fn OverriddenMarker() -> impl IntoElement {
+    let classes = TextViewClasses {
+        list_marker: Some("select-text".into()),
+        ..TextViewClasses::default()
+    };
+    text_view()
+        .selectable(true)
+        .classes(classes)
+        .markdown("- Item")
+}
+
+#[test]
+fn app_part_classes_can_still_override_marker_user_select() {
+    let mut core = nsh_core::Core::new(nsh_core::ApproxTextEngine, Size::new(px(400.0), px(200.0)));
+    core.mount_root(&nsh_core::element::Root::of::<OverriddenMarker>());
+    let batch = core.commit().expect("initial batch");
+    let marker = batch.items.iter().find_map(|item| match item {
+        MountItem::Text { text, .. } if text.text == "•" => Some(text.selectable),
+        _ => None,
+    });
+    assert_eq!(marker, Some(Some(true)));
+}
+
+#[component]
+fn TerminalChromeDoc() -> impl IntoElement {
+    text_view()
+        .selectable(true)
+        .markdown("# Title\n\n- Bullet\n- [x] Done\n\n> Quoted\n\n> [!TIP]\n> Tip\n\n```rs\nfn a() {}\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |")
+}
+
+#[test]
+fn terminal_text_view_excludes_decorative_chrome_from_selection() {
+    let mut core = nsh_core::Core::new(nsh_core::ApproxTextEngine, Size::new(px(480.0), px(600.0)));
+    let env = nsh_core::element::Environment {
+        idiom: Idiom::Terminal,
+        ..Default::default()
+    };
+    core.set_environment(env);
+    core.mount_root(&nsh_core::element::Root::of::<TerminalChromeDoc>());
+    let batch = core.commit().expect("initial batch");
+    let selectable: Vec<String> = selectable_area_texts(&batch.items)
+        .into_iter()
+        .filter(|t| t.selectable != Some(false))
+        .map(|t| t.text)
+        .collect();
+    assert_eq!(
+        selectable,
+        [
+            "Title",
+            "Bullet",
+            "Done",
+            "Quoted",
+            "Tip",
+            "fn a() {}",
+            "A",
+            "B",
+            "1",
+            "2"
+        ]
+    );
+}
+
+mod large_document {
+    //! A long Markdown document opened at once in a scroll view: reading
+    //! it, and mounting its blocks, each a row of the same parent.
+
+    use std::{
+        cell::RefCell,
+        time::{Duration, Instant},
+    };
+
+    use nsh_base::{
+        text_view,
+        text_view::{Document, Parser},
+    };
+    use nsh_core::{ApproxTextEngine, Core, Size, element::Root, prelude::*};
+
+    thread_local! {
+        static SOURCE: RefCell<Option<String>> = const { RefCell::new(None) };
+        static DOCUMENT: RefCell<Option<Document>> = const { RefCell::new(None) };
+    }
+
+    /// [`SOURCE`] read by the view, or [`DOCUMENT`] read before.
+    #[component]
+    fn Opened() -> impl IntoElement {
+        let view = match SOURCE.take() {
+            Some(source) => text_view().markdown(SharedString::from(source)),
+            None => text_view().document(DOCUMENT.take().expect("a document")),
+        };
+        scroll().size_full().child(view)
+    }
+
+    /// Sections of a heading, a paragraph with bold words and a link, and
+    /// a list of two items, about 50 bytes a block.
+    fn document(bytes: usize) -> String {
+        let mut text = String::with_capacity(bytes + 200);
+        let mut n = 0;
+        while text.len() < bytes {
+            n += 1;
+            text.push_str(&format!(
+                "## Section {n}\n\nSome **bold** text and a [link](https://example.com/{n}), with a few more words in each paragraph.\n\n- the first item of the list\n- the second item\n\n"
+            ));
+        }
+        text
+    }
+
+    fn mount(culling: bool) -> (Duration, usize) {
+        let mut core = Core::new(ApproxTextEngine, Size::new(px(390.0), px(844.0)));
+        core.set_content_culling(culling);
+        let start = Instant::now();
+        core.mount_root(&Root::new::<Opened>(|| ()));
+        let mut items = 0;
+        // What waits for later turns is made too, as a test driver has it.
+        for _ in 0..if culling { 1 } else { 8 } {
+            match core.commit() {
+                Some(batch) => items += batch.items.len(),
+                None => break,
+            }
+        }
+        (start.elapsed(), items)
+    }
+
+    /// `cargo test --release -p nsh-base --test base bench_large_document
+    /// -- --ignored --nocapture`; the numbers are in `docs/dev/performance.md`.
+    #[test]
+    #[ignore]
+    fn bench_large_document() {
+        let ms = |d: Duration| d.as_secs_f64() * 1e3;
+        println!("ms to read | ms to mount the read document, culling on / off | both, culling on");
+        for kb in [190, 475, 950, 1_900] {
+            let source = document(kb * 1_000);
+            let start = Instant::now();
+            let document = Parser::new().markdown(&source);
+            let read = start.elapsed();
+            let blocks = document.blocks.len();
+            let mut shown = Vec::new();
+            for culling in [true, false] {
+                DOCUMENT.set(Some(document.clone()));
+                shown.push(mount(culling));
+            }
+            SOURCE.set(Some(source));
+            let both = mount(true);
+            println!(
+                "{kb:>5} KB {blocks:>6} blocks | {:>8.1} | {:>8.1} ({} items) / {:>8.1} ({} items) | {:>8.1}",
+                ms(read),
+                ms(shown[0].0),
+                shown[0].1,
+                ms(shown[1].0),
+                shown[1].1,
+                ms(both.0),
+            );
+        }
+    }
+}
+
+/// Headings whose parts have typed styles (`StyleRefinement`, as a Rust
+/// app types them): every heading's, then its level's over it.
+#[component]
+fn TypedHeadings() -> impl IntoElement {
+    use nsh_base::text_view::PartStyle;
+    use nsh_core::element::StyleRefinement;
+
+    let color = |c: u32| PartStyle(StyleRefinement::default().text_color(rgb(c)).into());
+    let styles = TextViewStyles {
+        heading: Some(color(0xff0000)),
+        heading1: Some(color(0x0000ff)),
+        ..Default::default()
+    };
+    text_view().markdown("# Big\n\n## Small").styles(styles)
+}
+
+#[test]
+fn typed_part_styles_reach_headings_in_order() {
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<TypedHeadings>(),
+    ))
+    .unwrap();
+    app.wait_for("Small").unwrap();
+    let color = |selector: &str| app.screen().span_style(selector).unwrap().color;
+    assert_eq!(color("text:Big"), Color(0x0000_ffff));
+    assert_eq!(color("text:Small"), Color(0xff00_00ff));
+}
+
+/// A quote whose part has a typed style (`StyleRefinement`, as a Rust app
+/// types it) or the same in declarations: either wins over the color the
+/// view gives quotes, which follows the theme.
+#[derive(Clone, PartialEq, Props)]
+struct QuoteProps {
+    typed: bool,
+}
+
+#[component]
+fn StyledQuote(props: QuoteProps) -> impl IntoElement {
+    use nsh_base::text_view::PartStyle;
+    use nsh_core::element::StyleRefinement;
+
+    let red = rgb(0xff0000);
+    let style = if props.typed {
+        StyleRefinement::default().text_color(red).into()
+    } else {
+        Style::default().with(
+            StyleKey::Color,
+            nsh_core::PropertyValue::Color(Some(red.into())),
+        )
+    };
+    let styles = TextViewStyles {
+        blockquote: Some(PartStyle(style)),
+        ..Default::default()
+    };
+    text_view().markdown("> quoted").styles(styles)
+}
+
+#[test]
+fn a_quotes_typed_part_style_wins_over_its_theme_color() {
+    for typed in [false, true] {
+        let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root_with::<
+            StyledQuote,
+        >(move || QuoteProps { typed })))
+        .unwrap();
+        app.wait_for("quoted").unwrap();
+        assert_eq!(
+            app.screen().span_style("text:quoted").unwrap().color,
+            Color(0xff00_00ff),
+            "typed: {typed}"
+        );
+    }
+}
+
+/// `ParseContext::conversion_id`: one id for every callback of a
+/// conversion, another for each conversion.
+mod conversion_ids {
+    use std::{
+        cell::{Cell, RefCell},
+        collections::{BTreeMap, HashMap, HashSet},
+        rc::Rc,
+        sync::{Arc, Mutex},
+    };
+
+    use nsh_base::{
+        MarkdownExtension, MarkdownPlugin, MarkdownPlugins,
+        text_view::{
+            Block, ConversionId, CustomNode, Inline, ParseContext, Parser, mdast::Node, text_view,
+        },
+    };
+    use nsh_core::prelude::*;
+    use nsh_engine::EngineConfig;
+    use nsh_testing::Headless;
+
+    /// The callbacks a plugin saw: the node's source and the conversion.
+    type Seen = Arc<Mutex<Vec<(String, ConversionId)>>>;
+
+    /// Notes every node offered; reads a quote's blocks itself, and an
+    /// inline code's text with a parser of its own (a conversion inside a
+    /// callback).
+    struct Note(Seen);
+
+    impl Note {
+        fn note(&self, node: &Node, cx: &ParseContext<'_>) {
+            let source = cx.node_source(node).unwrap_or_default().to_owned();
+            self.0.lock().unwrap().push((source, cx.conversion_id()));
+        }
+    }
+
+    impl MarkdownPlugin for Note {
+        fn name(&self) -> &str {
+            "note-conversions"
+        }
+
+        fn block(&self, node: &Node, cx: &mut ParseContext<'_>) -> Option<Block> {
+            self.note(node, cx);
+            let Node::Blockquote(quote) = node else {
+                return None;
+            };
+            let children = cx.blocks(&quote.children);
+            Some(Block::Custom(
+                CustomNode::new("quote").with_children(children),
+            ))
+        }
+
+        fn inline(&self, node: &Node, cx: &mut ParseContext<'_>) -> Option<Inline> {
+            self.note(node, cx);
+            let Node::InlineCode(code) = node else {
+                return None;
+            };
+            let inner = Parser::new()
+                .plugin(Note(self.0.clone()))
+                .markdown(&code.value);
+            Some(Inline::Custom(
+                CustomNode::new("nested").with_children(inner.blocks),
+            ))
+        }
+    }
+
+    const SOURCE: &str = "Intro **bold**[^a].\n\n:::note\n\nInside *it*.\n\n:::\n\n> Quoted _text_.\n\n- An item\n\n[^a]: A *footnote*.\n";
+
+    fn parser(seen: &Seen) -> Parser {
+        Parser::new()
+            .extension(MarkdownExtension::container("note", "note"))
+            .plugin(Note(seen.clone()))
+    }
+
+    /// The ids of `seen`, each with the sources it saw, in order.
+    fn by_id(seen: &Seen) -> BTreeMap<String, Vec<String>> {
+        let mut out = BTreeMap::<String, Vec<String>>::new();
+        for (source, id) in seen.lock().unwrap().iter() {
+            out.entry(format!("{id:?}"))
+                .or_default()
+                .push(source.clone());
+        }
+        out
+    }
+
+    #[test]
+    fn every_callback_of_a_conversion_has_its_id() {
+        let seen = Seen::default();
+        parser(&seen).markdown(SOURCE);
+        let seen = seen.lock().unwrap();
+        let first = seen[0].1;
+        assert!(seen.iter().all(|(_, id)| *id == first), "{seen:#?}");
+        // Inside a container, in a quote's blocks the plugin read, in a
+        // footnote.
+        for part in ["*it*", "_text_", "*footnote*", "An item"] {
+            assert!(seen.iter().any(|(s, _)| s == part), "{part}: {seen:#?}");
+        }
+    }
+
+    #[test]
+    fn each_conversion_has_an_id_of_its_own() {
+        let seen = Seen::default();
+        let parser = parser(&seen);
+        // The same source, at the same address.
+        parser.markdown(SOURCE);
+        let count = seen.lock().unwrap().len();
+        parser.markdown(SOURCE);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2 * count);
+        assert_ne!(seen[0].1, seen[count].1);
+        assert!(seen[..count].iter().all(|(_, id)| *id == seen[0].1));
+        assert!(seen[count..].iter().all(|(_, id)| *id == seen[count].1));
+    }
+
+    #[test]
+    fn a_conversion_inside_a_callback_has_its_own_id() {
+        let seen = Seen::default();
+        parser(&seen).markdown("Before `**inner**` after *outer*.");
+        let seen = seen.lock().unwrap();
+        let outer = seen[0].1;
+        // The paragraph and the strong text of the inline code's text.
+        let inner: Vec<_> = seen.iter().filter(|(s, _)| s == "**inner**").collect();
+        assert_eq!(inner.len(), 2, "{seen:#?}");
+        assert_ne!(inner[0].1, outer);
+        assert_eq!(inner[0].1, inner[1].1);
+        // The outer conversion goes on with its id.
+        let after = seen.iter().find(|(s, _)| s == "*outer*").unwrap();
+        assert_eq!(after.1, outer);
+    }
+
+    #[test]
+    fn a_long_text_read_in_parts_is_one_conversion() {
+        let seen = Seen::default();
+        // Long enough to be read a part at a time; no container or
+        // definition, which have it read whole.
+        let long = "A paragraph with *emphasis*.\n\n".repeat(4000);
+        Parser::new().plugin(Note(seen.clone())).markdown(&long);
+        let ids = by_id(&seen);
+        assert_eq!(ids.len(), 1);
+        let seen = ids.values().next().unwrap();
+        assert_eq!(seen.iter().filter(|s| *s == "*emphasis*").count(), 4000);
+    }
+
+    /// The plugin of the user docs: abbreviations (`*[HTML]: HyperText
+    /// Markup Language` lines anywhere in the text) worked out once per
+    /// conversion, consulted for every text node.
+    type Terms = Rc<HashMap<String, String>>;
+
+    #[derive(Default)]
+    struct Abbreviations {
+        last: RefCell<Option<(ConversionId, Terms)>>,
+        /// How many times the source was read for them.
+        reads: Rc<Cell<usize>>,
+    }
+
+    impl Abbreviations {
+        fn of(&self, cx: &ParseContext<'_>) -> Terms {
+            let mut last = self.last.borrow_mut();
+            if let Some((id, terms)) = &*last
+                && *id == cx.conversion_id()
+            {
+                return terms.clone();
+            }
+            self.reads.set(self.reads.get() + 1);
+            let terms: Terms = Rc::new(
+                cx.source()
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("*[")?.split_once("]: "))
+                    .map(|(term, title)| (term.to_owned(), title.to_owned()))
+                    .collect(),
+            );
+            *last = Some((cx.conversion_id(), terms.clone()));
+            terms
+        }
+    }
+
+    impl MarkdownPlugin for Abbreviations {
+        fn name(&self) -> &str {
+            "abbreviations"
+        }
+
+        /// The lines that define them are not shown.
+        fn block(&self, node: &Node, cx: &mut ParseContext<'_>) -> Option<Block> {
+            let source = cx.node_source(node)?;
+            (matches!(node, Node::Paragraph(_)) && source.lines().all(|l| l.starts_with("*[")))
+                .then(|| Block::Custom(CustomNode::new("abbreviations")))
+        }
+
+        /// A text that is an abbreviation is one, with its title.
+        fn inline(&self, node: &Node, cx: &mut ParseContext<'_>) -> Option<Inline> {
+            let Node::Text(text) = node else {
+                return None;
+            };
+            let terms = self.of(cx);
+            let title = terms.get(text.value.trim())?;
+            Some(Inline::Custom(
+                CustomNode::new("abbr")
+                    .with_text(text.value.clone())
+                    .with_attribute("title", title.clone()),
+            ))
+        }
+    }
+
+    #[test]
+    fn a_plugin_works_out_the_source_once_per_conversion() {
+        let plugin = Abbreviations::default();
+        let reads = plugin.reads.clone();
+        let parser = Parser::new().plugin(plugin);
+        let source = "*HTML* and *CSS*, then *HTML* again.\n\n- *CSS*\n- *JS*\n\n*[HTML]: HyperText Markup Language\n*[CSS]: Cascading Style Sheets\n";
+        let document = parser.markdown(source);
+        assert_eq!(reads.get(), 1);
+        let abbrs = format!("{document:?}").matches("\"abbr\"").count();
+        assert_eq!(abbrs, 4);
+        // The same text again, and another: read again each time, never
+        // with what an earlier conversion found.
+        parser.markdown(source);
+        assert_eq!(reads.get(), 2);
+        let other = parser.markdown("*HTML*\n\n*[HTML]: Hypertext\n");
+        assert_eq!(reads.get(), 3);
+        assert!(format!("{other:?}").contains("Hypertext"));
+        assert!(!format!("{other:?}").contains("HyperText Markup"));
+    }
+
+    static SHARED: Mutex<Option<Seen>> = Mutex::new(None);
+
+    /// Two views of the same text, given at the same address, sharing a
+    /// plugin.
+    #[component]
+    fn TwoViews() -> impl IntoElement {
+        let seen = SHARED.lock().unwrap().clone().unwrap();
+        provide_context(MarkdownPlugins::new().with(Note(seen)));
+        view()
+            .child(text_view().markdown("Shared *text*."))
+            .child(text_view().markdown("Shared *text*."))
+    }
+
+    #[test]
+    fn views_sharing_a_plugin_read_in_conversions_of_their_own() {
+        let seen = Seen::default();
+        *SHARED.lock().unwrap() = Some(seen.clone());
+        let mut app =
+            Headless::start(EngineConfig::new(nsh_testing::windowed_root::<TwoViews>())).unwrap();
+        app.wait_for("Shared text.").unwrap();
+        // One conversion saw one view's nodes only.
+        let one = {
+            let seen = Seen::default();
+            Parser::new()
+                .plugin(Note(seen.clone()))
+                .markdown("Shared *text*.");
+            seen.lock()
+                .unwrap()
+                .iter()
+                .map(|(s, _)| s.clone())
+                .collect::<Vec<_>>()
+        };
+        let ids = by_id(&seen);
+        assert!(ids.len() >= 2, "{ids:#?}");
+        assert!(ids.values().all(|s| *s == one), "{ids:#?}");
+        let distinct: HashSet<_> = ids.keys().collect();
+        assert_eq!(distinct.len(), ids.len());
+    }
 }

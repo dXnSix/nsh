@@ -148,6 +148,14 @@ impl Animator {
         self.graph.tick(now, &mut self.finished)
     }
 
+    /// [`Animator::tick`] for a display frame ([`Graph::tick_frame`]): an
+    /// animation whose first step was followed by a long hold of the UI
+    /// thread counts from this frame. Deadline ticks without frames use
+    /// [`Animator::tick`].
+    pub fn tick_frame(&mut self, now: f64) -> bool {
+        self.graph.tick_frame(now, &mut self.finished)
+    }
+
     /// The scroll views whose sticky cells stick an animated value further
     /// from the viewport's start: pin them again after writing a frame.
     pub fn sticky_views(&self) -> &[u32] {
@@ -503,8 +511,8 @@ mod tests {
         a.apply(&MountItem::Animation(AnimationOp::CreateDiffClamp {
             node: 3,
             input: 2,
-            min: 0.0,
-            max: 50.0,
+            min: crate::animation::Operand::Const(0.0),
+            max: crate::animation::Operand::Const(50.0),
             snap: true,
         }));
         a.apply(&MountItem::ScrollConfig {

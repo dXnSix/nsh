@@ -11,6 +11,51 @@ demo: el-date-picker
 
 日历负责行为：值（应用的，或它自己的）、显示的月份、视图、不能选的日期、键盘，以及屏幕阅读器听到的内容。外观由应用决定：应用为头部、主体、每个月、每一行和每个条目设置样式，并绘制条目的内容（月份和星期的名称、今天的标记、范围的色带）。日历的网格像表格的列一样填满给它的宽度：几个月平分它，一行里的条目平分这一行，所以手机底部面板里的日历横跨整个屏幕，而按内容定宽的弹出层里的日历保持条目自身的宽度（在 `itemClass` 或 `monthClass` 里写 `flex-none` 可让条目或月份保持自身宽度）。
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { Calendar, type CalendarValue } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+function App() {
+  const due = signal<CalendarValue>(null);
+  return (
+    <Calendar
+      value={due()}
+      onChange={({ value }) => due.set(value)}
+      disabledMatcher={[0, 6]}
+      previousAccessibilityLabel="Previous month"
+      nextAccessibilityLabel="Next month"
+      class="w-72 gap-2 rounded-lg border border-border p-3"
+      headerClass="flex-row items-center justify-between"
+      rowClass="flex-row justify-between"
+      itemClass="group h-8 min-w-8 items-center justify-center rounded-md text-sm focus-visible:ring-2 focus-visible:ring-ring selected:bg-primary selected:text-primary-foreground data-range-middle:rounded-none data-range-middle:bg-accent data-range-middle:text-accent-foreground data-outside:text-muted-foreground disabled:opacity-50"
+      renderItem={(item) => (
+        <Text class={item.today ? "font-semibold" : ""}>
+          {item.kind === "weekday"
+            ? WEEKDAYS[item.value]
+            : item.kind === "month" || item.kind === "monthToggle"
+              ? MONTHS[item.value - 1]
+              : item.kind === "previous"
+                ? "‹"
+                : item.kind === "next"
+                  ? "›"
+                  : String(item.value)}
+        </Text>
+      )}
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{CalendarEntry, CalendarItemKind, Date, Matcher, calendar};
 use nsh_core::prelude::*;
@@ -48,46 +93,6 @@ fn due_date() -> impl IntoElement {
                 .child(text(label).text_sm())
         })
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { Calendar, type CalendarValue } from "nsh/base";
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
-
-function App() {
-  const due = signal<CalendarValue>(null);
-  return (
-    <Calendar
-      value={due()}
-      onChange={({ value }) => due.set(value)}
-      disabledMatcher={[0, 6]}
-      previousAccessibilityLabel="Previous month"
-      nextAccessibilityLabel="Next month"
-      class="w-72 gap-2 rounded-lg border border-border p-3"
-      headerClass="flex-row items-center justify-between"
-      rowClass="flex-row justify-between"
-      itemClass="group h-8 min-w-8 items-center justify-center rounded-md text-sm focus-visible:ring-2 focus-visible:ring-ring selected:bg-primary selected:text-primary-foreground data-range-middle:rounded-none data-range-middle:bg-accent data-range-middle:text-accent-foreground data-outside:text-muted-foreground disabled:opacity-50"
-      renderItem={(item) => (
-        <Text class={item.today ? "font-semibold" : ""}>
-          {item.kind === "weekday"
-            ? WEEKDAYS[item.value]
-            : item.kind === "month" || item.kind === "monthToggle"
-              ? MONTHS[item.value - 1]
-              : item.kind === "previous"
-                ? "‹"
-                : item.kind === "next"
-                  ? "›"
-                  : String(item.value)}
-        </Text>
-      )}
-    />
-  );
-}
-
-mount(App);
 ```
 
 `Calendar` 来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate。在 Rust 中，`calendar()` 创建一个日历，每个属性有一个设置方法（`.value(..)`、`.range(..)`、`.number_of_months(..)`），每个事件有一个监听方法（`.on_change(..)`）。它的值是 `Date`（`Date::Single`、`Date::Range`，由一个 `chrono::NaiveDate` 或一对日期构成），禁用的日期是 `Matcher`。
@@ -147,6 +152,8 @@ mount(App);
 | `focus:` | 键盘在它上面。 |
 | `data-range-start:`、`data-range-end:` | 是完整范围的第一天或最后一天（只有一天的范围两者都是）。 |
 | `data-range-middle:` | 是完整范围内、不在两端的一天。 |
+| `data-range-preview-start:`、`data-range-preview-end:` | 范围只选了一半时：是它的开始日，或是鼠标所在、键盘所在、再选一次就会作为结束日的那一天（只有一天的范围两者都是）。 |
+| `data-range-preview-middle:` | 范围只选了一半时：是开始日与那一天之间的一天。 |
 | `data-today:` | 是今天。 |
 | `data-outside:` | 是补满各周的前后月份的日期。 |
 
@@ -159,7 +166,16 @@ mount(App);
 />
 ```
 
-`renderItem` 根据条目本身（`CalendarEntry`）绘制其内容，从不根据它的状态：绘制只做一次，条目被选中、获得焦点或进入范围时都保留，所以按键、选择和焦点进出都不再绘制，翻月时只为新出现的日期各绘制一次（一天的绘制按它的月份和日期保留：显示多个月时，仍在显示的月份保留它们的绘制）。
+选择第二个端点时，`data-range-preview-*` 变体标出再选一次会得到的范围：从开始日到鼠标最后移过的那一天，或在键盘移动后到键盘所在的那一天，与 React Aria 的范围日历高亮它的方式相同。鼠标和键盘以最后移动的为准。开始日之前的日期没有预览，因为在那里选择会重新开始范围；鼠标停在被禁用的日期上或离开日期时，预览留在原处。第二次选择后，预览让位于范围自己的变体。没有鼠标和键盘时（触摸屏上），半个范围只显示它的开始日。把预览画得和范围一样，就能在选定之前显示出范围的色带，末端那一天由 `hover:` 或 `focus:` 点亮：
+
+```tsx
+<Calendar
+  range
+  itemClass="group rounded-md hover:bg-accent focus:bg-accent selected:bg-primary selected:text-primary-foreground data-range-preview-middle:rounded-none data-range-preview-middle:bg-accent data-range-preview-start:rounded-r-none data-range-preview-end:rounded-l-none data-range-preview-start:data-range-preview-end:rounded-md"
+/>
+```
+
+`renderItem` 根据条目本身（`CalendarEntry`）绘制其内容，从不根据它的状态：绘制只做一次，条目被选中、获得焦点或进入范围时都保留，所以按键、鼠标、选择和焦点进出都不再绘制，翻月时只为新出现的日期各绘制一次（一天的绘制按它的月份和日期保留：显示多个月时，仍在显示的月份保留它们的绘制）。
 
 | 字段 | 含义 |
 |---|---|
@@ -191,7 +207,7 @@ mount(App);
 | `bodyClass`、`bodyStyle` | `.body_class(..)`、`.body_style(..)` | `string`、`StyleProp<ViewStyle>` | 无 | 主体：并排的各月，或月份、年份视图的行。 |
 | `monthClass`、`monthStyle` | `.month_class(..)`、`.month_style(..)` | `string`、`StyleProp<ViewStyle>` | 无 | 日视图中的每个月。 |
 | `rowClass`、`rowStyle` | `.row_class(..)`、`.row_style(..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每一行：星期、一周、一行月份或年份。 |
-| `itemClass`、`itemStyle` | `.item_class(..)`、`.item_style(..)` | `string`、`StyleProp<TextStyle>` | 无 | 每个条目：`selected:`、`disabled:`、`focus:`；日期的 `data-range-start:`、`data-range-end:`、`data-range-middle:`、`data-today:`、`data-outside:`（[条目](#items)）。 |
+| `itemClass`、`itemStyle` | `.item_class(..)`、`.item_style(..)` | `string`、`StyleProp<TextStyle>` | 无 | 每个条目：`selected:`、`disabled:`、`focus:`；日期的 `data-range-start:`、`data-range-end:`、`data-range-middle:`、`data-range-preview-start:`、`data-range-preview-end:`、`data-range-preview-middle:`、`data-today:`、`data-outside:`（[条目](#items)）。 |
 | `renderItem` | `.render_item(..)` | `(item: CalendarEntry) => JSX.Element` | 无 | 由应用根据条目本身绘制的内容；否则显示其数字。 |
 | `class`、`style` | 样式方法 | `string`、`StyleProp<ViewStyle>` | 无 | 日历：头部在主体之上。 |
 

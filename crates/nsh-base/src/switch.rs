@@ -4,6 +4,10 @@ use nsh_core::{AccessibilityState, Checked, element::Style, prelude::*};
 
 use crate::terminal::{is_terminal, mark_view, switch_mark};
 
+/// The group the parts take the switch's press from: a name of NSH's, so
+/// the app's own `group` classes around or inside it stay the app's.
+const PRESS_GROUP: &str = "nsh-switch";
+
 /// The props of [`Switch`].
 #[derive(Debug, Clone, PartialEq, Props)]
 pub struct SwitchProps {
@@ -22,6 +26,9 @@ pub struct SwitchProps {
     /// What screen readers say: what the switch turns on, when its children
     /// have no text that says it.
     pub accessibility_label: Prop<Option<SharedString>>,
+    /// What activating the switch does, for screen readers, as a view's
+    /// `accessibilityHint`.
+    pub accessibility_hint: Prop<Option<SharedString>>,
     /// How far outside its bounds presses still count, as a view's
     /// `hitSlop`: one number for every side, or the sides named (each left
     /// out 0). A small switch (a track with no label) takes presses a
@@ -29,14 +36,17 @@ pub struct SwitchProps {
     #[prop(default)]
     pub hit_slop: Prop<EdgeInsets>,
     /// The Tailwind classes of the track, the part the thumb moves along;
-    /// `checked:` and `disabled:` follow the switch.
+    /// `checked:`, `disabled:` and `active:` (while the switch is held)
+    /// follow the switch.
     pub track_class: Prop<Option<SharedString>>,
     /// The style of the track, over `trackClass`.
     #[prop(default)]
     pub track_style: Prop<Style>,
     /// The Tailwind classes of the thumb, inside the track (`checked:`
-    /// moves it: `checked:translate-x-4`); `checked:` and `disabled:`
-    /// follow the switch.
+    /// moves it: `checked:translate-x-4`); `checked:`, `disabled:` and
+    /// `active:` follow the switch, so a thumb can stretch while the
+    /// switch is held (`origin-left active:scale-x-125
+    /// checked:origin-right` with `transition-transform` to animate it).
     pub thumb_class: Prop<Option<SharedString>>,
     /// The style of the thumb, over `thumbClass`.
     #[prop(default)]
@@ -60,9 +70,11 @@ pub enum SwitchEvent {
 /// to the app: no colors, sizes, motion or label of its own. Its parts are
 /// a track and a thumb inside it, then its children; the app's `class` and
 /// `style` style the switch, `trackClass` / `trackStyle` and `thumbClass` /
-/// `thumbStyle` the parts, and `checked:` and `disabled:` classes on each
-/// follow the switch's state (or `checkedStyle` and `disabledStyle` on the
-/// switch). `hitSlop` widens where presses count past its bounds, as a
+/// `thumbStyle` the parts, and `checked:`, `disabled:` and `active:`
+/// classes on each follow the switch's state (or `checkedStyle` and
+/// `disabledStyle` on the switch): `active:` while the switch is held,
+/// wherever on it the press went down, until it is released or
+/// cancelled. `hitSlop` widens where presses count past its bounds, as a
 /// view's does.
 ///
 /// In a terminal it shows the terminal's switch, `[on ]` or `[off]` and a
@@ -75,11 +87,14 @@ pub fn Switch(props: SwitchProps, cx: Scope<SwitchEvent>) -> impl IntoElement {
         view()
             .project_checked(props.checked)
             .project_disabled(props.disabled)
+            .project_group_active(PRESS_GROUP)
     };
     view()
+        .group_named(PRESS_GROUP)
         .disabled(props.disabled)
         .role(AccessibilityRole::Switch)
         .optional_label(props.accessibility_label)
+        .optional_hint(props.accessibility_hint)
         .accessibility_state(move || AccessibilityState {
             checked: Some(if props.checked.get() {
                 Checked::True

@@ -10,6 +10,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.media.AudioAttributes;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.service.notification.StatusBarNotification;
@@ -17,7 +19,12 @@ import android.util.Log;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * {@code Notifications} of {@code nsh}: the system's notifications. They show in one channel; a press opens the app's
@@ -47,6 +54,10 @@ final class Notifications {
     private static final List<String> presses = new ArrayList<>();
     /** The count {@code setBadge} set. UI thread. */
     private static int badge;
+    /** The permission requests waiting for the prompt showing: their mounters and ids. UI thread. */
+    private static final List<Object[]> waiting = new ArrayList<>();
+    /** The intents {@link #foreign} looked at, by identity, for as long as their activities keep them. UI thread. */
+    private static final Set<Intent> foreignHandled = Collections.newSetFromMap(new WeakHashMap<>());
 
     private Notifications() {}
 
@@ -60,7 +71,7 @@ final class Notifications {
                 if (ask && permission(context).equals("default")) {
                     Activity activity = SystemUi.activity(context);
                     if (activity != null) {
-                        results(activity).ask(mounter, request);
+                        ask(activity, mounter, request);
                         return;
                     }
                 }
@@ -73,7 +84,8 @@ final class Notifications {
                 String title = (String) objects[b.getInt()];
                 String body = (String) objects[b.getInt()];
                 boolean silent = b.getInt() != 0;
-                boolean shown = show(context, id, title, body, silent);
+                String sound = (String) objects[b.getInt()];
+                boolean shown = show(context, id, title, body, silent, sound);
                 mounter.eventMap(1, Native.NOTIFICATION, new String[] {"id", "shown"}, new Object[] {(double) request, shown});
                 return;
             }
@@ -112,15 +124,84 @@ final class Notifications {
         if (listener == mounter) listener = null;
     }
 
-    /** Reports the press an activity's {@code intent} carries, if any. UI thread. */
+    /**
+     * Reports the press an activity's {@code intent} carries, if any: one of NSH's notifications to the app, one that
+     * other code showed (an intent {@link ForeignIntents#isPress} takes for one) to the handler Rust code set
+     * ({@code notifications.rs}). UI thread.
+     */
     static void handleIntent(Intent intent) {
         if (intent == null) return;
         String id = intent.getStringExtra(EXTRA);
-        if (id == null) return;
+        if (id == null) {
+            foreign(intent);
+            return;
+        }
         // Once: an activity recreated with the same intent has not been pressed again.
         intent.removeExtra(EXTRA);
         pressed(id);
     }
+
+    /**
+     * Hands {@code intent} to the handler of the notifications NSH did not show if it may be a press of one, once:
+     * an activity recreated with the same intent object has not been pressed again. Its extras stay as they are for
+     * the app's other code, such as the SDK that showed the notification. UI thread.
+     */
+    private static void foreign(Intent intent) {
+        if (!foreignHandled.add(intent)) return;
+        Bundle extras;
+        Set<String> keys;
+        try {
+            extras = intent.getExtras();
+            keys = extras == null ? null : extras.keySet();
+        } catch (RuntimeException e) {
+            // A value of a class this process cannot load fails the whole bundle on older Android versions.
+            Log.w(TAG, "cannot read the extras of the activity's intent", e);
+            return;
+        }
+        if (!ForeignIntents.isPress(intent.getAction(), intent.getFlags(), keys)) return;
+        String action = intent.getAction();
+        String data = intent.getDataString();
+        nativeForeignPressed(ForeignIntents.json(plain(extras)), action == null ? "" : action, data == null ? "" : data);
+    }
+
+    /**
+     * {@code extras} as plain Java values for {@link ForeignIntents#json}, without NSH's own: bundles as maps,
+     * parcelable arrays and lists as lists. A value that cannot be read is {@code null}.
+     */
+    @SuppressWarnings("deprecation")
+    private static Map<String, Object> plain(Bundle extras) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        for (String key : extras.keySet()) {
+            if (key == null || ForeignIntents.own(key)) continue;
+            Object value;
+            try {
+                value = extras.get(key);
+            } catch (RuntimeException e) {
+                Log.w(TAG, "cannot read the extra " + key + " of the activity's intent", e);
+                value = null;
+            }
+            map.put(key, plainValue(value));
+        }
+        return map;
+    }
+
+    private static Object plainValue(Object value) {
+        if (value instanceof Bundle) return plain((Bundle) value);
+        if (value instanceof Object[]) {
+            List<Object> list = new ArrayList<>();
+            for (Object item : (Object[]) value) list.add(plainValue(item));
+            return list;
+        }
+        if (value instanceof List) {
+            List<Object> list = new ArrayList<>();
+            for (Object item : (List<?>) value) list.add(plainValue(item));
+            return list;
+        }
+        return value;
+    }
+
+    /** The extras ({@code extras}, JSON), action and data URI ({@code ""} for none) of a press. UI thread. */
+    private static native void nativeForeignPressed(String extras, String action, String data);
 
     private static void pressed(String id) {
         if (listener == null) {
@@ -144,7 +225,7 @@ final class Notifications {
         if (Build.VERSION.SDK_INT >= 33
                 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             boolean asked = preferences(context).getBoolean(ASKED, false);
-            return asked || !declared(context) ? "denied" : "default";
+            return asked || !Permissions.declared(context, Manifest.permission.POST_NOTIFICATIONS) ? "denied" : "default";
         }
         return manager(context).areNotificationsEnabled() ? "granted" : "denied";
     }
@@ -153,38 +234,46 @@ final class Notifications {
         return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
     }
 
-    /** Whether the app's manifest declares {@code POST_NOTIFICATIONS}. */
-    private static boolean declared(Context context) {
-        try {
-            String[] permissions = context.getPackageManager()
-                    .getPackageInfo(context.getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
-            if (permissions != null) {
-                for (String permission : permissions) {
-                    if (Manifest.permission.POST_NOTIFICATIONS.equals(permission)) return true;
-                }
-            }
-        } catch (PackageManager.NameNotFoundException e) {
-            Log.w(TAG, "cannot read the app's permissions", e);
-        }
-        return false;
-    }
-
     @SuppressWarnings("deprecation")
-    private static boolean show(Context context, String id, String title, String body, boolean silent) {
+    private static boolean show(Context context, String id, String title, String body, boolean silent, String sound) {
         if (!permission(context).equals("granted")) return false;
         NotificationManager manager = manager(context);
+        // The app's sound, a raw resource `nsh package` added; none found plays the default.
+        Uri soundUri = null;
+        if (!silent && !sound.isEmpty()) {
+            int res = context.getResources().getIdentifier(sound, "raw", context.getPackageName());
+            if (res != 0) {
+                soundUri = Uri.parse("android.resource://" + context.getPackageName() + "/" + res);
+            } else {
+                Log.w(TAG, "no raw resource for the notification sound " + sound);
+            }
+        }
         Notification.Builder builder;
         if (Build.VERSION.SDK_INT >= 26) {
-            if (manager.getNotificationChannel(CHANNEL) == null) {
-                NotificationChannel channel = new NotificationChannel(CHANNEL, "Notifications", NotificationManager.IMPORTANCE_HIGH);
+            // A channel's sound is fixed once made, so each sound has its own channel.
+            String channelId = soundUri == null ? CHANNEL : CHANNEL + ".sound." + sound;
+            if (manager.getNotificationChannel(channelId) == null) {
+                String name = soundUri == null ? "Notifications" : "Notifications (" + sound + ")";
+                NotificationChannel channel = new NotificationChannel(channelId, name, NotificationManager.IMPORTANCE_HIGH);
                 channel.setShowBadge(true);
+                if (soundUri != null) {
+                    channel.setSound(soundUri, new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build());
+                }
                 manager.createNotificationChannel(channel);
             }
-            builder = new Notification.Builder(context, CHANNEL);
+            builder = new Notification.Builder(context, channelId);
         } else {
             builder = new Notification.Builder(context);
             builder.setPriority(Notification.PRIORITY_HIGH);
-            builder.setDefaults(silent ? Notification.DEFAULT_LIGHTS : Notification.DEFAULT_ALL);
+            if (soundUri != null) {
+                builder.setDefaults(Notification.DEFAULT_LIGHTS | Notification.DEFAULT_VIBRATE);
+                builder.setSound(soundUri);
+            } else {
+                builder.setDefaults(silent ? Notification.DEFAULT_LIGHTS : Notification.DEFAULT_ALL);
+            }
         }
         if (silent && Build.VERSION.SDK_INT >= 26) {
             // The channel's sound and vibration are for every notification in it. A child of a group that alerts
@@ -214,47 +303,26 @@ final class Notifications {
         }
     }
 
-    @SuppressWarnings("deprecation")
-    private static Results results(Activity activity) {
-        android.app.FragmentManager fragments = activity.getFragmentManager();
-        Results results = (Results) fragments.findFragmentByTag(TAG_RESULTS);
-        if (results == null) {
-            results = new Results();
-            fragments.beginTransaction().add(results, TAG_RESULTS).commitNow();
-        }
-        return results;
+    /**
+     * Shows the system's prompt for request {@code request}, or joins the prompt already showing: each request waiting
+     * gets the one answer. UI thread.
+     */
+    private static void ask(Activity activity, Mounter mounter, int request) {
+        waiting.add(new Object[] {mounter, request});
+        if (waiting.size() > 1) return;
+        boolean asked = Permissions.ask(activity, new String[] {Manifest.permission.POST_NOTIFICATIONS}, results -> {
+            // Empty: the prompt was cancelled, so the user can still be asked.
+            if (results != null && results.length > 0) preferences(activity).edit().putBoolean(ASKED, true).apply();
+            answerWaiting();
+        });
+        // In the background: answered with the state as it is, the user still to be asked.
+        if (!asked) answerWaiting();
     }
 
-    private static final String TAG_RESULTS = "com.longbridge.nsh.Notifications";
-
-    /** Gets the system's answer to the permission prompt, across configuration changes. */
-    @SuppressWarnings("deprecation")
-    public static final class Results extends android.app.Fragment {
-        private static final int CODE = 0x4f00;
-        private final List<Object[]> waiting = new ArrayList<>();
-
-        @Override
-        public void onCreate(Bundle state) {
-            super.onCreate(state);
-            setRetainInstance(true);
-        }
-
-        void ask(Mounter mounter, int request) {
-            waiting.add(new Object[] {mounter, request});
-            if (waiting.size() == 1) requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, CODE);
-        }
-
-        @Override
-        public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
-            if (code != CODE) {
-                super.onRequestPermissionsResult(code, permissions, results);
-                return;
-            }
-            // Empty: the prompt was cancelled, so the user can still be asked.
-            if (results.length > 0) preferences(getActivity()).edit().putBoolean(ASKED, true).apply();
-            List<Object[]> answered = new ArrayList<>(waiting);
-            waiting.clear();
-            for (Object[] w : answered) answerPermission((Mounter) w[0], (Integer) w[1]);
-        }
+    /** Answers every request waiting for the prompt with the permission's state now. UI thread. */
+    private static void answerWaiting() {
+        List<Object[]> answered = new ArrayList<>(waiting);
+        waiting.clear();
+        for (Object[] w : answered) answerPermission((Mounter) w[0], (Integer) w[1]);
     }
 }

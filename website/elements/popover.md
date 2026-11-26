@@ -9,8 +9,31 @@ demo: el-popover
 
 A popover shows content next to its trigger, on top of everything else: details, a small form, a color picker.
 Pressing the trigger opens and closes it; a press outside, Escape, the Android back button and VoiceOver's escape gesture close it. It is placed
-on a side of the trigger, moves to the other side when there is no room, stays inside the safe area and follows the
-trigger as it scrolls. It draws nothing of its own: the popup and its content are the app's.
+on a side of the trigger, moves to the other side when there is no room, stays inside the safe area and above the
+software keyboard, and follows the trigger as it scrolls. It draws nothing of its own: the popup and its content are the app's.
+
+```tsx tabs
+import { Text, View } from "nsh";
+import { Popover } from "nsh/base";
+
+function Details() {
+  return (
+    <Popover
+      offset={6}
+      margin={8}
+      popupClass="w-60 gap-1 rounded-lg bg-white p-3 shadow-lg"
+      trigger={
+        <View class="rounded-md bg-gray-200 px-3 py-2">
+          <Text>Details</Text>
+        </View>
+      }
+    >
+      <Text class="font-semibold">Order #1024</Text>
+      <Text>Shipped yesterday, arriving Friday.</Text>
+    </Popover>
+  );
+}
+```
 
 ```rust tabs
 use nsh_base::{OpenChangeReason, PopoverEvent, popover};
@@ -40,29 +63,6 @@ fn details() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { Text, View } from "nsh";
-import { Popover } from "nsh/base";
-
-function Details() {
-  return (
-    <Popover
-      offset={6}
-      margin={8}
-      popupClass="w-60 gap-1 rounded-lg bg-white p-3 shadow-lg"
-      trigger={
-        <View class="rounded-md bg-gray-200 px-3 py-2">
-          <Text>Details</Text>
-        </View>
-      }
-    >
-      <Text class="font-semibold">Order #1024</Text>
-      <Text>Shipped yesterday, arriving Friday.</Text>
-    </Popover>
-  );
-}
-```
-
 `Popover` comes from [`nsh/base`](../modules/nsh-base.md). Its content is made each time it opens, so state inside it
 starts fresh.
 
@@ -89,16 +89,9 @@ A popover leaves the keyboard focus where it is when it opens. For a popover tha
 focus its content in `onOpen`: it comes once the content is rendered, so refs inside it reach their views. Make the
 view `focusable` (or give it a press handler) so it can hold the focus. When the popover closes with the focus inside
 it, by Escape or by the app, the focus goes back to the trigger on the desktops as it starts to go, so a key pressed
-during its exit is the trigger's; a press outside leaves it where the press put it.
-
-```rust tabs
-let panel = element_ref();
-
-popover()
-    .on_open(move || panel.focus())
-    .trigger(text("Filters"))
-    .child(view().element_ref(&panel).focusable(true).child(filter_form()))
-```
+during its exit is the trigger's (on macOS, opened by a pointer, it goes back where it was before the popover opened instead,
+as a press there gives the trigger no focus); a press outside leaves it where the press put it, and so does a `focus()` of a
+view outside the popover that your app calls in the same turn as it closes the popover.
 
 ```tsx tabs
 let panel!: ViewRef;
@@ -107,6 +100,15 @@ let panel!: ViewRef;
     <FilterForm />
   </View>
 </Popover>;
+```
+
+```rust tabs
+let panel = element_ref();
+
+popover()
+    .on_open(move || panel.focus())
+    .trigger(text("Filters"))
+    .child(view().element_ref(&panel).focusable(true).child(filter_form()))
 ```
 
 ## Phones and desktops

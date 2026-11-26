@@ -1,6 +1,6 @@
 ---
 title: iOS
-description: Run Rust and TSX NSH apps on iOS with UIKit views, in the simulator or on devices, package them as .app and .ipa, and embed them in an existing iOS app with AppView or NativeShell.xcframework's NshAppView.
+description: Run TSX and Rust NSH apps on iOS with UIKit views, in the simulator or on devices, package them as .app and .ipa, and embed them in an existing iOS app with AppView or NativeShell.xcframework's NshAppView.
 order: 11
 group: platforms
 ---
@@ -31,9 +31,55 @@ nsh run App.tsx --target ios                          # a TSX app
 `nsh` uses a booted simulator, or boots the newest iPhone. For a Rust app it builds the app's own runner with your
 crate, installs it and shows its logs in the terminal; a change to the crate's Rust code builds it again and restarts
 the app. For a TSX app it installs the development host and keeps the app up to date as you save, with logs in the
-terminal. `--device` picks a simulator by name or UDID. For a quicker loop
-without a simulator, `nsh run --target catalyst` on a Mac opens the same UIKit backend in an iPhone-sized
-[Mac Catalyst](./getting-started.md#mac-catalyst) window.
+terminal. `--device` picks a simulator by name or UDID. The simulator is where to check an app
+as an iPhone shows it; [Mac Catalyst](./getting-started.md#mac-catalyst) (`--target catalyst`) is for
+Catalyst-specific work.
+
+## Notifications from other code
+
+NSH is the app's notification center delegate. [`Notifications`](../modules/nsh.md#notifications) reports presses
+of the notifications the app showed. Remote notifications, and those other native code such as a push SDK schedules,
+go to one handler that Rust code sets with `nsh_platform_apple::notifications::set_foreign_handler`. Set it in the
+`#[native_module]` entry of the app's crate, which runs on the main thread before the app starts, so the press that
+starts the app reaches it:
+
+```rust
+use nsh_platform_apple::notifications::{
+    ForeignNotification, ForeignNotificationHandler, Presentation, set_foreign_handler,
+};
+
+struct Chats;
+
+impl ForeignNotificationHandler for Chats {
+    // Arriving while the app is in front: hide the banner of the open conversation.
+    fn presentation(&self, notification: &ForeignNotification) -> Presentation {
+        if is_open(&notification.thread_id) {
+            Presentation::default().banner(false).sound(false)
+        } else {
+            Presentation::default()
+        }
+    }
+
+    // The user pressed it, possibly starting the app.
+    fn pressed(&self, notification: &ForeignNotification) {
+        open_chat(&notification.user_info["chat"]);
+    }
+}
+
+set_foreign_handler(Chats);
+```
+
+`ForeignNotification` carries the request's `id`, the `thread_id` it is grouped in and its `userInfo` as JSON
+(`user_info`). The handler's methods run on the main thread, and `set_foreign_handler` panics elsewhere. There is one
+handler, so the app's crate owns it and passes notifications on to the modules it uses; a later call replaces it.
+Without a handler, these notifications show as the app's own do and their presses are dropped. Only a press of the
+notification itself is reported, not the actions of its category. An app that embeds NSH and has a notification center
+delegate of its own keeps every notification there. macOS works the same way.
+
+An app that turns on `nsh-extra`'s [`push`](./nshm.md#push) feature has this handler set by that module once the
+standalone app launches, which passes the notifications to `Push.on` and to Rust code through
+`nsh_extra::push::on_event`; the app's crate then listens there, and decides how a notification shows in front with
+`nsh_extra::push::set_foreground_presentation_decider`, rather than setting a handler of its own.
 
 ## Packaging
 
@@ -52,6 +98,45 @@ The app logs its warnings, its errors and its `console.log` and `console.info` l
 as the subsystem: Console shows a connected iPhone's, and
 `xcrun simctl spawn booted log stream --predicate 'subsystem == "com.example.notes"'` the simulator's
 ([A packaged app's logs](./dev-server-and-debugging.md#a-packaged-apps-logs)).
+
+## Application events
+
+A standalone app's `UIApplicationDelegate` belongs to NSH. The Rust code of the app's crate or of an
+[nshm](./nshm.md) receives its launch and remote-notification callbacks with
+`nsh_platform_ios::on_application_event`. Call it once, from the `#[native_module]` entry, which runs on the main
+thread before the app starts; each call adds another handler, so code that runs the entry again (its `registry()`)
+adds it again. The crate depends on `nsh-platform-ios` for iOS only, at the version and from the source of its other
+NSH crates ([Registering from the app's crate](./native-components.md#registering-from-the-apps-crate)):
+
+```toml
+[target.'cfg(target_os = "ios")'.dependencies]
+nsh-platform-ios = { version = "0.6", default-features = false }
+```
+
+```rust
+#[cfg(target_os = "ios")]
+nsh_platform_ios::on_application_event(|event| match event {
+    nsh_platform_ios::ApplicationEvent::RegisteredForRemoteNotifications { device_token, .. } => {
+        // Hand the token to the push service the app uses.
+        log::info!("device token: {} bytes", device_token.len());
+    }
+    nsh_platform_ios::ApplicationEvent::RemoteNotification { user_info, completion, .. } => {
+        log::info!("remote notification: {:?}", user_info.to_json());
+        // Keep a clone of `completion` across background work, then report how it went.
+        completion.set_result(nsh_platform_ios::FetchResult::NewData);
+    }
+    _ => {}
+});
+```
+
+The events are `Launched` (with the launch options), `RegisteredForRemoteNotifications`,
+`FailedToRegisterForRemoteNotifications` and `RemoteNotification`. NSH only passes them on: the app's code asks for
+remote notifications itself (`registerForRemoteNotifications`). The `aps-environment` entitlement comes from the
+provisioning profile the app is signed with, and the app declares the `remote-notification` background mode in
+`nsh.json` ([Info.plist keys and entitlements](./packaging.md#infoplist-keys-and-entitlements)); `nsh-extra`'s
+[`push`](./nshm.md#push) feature adds that mode itself. An app with no handler has a
+delegate without these methods. An app that embeds NSH in its own UIKit app keeps its own delegate and receives them
+there.
 
 ## Embedding in an iOS app
 
@@ -97,6 +182,11 @@ holds the limits, the granted capabilities, the data directory and the native co
 below do; `AppView::set_locale`, `set_font_scale` and `set_error_handler` match `locale`, `fontScale` and `onError`.
 `nsh package --target ios` builds this kind of app for you, with your root mounted.
 
+Without `set_ui_sets`, an `AppView` serves `nsh/base`'s core part (`Button`, `Checkbox`, `Switch`, `Tabs`, `Slider`,
+`AlertDialog`, the navigation, `Input`, ...), all a Rust root needs, as Rust makes `nsh/base`'s components by type. A
+view that loads TSX importing more of `nsh/base` (`Select`, `TextView`, `EmojiPicker`, ...) passes all of it,
+`nsh_base::registry()`, as above.
+
 ## Get the framework
 
 The distribution contains both variants:
@@ -124,6 +214,10 @@ other Rust runtimes. Choose the Xcode embedding setting below to match the frame
 By default, each XCFramework has three arm64 slices: iOS devices, the iOS simulator (Apple silicon) and Mac Catalyst. The minimum
 deployment target is iOS 15.0. The Swift module is compiled with library evolution, so apps built with other Swift
 compiler versions can import it, and the framework links everything it needs: you add nothing else.
+
+`NshAppView` serves the apps it runs all of `nsh/base`, `nsh/base/plot` included, as Android's `NshView` does: an app
+imports any of its components. A host app that builds the runtime with Rust code of its own picks the UI sets with
+`nsh_platform_ios::set_ui_sets` before its first view ([Embedding a Rust app](#embedding-a-rust-app)).
 
 ## Add it to an Xcode project
 
@@ -213,6 +307,7 @@ The complete sample, a UIKit app that shows an NSH app below its own native head
 | `init(frame: CGRect = .zero, trace: Bool = false)` | Creates the view. `trace` logs the time of every commit. `init?(coder:)` supports storyboards and nibs. |
 | `onError: ((String) -> Void)?` | Receives fatal app errors (a bundle that fails to load, uncaught JS exceptions, a VM stopped by a limit) on the main thread. Errors are always logged; development builds also show them over the app. |
 | `limits: NshLimits` | The VM limits of the apps loaded from now on. |
+| `handoff: Bool` | Gives the address the apps loaded from now on set with [`UrlScheme.setUrl`](../modules/nsh.md#handoff) to the system, so Handoff continues it on the user's other devices. An address of the app's own scheme needs `<bundle id>.url` in your Info.plist's `NSUserActivityTypes`, and comes back to the other device's `scene(_:continue:)` with the URL in `userInfo["url"]`: pass it to `openURL(_:)`. Off by default. |
 | `grantCapabilities(_ json: String?) throws` | The most the apps loaded from now on may do, as JSON in the form of `nsh.json`'s `capabilities`; `nil` grants what each app declares. Throws `NshError` for invalid JSON. |
 | `locale: Locale?` | The app's language and region in place of the user's: `Intl`, `locale()` and the components follow it at once, and the apps loaded later start in it. `nil` follows the system's. |
 | `fontScale: CGFloat?` | The text size in place of Dynamic Type's (1 is the default): texts and inputs are laid out again at it and `fontScale()` reads it, at once and for the apps loaded later; lengths keep their size. `nil` follows the system's. |
@@ -226,6 +321,7 @@ The complete sample, a UIKit app that shows an NSH app below its own native head
 | `connectDevServer(_ url: URL) throws` | Development: loads from a `nsh dev` server and reloads on every change. Throws with `NativeShell.xcframework`, which has no development support. |
 | `register(component:_:)` | Registers a [native component](./native-components.md). |
 | `watchScroll(_ nativeID: String, _ watcher: NshScrollWatcher?)` | Follows and drives the app's `<Scroll>` with that `nativeID` from the main thread, in the frame of the scroll ([Following a scroll view](#following-a-scroll-view)); `nil` stops watching. |
+| `contentCulling: Bool` | Whether scroll views make the views of their content only near their viewport (`true`, the default) or all of it. Turned off, what is not made yet is made in the next frames, so the host can draw a whole scroll view (a long screenshot of the page from the handle's `contentView`); turned on again, what is far away is given up. Applies at once and to the apps loaded later. |
 | `params: [String: Any]` | The launch parameters of the apps loaded from now on: the app reads them at start as `host.params` ([`host`](../modules/nsh.md#host)). |
 | `send(_ name: String, _ data: Any? = nil)` | Sends an event to the app (`host.on(name, …)`); kept until it listens, or for the next app while none runs. |
 | `handle(_ name: String, _ handler:)` | Handles the app's calls (`host.call`) and posts (`host.post`) of `name` on the main thread: `{ data, reply in … }`, or an `async throws` function `{ data in … }` whose result answers the call. |
@@ -238,7 +334,7 @@ The complete sample, a UIKit app that shows an NSH app below its own native head
 > anywhere else could corrupt memory: for a file outside the app bundle, load `bundle.js` (JS source), or better, a
 > [signed package](./signed-packages.md).
 
-`limits`, `grantCapabilities`, `storageDirectory` and `cacheOptions` apply from the next load: set them before `loadBundle` / `run`.
+`limits`, `handoff`, `grantCapabilities`, `storageDirectory` and `cacheOptions` apply from the next load: set them before `loadBundle` / `run`.
 
 Each app keeps its storage under its own id with no setting: a signed package under the id its release key's certificate vouches for, a bundle under the `id` of its `nsh.json` (`app.json` next to it, written by `nsh build`). Set `storageDirectory` to keep an app's data somewhere of the host's choosing:
 
@@ -364,6 +460,14 @@ app.onOpenURL = { url in
 }
 ```
 
+## Presenting from Rust
+
+Rust code that shows a system view controller (the camera, a share sheet) presents it over the surface whose code
+asked. In a main-thread task (`run_on_main_thread`), `nsh_platform_ios::presenting_controller(mtm)` is the top view
+controller of that surface's window, else of the app's key window. `prepare_image(bytes, name, &request)` prepares
+image bytes as `Picker.pickImages` does: upright, scaled and encoded as the request says. `nsh-extra`'s camera
+(`crates/nsh-extra/src/camera/ios.rs`) uses both.
+
 ## Limits
 
 ```swift
@@ -475,6 +579,7 @@ updates the app in place, logs appear in the `nsh dev` terminal, and errors show
 
 ## See also
 
+- [Publish to the App Store](./publish.md#publish-to-the-app-store)
 - [Building with Rust](./rust.md)
 - [Embedding in Android apps](./android.md)
 - [Native components](./native-components.md)

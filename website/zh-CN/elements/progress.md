@@ -9,6 +9,33 @@ demo: el-progress
 
 进度条显示一个有明确工作量的任务完成了多少（下载、上传、设置中的一步），或者在 `indeterminate` 时表示一个工作量未知的任务正在进行。它负责屏幕阅读器读到的内容（进度条角色、0 到 100 的范围和数值）以及指示条的宽度：轨道宽度的 `value` 百分比。外观由应用决定：`Progress` 没有自己的颜色、尺寸、圆角、动效或文字。它由一条轨道、轨道里的指示条以及之后的子元素（标签、数值文字）组成，应用为每个部件设置样式。
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { Progress } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const sent = signal(40);
+  return (
+    <Progress
+      value={sent()}
+      accessibilityLabel="正在上传照片"
+      class="gap-2"
+      trackClass="h-2 overflow-hidden rounded-full bg-muted"
+      indicatorClass="h-full rounded-full bg-primary"
+    >
+      <Text class="text-sm text-muted-foreground">{`${sent()}%`}</Text>
+    </Progress>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{progress, theme};
 use nsh_core::prelude::*;
@@ -26,28 +53,6 @@ fn upload(sent: Signal<f32>) -> impl IntoElement {
                 .text_color(move || theme().muted_foreground),
         )
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { Progress } from "nsh/base";
-
-function App() {
-  const sent = signal(40);
-  return (
-    <Progress
-      value={sent()}
-      accessibilityLabel="正在上传照片"
-      class="gap-2"
-      trackClass="h-2 overflow-hidden rounded-full bg-muted"
-      indicatorClass="h-full rounded-full bg-primary"
-    >
-      <Text class="text-sm text-muted-foreground">{`${sent()}%`}</Text>
-    </Progress>
-  );
-}
-
-mount(App);
 ```
 
 `Progress` 来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate。数值由应用持有：进度条显示应用传入的 `value`，限定在 0 到 100 之间。在 Rust 中，`progress()` 创建一个进度条，每个属性有对应的设置方法（`.value(..)`、`.indicator_style(..)`），进度条本身用类型化的样式方法，标签用 `.child(..)`。

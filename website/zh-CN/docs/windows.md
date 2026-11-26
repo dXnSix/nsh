@@ -1,6 +1,6 @@
 ---
 title: Windows
-description: 在 Windows 上用 Direct2D 绘制的 Win32 窗口运行 Rust 和 TSX 编写的 NSH 应用、打包应用、用 AppView 嵌入 Win32 应用，以及 Windows 上的差异。
+description: 在 Windows 上用 Direct2D 绘制的 Win32 窗口运行 TSX 和 Rust 编写的 NSH 应用、打包应用、用 AppView 嵌入 Win32 应用，以及 Windows 上的差异。
 order: 14
 group: platforms
 ---
@@ -53,7 +53,7 @@ dist\nsh\runtime\windows\nsh-windows-host --bundle build\bundle.nshc --window-si
 
 `--fps`（`nsh run App.tsx --target windows --fps`、`nsh test --target windows --fps`、宿主的 `--fps`、Rust 应用在
 `run_app` 中用 `AppOptions { fps: true, .. }`、环境变量 `NSH_FPS=1`，或应用自己调用 `setFpsEnabled(true)`）每秒输出一行性能监视器读数（target `nsh::fps`）：显示的帧数与显示器刷新率、
-主线程每帧的耗时及其各阶段（`tick`、`drain`、`paint`、`present`、`canvas`）、引擎的 commit、CPU 和内存，格式与其他桌面平台一致
+主线程每帧的耗时及其各阶段（`tick`、`drain`、`paint`、`present`、`canvas`）、引擎的 commit、CPU 和内存，以及每帧重绘了窗口的多少（`drawn`：每帧重绘像素占窗口的平均比例；`whole`：整窗重绘的帧数），格式与其他桌面平台一致
 （毫秒，依次为 mean/p50/p95/max）。`nsh test --fps -v` 会显示这些读数，`examples/gallery/tools/perf.py` 会读取它们
 （[性能报告](./performance-report.md#windowswin32direct2d)）。请测量 release 构建；监视器关闭时没有任何开销。
 
@@ -158,9 +158,10 @@ QuickJS 字节码是受信任的输入，只能从你自己应用的文件中加
 鼠标停在视图上时，`cursor` 样式也会跟随更新。批次改变光标后，Windows 会在整个批次应用完成时，
 根据指针下方的视图显示新形状或应用 `"none"`。标题栏和调整窗口大小的边框使用系统光标。
 
-应用用 [`<Window>` 和 `Window.open`](../modules/nsh-desktop.md#窗口) 打开自己的窗口：每个都是顶层窗口，
+应用用 [`<Window>` 和 `Window.open`](../modules/nsh-desktop.md#窗口) 声明自己的窗口：每个都是顶层窗口，
 由应用的引擎绘制，并运行在应用唯一的 JS 运行时中，因此直接共享应用的 signal 和模块。普通窗口在任务栏有自己的按钮；
-对话框、面板和弹出窗口属于它们的父窗口。关闭主窗口会关闭这些窗口并结束应用。
+带 parent 的对话框、面板和弹出窗口属于那个窗口。应用宿主是不可见的 message-only 调度窗口，加上一个隐藏的 surface：
+关闭任何用户窗口只关闭那个窗口，只有关闭最后一个窗口且应用的退出模式允许时才退出（Windows 的默认行为）。
 
 ### 键盘
 
@@ -186,18 +187,18 @@ QuickJS 字节码是受信任的输入，只能从你自己应用的文件中加
 
 - **`WebView`**：位于 3D 变换（透视）视图内的网页不显示；网页上方的 `backdropFilter` 不会模糊网页。`baseUrl`
   只接受 `http(s)` 地址。自带窗口的原生组件始终位于 NSH 绘制的所有内容之上。
-- **视频**：只能播放已安装解码器支持的格式；没有封面图（poster）；开启 `controls` 时控制栏始终显示。
-- **可缩放的滚动视图**（`zoomTo`、缩放相关属性）；滚动条不能拖动。
+- **视频**：只能播放已安装解码器支持的格式；开启 `controls` 时控制栏始终显示。
 - **`mixBlendMode` 和 `backdropFilter`** 会绘制，但在带 `filter` 或 3D 变换的视图内部不生效；`borderCurve: "continuous"`
   绘制为圆形圆角。
 - **文本**：头部和中间省略号只用于单行（多行时改为尾部省略号）；彩色 emoji 只支持 COLR 字体；小型大写字母只在字体提供时可用。
 - **文本输入**：键盘类型和自动填充不适用（没有软键盘）；Tab 在文本框之间切换。右键打开编辑菜单（撤销、剪切、复制、粘贴、删除、
   全选），可选中的文本右键也有菜单（复制、全选）。
-- **无障碍**（UI Automation）：提示对话框和 toast 不会暴露出来；标题（heading）的级别都报告为 1。
+- **无障碍**（UI Automation）：提示对话框和 toast 不会暴露出来。
 - **输入辅助视图**和**状态栏**（桌面上没有对应物）。
 
 ## 另见
 
+- [签名与分发](./packaging.md#sign-and-distribute)
 - [CLI](./cli.md)：`nsh run --target windows`、`nsh package --target windows`
 - [打包](./packaging.md)
 - [平台特定代码](./platform-specific.md)

@@ -9,6 +9,7 @@ import { createGestures } from "./gesture.js";
 import { createAnimation } from "./animation.js";
 import { createCanvas } from "./canvas.js";
 import { createNavigation } from "./navigation.js";
+import { createHot } from "./hot.js";
 import { createKeymap } from "./keymap.js";
 import { createEnvironment } from "./environment.js";
 import { createComponents } from "./components.js";
@@ -51,6 +52,33 @@ test("platform props set the props of the web's and the desktop's objects and ig
   platform.desktop = false;
   dom.rt.prop(view, "desktop", { cursor: "default" });
   assert.deepEqual(props(), []);
+});
+
+test("platform backdrops set, update and clear with the matching decoder key", () => {
+  const mac = { blending: "behindWindow" };
+  const macUpdated = { material: "sidebar" };
+  const win = { material: "blur" };
+  for (const [os, group, key, first, updated] of [
+    ["windows", "windows", "windows.backdrop", win, {}],
+    ["macos", "macos", "backdrop", mac, macUpdated],
+  ]) {
+    const values = new Values();
+    const calls = [];
+    const dom = createDom((op, args) => calls.push([op, args]), values, { getOwner: () => null }, () => true, () => {});
+    dom.setPlatform({ os, desktop: true });
+    const view = values.makeNode(2);
+    const other = group === "windows" ? "macos" : "windows";
+    dom.rt.prop(view, group, { backdrop: first });
+    dom.rt.prop(view, other, { backdrop: group === "windows" ? mac : win });
+    dom.rt.prop(view, group, { backdrop: updated });
+    dom.rt.prop(view, other, {});
+    dom.rt.prop(view, group, {});
+    assert.deepEqual(calls, [
+      [303, [view, key, first]],
+      [303, [view, key, updated]],
+      [303, [view, key, undefined]],
+    ]);
+  }
 });
 
 test("browser web view refs forward sendInput to the command bridge", () => {
@@ -118,7 +146,7 @@ async function fixture() {
     const dom = createDom(invoke, values, api, () => live, () => {});
     const components = createComponents(invoke, values, api, dom);
     const close = () => { if (live) { wasm.nsh_browser_dispose(); live = false; values.dispose(); } };
-    return { api, values, invoke, dom, components, mouseEvents: () => values.result(wasm.nsh_browser_test_mouse_events()), fileDropEvents: () => values.result(wasm.nsh_browser_test_file_drop_events()), videoLoadEvent: () => values.result(wasm.nsh_browser_test_video_load_event()), modules: () => createModules(invoke, values, () => live, () => {}, components.make), close,
+    return { api, values, invoke, dom, components, mouseEvents: () => values.result(wasm.nsh_browser_test_mouse_events()), fileDropEvents: () => values.result(wasm.nsh_browser_test_file_drop_events()), touchEvents: () => values.result(wasm.nsh_browser_test_touch_events()), videoLoadEvent: () => values.result(wasm.nsh_browser_test_video_load_event()), modules: () => createModules(invoke, values, () => live, () => {}, components.make), close,
       restart() { close(); return start(); } };
   };
   return start();
@@ -466,6 +494,50 @@ test("navigation keeps duplicate route entries and keymaps validate atomically",
   dispose();f.close();
 });
 
+
+test("a route's page made by nested hot components is the stack's own screen", { skip: !path }, async () => {
+  const f = await fixture();
+  // The nodes each parent shows: what the last insert (op 308) returned.
+  const shown = new Map(), screens = [];
+  const invoke = (op, args) => {
+    const result = f.invoke(op, args);
+    if (op === 300 && args[0] === "screen") screens.push(result);
+    if (op === 308) shown.set(args[0], result);
+    return result;
+  };
+  const dom = createDom(invoke, f.values, f.api, () => true, () => {});
+  const env = createEnvironment(f.api, f.invoke, dom);
+  const { createNavStack, NavStack, NavPage } = createNavigation(f.api, dom, env);
+  // A development bundle's components: each a proxy returning an accessor, here one around the next.
+  const { hot } = createHot(f.api, error => { throw error; });
+  let Screen;
+  const app = sig => () => {
+    const Page = hot.component("App.js", "Page", () => NavPage({ title: "Page" }), sig);
+    Screen = hot.component("App.js", "Screen", () => dom.rt.component(Page, {}), "screen");
+  };
+  hot.define("App.js", app("a"));
+  hot.start("App.js", {});
+  let dispose, nav, stack;
+  f.api.root(stop => {
+    dispose = stop;
+    nav = createNavStack(["home"]);
+    stack = NavStack({ state: nav, children: route => route === "home" ? NavPage({}) : dom.rt.component(Screen, {}) });
+  });
+  nav.push("page");
+  // One screen for each route, each the stack's child.
+  assert.equal(screens.length, 2);
+  assert.deepEqual(shown.get(stack), screens);
+
+  // An edit of the inner component renders the route's screen again.
+  hot.update({ "App.js": app("b") });
+  assert.equal(screens.length, 3);
+  assert.deepEqual(shown.get(stack), [screens[0], screens[2]]);
+
+  // A pop by the user removes the page's route.
+  dom.event(f.values.nodeIds.get(screens[2]), "onDismiss", {});
+  assert.deepEqual(nav.routes(), ["home"]);
+  dispose(); f.close();
+});
 
 test("touch dispatch captures, grants, tracks the Rust pan, and releases", { skip: !path }, async () => {
   const f=await fixture();const gestures=createGestures(f.invoke,f.values,f.api,f.dom,()=>!f.values.closed,()=>{});f.dom.setTouches(gestures);
@@ -834,6 +906,22 @@ test("Rust renderer getters retain their error boundary owner", { skip: !path },
   dispose(); close();
 });
 
+test("a Rust renderer of a pair gets the pair as two arguments", { skip: !path }, async () => {
+  const { api, values, components, close } = await fixture();
+  const Component = components.make({ name: "Fixture", id: 0, props: [], events: [], methods: [], hostProps: [] }, () => {});
+  const calls = [];
+  let node, dispose;
+  api.root(stop => {
+    dispose = stop;
+    node = Component({ cell: (...args) => { calls.push(args); return null; } });
+  });
+  const id = values.nodeIds.get(node);
+  components.render(id, "cell", "a", { src: "x" }, false);
+  components.render(id, "cell", "b", [{ src: "x" }, { link: { url: "u" } }], true);
+  assert.deepEqual(calls, [[{ src: "x" }], [{ src: "x" }, { link: { url: "u" } }]]);
+  dispose(); close();
+});
+
 test("cleanup returns its callback and permits an unowned registration", { skip: !path }, async () => {
   const { api, close } = await fixture();
   let calls = 0;
@@ -860,14 +948,43 @@ test("native mouse payloads preserve positions, modifiers and nullable pressed b
 });
 
 
+test("native touch payloads keep each point's pointer type, pressure and tilt", { skip: !path }, async () => {
+  const f = await fixture();
+  try {
+    const pointers = [["mouse", 0.5, 0, 0], ["pen", 0.25, 30, -15], ["touch", 0.5, 0, 0]];
+    assert.deepEqual(f.touchEvents(), pointers.map(([pointerType, pressure, tiltX, tiltY]) => ({
+      phase: "move", timestamp: 10, activated: undefined,
+      points: [{ identifier: 1, target: 2, path: [2, 1], pageX: 30, pageY: 40, locationX: 3, locationY: 4, changed: true, timestamp: 10, pointerType, pressure, tiltX, tiltY, eraser: false, barrel: false, coalesced: [] }],
+    })));
+  } finally { f.close(); }
+});
+
+test("touch handlers see the pointer fields on the event, touches and changedTouches", { skip: !path }, async () => {
+  const f=await fixture();const gestures=createGestures(f.invoke,f.values,f.api,f.dom,()=>!f.values.closed,()=>{});f.dom.setTouches(gestures);
+  const seen=[];let view,dispose;
+  f.api.root(stop=>{dispose=stop;view=f.dom.rt.element("view");f.dom.rt.prop(view,"onTouchMove",e=>seen.push(e));});
+  const target=f.values.nodeIds.get(view);
+  const at=(pointerType,pressure,tiltX,tiltY)=>({identifier:1,target,path:[target],pageX:5,pageY:6,locationX:5,locationY:6,changed:true,timestamp:10,pointerType,pressure,tiltX,tiltY});
+  for(const p of [at("mouse",0.5,0,0),at("pen",0.25,30,-15),at("touch",0.5,0,0)]){
+    f.dom.event(target,"onTouch",{phase:"start",timestamp:0,points:[p]});
+    f.dom.event(target,"onTouch",{phase:"move",timestamp:10,points:[p]});
+    f.dom.event(target,"onTouch",{phase:"end",timestamp:20,points:[p]});
+  }
+  const fields=e=>[e.pointerType,e.pressure,e.tiltX,e.tiltY];
+  assert.deepEqual(seen.map(fields),[["mouse",0.5,0,0],["pen",0.25,30,-15],["touch",0.5,0,0]]);
+  assert.deepEqual(seen.map(e=>fields(e.touches[0])),seen.map(fields));
+  assert.deepEqual(seen.map(e=>fields(e.changedTouches[0])),seen.map(fields));
+  dispose();f.close();
+});
+
 test("native file drops preserve URIs and optional page position", { skip: !path }, async () => {
   const f = await fixture();
   try {
     const uris = ["file:///tmp/hello.txt", "file:///tmp/world.txt"];
     const mimeTypes = ["text/plain", "text/plain"];
     assert.deepEqual(f.fileDropEvents(), [
-      { uris, mimeTypes },
-      { uris, mimeTypes, pagePosition: { x: 30, y: 40 } },
+      { uris, mimeTypes, files: [] },
+      { uris, mimeTypes, files: [], pagePosition: { x: 30, y: 40 } },
     ]);
   } finally { f.close(); }
 });

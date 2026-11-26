@@ -24,8 +24,19 @@ use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(
+    all(target_os = "linux", not(target_env = "ohos")),
+    target_os = "macos",
+    windows
+))]
 pub mod install;
+
+#[cfg(any(
+    all(target_os = "linux", not(target_env = "ohos")),
+    target_os = "macos",
+    windows
+))]
+pub mod delta;
 
 /// The name of the manifest, next to the release's assets.
 pub const MANIFEST: &str = "latest.json";
@@ -64,19 +75,30 @@ pub enum Error {
 #[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct Config {
-    /// The app's id: a manifest for another app is refused.
+    /// The app's id: what finds the installed app ([`install`]). A manifest
+    /// and the package it names may carry another id (an app moved to a new
+    /// one): the manifest's signature is what binds an update to the app.
     pub id: String,
     /// The running version.
     pub version: String,
+    /// The app's display name (`nsh.json` `"name"`), which the built-in
+    /// update prompt shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// `owner/repo`: updates from its GitHub Releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub github: Option<String>,
     /// The manifest's URL on a host of the app's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Other manifests the app may check instead, by name (`"beta"`): the
+    /// app's code picks one by its name ([`Config::channel`]), never by its
+    /// URL. Each needs HTTPS and `public_key`, as `url` does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub channels: BTreeMap<String, String>,
     /// The Ed25519 key manifests are signed with (`nsh keygen`'s `.pub`).
-    /// Required with `url`; with `github`, unsigned manifests are refused
-    /// once it is set.
+    /// Required with `url` and `channels`; with `github`, unsigned manifests
+    /// are refused once it is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_key: Option<String>,
     /// The build number of the bundle shipped in the app (`nsh.json`
@@ -97,6 +119,31 @@ pub struct Packages {
     /// The root public keys (`nsh keygen`'s `root.pub`, base64) whose
     /// certified release keys may sign the app's packages. At least one.
     pub roots: Vec<String>,
+    /// Where packages come from; `None`: the app's source (`github` or
+    /// `url`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PackageSource>,
+    /// With [`PackageSource::Runtime`]: a feed may be plain `http://`
+    /// ([`Config::package_feed`]). Its manifest, signature, notes and
+    /// package then stay on the feed's origin. The signatures still decide
+    /// what runs, and a package not newer than the running build is still
+    /// refused, so an attacker on the network can only withhold updates or
+    /// see them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_http: bool,
+}
+
+/// `nsh.json`'s `"updater": { "packages": { "source" } }`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub enum PackageSource {
+    /// The app's code names the manifest's URL at each check
+    /// (`checkForPackage({ url })`, [`Config::package_feed`]): one build of
+    /// the app for several servers, chosen at run time. The manifest's
+    /// signature (`publicKey`) and the package roots still come from the
+    /// app.
+    Runtime,
 }
 
 impl Config {
@@ -108,12 +155,16 @@ impl Config {
         Ok(config)
     }
 
-    /// Exactly one source, a well-formed repository or URL, the key a
-    /// custom host needs, a version that compares.
+    /// Exactly one source, a well-formed repository or URL, channels with
+    /// names and HTTPS URLs, the key a custom host needs, a version that
+    /// compares.
     pub fn validate(&self) -> Result<(), Error> {
         semver::Version::parse(&self.version)
             .map_err(|e| Error::Config(format!("version {:?}: {e}", self.version)))?;
+        let runtime = self.runtime_packages();
         match (&self.github, &self.url) {
+            // Packages only, from feeds the app's code names.
+            (None, None) if runtime => {}
             (Some(repo), None) => {
                 let mut parts = repo.split('/');
                 let valid = |part: Option<&str>| {
@@ -143,10 +194,41 @@ impl Config {
                 return Err(Error::Config("set one of github and url".into()));
             }
         }
+        for (name, url) in &self.channels {
+            let valid = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
+            if !valid {
+                return Err(Error::Config(format!(
+                    "channels: {name:?} is not a name (letters, digits, \"-\", \"_\", \".\")"
+                )));
+            }
+            check_url(url).map_err(|e| Error::Config(format!("channels.{name}: {e}")))?;
+        }
+        if !self.channels.is_empty() && self.public_key.is_none() {
+            return Err(Error::Config(
+                "channels: they need publicKey (`nsh keygen`'s .pub), as url does".into(),
+            ));
+        }
         if let Some(key) = &self.public_key {
             public_key(key)?;
         }
         if let Some(packages) = &self.packages {
+            if runtime && self.public_key.is_none() {
+                return Err(Error::Config(
+                    "packages.source: a runtime feed needs publicKey (`nsh keygen`'s .pub), as \
+                     url does"
+                        .into(),
+                ));
+            }
+            if packages.allow_http && !runtime {
+                return Err(Error::Config(
+                    "packages.allowHttp: only feeds the app names at run time \
+                     (\"source\": \"runtime\") may be plain HTTP"
+                        .into(),
+                ));
+            }
             if packages.roots.is_empty() {
                 return Err(Error::Config(
                     "packages.roots: name at least one root key (`nsh keygen`'s root.pub)".into(),
@@ -165,14 +247,90 @@ impl Config {
         self.packages.as_ref().map_or(&[], |p| &p.roots)
     }
 
-    /// The manifest's URL.
+    /// Whether packages come from feeds the app's code names
+    /// ([`PackageSource::Runtime`]).
+    pub fn runtime_packages(&self) -> bool {
+        self.packages
+            .as_ref()
+            .is_some_and(|p| p.source == Some(PackageSource::Runtime))
+    }
+
+    /// Whether the configuration names a manifest of its own (`github` or
+    /// `url`): an app taking packages only from runtime feeds has none, and
+    /// checks for no new app.
+    pub fn has_source(&self) -> bool {
+        self.github.is_some() || self.url.is_some()
+    }
+
+    /// This configuration with the manifest at `url` as its source, for
+    /// [`Config::check_package`]: what an app with
+    /// [`PackageSource::Runtime`] checks when its code names a feed. Fails
+    /// when the app does not take runtime feeds, and for a URL that is not
+    /// HTTPS (or plain HTTP with [`Packages::allow_http`]) or carries a user
+    /// name or password: update requests carry no credentials.
+    pub fn package_feed(&self, url: &str) -> Result<Config, Error> {
+        if !self.runtime_packages() {
+            return Err(Error::Config(
+                "url: the app names its package source in nsh.json; set \
+                 `\"updater\": { \"packages\": { \"source\": \"runtime\" } }` to choose it at run time"
+                    .into(),
+            ));
+        }
+        let allow_http = self.packages.as_ref().is_some_and(|p| p.allow_http);
+        let plain = http_origin(url).is_some();
+        if !(plain && allow_http) {
+            check_url(url).map_err(|e| {
+                let hint = if plain {
+                    ": set `\"updater\": { \"packages\": { \"allowHttp\": true } }` to allow plain HTTP"
+                } else {
+                    ""
+                };
+                Error::Config(format!("url: {e}{hint}"))
+            })?;
+        }
+        if authority(url).is_none_or(|(_, authority)| authority.contains('@')) {
+            return Err(Error::Config(format!(
+                "url: {url:?} is not a URL with a host, or carries a user name or password \
+                 (update requests carry no credentials)"
+            )));
+        }
+        Ok(Config {
+            github: None,
+            url: Some(url.to_owned()),
+            channels: BTreeMap::new(),
+            ..self.clone()
+        })
+    }
+
+    /// This configuration with the manifest of channel `name` (one of
+    /// [`Config::channels`]) as its source: what [`Config::check`] and the
+    /// other methods then read. Fails for a name the package does not
+    /// declare, so the app's code chooses among the package's sources and
+    /// cannot add one.
+    pub fn channel(&self, name: &str) -> Result<Config, Error> {
+        let url = self.channels.get(name).ok_or_else(|| {
+            Error::Config(format!(
+                "channel {name:?}: the package declares no such channel (`\"updater\": {{ \"channels\" }}`)"
+            ))
+        })?;
+        Ok(Config {
+            github: None,
+            url: Some(url.clone()),
+            channels: BTreeMap::new(),
+            ..self.clone()
+        })
+    }
+
+    /// The manifest's URL; empty when the configuration names none
+    /// ([`Config::has_source`]).
     pub fn manifest_url(&self) -> String {
         match (&self.github, &self.url) {
             (Some(repo), _) => {
                 format!("https://github.com/{repo}/releases/latest/download/{MANIFEST}")
             }
             (_, Some(url)) => url.clone(),
-            _ => unreachable!("validated"),
+            // Packages only from runtime feeds ([`Config::package_feed`]).
+            _ => String::new(),
         }
     }
 
@@ -191,6 +349,7 @@ impl Config {
         signature: Option<&[u8]>,
         platform: &str,
     ) -> Result<Option<Available>, Error> {
+        self.need_source()?;
         let parsed = self.open(manifest, signature)?;
         let version = semver::Version::parse(&parsed.version)
             .map_err(|e| Error::Manifest(format!("version {:?}: {e}", parsed.version)))?;
@@ -204,12 +363,15 @@ impl Config {
         };
         let url = resolve(&self.manifest_url(), &asset.url);
         check_url(&url).map_err(Error::Manifest)?;
+        let localized_notes = self.localized_notes(parsed.localized_notes, check_url)?;
         Ok(Some(Available {
             version: parsed.version,
             notes: parsed.notes,
+            localized_notes,
             url,
             sha256: asset.sha256.clone(),
             size: asset.size,
+            delta: self.delta(&asset.deltas)?,
         }))
     }
 
@@ -229,6 +391,7 @@ impl Config {
         if self.package_roots().is_empty() {
             return Ok(None);
         }
+        self.need_source()?;
         let parsed = self.open(manifest, signature)?;
         let Some(package) = parsed.package else {
             return Ok(None);
@@ -240,18 +403,80 @@ impl Config {
             return Err(Error::Manifest("the package has no sha256".into()));
         }
         let url = resolve(&self.manifest_url(), &package.url);
-        check_url(&url).map_err(Error::Manifest)?;
+        self.check_package_url(&url).map_err(Error::Manifest)?;
+        let localized_notes =
+            self.localized_notes(parsed.localized_notes, |url| self.check_package_url(url))?;
         Ok(Some(AvailablePackage {
             version: package.version,
             build: package.build,
             notes: parsed.notes,
+            localized_notes,
             url,
             sha256: package.sha256,
             size: package.size,
         }))
     }
 
-    /// The manifest, its signature checked and its id this app's.
+    /// The manifest's notes files, their URLs absolute and HTTPS.
+    /// The patch of `deltas` from the running version, its URL absolute.
+    fn delta(&self, deltas: &[Delta]) -> Result<Option<Delta>, Error> {
+        let Some(delta) = deltas.iter().find(|delta| delta.from == self.version) else {
+            return Ok(None);
+        };
+        let mut delta = delta.clone();
+        delta.url = resolve(&self.manifest_url(), &delta.url);
+        check_url(&delta.url).map_err(Error::Manifest)?;
+        Ok(Some(delta))
+    }
+
+    fn localized_notes(
+        &self,
+        mut notes: BTreeMap<String, NotesFile>,
+        check: impl Fn(&str) -> Result<(), String>,
+    ) -> Result<BTreeMap<String, NotesFile>, Error> {
+        for file in notes.values_mut() {
+            file.url = resolve(&self.manifest_url(), &file.url);
+            check(&file.url).map_err(Error::Manifest)?;
+        }
+        Ok(notes)
+    }
+
+    /// Fails for a configuration without a manifest of its own: its app
+    /// checks packages from runtime feeds only ([`Config::package_feed`]).
+    fn need_source(&self) -> Result<(), Error> {
+        if self.has_source() {
+            return Ok(());
+        }
+        Err(Error::Config(
+            "no update source: the app takes packages from feeds it names at run time \
+             (`checkForPackage({ url })`) and has no github or url"
+                .into(),
+        ))
+    }
+
+    /// What a package check downloads: HTTPS, or with
+    /// [`Packages::allow_http`] plain HTTP on the plain-HTTP manifest's own
+    /// origin, so one opt-in covers one server.
+    fn check_package_url(&self, url: &str) -> Result<(), String> {
+        let allow_http = self.packages.as_ref().is_some_and(|p| p.allow_http);
+        match http_origin(url) {
+            Some(origin) if allow_http => {
+                if http_origin(&self.manifest_url()).as_deref() == Some(origin.as_str()) {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "{url:?} is plain HTTP off the manifest's origin: only the feed's own \
+                         server may serve it without HTTPS"
+                    ))
+                }
+            }
+            _ => check_url(url),
+        }
+    }
+
+    /// The manifest, its signature checked. Its id is not checked against
+    /// the app's: an update may move the app to a new id or name, and the
+    /// signature, with the manifest's URL, decides what installs.
     fn open(&self, manifest: &[u8], signature: Option<&[u8]>) -> Result<Manifest, Error> {
         if let Some(key) = &self.public_key {
             let signature =
@@ -260,12 +485,6 @@ impl Config {
         }
         let parsed: Manifest =
             serde_json::from_slice(manifest).map_err(|e| Error::Manifest(e.to_string()))?;
-        if parsed.id != self.id {
-            return Err(Error::Manifest(format!(
-                "it is for {:?}, this app is {:?}",
-                parsed.id, self.id
-            )));
-        }
         Ok(parsed)
     }
 }
@@ -297,6 +516,13 @@ pub struct Manifest {
     /// What changed, for the app to show.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// `notes` in other languages, by BCP 47 tag (`en`, `zh-TW`, `ja`):
+    /// each a file of its own, so a client downloads only the one its user
+    /// reads. Their hashes are here, under the manifest's signature. `notes`
+    /// stays the text for every other language and for older runtimes,
+    /// which ignore this.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub localized_notes: BTreeMap<String, NotesFile>,
     /// By [`platform`]: `linux-x86_64`, `macos-aarch64`, `android`, `ios`.
     /// Empty in a release that only has a package (still written: older
     /// runtimes require it).
@@ -340,12 +566,54 @@ pub struct AvailablePackage {
     pub build: u64,
     /// What changed (the manifest's notes).
     pub notes: Option<String>,
+    /// The manifest's notes in other languages, by BCP 47 tag, their URLs
+    /// absolute.
+    pub localized_notes: BTreeMap<String, NotesFile>,
     /// Where it is, absolute.
     pub url: String,
     /// Its SHA-256, in hex.
     pub sha256: String,
     /// Its size in bytes.
     pub size: Option<u64>,
+}
+
+/// One language's notes in a [`Manifest`]: a text file beside it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct NotesFile {
+    /// Where it is, absolute or relative to the manifest.
+    pub url: String,
+    /// Its SHA-256, in hex.
+    pub sha256: String,
+}
+
+/// The notes of `locale` (a BCP 47 tag) among `notes`: its own tag, else
+/// its language's (`zh` for `zh-TW`), compared without case; `None`: show
+/// the manifest's `notes`.
+pub fn notes_for<'a>(
+    notes: &'a BTreeMap<String, NotesFile>,
+    locale: &str,
+) -> Option<&'a NotesFile> {
+    let find = |tag: &str| {
+        notes
+            .iter()
+            .find(|(have, _)| have.eq_ignore_ascii_case(tag))
+            .map(|(_, file)| file)
+    };
+    find(locale).or_else(|| find(locale.split(['-', '_']).next()?))
+}
+
+/// The notes in `bytes`, downloaded for `file`: its text when the hash
+/// matches.
+pub fn open_notes(file: &NotesFile, bytes: Vec<u8>) -> Result<String, Error> {
+    if sha256(&bytes) != file.sha256.to_ascii_lowercase() {
+        return Err(Error::Manifest(format!(
+            "{}: not the notes the manifest names",
+            file.url
+        )));
+    }
+    String::from_utf8(bytes).map_err(|_| Error::Manifest(format!("{}: not UTF-8", file.url)))
 }
 
 /// One platform's entry of a [`Manifest`].
@@ -362,6 +630,33 @@ pub struct Asset {
     /// The archive's size in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
+    /// Patches from earlier versions to this one ([`delta`]): an app
+    /// running `from` downloads one instead of the archive.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deltas: Vec<Delta>,
+}
+
+/// A zstd patch from the app of one version to the app of the
+/// [`Manifest`]'s ([`delta`]). The app rebuilds its installed files as
+/// [`delta::base`] does, checks them against `base`, applies the patch and
+/// checks the result against `result`; on any difference it downloads the
+/// archive instead.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct Delta {
+    /// The version it patches.
+    pub from: String,
+    /// The SHA-256 of that version's files, as [`delta::base`] writes them.
+    pub base: String,
+    /// Where the patch is, absolute or relative to the manifest.
+    pub url: String,
+    /// The patch's SHA-256, in hex.
+    pub sha256: String,
+    /// The patch's size in bytes.
+    pub size: u64,
+    /// The SHA-256 of what the patch makes: a `.tar` of the new app.
+    pub result: String,
 }
 
 /// A newer version for this machine.
@@ -372,20 +667,31 @@ pub struct Available {
     pub version: String,
     /// What changed.
     pub notes: Option<String>,
+    /// What changed in other languages, by BCP 47 tag, their URLs
+    /// absolute: [`notes_for`] picks one.
+    pub localized_notes: BTreeMap<String, NotesFile>,
     /// Where it is, absolute.
     pub url: String,
     /// The archive's SHA-256; `None`: `url` is a page, not an archive.
     pub sha256: Option<String>,
     /// The archive's size.
     pub size: Option<u64>,
+    /// The patch from the running version, if the manifest has one.
+    pub delta: Option<Delta>,
 }
 
 /// This machine's key in [`Manifest::platforms`]: `<os>-<arch>` on the
-/// desktop; `android` or `ios`, which update through a store or a page.
+/// desktop; `android`, `ios` or `harmonyos`, which update through a store or
+/// a page (HarmonyOS's Rust target counts as Linux: `target_env = "ohos"`).
 pub fn platform() -> String {
-    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    let os = if cfg!(target_env = "ohos") {
+        "harmonyos"
+    } else {
+        std::env::consts::OS
+    };
+    let arch = std::env::consts::ARCH;
     match os {
-        "android" | "ios" => os.to_owned(),
+        "android" | "ios" | "harmonyos" => os.to_owned(),
         _ => format!("{os}-{arch}"),
     }
 }
@@ -437,6 +743,30 @@ fn check_url(url: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("{url:?} is not an https:// URL"))
+    }
+}
+
+/// `url`'s scheme and authority (`host:port`, with any user info), each
+/// lower-case; `None` without `scheme://` and a non-empty authority, or with
+/// a backslash in it, which URL parsers read differently.
+fn authority(url: &str) -> Option<(String, String)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    if scheme.is_empty() || authority.is_empty() || authority.contains('\\') {
+        return None;
+    }
+    Some((scheme.to_ascii_lowercase(), authority.to_ascii_lowercase()))
+}
+
+/// The origin (`http://host:port`) of a plain-HTTP `url` without user
+/// info; `None` for any other URL.
+fn http_origin(url: &str) -> Option<String> {
+    match authority(url)? {
+        (scheme, authority) if scheme == "http" && !authority.contains('@') => {
+            Some(format!("http://{authority}"))
+        }
+        _ => None,
     }
 }
 
@@ -546,6 +876,60 @@ mod tests {
     }
 
     #[test]
+    fn localized_notes_are_files_beside_the_manifest() {
+        let zh_tw = sha256("修復".as_bytes());
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "id": "com.example.app",
+            "version": "2.0.0",
+            "notes": "Fixes",
+            "localizedNotes": {
+                "zh-TW": { "url": "notes.zh-TW.md", "sha256": zh_tw },
+                "ja": { "url": "https://cdn.example.com/notes.ja.md", "sha256": "ab" },
+            },
+            "platforms": { "linux-x86_64": { "url": "a.tar.gz", "sha256": "ab", "size": 2 } },
+        }))
+        .unwrap();
+        let available = config()
+            .check(&bytes, None, "linux-x86_64")
+            .unwrap()
+            .unwrap();
+        assert_eq!(available.notes.as_deref(), Some("Fixes"));
+        let file = notes_for(&available.localized_notes, "zh-tw").unwrap();
+        assert_eq!(
+            file.url,
+            "https://github.com/owner/repo/releases/latest/download/notes.zh-TW.md"
+        );
+        assert_eq!(
+            open_notes(file, "修復".as_bytes().to_vec()).unwrap(),
+            "修復"
+        );
+        assert!(open_notes(file, b"tampered".to_vec()).is_err());
+        assert_eq!(
+            notes_for(&available.localized_notes, "ja-JP").unwrap().url,
+            "https://cdn.example.com/notes.ja.md"
+        );
+        assert!(notes_for(&available.localized_notes, "zh-CN").is_none());
+        assert!(notes_for(&available.localized_notes, "en").is_none());
+        // A manifest without them reads as before, and writes as before.
+        let plain = config()
+            .check(&manifest("2.0.0", "a.tar.gz"), None, "linux-x86_64")
+            .unwrap()
+            .unwrap();
+        assert!(plain.localized_notes.is_empty());
+        let written = serde_json::to_value(Manifest::default()).unwrap();
+        assert!(written.get("localizedNotes").is_none());
+        // Notes over plain HTTP are refused as archives are.
+        let http = serde_json::to_vec(&serde_json::json!({
+            "id": "com.example.app",
+            "version": "2.0.0",
+            "localizedNotes": { "ja": { "url": "http://x.dev/ja.md", "sha256": "ab" } },
+            "platforms": { "linux-x86_64": { "url": "a.tar.gz", "sha256": "ab", "size": 2 } },
+        }))
+        .unwrap();
+        assert!(config().check(&http, None, "linux-x86_64").is_err());
+    }
+
+    #[test]
     fn github_reads_the_latest_release_without_the_api() {
         assert_eq!(
             config().manifest_url(),
@@ -606,6 +990,125 @@ mod tests {
         );
     }
 
+    fn with_channels(channels: &[(&str, &str)]) -> Config {
+        Config {
+            public_key: Some(public()),
+            channels: channels
+                .iter()
+                .map(|(name, url)| ((*name).to_owned(), (*url).to_owned()))
+                .collect(),
+            ..config()
+        }
+    }
+
+    #[test]
+    fn channels_need_names_https_and_a_key() {
+        assert!(
+            with_channels(&[("beta", "https://x.dev/beta/latest.json")])
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            with_channels(&[("beta", "http://x.dev/beta/latest.json")])
+                .validate()
+                .is_err()
+        );
+        for name in ["", "a b", "a/b"] {
+            assert!(
+                with_channels(&[(name, "https://x.dev/l.json")])
+                    .validate()
+                    .is_err(),
+                "{name:?}"
+            );
+        }
+        let unsigned = Config {
+            public_key: None,
+            ..with_channels(&[("beta", "https://x.dev/beta/latest.json")])
+        };
+        assert!(unsigned.validate().is_err());
+        // The packaged file keeps them; one without any reads as before.
+        let beta = with_channels(&[("beta", "https://x.dev/beta/latest.json")]);
+        let bytes = serde_json::to_vec(&beta).unwrap();
+        assert_eq!(Config::parse(&bytes).unwrap(), beta);
+        let plain = serde_json::to_value(config()).unwrap();
+        assert!(plain.get("channels").is_none());
+    }
+
+    #[test]
+    fn a_channel_is_chosen_by_a_declared_name_only() {
+        let config = with_channels(&[("beta", "https://x.dev/beta/latest.json")]);
+        let beta = config.channel("beta").unwrap();
+        assert_eq!(beta.manifest_url(), "https://x.dev/beta/latest.json");
+        assert_eq!(
+            beta.signature_url().as_deref(),
+            Some("https://x.dev/beta/latest.json.sig")
+        );
+        assert!(beta.validate().is_ok());
+        assert!(config.channel("nightly").is_err());
+        assert!(config.channel("https://evil.dev/latest.json").is_err());
+        // The default source stays the package's own.
+        assert_eq!(
+            config.manifest_url(),
+            "https://github.com/owner/repo/releases/latest/download/latest.json"
+        );
+        // Archives resolve next to the channel's manifest; the signature,
+        // the id and the newer version are checked as on the default.
+        let bytes = manifest("2.0.0", "a.tar.gz");
+        let signature = sign(SECRET, &bytes).unwrap();
+        let available = beta
+            .check(&bytes, Some(signature.as_bytes()), "linux-x86_64")
+            .unwrap()
+            .unwrap();
+        assert_eq!(available.url, "https://x.dev/beta/a.tar.gz");
+        assert!(beta.check(&bytes, None, "linux-x86_64").is_err());
+        let older = manifest("1.1.0", "a.tar.gz");
+        let signature = sign(SECRET, &older).unwrap();
+        assert!(
+            beta.check(&older, Some(signature.as_bytes()), "linux-x86_64")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_patch_from_the_running_version_is_offered() {
+        let delta = |from: &str| {
+            serde_json::json!({ "from": from, "base": "aa", "url": format!("from-{from}.patch"),
+                                "sha256": "bb", "size": 3, "result": "cc" })
+        };
+        let manifest = |deltas: serde_json::Value| {
+            serde_json::to_vec(&serde_json::json!({
+                "id": "com.example.app", "version": "1.3.0",
+                "platforms": { "linux-x86_64": { "url": "a.tar.gz", "sha256": "ab", "size": 2,
+                                                 "deltas": deltas } },
+            }))
+            .unwrap()
+        };
+        let check = |bytes: Vec<u8>| {
+            config()
+                .check(&bytes, None, "linux-x86_64")
+                .unwrap()
+                .unwrap()
+        };
+        let available = check(manifest(serde_json::json!([
+            delta("1.1.0"),
+            delta("1.2.0")
+        ])));
+        let offered = available.delta.unwrap();
+        assert_eq!(offered.from, "1.2.0");
+        assert_eq!(
+            offered.url,
+            "https://github.com/owner/repo/releases/latest/download/from-1.2.0.patch"
+        );
+        assert!(
+            check(manifest(serde_json::json!([delta("1.1.0")])))
+                .delta
+                .is_none()
+        );
+        // Older manifests have none.
+        assert!(check(manifest(serde_json::json!([]))).delta.is_none());
+    }
+
     #[test]
     fn only_a_newer_version_for_this_platform_is_offered() {
         let check = |version: &str, platform: &str| {
@@ -655,9 +1158,17 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_of_another_app_or_plain_http_is_refused() {
-        let other = br#"{"id":"com.other","version":"9.0.0","platforms":{}}"#;
-        assert!(config().check(other, None, "linux-x86_64").is_err());
+    fn a_manifest_of_another_id_is_taken_plain_http_is_refused() {
+        // An app moving to a new id: the signature binds, not the id.
+        let other = manifest("2.0.0", "https://x.dev/a.tar.gz");
+        let other = String::from_utf8(other)
+            .unwrap()
+            .replace("com.example.app", "com.other");
+        let found = config()
+            .check(other.as_bytes(), None, "linux-x86_64")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.version, "2.0.0");
         let plain = manifest("2.0.0", "http://x.dev/a.tar.gz");
         assert!(config().check(&plain, None, "linux-x86_64").is_err());
     }
@@ -667,6 +1178,7 @@ mod tests {
             build: Some(3),
             packages: Some(Packages {
                 roots: vec![public()],
+                ..Packages::default()
             }),
             ..config()
         }
@@ -689,13 +1201,14 @@ mod tests {
     fn package_roots_are_keys() {
         assert!(takes_packages().validate().is_ok());
         let none = Config {
-            packages: Some(Packages { roots: vec![] }),
+            packages: Some(Packages::default()),
             ..config()
         };
         assert!(none.validate().is_err());
         let bad = Config {
             packages: Some(Packages {
                 roots: vec!["not a key".into()],
+                ..Packages::default()
             }),
             ..config()
         };
@@ -756,12 +1269,6 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let other = br#"{"id":"com.other","version":"1.0.0","package":{"version":"1","build":9,"url":"p","sha256":"ab","minRuntime":"0.1.0"}}"#;
-        assert!(
-            takes_packages()
-                .check_package(other, None, 3, "0.5.0")
-                .is_err()
-        );
         let plain = serde_json::to_vec(&serde_json::json!({
             "id": "com.example.app", "version": "1.0.0",
             "package": { "version": "1", "build": 9, "url": "http://x.dev/p.nshpkg",
@@ -772,6 +1279,210 @@ mod tests {
             takes_packages()
                 .check_package(&plain, None, 3, "0.5.0")
                 .is_err()
+        );
+    }
+
+    /// An app taking packages from feeds its code names, over plain HTTP
+    /// when `allow_http`.
+    fn runtime_feeds(allow_http: bool) -> Config {
+        Config {
+            github: None,
+            public_key: Some(public()),
+            packages: Some(Packages {
+                roots: vec![public()],
+                source: Some(PackageSource::Runtime),
+                allow_http,
+            }),
+            ..takes_packages()
+        }
+    }
+
+    fn signed(manifest: &[u8]) -> String {
+        sign(SECRET, manifest).unwrap()
+    }
+
+    #[test]
+    fn runtime_feeds_need_a_key_and_opt_in_to_http() {
+        assert!(runtime_feeds(false).validate().is_ok());
+        assert!(runtime_feeds(true).validate().is_ok());
+        let bytes = serde_json::to_vec(&runtime_feeds(true)).unwrap();
+        assert_eq!(Config::parse(&bytes).unwrap(), runtime_feeds(true));
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.contains(r#""source":"runtime""#), "{text}");
+        assert!(text.contains(r#""allowHttp":true"#), "{text}");
+        // A signature still decides what is offered.
+        let unsigned = Config {
+            public_key: None,
+            ..runtime_feeds(false)
+        };
+        assert!(unsigned.validate().is_err());
+        // HTTP only for feeds named at run time, never the packaged source.
+        let mut fixed = takes_packages();
+        fixed.packages.as_mut().unwrap().allow_http = true;
+        assert!(fixed.validate().is_err());
+        // Without runtime packages, a source is still needed.
+        let mut none = takes_packages();
+        none.github = None;
+        assert!(none.validate().is_err());
+        // An older runtime's file, and one asking for an unknown source.
+        let old = br#"{"id":"a.b","version":"1.0.0","github":"o/r","packages":{"roots":[]}}"#;
+        assert!(matches!(Config::parse(old), Err(Error::Config(_))));
+        let unknown = format!(
+            r#"{{"id":"a.b","version":"1.0.0","github":"o/r","packages":{{"roots":["{}"],"source":"elsewhere"}}}}"#,
+            public()
+        );
+        assert!(Config::parse(unknown.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn a_runtime_feed_is_chosen_by_the_app_only_when_it_opts_in() {
+        let feed = runtime_feeds(false)
+            .package_feed("https://a.example/updates/latest.json")
+            .unwrap();
+        assert_eq!(feed.manifest_url(), "https://a.example/updates/latest.json");
+        assert_eq!(
+            feed.signature_url().as_deref(),
+            Some("https://a.example/updates/latest.json.sig")
+        );
+        // The packaged source decides unless the app opts in.
+        let fixed = Config {
+            public_key: Some(public()),
+            ..takes_packages()
+        };
+        assert!(fixed.package_feed("https://a.example/latest.json").is_err());
+        // Plain HTTP needs allowHttp; loopback is a local test, as for `url`.
+        assert!(
+            runtime_feeds(false)
+                .package_feed("http://10.0.0.2/latest.json")
+                .is_err()
+        );
+        assert!(
+            runtime_feeds(false)
+                .package_feed("http://127.0.0.1:8080/latest.json")
+                .is_ok()
+        );
+        assert!(
+            runtime_feeds(true)
+                .package_feed("http://10.0.0.2:8080/latest.json")
+                .is_ok()
+        );
+        for bad in [
+            "ftp://10.0.0.2/latest.json",
+            "file:///etc/latest.json",
+            "http:///latest.json",
+            "http://user:pass@10.0.0.2/latest.json",
+            "https://token@a.example/latest.json",
+            "http://10.0.0.2\\@evil.dev/latest.json",
+            "latest.json",
+        ] {
+            assert!(runtime_feeds(true).package_feed(bad).is_err(), "{bad}");
+        }
+        // A runtime-only app checks for no new app.
+        assert!(feed.has_source());
+        let only = runtime_feeds(false);
+        assert!(!only.has_source());
+        assert!(
+            only.check(&manifest("9.0.0", "a.tar.gz"), None, "linux-x86_64")
+                .is_err()
+        );
+        assert!(
+            only.check_package(&package_manifest(5, "0.1.0"), None, 3, "0.5.0")
+                .is_err()
+        );
+    }
+
+    fn package_at(build: u64, url: &str, notes: Option<&str>) -> Vec<u8> {
+        let mut manifest = serde_json::json!({
+            "id": "com.example.app",
+            "version": "1.2.0",
+            "package": {
+                "version": "1.2.1", "build": build, "url": url,
+                "sha256": "ab", "size": 2, "minRuntime": "0.1.0",
+            },
+        });
+        if let Some(notes) = notes {
+            manifest["localizedNotes"] =
+                serde_json::json!({ "ja": { "url": notes, "sha256": "ab" } });
+        }
+        serde_json::to_vec(&manifest).unwrap()
+    }
+
+    #[test]
+    fn a_plain_http_feed_stays_on_its_origin() {
+        let feed = runtime_feeds(true)
+            .package_feed("http://10.0.0.2:8080/updates/latest.json")
+            .unwrap();
+        let check = |manifest: Vec<u8>| {
+            let signature = signed(&manifest);
+            feed.check_package(&manifest, Some(signature.as_bytes()), 3, "0.5.0")
+        };
+        let found = check(package_at(5, "app-5.nshpkg", Some("notes.ja.md")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.url, "http://10.0.0.2:8080/updates/app-5.nshpkg");
+        assert_eq!(
+            found.localized_notes["ja"].url,
+            "http://10.0.0.2:8080/updates/notes.ja.md"
+        );
+        assert!(check(package_at(5, "HTTP://10.0.0.2:8080/p/app-5.nshpkg", None)).is_ok());
+        assert!(check(package_at(5, "https://cdn.example/app-5.nshpkg", None)).is_ok());
+        for elsewhere in [
+            "http://10.0.0.3:8080/app-5.nshpkg",
+            "http://10.0.0.2/app-5.nshpkg",
+            "http://10.0.0.2:8080@evil.dev/app-5.nshpkg",
+        ] {
+            assert!(
+                check(package_at(5, elsewhere, None)).is_err(),
+                "{elsewhere}"
+            );
+        }
+        assert!(check(package_at(5, "a.nshpkg", Some("http://evil.dev/ja.md"))).is_err());
+        // An HTTPS feed gets no plain-HTTP downloads from the opt-in.
+        let secure = runtime_feeds(true)
+            .package_feed("https://a.example/latest.json")
+            .unwrap();
+        let manifest = package_at(5, "http://a.example/app-5.nshpkg", None);
+        let signature = signed(&manifest);
+        assert!(
+            secure
+                .check_package(&manifest, Some(signature.as_bytes()), 3, "0.5.0")
+                .is_err()
+        );
+    }
+
+    /// What someone on the network can do to a plain-HTTP feed: not change a
+    /// manifest, and not get an older one, however validly signed, offered
+    /// again.
+    #[test]
+    fn a_plain_http_feed_cannot_be_tampered_with_or_downgraded() {
+        let feed = runtime_feeds(true)
+            .package_feed("http://10.0.0.2/latest.json")
+            .unwrap();
+        let newer = package_at(7, "app-7.nshpkg", None);
+        let signature = signed(&newer);
+        assert!(feed.check_package(&newer, None, 5, "0.5.0").is_err());
+        let mut forged = newer.clone();
+        let at = forged.len() - 2;
+        forged[at] = b' ';
+        assert!(
+            feed.check_package(&forged, Some(signature.as_bytes()), 5, "0.5.0")
+                .is_err()
+        );
+        // A replay of the running build's manifest, or an older one.
+        for build in [5, 4, 1] {
+            let old = package_at(build, "app.nshpkg", None);
+            let signature = signed(&old);
+            assert!(
+                feed.check_package(&old, Some(signature.as_bytes()), 5, "0.5.0")
+                    .unwrap()
+                    .is_none(),
+                "build {build}"
+            );
+        }
+        assert!(
+            feed.check_package(&newer, Some(signature.as_bytes()), 5, "0.5.0")
+                .unwrap()
+                .is_some()
         );
     }
 

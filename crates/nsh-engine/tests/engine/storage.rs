@@ -30,13 +30,13 @@ fn start(
 }
 
 /// `app` with `capabilities` and the id `app_id`, the platform giving
-/// `data_dir` and `storage`.
+/// `support_dir` and `storage`.
 fn launch(
     name: &str,
     app: &str,
     capabilities: Option<&str>,
     app_id: Option<&str>,
-    data_dir: Option<&std::path::Path>,
+    support_dir: Option<&std::path::Path>,
     storage: Option<&PathBuf>,
 ) -> (Engine, Receiver<MountBatch>) {
     let dir = scratch(name);
@@ -73,7 +73,7 @@ fn launch(
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
-        data_dir: data_dir.map(Into::into),
+        support_dir: support_dir.map(Into::into),
         cache: nsh_engine::CacheOptions::off(),
         storage: storage.map(|data| FileStorage::open(data) as _),
         clock: Default::default(),
@@ -82,10 +82,10 @@ fn launch(
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
+        data_dir: None,
     };
     (
         Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
@@ -188,7 +188,7 @@ fn rust_shares_the_entries_of_js() {
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
-        data_dir: None,
+        support_dir: None,
         cache: nsh_engine::CacheOptions::off(),
         storage: Some(FileStorage::open(&data)),
         clock: Default::default(),
@@ -197,10 +197,10 @@ fn rust_shares_the_entries_of_js() {
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
+        data_dir: None,
     };
     let engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
     assert_eq!(shown(&rx, "rust"), "rust saw 1 from_rust,launches");
@@ -294,7 +294,7 @@ fn rust_edits_the_storage() {
         ui_sets: Vec::new(),
         runtime: None,
         // In memory: the platform gave none.
-        data_dir: None,
+        support_dir: None,
         cache: nsh_engine::CacheOptions::off(),
         storage: None,
         clock: Default::default(),
@@ -303,10 +303,10 @@ fn rust_edits_the_storage() {
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
+        data_dir: None,
     };
     let _engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
     assert_eq!(shown(&rx, "rust"), "rust b true 0 true");
@@ -384,7 +384,7 @@ fn a_rust_root_keeps_its_data_under_its_id() {
         limits: nsh_engine::Limits::default(),
         ui_sets: Vec::new(),
         runtime: None,
-        data_dir: Some(root.clone()),
+        support_dir: Some(root.clone()),
         cache: nsh_engine::CacheOptions::off(),
         storage: None,
         clock: Default::default(),
@@ -393,17 +393,17 @@ fn a_rust_root_keeps_its_data_under_its_id() {
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
+        data_dir: None,
     };
     let engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();
     assert_eq!(shown(&rx, "rust"), "rust wrote");
     drop(engine);
     let file = root.join("com.example.rusty/storage.json");
     assert_eq!(std::fs::read_to_string(file).unwrap(), r#"{"from":"rust"}"#);
-    // Its own files sit beside its storage (`data_dir`).
+    // Its own files sit beside its storage (`support_dir`).
     let db = root.join("com.example.rusty/app.db");
     assert_eq!(std::fs::read_to_string(db).unwrap(), "rust");
 }
@@ -417,4 +417,139 @@ fn a_built_bundle_carries_its_apps_id() {
     let bundle = Bundle::read(&dir.join("bundle.js")).unwrap();
     assert_eq!(bundle.app_id.as_deref(), Some("com.example.built"));
     assert_eq!(App::Js(bundle).app_id(), Some("com.example.built"));
+}
+
+/// Rust root `root` with its storage in `data`, beside other engines
+/// using the same storage (other windows of the app).
+fn start_rust(root: Root, data: &PathBuf) -> (Engine, Receiver<MountBatch>) {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let config = EngineConfig {
+        app: App::Rust(root),
+        viewport: Size::new(px(390.0), px(844.0)),
+        trace: false,
+        content_culling: false,
+        network: None,
+        websocket: None,
+        refuse_connections: None,
+        filesystem: None,
+        assets: None,
+        environment: Environment::default(),
+        header_heights: (nsh_core::Points(44.0), nsh_core::Points(96.0)),
+        limits: nsh_engine::Limits::default(),
+        ui_sets: Vec::new(),
+        runtime: None,
+        support_dir: None,
+        cache: nsh_engine::CacheOptions::off(),
+        storage: Some(FileStorage::open(data)),
+        clock: Default::default(),
+        context: Default::default(),
+        pinned: Default::default(),
+        clipboard: None,
+        host: Default::default(),
+        picker: None,
+        audio: None,
+        windows: None,
+        login_item: None,
+        data_dir: None,
+    };
+    (
+        Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap(),
+        rx,
+    )
+}
+
+const LISTENER: &str = r#"import { mount, signal, Text } from "nsh";
+import { Storage } from "nsh";
+
+const shown = signal("waiting");
+const heard: string[] = [];
+const stop = Storage.on("change", (e) => {
+  heard.push(`${e.key}=${e.value}`);
+  if (e.key === null) {
+    stop();
+    shown.set(`heard ${heard.join(" ")}`);
+  }
+});
+setTimeout(async () => {
+  // Its own change: not heard.
+  await Storage.setItem("own", "1");
+  shown.set(`listening ${typeof stop}`);
+}, 0);
+
+mount(() => <Text>{shown()}</Text>);
+"#;
+
+#[derive(Clone, PartialEq, Props)]
+struct OtherWindowProps {}
+
+/// Another window of the app, changing the entries.
+#[component]
+fn OtherWindow(_props: OtherWindowProps) -> impl IntoElement {
+    Storage::set_item("theme", "dark").unwrap();
+    // Unchanged: nothing to hear.
+    Storage::set_item("theme", "dark").unwrap();
+    Storage::remove_item("own");
+    Storage::clear();
+    text(|| "rust changed".to_owned())
+}
+
+#[test]
+fn js_hears_what_another_window_changed() {
+    let data = scratch("js-hears-data");
+    let (_listener, rx) = start("js-hears", LISTENER, None, &data);
+    assert_eq!(shown(&rx, "listening"), "listening function");
+    let (_other, other_rx) = start_rust(Root::new::<OtherWindow>(|| OtherWindowProps {}), &data);
+    assert_eq!(shown(&other_rx, "rust"), "rust changed");
+    assert_eq!(shown(&rx, "heard"), "heard theme=dark own=null null=null");
+}
+
+#[derive(Clone, PartialEq, Props)]
+struct WatcherProps {}
+
+/// A window whose Rust hears what other windows change.
+#[component]
+fn Watcher(_props: WatcherProps) -> impl IntoElement {
+    let heard = signal(Vec::<String>::new());
+    Storage::on_change(move |change| {
+        let value = change.value().unwrap_or("-");
+        let entry = format!("{}={value}", change.key().unwrap_or("*"));
+        heard.update(|h| h.push(entry));
+    });
+    // Its own change: not heard.
+    Storage::set_item("own", "1").unwrap();
+    text(move || {
+        let heard = heard.get();
+        if heard.is_empty() {
+            "rust listening".to_owned()
+        } else {
+            format!("rust heard {}", heard.join(" "))
+        }
+    })
+}
+
+const CHANGER: &str = r#"import { mount, signal, Text } from "nsh";
+import { Storage } from "nsh";
+
+const shown = signal("waiting");
+setTimeout(async () => {
+  await Storage.setItem("theme", "dark");
+  await Storage.removeItem("own");
+  await Storage.setItem("theme", "light");
+  shown.set("changed");
+}, 0);
+
+mount(() => <Text>{shown()}</Text>);
+"#;
+
+#[test]
+fn rust_hears_what_another_window_changed() {
+    let data = scratch("rust-hears-data");
+    let (_watcher, rx) = start_rust(Root::new::<Watcher>(|| WatcherProps {}), &data);
+    assert_eq!(shown(&rx, "rust"), "rust listening");
+    let (_changer, changer_rx) = start("rust-hears", CHANGER, None, &data);
+    assert_eq!(shown(&changer_rx, "changed"), "changed");
+    assert_eq!(
+        shown(&rx, "rust heard theme=dark own=- theme=light"),
+        "rust heard theme=dark own=- theme=light"
+    );
 }

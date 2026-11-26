@@ -19,17 +19,21 @@
 //!   dialog, a sheet, a menu) covers it. The window takes the input and
 //!   forwards to the page what nsh's hit testing gives it.
 //! - **Registered components**: [`crate::AppView::register_component`]
-//!   names a factory; the core creates a [`ViewKind::Native`] container,
+//!   names a factory; the core creates a [`nsh_core::ViewKind::Native`] container,
 //!   names the component ([`MountItem::Component`]) and sends its props as
 //!   JSON as they change. A component draws with Direct2D in the view
-//!   ([`NativeComponent::draw`]) or brings a child window of its own
-//!   ([`NativeComponent::window`]), moved where the view was drawn after
-//!   every frame ([`Hosted::placed`]), clipped to its clipping ancestors
-//!   and its rounded corners with a window region and hidden while its view
-//!   is not drawn. Being a window, it sits above everything nsh draws (the
-//!   "airspace" limit of child windows): nsh content drawn over it is
-//!   covered by it. Components emit events and report their own size
-//!   through their [`ComponentContext`].
+//!   ([`NativeComponent::draw`]), brings a composition visual of its own
+//!   ([`NativeComponent::visual`]: content another device draws, a swap
+//!   chain of its own), which the window's composition stacks in order with
+//!   nsh's drawing as it stacks a web view's page, placed, clipped and faded
+//!   like its view ([`NativeComponent::placed`]), or brings a child
+//!   window of its own ([`NativeComponent::window`]), moved where the view
+//!   was drawn after every frame ([`Hosted::placed`]), clipped to its
+//!   clipping ancestors and its rounded corners with a window region and
+//!   hidden while its view is not drawn. Being a window, it sits above
+//!   everything nsh draws (the "airspace" limit of child windows): nsh
+//!   content drawn over it is covered by it. Components emit events and
+//!   report their own size through their [`ComponentContext`].
 //!   Registries belong to one `AppView` (and the views made from the same
 //!   [`crate::AppOptions`]): no globals.
 //!
@@ -38,27 +42,29 @@
 //!
 //! [`MountItem::Component`]: nsh_core::MountItem::Component
 
+#[cfg(feature = "media")]
 mod video;
+#[cfg(feature = "webview")]
 mod web;
 
 use std::{
     cell::{Cell, RefCell},
-    path::PathBuf,
     rc::{Rc, Weak},
     sync::Arc,
 };
 
 use nsh_core::{
-    Bounds, Command, EventKind, EventPayload, NativeProps, NodeId, PayloadValue, Points, Size,
-    ViewKind, geometry::Point,
+    Bounds, Command, Cursor, EventKind, EventPayload, NativeProps, NodeId, PayloadValue, Points,
+    Size, geometry::Point,
 };
 use nsh_engine::{Access, EngineControl};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value as JsonValue;
 use windows::Win32::{
     Foundation::{HWND, RECT},
-    Graphics::Gdi::{
-        CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, RGN_AND, SetWindowRgn,
+    Graphics::{
+        DirectComposition::{IDCompositionDesktopDevice, IDCompositionVisual2},
+        Gdi::{CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, RGN_AND, SetWindowRgn},
     },
     UI::WindowsAndMessaging::{
         GWL_STYLE, GetWindowLongPtrW, HWND_TOP, SW_HIDE, SWP_NOACTIVATE, SWP_NOZORDER,
@@ -68,6 +74,7 @@ use windows::Win32::{
 };
 
 use crate::{
+    compose::Composition,
     image::AssetBase,
     render::DrawCx,
     surface::Surface,
@@ -131,6 +138,43 @@ pub trait NativeComponent {
         None
     }
 
+    /// True for a component that brings a composition visual of its own
+    /// ([`Self::visual`]). Asked once, when it is made: a frame decides
+    /// whether to draw the view or stack a visual before any visual exists,
+    /// so a component that only draws is never asked for one and its first
+    /// frame is drawn. True with no visual from [`Self::visual`]: its first
+    /// frame shows nothing, and it is drawn from the next frame on.
+    fn composed(&self) -> bool {
+        false
+    }
+
+    /// The visual of a [`Self::composed`] component, made on `device`, the
+    /// composition device of the window its view is first drawn in (asked
+    /// then, once). The window stacks it in order with what nsh draws, as it
+    /// stacks a web view's page: what is drawn before the view is below it,
+    /// what is drawn after it above. `None`: it is drawn with
+    /// [`Self::draw`] instead.
+    ///
+    /// Not asked again when the view moves to another window: the visual
+    /// stays on the first window's device and is not shown in the new one.
+    /// Like a web view's page, it is left out of the window's offscreen
+    /// drawings (the surface drawn to a picture, shader effects and
+    /// transitions).
+    fn visual(&mut self, device: &IDCompositionDesktopDevice) -> Option<IDCompositionVisual2> {
+        let _ = device;
+        None
+    }
+
+    /// Where the frame just shown put the view of a composed component
+    /// (`None`: it was not drawn, and its visual is out of the window's
+    /// tree): the component sets its visual to it (its transform, clip,
+    /// corners and opacity), and the window commits its composition after.
+    /// A window that closes while the component lives does not call it with
+    /// `None`; the component drops with its view.
+    fn placed(&mut self, at: Option<crate::Placement>) {
+        let _ = at;
+    }
+
     /// Prop `name` changed (`None`: removed). Every prop the app set comes
     /// right after the component is made.
     fn set_prop(&mut self, name: &str, value: Option<&JsonValue>);
@@ -157,10 +201,96 @@ pub trait NativeComponent {
     /// A wheel or touchpad scroll over the component (an image viewer
     /// zooms with it). True when it took it; otherwise the scroll views
     /// around it scroll, as they do by default. Presses, moves and
-    /// releases go to its view's handlers (`onPress`, `onMouseMove`).
+    /// releases go to its view's handlers unless it takes them
+    /// ([`Self::hit`]).
     fn wheel(&mut self, event: &Wheel) -> bool {
         let _ = event;
         false
+    }
+
+    /// True when the component takes the pointer at `(x, y)` (points, the
+    /// component's coordinates; `size` is its size). Asked for each point,
+    /// so a component can take it only where it has something to hit. By
+    /// default it takes none: presses, moves and releases go to its view's
+    /// handlers (`onPress`, `onMouseMove`).
+    fn hit(&self, x: f32, y: f32, size: (f32, f32)) -> bool {
+        let _ = (x, y, size);
+        false
+    }
+
+    /// A pointer event while the component has the pointer: a press went
+    /// down where it hits (the moves and the release follow until the
+    /// release, also outside its bounds), or the mouse is over where it
+    /// hits (moves, then [`PointerKind::Leave`]). Only the left button: the
+    /// others stay with its view. True when it took the event; a press it
+    /// declines goes to the views below.
+    fn pointer(&mut self, event: &Pointer) -> bool {
+        let _ = event;
+        false
+    }
+
+    /// The cursor over `(x, y)` where it hits; `None` (or
+    /// [`Cursor::Auto`]) for its view's.
+    fn cursor(&self, x: f32, y: f32) -> Option<Cursor> {
+        let _ = (x, y);
+        None
+    }
+}
+
+/// What a pointer did ([`Pointer::kind`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PointerKind {
+    /// A button (or a finger, a pen) went down.
+    Down,
+    /// It moved.
+    Move,
+    /// It went up.
+    Up,
+    /// The press was taken away (capture lost).
+    Cancel,
+    /// The mouse left where the component hits.
+    Leave,
+}
+
+/// A pointer event for a component ([`NativeComponent::pointer`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct Pointer {
+    /// What happened.
+    pub kind: PointerKind,
+    /// Where (points, the component's coordinates).
+    pub x: f32,
+    /// Where, vertically.
+    pub y: f32,
+    /// Consecutive clicks (1, 2 for a double click, ...).
+    pub clicks: u32,
+    /// Shift held.
+    pub shift: bool,
+    /// Ctrl held.
+    pub ctrl: bool,
+    /// Alt held.
+    pub alt: bool,
+}
+
+impl Pointer {
+    fn new(event: &crate::view::ItemPointer) -> Self {
+        use crate::input::PointerKind as K;
+        Pointer {
+            kind: match event.kind {
+                K::Down => PointerKind::Down,
+                K::Move => PointerKind::Move,
+                K::Up => PointerKind::Up,
+                K::Cancel => PointerKind::Cancel,
+                K::Leave => PointerKind::Leave,
+            },
+            x: event.x,
+            y: event.y,
+            clicks: event.clicks,
+            shift: event.modifiers.shift,
+            ctrl: event.modifiers.ctrl,
+            alt: event.modifiers.alt,
+        }
     }
 }
 
@@ -309,10 +439,6 @@ pub(crate) struct NativeState {
     access: RefCell<Option<Arc<Access>>>,
     /// The application id: web views keep their data under it.
     app_id: RefCell<String>,
-    /// Where web views save downloads (the app's data directory's
-    /// `downloads`); `None` before an app starts or without a data
-    /// directory.
-    downloads: RefCell<Option<PathBuf>>,
     /// The controls, by node.
     hosts: RefCell<FxHashMap<NodeId, Host>>,
 }
@@ -351,24 +477,14 @@ impl NativeState {
         *self.app_id.borrow_mut() = app_id.to_owned();
     }
 
-    /// Where the app that starts saves web downloads (its data directory's
-    /// `downloads`); `None` without one.
-    pub(crate) fn set_downloads(&self, downloads: Option<PathBuf>) {
-        *self.downloads.borrow_mut() = downloads;
-    }
-
-    /// Where web views save downloads.
-    pub(crate) fn downloads(&self) -> Option<PathBuf> {
-        self.downloads.borrow().clone()
-    }
-
     /// Drops every control (the app stopped): media stops playing, pages
     /// close.
     pub(crate) fn clear(&self) {
         let hosts = std::mem::take(&mut *self.hosts.borrow_mut());
+        #[cfg(feature = "webview")]
         for host in hosts.values() {
             if let Host::Web(w) = host {
-                w.close();
+                w.shutdown();
             }
         }
         drop(hosts);
@@ -377,7 +493,9 @@ impl NativeState {
 
 /// What a native view holds.
 enum Host {
+    #[cfg(feature = "media")]
     Video(Rc<video::VideoItem>),
+    #[cfg(feature = "webview")]
     Web(Rc<web::WebItem>),
     Component(Rc<ComponentItem>),
 }
@@ -385,7 +503,9 @@ enum Host {
 impl Host {
     fn item(&self) -> Rc<dyn Hosted> {
         match self {
+            #[cfg(feature = "media")]
             Host::Video(v) => v.clone(),
+            #[cfg(feature = "webview")]
             Host::Web(w) => w.clone(),
             Host::Component(c) => c.clone(),
         }
@@ -399,7 +519,9 @@ impl Drop for Host {
         // last frame of a video, and a web view's page until the view is
         // not drawn anymore.
         match self {
+            #[cfg(feature = "media")]
             Host::Video(v) => v.close(),
+            #[cfg(feature = "webview")]
             Host::Web(w) => w.retire(),
             Host::Component(c) => c.close(),
         }
@@ -409,9 +531,18 @@ impl Drop for Host {
 /// Sets up a web view, video or component container.
 pub(crate) fn create(surface: &Rc<Surface>, view: &NshView) {
     let id = view.id();
+    #[cfg(not(feature = "media"))]
+    if matches!(view.kind(), nsh_core::ViewKind::Video) {
+        static WARNED: std::sync::Once = std::sync::Once::new();
+        WARNED.call_once(|| {
+            log::warn!("a Video shows nothing: this runtime was built without the feature `media`")
+        });
+    }
     let host = match view.kind() {
-        ViewKind::Video => Host::Video(video::VideoItem::new(surface, id)),
-        ViewKind::WebView => Host::Web(web::WebItem::new(surface, view)),
+        #[cfg(feature = "media")]
+        nsh_core::ViewKind::Video => Host::Video(video::VideoItem::new(surface, id)),
+        #[cfg(feature = "webview")]
+        nsh_core::ViewKind::WebView => Host::Web(web::WebItem::new(surface, view)),
         _ => Host::Component(Rc::new(ComponentItem {
             surface: Rc::downgrade(surface),
             id,
@@ -419,6 +550,8 @@ pub(crate) fn create(surface: &Rc<Surface>, view: &NshView) {
             window: Cell::new(None),
             parent: Cell::new(None),
             placement: Placement::default(),
+            composes: Cell::new(false),
+            composed: RefCell::new(None),
         })),
     };
     fill(view, &host.item());
@@ -450,10 +583,12 @@ pub(crate) fn props(surface: &Rc<Surface>, view: &NshView, props: &NativeProps) 
         .get(&view.id())
         .map(Host::item_ref);
     match (host, props) {
+        #[cfg(feature = "media")]
         (Some(HostRef::Video(video)), NativeProps::Video(p)) => {
             let base = surface.native.asset_base.borrow().clone();
             video.set(surface, p, base.as_ref());
         }
+        #[cfg(feature = "webview")]
         (Some(HostRef::Web(web)), NativeProps::WebView(p)) => web.set(surface, view, p),
         _ => log::debug!("native: props for a view of another kind"),
     }
@@ -485,6 +620,7 @@ pub(crate) fn component(surface: &Rc<Surface>, view: &NshView, name: &Arc<str>) 
         item.window.set(Some(hwnd));
         item.parent.set(Some(parent));
     }
+    item.composes.set(made.composed());
     *item.component.borrow_mut() = Some(made);
     view.changed();
 }
@@ -518,7 +654,9 @@ pub(crate) fn command(surface: &Rc<Surface>, view: &NshView, command: &Command) 
         .get(&view.id())
         .map(Host::item_ref);
     match (host, command) {
+        #[cfg(feature = "media")]
         (Some(HostRef::Video(video)), Command::Seek(seconds)) => video.seek(*seconds),
+        #[cfg(feature = "webview")]
         (Some(HostRef::Web(web)), _) => web.command(command),
         (Some(HostRef::Component(item)), Command::Native { name, args }) => {
             let taken = item.component.borrow_mut().take();
@@ -534,7 +672,9 @@ pub(crate) fn command(surface: &Rc<Surface>, view: &NshView, command: &Command) 
 /// A host's item, cloned out of the map so that no borrow of it is held
 /// while the control runs.
 enum HostRef {
+    #[cfg(feature = "media")]
     Video(Rc<video::VideoItem>),
+    #[cfg(feature = "webview")]
     Web(Rc<web::WebItem>),
     Component(Rc<ComponentItem>),
 }
@@ -542,7 +682,9 @@ enum HostRef {
 impl Host {
     fn item_ref(&self) -> HostRef {
         match self {
+            #[cfg(feature = "media")]
             Host::Video(v) => HostRef::Video(v.clone()),
+            #[cfg(feature = "webview")]
             Host::Web(w) => HostRef::Web(w.clone()),
             Host::Component(c) => HostRef::Component(c.clone()),
         }
@@ -571,6 +713,7 @@ pub(crate) fn take_keyboard(surface: &Surface) {
 }
 
 /// The web view of node `id`.
+#[cfg(feature = "webview")]
 fn web_item(surface: &Surface, id: NodeId) -> Option<Rc<web::WebItem>> {
     match surface.native.hosts.borrow().get(&id) {
         Some(Host::Web(item)) => Some(item.clone()),
@@ -651,6 +794,11 @@ struct ComponentItem {
     /// The window it is a child of: the one its view shows in.
     parent: Cell<Option<HWND>>,
     placement: Placement,
+    /// The component brings a visual ([`NativeComponent::composed`]).
+    composes: Cell<bool>,
+    /// Its visual and the composition it is in, once its view was drawn in
+    /// a window (kept: the window composes while it holds it).
+    composed: RefCell<Option<(Rc<Composition>, IDCompositionVisual2)>>,
 }
 
 impl ComponentItem {
@@ -668,7 +816,52 @@ impl ComponentItem {
         }
     }
 
+    /// Asks the component for its visual on the composition of the window
+    /// its view is in; false while it is in none, or when it has no visual
+    /// (then it is drawn instead).
+    fn bind(&self, surface: &Surface) -> bool {
+        if self.composed.borrow().is_some() {
+            return true;
+        }
+        let Some(view) = view_of(surface, self.id).filter(NshView::attached) else {
+            return false;
+        };
+        let window = crate::app_window::window_of(surface, &view);
+        let made = if window == nsh_core::ROOT_ID {
+            surface.compose()
+        } else {
+            crate::app_window::compose(surface, window).map(|(_, c)| c)
+        };
+        let composition = match made {
+            Ok(c) => c,
+            Err(err) => {
+                log::warn!("native: a component cannot compose: {err}");
+                self.composes.set(false);
+                // The next frame draws it instead.
+                view.changed();
+                return false;
+            }
+        };
+        let Ok(mut component) = self.component.try_borrow_mut() else {
+            return false;
+        };
+        // Taken out while its own code runs: a later frame asks again.
+        let Some(component) = component.as_mut() else {
+            return false;
+        };
+        let Some(visual) = component.visual(composition.device()) else {
+            self.composes.set(false);
+            view.changed();
+            return false;
+        };
+        *self.composed.borrow_mut() = Some((composition, visual));
+        // The window draws again with it in its composition.
+        view.changed();
+        true
+    }
+
     fn close(&self) {
+        self.composed.borrow_mut().take();
         if let Some(hwnd) = self.window.take() {
             // SAFETY: plain calls on a window the component made; it
             // destroys it when it drops.
@@ -693,10 +886,55 @@ impl Hosted for ComponentItem {
         cx.pop();
     }
 
-    fn hit(&self, _x: f32, _y: f32, _size: (f32, f32)) -> bool {
-        // Touches go to the view (presses, gestures, the responder system);
-        // a component's own window gets its input from Windows.
-        false
+    fn hit(&self, x: f32, y: f32, size: (f32, f32)) -> bool {
+        // By default touches go to the view (presses, gestures, the
+        // responder system); a component's own window gets its input from
+        // Windows. Not while its own code runs.
+        let Ok(component) = self.component.try_borrow() else {
+            return false;
+        };
+        component.as_ref().is_some_and(|c| c.hit(x, y, size))
+    }
+
+    fn pointer(&self, event: &crate::view::ItemPointer) -> bool {
+        let Ok(mut component) = self.component.try_borrow_mut() else {
+            return false;
+        };
+        let Some(component) = component.as_mut() else {
+            return false;
+        };
+        component.pointer(&Pointer::new(event))
+    }
+
+    fn cursor(&self, x: f32, y: f32) -> Option<crate::input::Cursor> {
+        let Ok(component) = self.component.try_borrow() else {
+            return None;
+        };
+        let cursor = component.as_ref()?.cursor(x, y)?;
+        crate::input::css_cursor(cursor)
+    }
+
+    fn composed(&self) -> bool {
+        self.composes.get()
+    }
+
+    fn visual(&self) -> Option<IDCompositionVisual2> {
+        self.composed.borrow().as_ref().map(|(_, v)| v.clone())
+    }
+
+    fn compose_at(&self, at: Option<&crate::compose::Placement>) {
+        if at.is_some()
+            && let Some(surface) = self.surface.upgrade()
+            && !self.bind(&surface)
+        {
+            return;
+        }
+        // Not while its own code runs: the next frame places it.
+        if let Ok(mut component) = self.component.try_borrow_mut()
+            && let Some(component) = component.as_mut()
+        {
+            component.placed(at.copied());
+        }
     }
 
     fn placed(&self, rect: Option<RECT>) {
@@ -752,27 +990,32 @@ impl Wheel {
 /// the components' windows it holds go back to the main window, hidden, so
 /// that they are not destroyed with it.
 pub(crate) fn window_closing(surface: &Surface, hwnd: HWND) {
-    let (webs, components): (Vec<_>, Vec<_>) = {
-        let hosts = surface.native.hosts.borrow();
-        let webs = hosts
+    #[cfg(feature = "webview")]
+    {
+        let webs: Vec<_> = surface
+            .native
+            .hosts
+            .borrow()
             .values()
             .filter_map(|h| match h {
                 Host::Web(w) if w.hwnd() == Some(hwnd) => Some(w.clone()),
                 _ => None,
             })
             .collect();
-        let components = hosts
+        for web in webs {
+            web.close();
+        }
+    }
+    let components: Vec<_> = {
+        let hosts = surface.native.hosts.borrow();
+        hosts
             .values()
             .filter_map(|h| match h {
                 Host::Component(c) if c.parent.get() == Some(hwnd) => Some(c.clone()),
                 _ => None,
             })
-            .collect();
-        (webs, components)
+            .collect()
     };
-    for web in webs {
-        web.close();
-    }
     let main = surface.hwnd();
     for item in components {
         if let Some(child) = item.window.get() {
@@ -931,6 +1174,7 @@ fn intersect(a: RECT, b: RECT) -> Option<RECT> {
 
 /// Where a video's source is.
 #[derive(Debug, PartialEq)]
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
 pub(crate) enum Location {
     /// A URL Media Foundation opens (`https://`, `file://`, ...).
     Url(String),
@@ -940,6 +1184,7 @@ pub(crate) enum Location {
 
 impl Location {
     /// The URL the media engine opens.
+    #[cfg_attr(not(feature = "media"), allow(dead_code))]
     pub(crate) fn url(&self) -> String {
         match self {
             Location::Url(url) => url.clone(),
@@ -949,6 +1194,7 @@ impl Location {
 }
 
 /// Resolves `source` (`asset:/` URIs against `base`).
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
 pub(crate) fn locate(source: &str, base: Option<&AssetBase>) -> Option<Location> {
     if let Some(path) = source.strip_prefix("asset:/") {
         let path = path.trim_start_matches('/');
@@ -975,6 +1221,7 @@ pub(crate) fn locate(source: &str, base: Option<&AssetBase>) -> Option<Location>
 /// A `file:` URL for a Windows path (`C:\a b\c.mp4` →
 /// `file:///C:/a%20b/c.mp4`; `\\server\share\c.mp4` →
 /// `file://server/share/c.mp4`).
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
 fn file_url(path: &str) -> String {
     let unc = path.strip_prefix(r"\\");
     let mut url = String::with_capacity(path.len() + 8);
@@ -994,11 +1241,13 @@ fn file_url(path: &str) -> String {
 
 /// Sends a control's events to JS, when JS listens to them.
 #[derive(Clone)]
+#[cfg_attr(not(any(feature = "webview", feature = "media")), allow(dead_code))]
 struct Emitter {
     surface: Weak<Surface>,
     id: NodeId,
 }
 
+#[cfg_attr(not(any(feature = "webview", feature = "media")), allow(dead_code))]
 impl Emitter {
     fn new(surface: &Rc<Surface>, id: NodeId) -> Self {
         Emitter {
@@ -1029,6 +1278,7 @@ impl Emitter {
     }
 }
 
+#[cfg_attr(not(any(feature = "webview", feature = "media")), allow(dead_code))]
 fn error(message: String) -> EventPayload {
     EventPayload::Map(vec![("message", PayloadValue::Str(message))])
 }
@@ -1134,5 +1384,106 @@ mod tests {
         let wheel = Wheel::new(0.0, 0.0, &event, 48.0);
         assert_eq!((wheel.notches_x, wheel.notches_y), (0.25, 0.0));
         assert!(wheel.precise && !wheel.ctrl);
+    }
+
+    /// A drawn component that takes the pointer in a rectangle, records the
+    /// events and shows a crosshair there.
+    struct Target(Rc<RefCell<Vec<Pointer>>>);
+
+    impl NativeComponent for Target {
+        fn set_prop(&mut self, _: &str, _: Option<&JsonValue>) {}
+
+        fn hit(&self, x: f32, y: f32, _size: (f32, f32)) -> bool {
+            (10.0..20.0).contains(&x) && (10.0..20.0).contains(&y)
+        }
+
+        fn pointer(&mut self, event: &Pointer) -> bool {
+            self.0.borrow_mut().push(*event);
+            event.kind != PointerKind::Down || event.x < 15.0
+        }
+
+        fn cursor(&self, _x: f32, _y: f32) -> Option<Cursor> {
+            Some(Cursor::Crosshair)
+        }
+    }
+
+    fn item(component: Option<Box<dyn NativeComponent>>) -> ComponentItem {
+        ComponentItem {
+            surface: Weak::new(),
+            id: 1,
+            component: RefCell::new(component),
+            window: Cell::new(None),
+            parent: Cell::new(None),
+            placement: Placement::default(),
+            composes: Cell::new(false),
+            composed: RefCell::new(None),
+        }
+    }
+
+    fn event(kind: crate::input::PointerKind, x: f32) -> crate::view::ItemPointer {
+        crate::view::ItemPointer {
+            kind,
+            x,
+            y: 12.0,
+            clicks: 2,
+            modifiers: crate::input::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            button: 0,
+            pointer: 1,
+            touch: false,
+            pen: false,
+        }
+    }
+
+    #[test]
+    fn components_take_the_pointer_where_they_hit() {
+        use crate::input::{Cursor as Shown, PointerKind as K};
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let it = item(Some(Box::new(Target(events.clone()))));
+        assert!(it.hit(12.0, 12.0, (100.0, 100.0)));
+        assert!(!it.hit(50.0, 12.0, (100.0, 100.0)));
+        assert_eq!(it.cursor(12.0, 12.0), Some(Shown::Crosshair));
+        // A press it takes, a move out of its bounds, the release.
+        assert!(it.pointer(&event(K::Down, 12.0)));
+        assert!(it.pointer(&event(K::Move, 150.0)));
+        assert!(it.pointer(&event(K::Up, 150.0)));
+        // A press it declines goes below.
+        assert!(!it.pointer(&event(K::Down, 18.0)));
+        assert!(it.pointer(&event(K::Leave, 18.0)));
+        let got = events.borrow();
+        let kinds: Vec<_> = got.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                PointerKind::Down,
+                PointerKind::Move,
+                PointerKind::Up,
+                PointerKind::Down,
+                PointerKind::Leave
+            ]
+        );
+        assert_eq!((got[1].x, got[1].y, got[1].clicks), (150.0, 12.0, 2));
+        assert!(got[0].shift && !got[0].ctrl && !got[0].alt);
+    }
+
+    #[test]
+    fn components_take_no_pointer_by_default() {
+        struct Plain;
+        impl NativeComponent for Plain {
+            fn set_prop(&mut self, _: &str, _: Option<&JsonValue>) {}
+        }
+        let it = item(Some(Box::new(Plain)));
+        assert!(!it.hit(12.0, 12.0, (100.0, 100.0)));
+        assert_eq!(it.cursor(12.0, 12.0), None);
+        assert!(!it.pointer(&event(crate::input::PointerKind::Down, 12.0)));
+        // Not made yet, or taken out while its own code runs.
+        let empty = item(None);
+        assert!(!empty.hit(12.0, 12.0, (100.0, 100.0)));
+        let busy = item(Some(Box::new(Plain)));
+        let _running = busy.component.borrow_mut();
+        assert!(!busy.hit(12.0, 12.0, (100.0, 100.0)));
+        assert!(!busy.pointer(&event(crate::input::PointerKind::Down, 12.0)));
     }
 }

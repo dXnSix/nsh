@@ -4,9 +4,9 @@
 //! table's header as a table, instead of the markers as text until the
 //! rest arrives. Only the last block is touched: the blocks before it are
 //! complete. A last line whose meaning the next characters decide (a list
-//! marker alone, a `-` or `=` line that may underline a heading, a fence
-//! being opened or closed) is held back until its line ends; a finished
-//! document is parsed as written.
+//! marker or an item's task box alone, a `-` or `=` line that may underline
+//! a heading, a fence being opened or closed) is held back until its line
+//! ends; a finished document is parsed as written.
 
 use std::borrow::Cow;
 
@@ -17,18 +17,46 @@ use super::{
 
 /// `source` with the syntax its last block leaves open closed.
 pub(crate) fn repair_streaming(source: &str) -> Cow<'_, str> {
-    let tail_start = match last_block(source) {
+    repair(source, false, &mut |_| {}).unwrap_or(Cow::Borrowed(source))
+}
+
+/// [`repair_streaming`] of `tail`, the end of a source from the start of a
+/// line after a blank line outside its fenced blocks (an offset a scan of
+/// the source gave `blank`): the scan of the whole source is in the same
+/// state there as at the start of a text, so the repair of the whole is
+/// the text before `tail` as written, then this. `None` when it is not: a
+/// line held back at the start of `tail` leaves the repair to the block
+/// before it. `blank` gets where each line after a blank line of `tail`
+/// outside its fenced blocks starts.
+pub(super) fn repair_tail<'s>(tail: &'s str, blank: &mut dyn FnMut(usize)) -> Option<Cow<'s, str>> {
+    repair(tail, true, blank)
+}
+
+/// The blank lines of `source` outside its fenced blocks, as the repair's
+/// scan reads them: where the line after each starts goes to `blank`.
+pub(super) fn blank_lines(source: &str, blank: &mut dyn FnMut(usize)) {
+    last_block(source, blank);
+}
+
+/// `source` repaired; with `tail`, `None` when the repair would reach the
+/// text before `source` ([`repair_tail`]).
+fn repair<'s>(source: &'s str, tail: bool, blank: &mut dyn FnMut(usize)) -> Option<Cow<'s, str>> {
+    let tail_start = match last_block(source, blank) {
         Last::Block(start) => start,
-        Last::Fenced => return Cow::Borrowed(source),
+        Last::Fenced => return Some(Cow::Borrowed(source)),
         Last::Hold(at) => {
             // The rest is repaired as if the held line had not arrived.
             let kept = source[..at].trim_end();
-            return Cow::Owned(repair_streaming(kept).into_owned());
+            if tail && kept.is_empty() {
+                return None;
+            }
+            let repaired = repair(kept, tail, &mut |_| {})?;
+            return Some(Cow::Owned(repaired.into_owned()));
         }
     };
     let tail = &source[tail_start..];
     if tail.trim().is_empty() {
-        return Cow::Borrowed(source);
+        return Some(Cow::Borrowed(source));
     }
     let repaired = match table(tail) {
         Some(table) => table,
@@ -45,11 +73,11 @@ pub(crate) fn repair_streaming(source: &str) -> Cow<'_, str> {
             text
         }
     };
-    if repaired == tail {
+    Some(if repaired == tail {
         Cow::Borrowed(source)
     } else {
         Cow::Owned(format!("{}{repaired}", &source[..tail_start]))
-    }
+    })
 }
 
 /// Where the last block of a streamed source starts.
@@ -65,8 +93,9 @@ enum Last {
 }
 
 /// Where the last block of `source` starts (after its last blank line or
-/// fenced block).
-fn last_block(source: &str) -> Last {
+/// fenced block). `blank` gets where the line after each blank line outside
+/// fenced blocks starts.
+fn last_block(source: &str, blank: &mut dyn FnMut(usize)) -> Last {
     let mut code: Option<(u8, usize)> = None;
     let mut math = false;
     let mut start = 0;
@@ -108,6 +137,7 @@ fn last_block(source: &str) -> Last {
         } else if line.trim().is_empty() && !open_end {
             // Markers alone on the last line (`- `) are no blank line yet.
             tail = next;
+            blank(next);
         }
         start = next;
     }
@@ -128,8 +158,9 @@ fn closer_typed(line: &str, ch: u8, len: usize) -> bool {
 /// Where the last line of `tail` starts when its end has not arrived and
 /// what it holds so far means nothing yet, or something else once more
 /// arrives: a list marker alone (`-`, `2.`, an empty item now; an item or
-/// text later), digits that may become one, or a line of `-` or `=` (a
-/// heading's underline now; a rule, an item or text later).
+/// text later), digits that may become one, an item's task box alone, or a
+/// line of `-` or `=` (a heading's underline now; a rule, an item or text
+/// later).
 fn held_line(tail: &str) -> Option<usize> {
     if tail.ends_with('\n') {
         return None;
@@ -145,10 +176,14 @@ fn held_line(tail: &str) -> Option<usize> {
     let marker = trimmed.is_empty()
         || matches!(trimmed, "-" | "*" | "+")
         || (!digits.is_empty() && digits.len() < 10 && digits.bytes().all(|b| b.is_ascii_digit()));
+    // An item's task box alone (`- [`, `- [x`, `- [x]`): an item showing
+    // `[x` now, a box once its content arrives.
+    let task_box = trimmed.len() < unquoted.len()
+        && matches!(trimmed, "[" | "[x" | "[X" | "[ ]" | "[x]" | "[X]");
     let underline = trimmed.bytes().all(|b| matches!(b, b'-' | b' ' | b'\t'))
         || trimmed.bytes().all(|b| b == b'=');
     // Whitespace alone is a blank line once it ends: nothing to hold.
-    (!line.trim().is_empty() && (marker || underline)).then_some(start)
+    (!line.trim().is_empty() && (marker || task_box || underline)).then_some(start)
 }
 
 /// A table's header followed by its delimiter row being typed (`| a | b |`
@@ -235,10 +270,54 @@ fn inline(tail: &str) -> String {
 /// A range of bytes, `(start, end)` or `(start, len)`.
 pub(super) type Span = (usize, usize);
 
-/// The spans of inline code and TeX formulas (`\\(…\\)`, `\\[…\\]`) of
-/// `text`, whose content is left alone.
-fn code_spans(text: &str) -> (Vec<Span>, Option<Span>) {
-    spans(text, true)
+/// The code of a text, whose content is left alone: its spans and the
+/// opening backtick run nothing closes (`spans`), read by a scan from the
+/// text's start to its end. Each question moves a cursor past the spans
+/// that end before the byte asked about, so a scan visits every span once
+/// rather than searching all of them at each byte: a block of thousands of
+/// spans (a long table still arriving) is repaired in time linear in its
+/// length.
+struct Code {
+    spans: Vec<Span>,
+    open: Option<Span>,
+    /// The first span that may hold a byte not asked about yet.
+    next: usize,
+}
+
+impl Code {
+    /// The code of `text`: its inline code, with `tex` its TeX formulas
+    /// (`\\(…\\)`, `\\[…\\]`) too.
+    fn of(text: &str, tex: bool) -> Self {
+        let (spans, open) = spans(text, tex);
+        Self {
+            spans,
+            open,
+            next: 0,
+        }
+    }
+
+    /// The span holding byte `i`, which is no less than at the call before.
+    fn span_at(&mut self, i: usize) -> Option<Span> {
+        debug_assert!(
+            self.next == 0 || self.spans[self.next - 1].1 <= i,
+            "code is read from start to end"
+        );
+        // The spans are in order and apart: the first that ends after `i` is
+        // the only one that may hold it.
+        while self.spans.get(self.next).is_some_and(|&(_, end)| end <= i) {
+            self.next += 1;
+        }
+        self.spans
+            .get(self.next)
+            .copied()
+            .filter(|&(start, _)| start <= i)
+    }
+
+    /// Whether byte `i`, which is no less than at the call before, is
+    /// outside code.
+    fn outside(&mut self, i: usize) -> bool {
+        self.span_at(i).is_none() && self.open.is_none_or(|(start, _)| i < start)
+    }
 }
 
 /// The spans of inline code of `text` (from their first backtick to after
@@ -303,19 +382,14 @@ fn run(bytes: &[u8], at: usize, b: u8) -> usize {
     bytes[at..].iter().take_while(|&&c| c == b).count()
 }
 
-/// Whether byte `i` is outside code.
-fn outside(spans: &[Span], open: Option<Span>, i: usize) -> bool {
-    !spans.iter().any(|&(s, e)| (s..e).contains(&i)) && open.is_none_or(|(s, _)| i < s)
-}
-
 /// A TeX formula left open (`\\(x`, `\\[` and lines of it) closed, or
 /// removed while nothing follows its opener.
 fn tex(text: &str) -> String {
-    let (code, open_code) = spans(text, false);
+    let mut code = Code::of(text, false);
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if !outside(&code, open_code, i) {
+        if !code.outside(i) {
             i += 1;
             continue;
         }
@@ -359,10 +433,11 @@ fn tex(text: &str) -> String {
     text.to_owned()
 }
 
-/// Links and images not finished: `[text` and `[text](partial` as their
-/// text, `![alt` and `![alt](partial` removed.
+/// Links and images not finished: `[text`, `[text]` at the end and
+/// `[text](partial` as their text, `![alt`, `![alt]` and `![alt](partial`
+/// removed.
 fn links(text: &str) -> String {
-    let (spans, open) = code_spans(text);
+    let mut code = Code::of(text, true);
     let bytes = text.as_bytes();
     // Ranges removed, and for a link whose destination is unfinished the
     // ranges of its syntax.
@@ -370,7 +445,7 @@ fn links(text: &str) -> String {
     let mut brackets: Vec<usize> = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        if !outside(&spans, open, i) {
+        if !code.outside(i) {
             i += 1;
             continue;
         }
@@ -381,12 +456,13 @@ fn links(text: &str) -> String {
             }
             b'[' => brackets.push(i),
             b']' => {
-                if let Some(start) = brackets.pop()
-                    && bytes.get(i + 1) == Some(&b'(')
-                    && destination_end(bytes, i + 2).is_none()
-                {
+                let Some(start) = brackets.pop() else {
+                    i += 1;
+                    continue;
+                };
+                let image = start > 0 && bytes[start - 1] == b'!';
+                if bytes.get(i + 1) == Some(&b'(') && destination_end(bytes, i + 2).is_none() {
                     // The destination runs to the end: drop it.
-                    let image = start > 0 && bytes[start - 1] == b'!';
                     if image {
                         remove.push((start - 1, bytes.len()));
                     } else {
@@ -395,6 +471,18 @@ fn links(text: &str) -> String {
                     }
                     brackets.clear();
                     break;
+                }
+                if i + 1 == bytes.len() && !matches!(bytes.get(start + 1), Some(b'^' | b'!')) {
+                    // Closed at the end, where its destination's `(` may
+                    // come next: shown as while it was open. A footnote's
+                    // reference and an alert's marker (`> [!NOTE]`) are
+                    // complete.
+                    if image {
+                        remove.push((start - 1, bytes.len()));
+                    } else {
+                        remove.push((start, start + 1));
+                        remove.push((i, i + 1));
+                    }
                 }
             }
             _ => {}
@@ -449,13 +537,11 @@ fn destination_end(bytes: &[u8], from: usize) -> Option<usize> {
 /// An HTML tag (or autolink) being typed at the end, removed: `<`, `<di`,
 /// `<a href="x`, `</`.
 fn tag(text: &str) -> String {
-    let (spans, open) = code_spans(text);
+    let mut code = Code::of(text, true);
     let Some(lt) = text.rfind('<') else {
         return text.to_owned();
     };
-    if !outside(&spans, open, lt)
-        || text[lt..].contains('>')
-        || (lt > 0 && text.as_bytes()[lt - 1] == b'\\')
+    if !code.outside(lt) || text[lt..].contains('>') || (lt > 0 && text.as_bytes()[lt - 1] == b'\\')
     {
         return text.to_owned();
     }
@@ -475,27 +561,41 @@ fn tag(text: &str) -> String {
 /// (`$$`, `$`) left open, closed in the reverse order they opened; a marker
 /// with nothing after it yet is removed instead.
 fn close(text: &str) -> String {
-    let (spans, open_code) = code_spans(text);
+    let mut code = Code::of(text, true);
+    let open_code = code.open;
     // A run of markers at the end after a space opens nothing yet (`a **`):
-    // removed.
-    let trimmed = text.trim_end();
-    let run_start = trimmed.trim_end_matches(['*', '_', '~']).len();
-    if run_start < trimmed.len()
-        && trimmed[..run_start]
-            .chars()
-            .next_back()
-            .is_none_or(char::is_whitespace)
-        && open_code.is_none_or(|(s, _)| s > run_start)
-    {
-        return close(trimmed[..run_start].trim_end());
+    // removed, and so is each run then at the end. A loop, not a call per
+    // run: a reply of thousands of runs (`a * * * …`) ran the stack out.
+    // The runs hold no backtick, backslash or `)`, so the code of what is
+    // left is the code of `text` before it.
+    let mut text = text;
+    loop {
+        let trimmed = text.trim_end();
+        let run_start = trimmed.trim_end_matches(['*', '_', '~']).len();
+        if run_start < trimmed.len()
+            && trimmed[..run_start]
+                .chars()
+                .next_back()
+                .is_none_or(char::is_whitespace)
+            && open_code.is_none_or(|(s, _)| s > run_start)
+        {
+            text = trimmed[..run_start].trim_end();
+        } else {
+            break;
+        }
     }
     let bytes = text.as_bytes();
     let scan_end = open_code.map_or(bytes.len(), |(s, _)| s);
     let mut stack: Vec<(&'static str, usize)> = Vec::new();
+    // The run of markers ending the text, when it neither opened nor
+    // closed anything: its start, length and marker.
+    let mut idle_end = None;
     let mut i = 0;
     while i < scan_end {
-        if let Some(&(_, e)) = spans.iter().find(|&&(s, _)| s == i) {
-            i = e;
+        if let Some((start, end)) = code.span_at(i)
+            && start == i
+        {
+            i = end;
             continue;
         }
         let b = bytes[i];
@@ -533,15 +633,20 @@ fn close(text: &str) -> String {
             _ => &[],
         };
         let mut opened: Vec<&'static str> = Vec::new();
+        let mut closed = false;
         for &token in tokens {
             let open = stack.iter().rposition(|&(t, _)| t == token);
             match open {
                 Some(at) if can_close => {
                     stack.remove(at);
+                    closed = true;
                 }
                 _ if can_open => opened.push(token),
                 _ => {}
             }
+        }
+        if i + len == bytes.len() && !closed && opened.is_empty() {
+            idle_end = Some((i, len, b));
         }
         // Opening `***`: the strong outside, the emphasis inside.
         for token in opened.into_iter().rev() {
@@ -551,12 +656,28 @@ fn close(text: &str) -> String {
     }
 
     let mut out = text.to_owned();
+    // A closer typed in part (`**bold*`, `~~del~`): a run at the end that
+    // did nothing, shorter than an open run of its marker, is the start of
+    // that run's closer. Removed, the whole closer is added below; kept,
+    // its markers would show as text after it.
+    if let Some((at, len, b)) = idle_end
+        && stack
+            .iter()
+            .any(|&(token, _)| token.as_bytes()[0] == b && token.len() > len)
+    {
+        out.truncate(at);
+    }
     // A code span with nothing in it yet: its backticks removed.
     let mut code_closer = None;
     if let Some((s, len)) = open_code {
-        if text[s + len..].trim().is_empty() {
+        // Fewer backticks at the end than opened the span (`` ``a`b` ``)
+        // are the start of its closer, likewise.
+        let typed = text.bytes().rev().take_while(|&b| b == b'`').count();
+        let body_end = text.len() - if typed < len { typed } else { 0 };
+        if text[s + len..body_end].trim().is_empty() {
             out.truncate(s);
         } else {
+            out.truncate(body_end);
             code_closer = Some(len);
         }
     }
@@ -601,6 +722,23 @@ mod tests {
     #[track_caller]
     fn check(input: &str, expected: &str) {
         assert_eq!(repair(input), expected, "input: {input:?}");
+    }
+
+    /// Runs of markers at the end are removed one after another without
+    /// recursion: a degenerate reply (`a * * * …`) ran the stack out.
+    #[test]
+    fn many_trailing_marker_runs() {
+        let source = format!("a{}", " *".repeat(30_000));
+        let repaired = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || repair(&source).into_owned())
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(repaired, "a");
+        check("a ** __ ~~ *", "a");
+        check("a **b ** *", "a **b**");
+        check("`a ** *", "`a ** *`");
     }
 
     #[test]
@@ -669,7 +807,19 @@ mod tests {
     fn links_and_tags() {
         check("See [the docs](https://exa", "See the docs");
         check("See [the docs", "See the docs");
-        check("See [the docs]", "See [the docs]");
+        // Closed at the end, the `(` of a destination may follow: its text,
+        // as while the label was open.
+        check("See [the docs]", "See the docs");
+        check("See [the docs] now", "See [the docs] now");
+        check("See [a](b) [c]", "See [a](b) c");
+        check("[a] [b]", "[a] b");
+        check("[a [b]", "a b");
+        check("An image ![alt]", "An image");
+        check("`[x]`", "`[x]`");
+        // A footnote's reference and an alert's marker are complete as
+        // they are.
+        check("Note[^1]", "Note[^1]");
+        check("> [!NOTE]", "> [!NOTE]");
         check("See [a](b) and [c](d", "See [a](b) and c");
         check("An image ![alt](http://x", "An image");
         check("An image ![al", "An image");
@@ -718,6 +868,38 @@ mod tests {
         check("a -- b", "a -- b");
         // Ended, the line means what it says.
         check("- one\n-\n", "- one\n-\n");
+        // A task box alone: no item showing `[x` or `[x]` until its
+        // content arrives.
+        check("- one\n- [", "- one");
+        check("- one\n- [x", "- one");
+        check("- one\n- [X]", "- one");
+        check("- one\n- [ ]", "- one");
+        check("- one\n- [x] ", "- one");
+        check("1. one\n2. [x]", "1. one");
+        check("> - [x", "");
+        check("- [x] **", "");
+        check("- one\n- [x] t", "- one\n- [x] t");
+        check("- [x]\n", "- [x]\n");
+        // Not a task box: an item's link, a paragraph's brackets.
+        check("- [link", "- link");
+        check("[x", "x");
+    }
+
+    /// A closer typed in part (`**bold*`): what it will close shows closed,
+    /// not a longer closer whose extra markers show as text.
+    #[test]
+    fn half_typed_closers() {
+        check("**bold*", "**bold**");
+        check("Some ~~del~", "Some ~~del~~");
+        check("__bold_", "__bold__");
+        check("Formula $$x$", "Formula $$x$$");
+        check("**a ~~b~", "**a ~~b~~**");
+        check("``b`c`", "``b`c``");
+        check("x ```a`` b`", "x ```a`` b```");
+        // A run that closed something stays.
+        check("**a *b*", "**a *b***");
+        check("***both**", "***both***");
+        check("*a* b*", "*a* b*");
     }
 
     #[test]
@@ -746,6 +928,110 @@ mod tests {
         check("*a*b", "*a*b");
         check("foo**bar", "foo**bar**");
         check("中*粗", "中*粗*");
+    }
+
+    #[test]
+    fn escaped_and_open_code() {
+        // Escaped backticks open no code: the markers after them count.
+        check("Use \\`not code\\` and **b", "Use \\`not code\\` and **b**");
+        check("\\``a` and **b", "\\``a` and **b**");
+        // A backslash inside code escapes nothing.
+        check("`a\\` **b", "`a\\` **b**");
+        // An escaped backtick before an open span: the span opens after it.
+        check("\\`a` and **b", "\\`a` and **b`");
+        // An open span after closed ones: what follows it is code.
+        check("Use `x` and `open **b", "Use `x` and `open **b`");
+        check("Use `x` and `[open", "Use `x` and `[open`");
+        check("`a` `b` ``c ` d", "`a` `b` ``c ` d``");
+        check("`a` and `", "`a` and");
+        check("`a` *b* `", "`a` *b*");
+    }
+
+    #[test]
+    fn tex_holding_backticks() {
+        // A formula's backtick opens no code, whether it is closed or not.
+        check("\\(a`b\\) and **c", "\\(a`b\\) and **c**");
+        check("Euler \\(a`b", "Euler \\(a`b\\)");
+        check("\\(`x` *y", "\\(`x` *y\\)");
+        check("\\[\n`a`\n**b", "\\[\n`a`\n**b\n\\]");
+        check("\\(x*`y`*z\\) [link](htt", "\\(x*`y`*z\\) link");
+        // Code holding a formula's opener: no formula.
+        check("`\\(` and \\(x", "`\\(` and \\(x\\)");
+        check("`\\[a` **b", "`\\[a` **b**");
+    }
+
+    #[test]
+    fn links_beside_code() {
+        check("`a` [b](htt", "`a` b");
+        check("[`a`](htt", "`a`");
+        check("`[` [b](c) and [d](e", "`[` [b](c) and d");
+        check("[a `]` b](htt", "a `]` b");
+        check("`x`![alt](htt", "`x`");
+        check("`x`[", "`x`");
+        check("[`a` and `b", "`a` and `b`");
+        // Multi-byte characters around spans.
+        check("中`代码`文 **粗", "中`代码`文 **粗**");
+        check("é`a`[链接](htt", "é`a`链接");
+        check("`中`\\(公式", "`中`\\(公式\\)");
+        check("中文 `代码", "中文 `代码`");
+        check("`é`[ü](http", "`é`ü");
+        check("`日本` <di", "`日本`");
+    }
+
+    #[test]
+    fn many_code_spans() {
+        let spans = "`a` x ".repeat(2_000);
+        // Nothing to repair: the source itself.
+        assert!(matches!(repair(&spans), std::borrow::Cow::Borrowed(_)));
+        check(&format!("{spans}**b"), &format!("{spans}**b**"));
+        check(&format!("{spans}[c](htt"), &format!("{spans}c"));
+        check(&format!("{spans}\\(x"), &format!("{spans}\\(x\\)"));
+        check(&format!("{spans}`open"), &format!("{spans}`open`"));
+        let starred = "`a*b` _ `[` ".repeat(500);
+        check(&format!("{starred}*it"), &format!("{starred}*it*"));
+        let mut table = String::from("| Name | Type |\n|---|---|\n");
+        for n in 0..600 {
+            table.push_str(&format!("| `field_{n}` | `Option<u32>` |\n"));
+        }
+        assert!(matches!(repair(&table), std::borrow::Cow::Borrowed(_)));
+        check(
+            &format!("{table}| `last` | **b"),
+            &format!("{table}| `last` | **b**"),
+        );
+    }
+
+    /// The cursor answers as a search of all the spans would, whichever
+    /// bytes a scan skips.
+    #[test]
+    fn code_cursor_matches_search() {
+        let pieces = [
+            "`", "``", "\\", "\\(", "\\)", "\\[", "\\]", "a", " ", "中", "é", "*", "[", "\n",
+        ];
+        // xorshift from a fixed seed: the same texts on every run.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut random = move |below: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % below as u64) as usize
+        };
+        for _ in 0..2_000 {
+            let text: String = (0..random(30))
+                .map(|_| pieces[random(pieces.len())])
+                .collect();
+            for tex in [false, true] {
+                let (spans, open) = super::spans(&text, tex);
+                for stride in 1..=3 {
+                    let mut code = super::Code::of(&text, tex);
+                    for i in (0..text.len()).step_by(stride) {
+                        let holding = spans.iter().copied().find(|&(s, e)| (s..e).contains(&i));
+                        let outside = holding.is_none() && open.is_none_or(|(s, _)| i < s);
+                        assert_eq!(code.span_at(i), holding, "{text:?} at {i}");
+                        assert_eq!(code.outside(i), outside, "{text:?} at {i}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

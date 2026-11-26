@@ -77,9 +77,9 @@ final class Native {
     static final int OPEN_URL = 65;
     static final int CARET_MOVE = 66;
     static final int PASTE = 67;
-    static final int SCREEN_COLOR = 68;
-    static final int FILE_REQUEST = 69;
-    static final int SPEECH = 70;
+    static final int CLIPBOARD_WRITE = 68;
+    static final int SCREEN_COLOR = 69;
+    static final int FILE_REQUEST = 70;
     static final int DOWNLOAD = 71;
     static final int NOTIFICATION = 72;
     static final int URL_SCHEME = 73;
@@ -96,6 +96,17 @@ final class Native {
     static final int KEY_UP = 84;
     static final int WEB_VIEW_REPLY = 85;
     static final int DOWNLOAD_PENDING = 86;
+    static final int DOWNLOAD_OFFER = 87;
+    static final int DOWNLOAD_PROGRESS = 88;
+    static final int DOWNLOAD_END = 89;
+    static final int SHARE = 90;
+    static final int DETENT_CHANGE = 91;
+    static final int AUTH_SESSION = 92;
+    static final int FOCUS_IN = 93;
+    static final int FOCUS_OUT = 94;
+    static final int TEXT_DROP = 95;
+    static final int OPEN_APP_SETTINGS = 96;
+    static final int BACK_PROGRESS = 97;
 
     /**
      * Draws the SVG {@code bytes} for a view {@code maxPx} pixels on its longer side, with its shorter side that long
@@ -122,6 +133,9 @@ final class Native {
 
     /** No VM limits for the apps loaded next: they run on their own. */
     static native void setStandaloneLimits(long handle);
+
+    /** Whether scroll views make their content's native views only near their viewport (default: true). */
+    static native void setContentCulling(long handle, boolean enabled);
 
     /** The directory the storage of the apps loaded next is kept in (null: each app's own in the data directory). */
     static native void setStorage(long handle, String dir);
@@ -156,8 +170,11 @@ final class Native {
     /** Registers a font file; returns an error, or null. */
     static native String registerFont(long handle, byte[] data);
 
-    /** Whether the running app's web views may navigate to {@code url}. */
-    static native boolean allowsWebview(long handle, String url);
+    /**
+     * Whether a web view of the running app may navigate to {@code url}, with
+     * its {@code allowOrigin} {@code origin} (null: none).
+     */
+    static native boolean allowsWebview(long handle, String url, String origin);
 
     /**
      * Whether the running app's web pages may capture {@code kind}
@@ -219,6 +236,21 @@ final class Native {
     /** A native component's own size (dp). */
     static native void componentSize(long handle, int id, float width, float height);
 
+    /** Names of native components registered by the app's Rust crate, or null. */
+    static native String[] componentNames(long handle);
+
+    /** Notes that host code registered a Java component overriding {@code name}. */
+    static native void componentJavaRegistered(long handle, String name);
+
+    /** Creates the native view of a Rust crate component on the UI thread. */
+    static native android.view.View componentCreate(long handle, int id, android.content.Context context, String name);
+
+    /** Runs the next queued typed prop, slot, command, or reset step for a Rust component. */
+    static native void componentStep(long handle, long seq, int id);
+
+    /** Destroys a Rust component instance when its element or app stops. */
+    static native void componentDestroy(long handle, int id);
+
     /** The launch parameters (a JSON object; null: none) of the apps loaded next; false if it is not one. */
     static native boolean setHostParams(long handle, String json);
 
@@ -258,14 +290,48 @@ final class Native {
     static native void event(long handle, int id, int kind, String text, int count, float x, float y);
 
     /**
-     * A hardware key went down: whether the app's shortcuts ({@code nsh/keymap}) take it.
+     * A hardware key went down: whether the app's shortcuts ({@code nsh/keymap}) or a mounted
+     * {@code captureKeys} rule takes it (then Android runs no default). The raw event still goes
+     * to {@code focusedId} when {@code raw}, with the same {@code defaultPrevented} decision.
      * {@code unicode}: what it types without modifiers ({@code KeyEvent.getUnicodeChar(0)});
-     * {@code repeat}: an auto-repeat; {@code editing}: a text input or hosted view has the focus.
+     * {@code text}: the printable character it reports with the modifiers held (the raw
+     * {@code key}); {@code scanCode}: the kernel's evdev scan code ({@code KeyEvent.getScanCode()},
+     * 0 when Android supplied none: the raw {@code code} is then empty); {@code repeat}: an
+     * auto-repeat; {@code editing}: a text input or hosted view has the focus; {@code focusedId}:
+     * the focused node ({@code ROOT_ID} when {@code NshView} holds the focus, a modal's id in its
+     * dialog, `0` for a native child that owns its keys); {@code windowId}: that window's root node
+     * for `nsh/keymap` bindings; {@code control}: the focused node takes presses (`Keymap::find_at`);
+     * {@code defaultPrevented}: a mounted rule captures this transition; {@code raw}: the focused
+     * view or an ancestor hears raw keys. No capture rule or listener builds no raw event.
      */
-    static native boolean keyDown(long handle, int keyCode, int unicode, int meta, boolean repeat, boolean editing);
+    static native boolean keyDown(long handle, int keyCode, int unicode, int text, int meta, int scanCode,
+            boolean repeat, boolean editing, int focusedId, int windowId, boolean control,
+            boolean defaultPrevented, boolean raw);
 
-    /** A hardware key went up: whether its press was taken (then so is its release). */
-    static native boolean keyUp(long handle, int keyCode);
+    /**
+     * A hardware key went up: whether its release is consumed (the app's shortcuts held it, or a
+     * mounted rule captures it now). The raw {@code KeyUp} goes to {@code focusedId} when the
+     * current listeners/raw policy accept it ({@code 0}: a native child has the keys); a
+     * shortcut's release is still observed where the focus listens now.
+     */
+    static native boolean keyUp(long handle, int keyCode, int unicode, int text, int meta, int scanCode,
+            int focusedId, boolean defaultPrevented, boolean raw);
+
+    /**
+     * A key with Control came as a shortcut first: whether the app's shortcuts take it. No raw
+     * event is reported here; a key the shortcuts leave goes on to {@link #keyDown}.
+     */
+    static native boolean keyShortcut(long handle, int keyCode, int unicode, int meta, int windowId,
+            boolean control, boolean repeat, boolean editing);
+
+    /** A key's release was cancelled: forget it without a {@code KeyUp}; whether its press was taken. */
+    static native boolean keyCancel(long handle, int keyCode);
+
+    /** The window lost the focus or the app went away: no held key has a release any more. */
+    static native void keyReset(long handle);
+
+    /** The user gave the surface input with a pointer (a press that focuses a custom view). */
+    static native void pointerInput(long handle);
 
     /**
      * Mouse event {@code kind} ({@code onMouseEnter}, {@code onMouseMove}, {@code onMouseLeave}) of
@@ -291,8 +357,19 @@ final class Native {
      */
     static native void eventMap(long handle, int id, int kind, String[] keys, Object[] values);
 
-    /** `onPaste`: the pasted text, the images' encoded bytes and local files' {@code file:} URLs. */
-    static native void paste(long handle, int id, String text, byte[][] images, String[] uris);
+    /**
+     * `onPaste`: the pasted text, the images' encoded bytes, local files' {@code file:} URLs and the names, types
+     * and sizes of the images too large to read (`tooLarge`).
+     */
+    static native void paste(long handle, int id, String text, byte[][] images, String[] uris, String[] largeNames,
+                             String[] largeTypes, long[] largeLengths);
+
+    /**
+     * A file drag for node {@code id}: {@link #FILE_DRAG_ENTER} with the files offered (none yet on Android, which
+     * opens a drag's data only at the drop) or {@link #FILE_DROP} with the dropped files' app-owned copies, as
+     * {@code file:} URLs; a drop's point ({@code x}, {@code y}) in the surface's points.
+     */
+    static native void fileDrop(long handle, int id, int kind, String[] uris, float x, float y);
 
     /**
      * {@link #CANVAS_IMAGE} on the root: the answer to `OffscreenCanvas` render {@code request}, the encoded image
@@ -379,16 +456,21 @@ final class Native {
     /**
      * Touches for the JS responder system. phase: 0 start, 1 move, 2 end,
      * 3 cancel. Per finger: id, target node, path length (in {@code paths},
-     * innermost first), pageX, pageY, locationX, locationY (in
-     * {@code coords}, dp) and whether it changed. {@code time}: ms.
+     * innermost first), pageX, pageY, locationX, locationY (dp), pressure,
+     * tiltX, tiltY (degrees), kind (0 touch, 1 pen, 2 mouse), eraser and
+     * barrel (1 or 0: a pen's eraser end, its primary button held) (10
+     * floats in {@code coords}) and whether it changed. {@code samples}: the
+     * samples a move merged before its own, oldest first, 7 doubles each:
+     * the finger's index, pageX, pageY (dp), pressure, tiltX, tiltY and
+     * time. {@code time} and the samples' times: uptime ms.
      */
     static native void touch(long handle, int phase, int[] ids, int[] targets, int[] pathLengths, int[] paths,
-            float[] coords, boolean[] changed, long time, int activated);
+            float[] coords, double[] samples, boolean[] changed, long time, int activated);
 
     static native boolean hasPan(long handle, int id);
 
-    /** state: 0 began, 1 moved, 2 ended, 3 cancelled. */
-    static native float[] pan(long handle, int id, int state, float tx, float ty, float vx, float vy);
+    /** state: 0 began, 1 moved, 2 ended, 3 cancelled; (ox, oy): where the finger went down in the root (dp). */
+    static native float[] pan(long handle, int id, int state, float tx, float ty, float vx, float vy, float ox, float oy);
 
     /** A pinch (scale) or two-finger rotation (degrees); state as for pan. */
     static native float[] transformGesture(long handle, int id, boolean rotation, int state, float amount, float velocity);

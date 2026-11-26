@@ -8,6 +8,7 @@ import android.text.Editable;
 import android.text.InputFilter;
 import android.text.InputType;
 import android.text.Layout;
+import android.text.Spanned;
 import android.text.TextWatcher;
 import android.text.method.ArrowKeyMovementMethod;
 import android.util.TypedValue;
@@ -21,6 +22,7 @@ import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import java.text.BreakIterator;
 
 /** `<input>`: an EditText inside a container that carries the decoration. */
 @SuppressLint("ViewConstructor")
@@ -28,6 +30,13 @@ final class InputBox extends FrameLayout implements Node {
     final Mounter mounter;
     final int id;
     final Decor decor = new Decor();
+
+    // `clipPath`: what it draws shows, and touches reach it and its
+    // children, only inside it (`Decor.drawClipped`, `Decor.clipsOut`).
+    @Override
+    public void draw(android.graphics.Canvas canvas) {
+        decor.drawClipped(canvas, this, () -> super.draw(canvas));
+    }
 
     /** An outer box shadow draws outside the bounds, and compositing the
      * view at alpha < 1 into the bounds-clipped offscreen buffer would cut
@@ -44,11 +53,18 @@ final class InputBox extends FrameLayout implements Node {
     /** The text as last reported or set. */
     private String known = "";
     private boolean multiline;
+    /** Not `readOnly`: the user (and `insertText`) can edit it. */
+    private boolean editable = true;
     /** What return does (`submitBehavior`, resolved by the core; encode.rs's codes). */
     private static final int SUBMIT_AND_BLUR = 1, NEWLINE = 2;
     private int submit = SUBMIT_AND_BLUR;
     private boolean applying;
     private boolean configured;
+
+    /** It has had its first props (an `autoFocus` then focuses it). */
+    boolean isConfigured() {
+        return configured;
+    }
     /** The composition last seen (`onCompositionChange` reports its changes). */
     private boolean inComposition;
     private String composed = "";
@@ -62,13 +78,19 @@ final class InputBox extends FrameLayout implements Node {
     private boolean watching;
     /** `pasteBehavior` is `"insert"`: a paste inserts its text. */
     boolean pasteInserts = true;
+    /** `pasteMaxSize`: the largest pasted file read, in bytes (-1: any the heap holds). */
+    int pasteMaxSize = -1;
+    /** The EditText's own floating text toolbar (its selection or insertion action mode), while it is open. */
+    private android.view.ActionMode textActions;
     /** Whether the EditText shows a vertical scroll bar of its own by default. */
     private final boolean defaultVerticalBar;
+    /** Platform hint colors before any explicit `placeholderTextColor` override. */
+    private final android.content.res.ColorStateList defaultHintColors;
     /**
-     * A built-in bar replaces the scroll indicator (`InputConfig::replaced`):
+     * A bar of the app's follows the text (`InputConfig::report_scroll`):
      * how far the text scrolled is reported to the engine.
      */
-    private boolean replaced;
+    private boolean reportsScroll;
     /** What was last reported (px): offset, text height, viewport width and height; -1 for nothing. */
     private int reportedY = -1, reportedContent = -1, reportedWidth = -1, reportedHeight = -1;
     /** `pointerEvents` (`Box`'s codes): `none` and `box-none` let touches through to the views below. */
@@ -80,6 +102,8 @@ final class InputBox extends FrameLayout implements Node {
         // selection's handles): the touch goes to the views below. It
         // still takes focus and typed text.
         if (pointerEvents == 1 || pointerEvents == 2) return false;
+        // Where its clip path cuts it away, the touch goes to the views below.
+        if (e.getActionMasked() == MotionEvent.ACTION_DOWN && decor.clipsOut(this, e.getX(), e.getY())) return false;
         return super.dispatchTouchEvent(e);
     }
 
@@ -123,6 +147,11 @@ final class InputBox extends FrameLayout implements Node {
                 // TextView hides the action key of multiline inputs; one that
                 // submits shows it, as React Native does.
                 if (multiline && submit != NEWLINE) info.imeOptions &= ~EditorInfo.IME_FLAG_NO_ENTER_ACTION;
+                // In landscape an input method may otherwise go full screen,
+                // its own edit box covering the app (its layout, accessory
+                // view and action key with it), as Compose's and Flutter's
+                // fields keep it from doing.
+                info.imeOptions |= EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_FLAG_NO_FULLSCREEN;
                 return connection == null ? null : new KeyConnection(connection);
             }
 
@@ -138,24 +167,45 @@ final class InputBox extends FrameLayout implements Node {
             }
 
             @Override
+            public boolean onDragEvent(android.view.DragEvent event) {
+                // Files go to the file drop destination around the input
+                // (`FileDrops`), never in as their content URIs' text.
+                if (event.getAction() == android.view.DragEvent.ACTION_DRAG_STARTED
+                        && FileDrops.offersFiles(event.getClipDescription())) {
+                    return false;
+                }
+                return super.onDragEvent(event);
+            }
+
+            @Override
             public boolean onTextContextMenuItem(int item) {
+                if (item != android.R.id.paste && item != android.R.id.pasteAsPlainText) {
+                    return super.onTextContextMenuItem(item);
+                }
                 // Before Android 12 a paste comes here (the menu, Ctrl+V);
                 // from then on `receiveContent` hears it.
-                if (Build.VERSION.SDK_INT < 31
-                        && (item == android.R.id.paste || item == android.R.id.pasteAsPlainText)) {
+                boolean done = false;
+                if (Build.VERSION.SDK_INT < 31) {
                     android.content.ClipboardManager board = (android.content.ClipboardManager)
                             getContext().getSystemService(Context.CLIPBOARD_SERVICE);
                     android.content.ClipData clip = board == null ? null : board.getPrimaryClip();
-                    if (clip != null && pasted(clip) && !pasteInserts) return true;
+                    done = clip != null && pasted(clip) && !pasteInserts;
                 }
-                return super.onTextContextMenuItem(item);
+                if (!done) done = super.onTextContextMenuItem(item);
+                // TextView ends its toolbar when an edit changes the text, so
+                // a paste of text closes it; one whose content was taken
+                // without inserting anything (an image `onPaste` received,
+                // `pasteBehavior="report"`) leaves the text, and the toolbar
+                // with Paste on it, as they were. A paste ends it either way.
+                finishTextActions();
+                return done;
             }
 
             @Override
             protected void onScrollChanged(int left, int top, int oldLeft, int oldTop) {
                 super.onScrollChanged(left, top, oldLeft, oldTop);
                 reportCaret(this);
-                if (replaced) reportScroll();
+                if (reportsScroll) reportScroll();
             }
 
             @Override
@@ -164,21 +214,21 @@ final class InputBox extends FrameLayout implements Node {
                 // The text wraps again once laid out at the new size.
                 post(() -> {
                     reportCaret(this);
-                    if (replaced) reportScroll();
+                    if (reportsScroll) reportScroll();
                 });
             }
 
             @Override
             protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
                 super.onLayout(changed, left, top, right, bottom);
-                if (replaced) reportScroll();
+                if (reportsScroll) reportScroll();
             }
 
             @Override
             protected void onTextChanged(CharSequence text, int start, int before, int after) {
                 super.onTextChanged(text, start, before, after);
                 // The text's height is known once it is laid out again.
-                if (replaced) post(InputBox.this::reportScroll);
+                if (reportsScroll) post(InputBox.this::reportScroll);
             }
         };
         edit.setBackground(new ColorDrawable(0));
@@ -190,6 +240,7 @@ final class InputBox extends FrameLayout implements Node {
         if (Build.VERSION.SDK_INT >= 28) edit.setFallbackLineSpacing(false);
         if (Build.VERSION.SDK_INT >= 35) edit.setLocalePreferredLineHeightForMinimumUsed(false);
         defaultVerticalBar = edit.isVerticalScrollBarEnabled();
+        defaultHintColors = edit.getHintTextColors();
         edit.addTextChangedListener(new TextWatcher() {
             @Override
             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -241,6 +292,8 @@ final class InputBox extends FrameLayout implements Node {
                 edit.clearComposingText();
                 syncComposition();
             }
+            // Moving to the activity made again: the field keeps the focus for the app.
+            if (mounter != null && mounter.moving) return;
             mounter.inputFocused(this, focused);
             mounter.reportState(id, Mounter.STATE_FOCUSED, focused);
             if (mounter.wants(id, focused ? Native.FOCUS : Native.BLUR)) {
@@ -248,6 +301,32 @@ final class InputBox extends FrameLayout implements Node {
             }
         });
         addView(edit, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
+        // Keeps the EditText's toolbar at hand for a paste to end
+        // (`finishTextActions`); its items and their handling stay TextView's.
+        android.view.ActionMode.Callback textActionsTracker = new android.view.ActionMode.Callback() {
+            @Override
+            public boolean onCreateActionMode(android.view.ActionMode m, android.view.Menu menu) {
+                textActions = m;
+                return true;
+            }
+
+            @Override
+            public boolean onPrepareActionMode(android.view.ActionMode m, android.view.Menu menu) {
+                return true;
+            }
+
+            @Override
+            public boolean onActionItemClicked(android.view.ActionMode m, android.view.MenuItem item) {
+                return false;
+            }
+
+            @Override
+            public void onDestroyActionMode(android.view.ActionMode m) {
+                if (textActions == m) textActions = null;
+            }
+        };
+        edit.setCustomSelectionActionModeCallback(textActionsTracker);
+        edit.setCustomInsertionActionModeCallback(textActionsTracker);
         if (Build.VERSION.SDK_INT >= 31) {
             InputContent.install(edit, this);
         }
@@ -255,14 +334,20 @@ final class InputBox extends FrameLayout implements Node {
 
     /**
      * Reports what {@code clip} holds (`onPaste`), if the app listens: its text,
-     * its images' bytes (read from their content URIs as the user pastes) and local
-     * files' URLs. True when it reported.
+     * its images' bytes (read from their content URIs as the user pastes; one
+     * larger than {@link #pasteMaxSize} or the Java heap holds is not read, only
+     * its name, type and size reported) and local files' URLs. True when it
+     * reported.
      */
     boolean pasted(android.content.ClipData clip) {
         if (!mounter.wants(id, Native.PASTE)) return false;
         StringBuilder text = new StringBuilder();
         java.util.ArrayList<byte[]> images = new java.util.ArrayList<>();
         java.util.ArrayList<String> uris = new java.util.ArrayList<>();
+        java.util.ArrayList<String> largeNames = new java.util.ArrayList<>();
+        java.util.ArrayList<String> largeTypes = new java.util.ArrayList<>();
+        java.util.ArrayList<Long> largeLengths = new java.util.ArrayList<>();
+        int maxBytes = pasteMaxSize < 0 ? Integer.MAX_VALUE : pasteMaxSize;
         android.content.ContentResolver resolver = getContext().getContentResolver();
         for (int i = 0; i < clip.getItemCount(); i++) {
             android.content.ClipData.Item item = clip.getItemAt(i);
@@ -278,9 +363,16 @@ final class InputBox extends FrameLayout implements Node {
             }
             String type = resolver.getType(uri);
             if (type != null && type.startsWith("image/")) {
-                try (java.io.InputStream in = resolver.openInputStream(uri)) {
-                    if (in != null) images.add(readAll(in));
-                } catch (java.io.IOException | SecurityException e) {
+                try {
+                    Picker.Picked file = Picker.readFile(resolver, uri, maxBytes);
+                    if (file.bytes != null) {
+                        images.add(file.bytes);
+                    } else {
+                        largeNames.add(file.name);
+                        largeTypes.add(file.type);
+                        largeLengths.add(file.length);
+                    }
+                } catch (Exception e) {
                     android.util.Log.w("nsh", "a pasted image could not be read: " + e);
                 }
             } else {
@@ -288,33 +380,32 @@ final class InputBox extends FrameLayout implements Node {
                 if (t != null) text.append(t);
             }
         }
-        mounter.paste(id, text.toString(), images.toArray(new byte[0][]), uris.toArray(new String[0]));
+        long[] lengths = new long[largeLengths.size()];
+        for (int i = 0; i < lengths.length; i++) lengths[i] = largeLengths.get(i);
+        mounter.paste(id, text.toString(), images.toArray(new byte[0][]), uris.toArray(new String[0]),
+                largeNames.toArray(new String[0]), largeTypes.toArray(new String[0]), lengths);
         return true;
-    }
-
-    private static byte[] readAll(java.io.InputStream in) throws java.io.IOException {
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        byte[] buffer = new byte[64 * 1024];
-        for (int n; (n = in.read(buffer)) > 0; ) out.write(buffer, 0, n);
-        return out.toByteArray();
     }
 
     void configure(float fontSizeDp, int weight, boolean italic, int color, String family, float letterSpacingDp,
                    int align, String placeholder, boolean hasPlaceholderColor, int placeholderColor,
                    boolean secure, int keyboard, int returnKey, int capitalize, boolean autoCorrect,
-                   boolean multiline, int maxLength, boolean editable, boolean autoFocus,
+                   boolean multiline, int maxLength, boolean editable, boolean autoFocus, boolean selectOnFocus,
                    boolean hasSelectionColor, int selectionColor, boolean hasCaretColor, int caretColor,
-                   int submit) {
+                   int submit, boolean rtl, int fontVariant) {
         boolean restart = this.submit != submit && multiline && configured;
         this.multiline = multiline;
+        this.editable = editable;
         this.submit = submit;
         edit.setTextSize(TypedValue.COMPLEX_UNIT_PX, fontSizeDp * mounter.density);
         edit.setTextColor(color);
-        if (letterSpacingDp != 0) edit.setLetterSpacing(letterSpacingDp / fontSizeDp);
-        int horizontal = align == 1 ? Gravity.CENTER_HORIZONTAL : align == 2 ? Gravity.END : Gravity.START;
+        edit.setLetterSpacing(TextLayouts.letterSpacing(letterSpacingDp, fontSizeDp));
+        edit.setFontFeatureSettings(TextLayouts.features(fontVariant));
+        int horizontal = TextLayouts.horizontalGravity(align, rtl);
         edit.setGravity(horizontal | (multiline ? Gravity.TOP : Gravity.CENTER_VERTICAL));
         edit.setHint(placeholder);
         if (hasPlaceholderColor) edit.setHintTextColor(placeholderColor);
+        else if (defaultHintColors != null) edit.setHintTextColor(defaultHintColors);
         int type;
         switch (keyboard) {
             case 1: type = InputType.TYPE_CLASS_NUMBER; break;
@@ -347,7 +438,7 @@ final class InputBox extends FrameLayout implements Node {
         } else if (secure && (type & InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_NUMBER) {
             type |= InputType.TYPE_NUMBER_VARIATION_PASSWORD;
         }
-        int selection = edit.getSelectionEnd();
+        int selectionStart = edit.getSelectionStart(), selectionEnd = edit.getSelectionEnd();
         // Before the input type: setSingleLine replaces a password's
         // transformation (the text would show).
         edit.setSingleLine(!multiline);
@@ -355,7 +446,11 @@ final class InputBox extends FrameLayout implements Node {
         edit.setInputType(type);
         // After the input type: password types reset the typeface to monospace.
         edit.setTypeface(TextLayouts.typeface(family, weight, italic));
-        if (selection >= 0 && selection <= edit.length()) edit.setSelection(selection);
+        // The whole selection, not only its end: an update while the text is
+        // selected (`selectTextOnFocus`, then a prop set from `onFocus`) keeps it.
+        if (selectionStart >= 0 && selectionEnd >= 0 && Math.max(selectionStart, selectionEnd) <= edit.length()) {
+            edit.setSelection(selectionStart, selectionEnd);
+        }
         int ime;
         switch (returnKey) {
             case 1: ime = EditorInfo.IME_ACTION_DONE; break;
@@ -366,7 +461,7 @@ final class InputBox extends FrameLayout implements Node {
             default: ime = multiline && submit == NEWLINE ? EditorInfo.IME_ACTION_NONE : EditorInfo.IME_ACTION_DONE;
         }
         edit.setImeOptions(ime);
-        edit.setFilters(maxLength >= 0 ? new InputFilter[] {new InputFilter.LengthFilter(maxLength)} : new InputFilter[0]);
+        edit.setFilters(maxLength >= 0 ? new InputFilter[] {new CharLengthFilter(maxLength)} : new InputFilter[0]);
         // `readonly` keeps focus and selection, as the docs say: the text selects as a selectable TextView's does (a
         // long press on a word, the handles, Copy) while no key listener edits it and no keyboard comes up. Disabling
         // the EditText instead, as before, took the selection away too.
@@ -389,7 +484,11 @@ final class InputBox extends FrameLayout implements Node {
                 }
             });
         }
+        // TextView's own `selectAllOnFocus`: any focus (a tap, a key, `requestFocus`) selects the text; a tap that
+        // focuses keeps that selection rather than placing the caret, and one on the focused field places it.
+        edit.setSelectAllOnFocus(selectOnFocus);
         edit.setHighlightColor(hasSelectionColor ? (selectionColor & 0x00ffffff) | 0x55000000 : 0x5533b5e5);
+        tintHandles(hasSelectionColor ? selectionColor : null);
         boolean first = !configured;
         configured = true;
         if (first && autoFocus) post(this::focus);
@@ -398,6 +497,37 @@ final class InputBox extends FrameLayout implements Node {
             InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
             if (imm != null) imm.restartInput(edit);
         }
+    }
+
+    /** The color the selection handles are tinted (null: the theme's). */
+    private Integer handleColor;
+
+    /**
+     * Tints the selection and insertion handles {@code color}, as the
+     * selection's highlight (null: the theme's, as a fresh copy of the
+     * theme's drawables keeps it). Android 10 (API 29) and later.
+     */
+    private void tintHandles(Integer color) {
+        if (Build.VERSION.SDK_INT < 29 || java.util.Objects.equals(handleColor, color)) return;
+        int[] attrs = {
+            android.R.attr.textSelectHandleLeft, android.R.attr.textSelectHandleRight, android.R.attr.textSelectHandle
+        };
+        for (int i = 0; i < attrs.length; i++) {
+            android.content.res.TypedArray a = getContext().obtainStyledAttributes(new int[] {attrs[i]});
+            android.graphics.drawable.Drawable d = a.getDrawable(0);
+            a.recycle();
+            // A handle the theme has no drawable for keeps the EditText's own;
+            // the others still take the color.
+            if (d == null) continue;
+            d = d.mutate();
+            if (color != null) d.setTint(color);
+            if (i == 0) edit.setTextSelectHandleLeft(d);
+            else if (i == 1) edit.setTextSelectHandleRight(d);
+            else edit.setTextSelectHandle(d);
+        }
+        // Recorded only once applied, so the same color asked again is not
+        // skipped as already set.
+        handleColor = color;
     }
 
     /** Return submitted: `onSubmitEditing`, then unfocuses for `blurAndSubmit`. */
@@ -485,6 +615,42 @@ final class InputBox extends FrameLayout implements Node {
         String text = pendingText;
         pendingText = null;
         setValue(text, pendingCount);
+    }
+
+    /**
+     * `maxLength`: the user's edits keep the text within {@code max} characters, counted as Unicode code points (an
+     * emoji is one, though a Java string holds two chars for it), as on every platform; `LengthFilter` counts chars.
+     * An insertion longer than the room left goes in cut between user-perceived characters, never inside one (a
+     * letter with its accent, an emoji with its skin tone), as the core's `clip_chars` cuts. The app's value is
+     * never cut, as nowhere else.
+     */
+    private final class CharLengthFilter implements InputFilter {
+        private final int max;
+
+        CharLengthFilter(int max) {
+            this.max = max;
+        }
+
+        @Override
+        public CharSequence filter(CharSequence source, int start, int end, Spanned dest, int dstart, int dend) {
+            if (applying) return null;
+            int kept = Character.codePointCount(dest, 0, dstart)
+                    + Character.codePointCount(dest, dend, dest.length());
+            int room = max - kept;
+            if (Character.codePointCount(source, start, end) <= room) return null;
+            if (room <= 0) return "";
+            BreakIterator graphemes = BreakIterator.getCharacterInstance();
+            String text = source.subSequence(start, end).toString();
+            graphemes.setText(text);
+            int cut = 0;
+            int used = 0;
+            for (int next = graphemes.next(); next != BreakIterator.DONE; next = graphemes.next()) {
+                used += text.codePointCount(cut, next);
+                if (used > room) break;
+                cut = next;
+            }
+            return source.subSequence(start, start + cut);
+        }
     }
 
     /**
@@ -656,6 +822,52 @@ final class InputBox extends FrameLayout implements Node {
         if (m != null) m.finish();
     }
 
+    /** Ends the EditText's own toolbar, if it is open. */
+    private void finishTextActions() {
+        android.view.ActionMode m = textActions;
+        textActions = null;
+        if (m != null) m.finish();
+    }
+
+    /**
+     * `insertText`: {@code text} in place of the selection, as the user's edit. The change goes through the
+     * EditText's filters, so `maxLength` clips it and TextView's undo history records it as a step of its own (an
+     * edit from outside the keyboard is never merged into the typing before it); the text watcher reports it
+     * (`onChangeText`) and no key is reported. A composition in progress is committed first, as the text the
+     * keyboard composed stays. A single-line input gets the line breaks as spaces, as a paste does there.
+     */
+    void insertText(String text) {
+        if (!editable) {
+            android.util.Log.w("nsh", "insertText: the input is read-only");
+            return;
+        }
+        Editable content = edit.getText();
+        if (content == null) return;
+        if (BaseInputConnection.getComposingSpanStart(content) >= 0) {
+            BaseInputConnection.removeComposingSpans(content);
+            syncComposition();
+            // The keyboard drops the word it was composing rather than editing it on.
+            InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.restartInput(edit);
+        }
+        text = text.replace("\r\n", "\n").replace('\r', '\n');
+        if (!multiline) {
+            int end = text.length();
+            while (end > 0 && text.charAt(end - 1) == '\n') end--;
+            text = text.substring(0, end).replace('\n', ' ');
+        }
+        int a = Math.max(0, edit.getSelectionStart()), b = Math.max(0, edit.getSelectionEnd());
+        int start = Math.min(a, b), end = Math.max(a, b), before = content.length();
+        content.replace(start, end, text);
+        // The caret after what went in (as much as `maxLength` let in), as a paste leaves it: replacing a selection
+        // that starts at the replaced range would otherwise leave the new text selected, and the next insert would
+        // replace it.
+        int caret = Math.max(start, Math.min(content.length(), end + content.length() - before));
+        edit.setSelection(caret);
+        // An edit ends the EditText's toolbar, as its own paste does.
+        finishTextActions();
+    }
+
     /** Selects {@code start..end} (clamped to the text). */
     void select(int start, int end) {
         int length = edit.length();
@@ -700,14 +912,14 @@ final class InputBox extends FrameLayout implements Node {
 
     /**
      * `InputConfig`'s `scrollbarVisible` (whether the text's own scroll bar
-     * shows; the text scrolls either way) and `replaced` (a built-in bar takes
-     * its place: how far the text scrolled is reported, at once and on every
-     * change).
+     * shows; the text scrolls either way) and `reportScroll` (a bar of the
+     * app's follows the text: how far it scrolled is reported, at once and on
+     * every change).
      */
-    void setScrollbar(boolean visible, boolean replaced) {
+    void setScrollbar(boolean visible, boolean reportScroll) {
         edit.setVerticalScrollBarEnabled(visible && defaultVerticalBar);
-        this.replaced = replaced;
-        if (!replaced) return;
+        this.reportsScroll = reportScroll;
+        if (!reportScroll) return;
         reportedY = reportedContent = reportedWidth = reportedHeight = -1;
         // After the rest of the config (multiline, font) is applied.
         post(this::reportScroll);
@@ -722,7 +934,7 @@ final class InputBox extends FrameLayout implements Node {
 
     /** Reports how far the text scrolled when that, its height or the viewport changed. */
     private void reportScroll() {
-        if (!replaced || mounter == null) return;
+        if (!reportsScroll || mounter == null) return;
         int y = edit.getScrollY(), content = textHeight(), width = edit.getWidth(), height = edit.getHeight();
         if (y == reportedY && content == reportedContent && width == reportedWidth && height == reportedHeight) {
             return;
@@ -765,17 +977,88 @@ final class InputBox extends FrameLayout implements Node {
     }
 
     void focus() {
-        edit.requestFocus();
+        if (edit.isShown() && edit.hasWindowFocus() && edit.getWidth() > 0) {
+            edit.requestFocus();
+            showKeyboard();
+            return;
+        }
+        // A field focused as it mounts (`autoFocus`, or `ref.focus()` from a
+        // mount effect) is not laid out yet, or its window has no focus: the
+        // focus request fails, or the IME does not serve the field and drops
+        // the keyboard request. Wait until it is shown in a focused window.
+        if (pendingFocus != null) return;
+        pendingFocus = new android.view.ViewTreeObserver.OnGlobalLayoutListener() {
+            @Override
+            public void onGlobalLayout() {
+                if (!edit.isShown() || !edit.hasWindowFocus() || edit.getWidth() <= 0) return;
+                cancelPendingFocus();
+                edit.requestFocus();
+                // The IME serves the field once the focus change is dispatched.
+                edit.post(InputBox.this::showKeyboard);
+            }
+        };
+        getViewTreeObserver().addOnGlobalLayoutListener(pendingFocus);
+        getViewTreeObserver().addOnWindowFocusChangeListener(pendingWindowFocus);
+        // Whoever asked (`ref.focus()` or `autoFocus`), this is now
+        // the latest request: a newer one or a blur ends the wait.
+        if (mounter != null) mounter.inputFocusWaits(this);
+    }
+
+    /** {@link #focus()} waiting for the field to be shown in a focused window. */
+    private android.view.ViewTreeObserver.OnGlobalLayoutListener pendingFocus;
+    private final android.view.ViewTreeObserver.OnWindowFocusChangeListener pendingWindowFocus = focused -> {
+        if (focused && pendingFocus != null) pendingFocus.onGlobalLayout();
+    };
+
+    /** Whether {@link #focus()} still waits for the field to be shown in a focused window. */
+    boolean focusPending() {
+        return pendingFocus != null;
+    }
+
+    /**
+     * Ends a waiting {@link #focus()}: the field is shown (it is focused
+     * next), a newer focus request or a blur took over, or it left its
+     * window. The mounter forgets the request with it.
+     */
+    void cancelPendingFocus() {
+        if (pendingFocus == null) return;
+        getViewTreeObserver().removeOnGlobalLayoutListener(pendingFocus);
+        getViewTreeObserver().removeOnWindowFocusChangeListener(pendingWindowFocus);
+        pendingFocus = null;
+        if (mounter != null) mounter.inputFocusWaitEnded(this);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        cancelPendingFocus();
+        super.onDetachedFromWindow();
+    }
+
+    /**
+     * Shows the software keyboard for this field. {@code autoFocus} and
+     * {@code focus()} after a dialog opens often run before the window can
+     * take the IME; {@link InputMethodManager#SHOW_IMPLICIT} then returns
+     * false and nothing comes up. Ask again once the view is ready, with
+     * no show flags (as React Native does), so the keyboard still rises.
+     */
+    private void showKeyboard() {
         InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        imm.showSoftInput(edit, InputMethodManager.SHOW_IMPLICIT);
+        if (imm == null) return;
+        if (imm.showSoftInput(edit, 0)) return;
+        edit.post(() -> {
+            if (!edit.hasFocus()) return;
+            InputMethodManager again = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (again != null) again.showSoftInput(edit, 0);
+        });
     }
 
     void blur() {
+        cancelPendingFocus();
         if (!edit.hasFocus()) return;
         hideKeyboard();
-        // To the (focusable) root: clearFocus() would hand focus to the first
-        // focusable view, often another field.
-        mounter.host.requestFocus();
+        // Keep focus in this window without selecting another input, and
+        // leave subsequent hardware keys on the window's dispatch path.
+        mounter.releaseFocusOf(this);
     }
 
     private void hideKeyboard() {

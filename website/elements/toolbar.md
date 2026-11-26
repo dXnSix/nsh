@@ -14,6 +14,43 @@ A toolbar is a bar of controls: a text editor's formatting, a media player's tra
 related items (undo and redo, the alignment), and a `ToolbarSeparator` a line the app draws between runs. The look is
 the app's: the toolbar has no colors, padding or gaps of its own, and each control keeps its own state.
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { Button, Toggle, Toolbar, ToolbarGroup, ToolbarSeparator } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const bold = signal(false);
+  return (
+    <Toolbar accessibilityLabel="Formatting" class="items-center gap-1 self-start rounded-lg border border-border bg-muted p-1">
+      <ToolbarGroup accessibilityLabel="History">
+        <Button accessibilityLabel="Undo" class="size-8 items-center justify-center rounded-md hover:bg-foreground/5">
+          <Text>↶</Text>
+        </Button>
+        <Button accessibilityLabel="Redo" class="size-8 items-center justify-center rounded-md hover:bg-foreground/5">
+          <Text>↷</Text>
+        </Button>
+      </ToolbarGroup>
+      <ToolbarSeparator class="h-5 w-px bg-border" />
+      <Toggle
+        pressed={bold()}
+        accessibilityLabel="Bold"
+        onChange={({ pressed }) => bold.set(pressed)}
+        class="size-8 items-center justify-center rounded-md border border-transparent hover:bg-foreground/5 aria-pressed:border-border aria-pressed:bg-foreground/10"
+      >
+        <Text>B</Text>
+      </Toggle>
+    </Toolbar>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{button, theme, toggle, toolbar, toolbar_group, toolbar_separator};
 use nsh_core::prelude::*;
@@ -46,38 +83,6 @@ fn formatting() -> impl IntoElement {
                 .child(text("B")),
         )
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { Button, Toggle, Toolbar, ToolbarGroup, ToolbarSeparator } from "nsh/base";
-
-function App() {
-  const bold = signal(false);
-  return (
-    <Toolbar accessibilityLabel="Formatting" class="items-center gap-1 self-start rounded-lg border border-border bg-muted p-1">
-      <ToolbarGroup accessibilityLabel="History">
-        <Button accessibilityLabel="Undo" class="size-8 items-center justify-center rounded-md hover:bg-foreground/5">
-          <Text>↶</Text>
-        </Button>
-        <Button accessibilityLabel="Redo" class="size-8 items-center justify-center rounded-md hover:bg-foreground/5">
-          <Text>↷</Text>
-        </Button>
-      </ToolbarGroup>
-      <ToolbarSeparator class="h-5 w-px bg-border" />
-      <Toggle
-        pressed={bold()}
-        accessibilityLabel="Bold"
-        onChange={({ pressed }) => bold.set(pressed)}
-        class="size-8 items-center justify-center rounded-md border border-transparent hover:bg-foreground/5 aria-pressed:border-border aria-pressed:bg-foreground/10"
-      >
-        <Text>B</Text>
-      </Toggle>
-    </Toolbar>
-  );
-}
-
-mount(App);
 ```
 
 `Toolbar`, `ToolbarGroup` and `ToolbarSeparator` come from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate

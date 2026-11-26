@@ -6,7 +6,7 @@ order: 2
 
 # nsh
 
-`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), [speech recognition](#speech), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
+`nsh` is the core module: the reactive API (signals, computed values, effects, context), `mount`, `token`, `setTheme`, the host elements `View`, `Text`, `Scroll` and `Overlay`, [selectable views](#selectable-views), [the safe area and the keyboard](#safe-area-and-keyboard), [animation](#animation), [the device and its environment](#device), [`PanResponder`](#panresponder), the [clipboard](#clipboard), the [photo picker](#picker), the [share sheet](#share), [sound](#sound), [storage](#storage), the [host channel](#host), [keyboard shortcuts](#keymap), [native components and modules](#nativecomponent-and-nativemodule), [GPU views](#gpuview), [accessibility](#accessibility), and the TypeScript types of elements, styles and events. The reactive graph itself runs natively in Rust; reading a signal is a call into the runtime that costs a few nanoseconds, and only your own closures run in the JavaScript interpreter.
 
 ```ts
 import { batch, cleanup, computed, context, effect, ErrorBoundary, mount, Overlay, Scroll, signal, split, Text, token, untracked, View } from "nsh";
@@ -37,6 +37,7 @@ A signal holds a value. Calling it reads the value and, inside a tracking scope 
 
 ```tsx
 import { mount, signal, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
 
 function Counter() {
   const count = signal(0);
@@ -48,7 +49,7 @@ function Counter() {
   );
 }
 
-mount(Counter);
+mount(() => <Window id="main"><Counter /></Window>);
 ```
 
 By default a write that is `===` to the current value does nothing. Pass `equals: false` to notify on every write (useful when you mutate an object in place and set the same object again), or your own comparison:
@@ -157,6 +158,7 @@ A value a component provides to everything it renders, however deep. Calling the
 
 ```tsx
 import { context, mount, signal, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
 
 const Theme = context<"light" | "dark">("light");
 
@@ -176,7 +178,11 @@ function App() {
   );
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
 ```
 
 ## mount
@@ -185,9 +191,22 @@ mount(App);
 function mount<P extends object>(app: Component<P>, props?: P): () => void;
 ```
 
-Renders `app` into the surface (the window, or the `NshAppView` / `NshView` the app is embedded in) and returns a function that removes it. Every app's entry file ends with `mount(App)`.
+Renders `app` into the app root and returns a function that removes it. Every app's entry file ends with `mount(App)`.
+
+On the desktops the app root has no surface of its own: it owns the app's state, events and window registry, and its top-level children are `<Window>` scenes. An app declares every window it can show, including the first; a plain view returned from the app root, or no top-level `<Window>` at all, throws with a message saying so. The first window takes nsh.json's [`window`](../modules/nsh-desktop.md#the-app-host-and-the-first-window) launch defaults. Off the desktops (a phone, the web page, an embedded `NshAppView`) `<Window>` shows its content in the one surface, so the same app runs there.
 
 ```tsx
+import { mount, View } from "nsh";
+import { Window } from "nsh/desktop";
+
+function App() {
+  return (
+    <Window id="main" title="Counter">
+      <Counter />
+    </Window>
+  );
+}
+
 mount(App);
 ```
 
@@ -330,7 +349,8 @@ without `--release` make development builds; `nsh package`, `nsh publish` and `n
 builds. It reads the same on every platform and in any module, at its top level too: the build hands the information
 to the runtime before the app's modules run.
 
-`nsh/updater`'s [`shellInfo()`](./nsh-updater.md#shellinfo) reports the installed app's version.
+`nsh/updater`'s [`shellInfo()`](./nsh-updater.md#shellinfo) reports the installed app's version. Rust code of a Rust
+app reads the same with `app_info()` ([The app's version](../docs/device-and-environment.md#the-apps-version)).
 
 ```tsx
 import { appInfo, Text } from "nsh";
@@ -398,12 +418,12 @@ do: one selection runs across views, `Text` elements and `TextView`s, in reading
 
 The animation API animates on the UI thread. You create an **animated value**, bind it (or values derived from it) to a style property, and start an animation; from then on every frame is computed natively, without running the app's code. A busy engine or JS thread cannot make the animation stutter, and an animation costs the app no work per frame. Rust code uses `animated_value()`, `motion()`, `Animation`, `Spring`, `Timing`, `KeyframeTiming`, `MotionPreset` and `Easing` from `nsh_core::prelude` and binds values with the `.bind_*` methods of elements; TSX imports them from `nsh`.
 
-```rust tabs
-use nsh_core::{element::LayoutAnimation, prelude::*}; // animated_value, motion, Animation, Spring, Timing, Keyframe, KeyframeTiming, MotionPreset, MotionSpec, Easing, animate_layout
-```
-
 ```tsx tabs
 import { Animated, createAnimatedValue, createMotion, motions, Easing, LayoutAnimation, AnimatedNode, AnimatedValue } from "nsh";
+```
+
+```rust tabs
+use nsh_core::{element::LayoutAnimation, prelude::*}; // animated_value, motion, Animation, Spring, Timing, Keyframe, KeyframeTiming, MotionPreset, MotionSpec, Easing, animate_layout
 ```
 
 See [Animation](../docs/animation.md) for the guide.
@@ -432,6 +452,33 @@ function createAnimatedValue(value?: number): AnimatedValue;
 
 Creates an animated value starting at `value` (default `0`). Rust: `animated_value(value)`, a `Copy` handle kept by the component that made it.
 
+```tsx tabs
+import { mount, Text, View } from "nsh";
+import { createAnimatedValue } from "nsh";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const x = createAnimatedValue(0);
+  let right = false;
+  const toggle = () => {
+    right = !right;
+    x.spring(right ? 200 : 0);
+  };
+  return (
+    <View style={{ flex: 1, padding: 24, paddingTop: 48, gap: 16 }}>
+      <View style={{ width: 60, height: 60, borderRadius: 12, backgroundColor: "#6366f1", transform: [{ translateX: x }] }} />
+      <Text onPress={toggle}>Move</Text>
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -452,28 +499,6 @@ pub fn App() -> impl IntoElement {
         .child(view().size(px(60.0)).rounded(px(12.0)).bg(rgb(0x6366f1)).bind_translate_x(&x))
         .child(text("Move").on_press(toggle))
 }
-```
-
-```tsx tabs
-import { mount, Text, View } from "nsh";
-import { createAnimatedValue } from "nsh";
-
-function App() {
-  const x = createAnimatedValue(0);
-  let right = false;
-  const toggle = () => {
-    right = !right;
-    x.spring(right ? 200 : 0);
-  };
-  return (
-    <View style={{ flex: 1, padding: 24, paddingTop: 48, gap: 16 }}>
-      <View style={{ width: 60, height: 60, borderRadius: 12, backgroundColor: "#6366f1", transform: [{ translateX: x }] }} />
-      <Text onPress={toggle}>Move</Text>
-    </View>
-  );
-}
-
-mount(App);
 ```
 
 > [!NOTE]
@@ -512,6 +537,12 @@ class AnimatedValue extends AnimatedNode {
 
 Each animation method returns a promise that resolves with `{ finished }`: `true` when the animation finished, `false` when it was stopped (by `stop`, `set` or another animation of the same value). In Rust it returns an `AnimationEnd`, which a task awaits for the same `bool`.
 
+```tsx tabs
+const opacity = createAnimatedValue(1);
+const { finished } = await opacity.timing(0, { duration: 200 });
+if (finished) visible.set(false);
+```
+
 ```rust tabs
 let opacity = animated_value(1.0);
 spawn(async move {
@@ -519,12 +550,6 @@ spawn(async move {
         visible.set(false);
     }
 });
-```
-
-```tsx tabs
-const opacity = createAnimatedValue(1);
-const { finished } = await opacity.timing(0, { duration: 200 });
-if (finished) visible.set(false);
 ```
 
 ### AnimatedNode
@@ -539,7 +564,7 @@ class AnimatedNode {
     extrapolateRight?: Extrapolation;
     easing?: Easing;
   }): AnimatedNode;
-  diffClamp(min: number, max: number, options?: { snap?: boolean }): AnimatedNode;
+  diffClamp(min: number | AnimatedNode, max: number | AnimatedNode, options?: { snap?: boolean }): AnimatedNode;
   add(b: AnimatedNode | number): AnimatedNode;
   sub(b: AnimatedNode | number): AnimatedNode;
   mul(b: AnimatedNode | number): AnimatedNode;
@@ -555,9 +580,17 @@ A node of the native animation graph: a `AnimatedValue`, or a value derived from
 | Method | Rust | Description |
 |---|---|---|
 | `interpolate(config)` | `interpolate(&input, &output)`, `interpolate_colors(&input, &colors)`, `interpolate_with(&input, output, Interpolation { … })` | Maps the input through piecewise ranges. `outputRange` holds numbers, colors (`"#ff0000"`, `"rgba(…)"`) or angles (`"45deg"`, `"1rad"`). Outside `inputRange` it clamps by default; `extrapolate` (or `extrapolateLeft` / `extrapolateRight`) can be `"extend"` (continue the line), `"clamp"` or `"identity"` (pass the input through). `easing` shapes each segment. Rust takes numbers, theme colors (which follow the appearance) and angles as degrees for `bind_rotate`. |
-| `diffClamp(min, max, options?)` | `diff_clamp(min, max)`, `diff_clamp_with(min, max, DiffClamp::snapping())` | Follows the input's changes but keeps the result within `min..max`: a header that hides while content scrolls up and comes back as soon as it scrolls down. `snap: true` settles it at the nearer bound in 200 ms when its scroll view comes to rest, at `max` only once the input reached `max`. |
+| `diffClamp(min, max, options?)` | `diff_clamp(min, max)`, `diff_clamp_with(min, max, DiffClamp::snapping())` | Follows the input's changes but keeps the result within `min..max`: a header that hides while content scrolls up and comes back as soon as it scrolls down. `snap: true` settles it at the nearer bound in 200 ms when its scroll view comes to rest, at `max` only once the input reached `max`. Either bound can be a number or an animated value. |
 | `add`, `sub`, `mul`, `div` | `add`, `sub`, `mul`, `div` | Arithmetic with another node or a constant. |
 | `mod(b)` | `modulo(b)` | Modulo, never negative for a positive `b` (keeping angles in 0..360). |
+
+```tsx tabs
+const scroll = createAnimatedValue(0);
+const header = scroll.diffClamp(0, 44);
+
+<Scroll scrollValue={scroll} style={{ flex: 1 }}>{/* rows */}</Scroll>
+<View style={{ height: 44, transform: [{ translateY: header.mul(-1) }] }} />
+```
 
 ```rust tabs
 let scroll_y = animated_value(0.0);
@@ -570,23 +603,15 @@ view()
 ```
 
 ```tsx tabs
-const scroll = createAnimatedValue(0);
-const header = scroll.diffClamp(0, 44);
-
-<Scroll scrollValue={scroll} style={{ flex: 1 }}>{/* rows */}</Scroll>
-<View style={{ height: 44, transform: [{ translateY: header.mul(-1) }] }} />
+const progress = createAnimatedValue(0);
+const rotate = progress.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
+const color = progress.interpolate({ inputRange: [0, 0.5, 1], outputRange: ["#22c55e", "#eab308", "#ef4444"] });
 ```
 
 ```rust tabs
 let progress = animated_value(0.0);
 let rotate = progress.interpolate(&[0.0, 1.0], &[0.0, 360.0]); // degrees, for bind_rotate
 let color = progress.interpolate_colors(&[0.0, 0.5, 1.0], &[rgb(0x22c55e), rgb(0xeab308), rgb(0xef4444)]);
-```
-
-```tsx tabs
-const progress = createAnimatedValue(0);
-const rotate = progress.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
-const color = progress.interpolate({ inputRange: [0, 0.5, 1], outputRange: ["#22c55e", "#eab308", "#ef4444"] });
 ```
 
 ### Keyframes
@@ -612,17 +637,17 @@ interface KeyframeTiming {
 
 They play as CSS keyframes play: an easing shapes one segment (a keyframe's the segment that starts at it, the timing's every other one); offsets missing from keyframes spread evenly, the first at 0 and the last at 1; each iteration starts with a jump to its first keyframe, and without a keyframe at 0 the value goes from where it is; during a `delay` the value holds the first keyframe (CSS `animation-fill-mode: backwards`); backward iterations run the segments backwards with their curves reversed; the value stays where the last iteration leaves it.
 
+```tsx tabs
+const y = createAnimatedValue(0);
+y.keyframes([0, { offset: 0.3, value: -20, easing: "easeIn" }, 0], { duration: 600, iterations: 3 });
+```
+
 ```rust tabs
 let y = animated_value(0.0);
 y.keyframes(
     [Keyframe::new(0.0), Keyframe::at(0.3, -20.0).ease(Easing::EaseIn), Keyframe::new(0.0)],
     KeyframeTiming::new(600.0).iterations(Some(3)),
 );
-```
-
-```tsx tabs
-const y = createAnimatedValue(0);
-y.keyframes([0, { offset: 0.3, value: -20, easing: "easeIn" }, 0], { duration: 600, iterations: 3 });
 ```
 
 ### createMotion
@@ -636,6 +661,7 @@ interface MotionOptions extends MotionPlayOptions {
 }
 
 interface MotionPlayOptions extends KeyframeTiming {
+  spring?: MotionSpring;             // play each channel on this spring
   ignoreReduceMotion?: boolean;      // play even when the user asks for less motion
 }
 
@@ -671,16 +697,16 @@ Creates a motion: an animated value for each channel of a view's opacity and tra
 
 When the user asks for less motion (`reduceMotion()`), `play`, `animation` and `enter` land where the motion ends at once, without moving, unless `ignoreReduceMotion` is set (on the options or the motion).
 
+```tsx tabs
+const card = createMotion({ enter: "fadeInUp", delay: 80 });
+<View onPress={() => card.play("pulse")} style={{ width: 120, height: 120, borderRadius: 16, backgroundColor: "#0969da", ...card.style }} />
+```
+
 ```rust tabs
 let card = motion().entering(MotionPreset::FadeInUp.spec().timing(|t| t.delay(80.0)));
 view().size(px(120.0)).rounded(px(16.0)).bg(rgb(0x0969da)).bind_motion(&card).on_press(move || {
     card.play(MotionPreset::Pulse);
 })
-```
-
-```tsx tabs
-const card = createMotion({ enter: "fadeInUp", delay: 80 });
-<View onPress={() => card.play("pulse")} style={{ width: 120, height: 120, borderRadius: 16, backgroundColor: "#0969da", ...card.style }} />
 ```
 
 ### motions
@@ -692,8 +718,10 @@ type MotionChannel = "opacity" | "translateX" | "translateY" | "rotate" | "rotat
 
 interface MotionSpec extends KeyframeTiming {
   keyframes: { [C in MotionChannel]?: KeyframeValue[] } | MotionFrame[];
+  spring?: MotionSpring;
   ignoreReduceMotion?: boolean;
 }
+type MotionSpring = { stiffness?: number; damping?: number; mass?: number };   // 170, 26, 1
 type MotionFrame = { [C in MotionChannel]?: number | string } & { offset?: number; easing?: Easing };
 
 interface MotionPreset extends MotionSpec {
@@ -705,15 +733,31 @@ The ready-made motions as data: `motion.play("shake")` plays `motions.shake`. `M
 
 A `MotionSpec` is a motion of your own: each channel's keyframes (`{ opacity: [0, 1], translateY: [24, 0] }`), or a list of frames as the Web Animations API writes them (`[{ opacity: 0, translateY: 24 }, { opacity: 1, translateY: 0 }]`, a frame without an offset placed by its position in the list), with the [keyframe timing](#keyframes). Rust: `MotionSpec::new(KeyframeTiming)` with `.values(channel, values)` (spread evenly), `.track(channel, keyframes)` and `.timing(|t| …)`; `MotionPreset::FadeInUp` (or `.spec()`) is a preset, and `MotionChannel` names the channels.
 
+With `spring`, each channel springs from where it is to where its keyframes end, instead of running through them: a motion that interrupts another goes on from the values and velocities that one left, where keyframes start again from their first frame. The first keyframe is still where `enter` starts a view; `delay` waits before the spring starts, `direction: "reverse"` springs to the first keyframe, and the keyframes between, `duration`, `easing` and `iterations` are not used. The stiffness, damping and mass are `Animated.spring`'s (170, 26 and 1 by default). Rust: `.spring(Spring { stiffness, damping, ..Spring::default() })` on the `MotionSpec`. When the user asks for less motion, a sprung motion lands where it ends at once, as any motion does.
+
+```tsx tabs
+const spring = { stiffness: 620, damping: 36 };
+const sheet = createMotion({ enter: "slideInUp", spring });
+// Sent away while it still rises: it turns around from there, keeping its speed.
+sheet.play("slideOutDown", { spring });
+```
+
+```rust tabs
+let spring = Spring { stiffness: 620.0, damping: 36.0, ..Spring::default() };
+let sheet = motion().entering(MotionPreset::SlideInUp.spec().spring(spring));
+// Sent away while it still rises: it turns around from there, keeping its speed.
+let _ = sheet.play(MotionPreset::SlideOutDown.spec().spring(spring));
+```
+
+```tsx tabs
+card.play({ duration: 400, keyframes: [{ opacity: 0, translateY: 24, easing: "easeOut" }, { opacity: 1, translateY: 0 }] });
+```
+
 ```rust tabs
 let rise = MotionSpec::new(KeyframeTiming::new(400.0))
     .values(MotionChannel::Opacity, [0.0, 1.0])
     .track(MotionChannel::TranslateY, [Keyframe::at(0.0, 24.0).ease(Easing::EaseOut), Keyframe::at(1.0, 0.0)]);
 card.play(rise);
-```
-
-```tsx tabs
-card.play({ duration: 400, keyframes: [{ opacity: 0, translateY: 24, easing: "easeOut" }, { opacity: 1, translateY: 0 }] });
 ```
 
 ### Animated
@@ -768,6 +812,20 @@ interface CompositeAnimation {
 | `stop()` | `stop()` | Stops it where it is. |
 | `reset()` | `reset()` | Stops it and puts its values back where they were when it started. |
 
+```tsx tabs
+const ys = [0, 1, 2, 3].map(() => createAnimatedValue(0));
+const hop = Animated.stagger(
+  80,
+  ys.map((y) =>
+    Animated.sequence([
+      Animated.timing(y, { toValue: -36, duration: 220, easing: Easing.out(Easing.quad) }),
+      Animated.spring(y, { toValue: 0, stiffness: 300, damping: 12 }),
+    ]),
+  ),
+);
+hop.start(({ finished }) => console.log(finished ? "done" : "stopped"));
+```
+
 ```rust tabs
 let ys: Vec<AnimatedValue> = (0..4).map(|_| animated_value(0.0)).collect();
 let hop = Animation::stagger(
@@ -781,20 +839,6 @@ let hop = Animation::stagger(
 );
 let run = hop.start();
 spawn(async move { log::info!("{}", if run.await { "done" } else { "stopped" }) });
-```
-
-```tsx tabs
-const ys = [0, 1, 2, 3].map(() => createAnimatedValue(0));
-const hop = Animated.stagger(
-  80,
-  ys.map((y) =>
-    Animated.sequence([
-      Animated.timing(y, { toValue: -36, duration: 220, easing: Easing.out(Easing.quad) }),
-      Animated.spring(y, { toValue: 0, stiffness: 300, damping: 12 }),
-    ]),
-  ),
-);
-hop.start(({ finished }) => console.log(finished ? "done" : "stopped"));
 ```
 
 ### Easing
@@ -845,16 +889,16 @@ An easing is data, not a function of the app's: the runtime evaluates it nativel
 
 The curves are in their "in" form (slow at the start). `Easing.out(curve)` reverses one, `Easing.inOut(curve)` makes it symmetric, `Easing.in(curve)` keeps it as is; in Rust that is the `EaseMode` of `Easing::Curve`.
 
-```rust tabs
-let _ = value.timing(1.0, 600.0, Easing::Curve(Curve::Back(1.70158), EaseMode::Out));
-let _ = value.timing_with(1.0, Timing { easing: Easing::Bezier(0.2, 0.0, 0.0, 1.0), ..Timing::default() });
-let _ = value.timing_with(1.0, Timing { easing: Easing::EaseOut, ..Timing::default() });
-```
-
 ```tsx tabs
 value.timing(1, { duration: 600, easing: Easing.out(Easing.back()) });
 value.timing(1, { easing: Easing.bezier(0.2, 0, 0, 1) });
 value.timing(1, { easing: "easeOut" });
+```
+
+```rust tabs
+let _ = value.timing(1.0, 600.0, Easing::Curve(Curve::Back(1.70158), EaseMode::Out));
+let _ = value.timing_with(1.0, Timing { easing: Easing::Bezier(0.2, 0.0, 0.0, 1.0), ..Timing::default() });
+let _ = value.timing_with(1.0, Timing { easing: Easing::EaseOut, ..Timing::default() });
 ```
 
 ### LayoutAnimation
@@ -879,11 +923,15 @@ interface LayoutAnimationConfig {
 }
 
 interface LayoutAnimationAnimation {
-  type?: "easeInEaseOut" | "spring" | "linear" | "easeIn" | "easeOut" | "keyboard";
+  type?: "easeInEaseOut" | "spring" | "linear" | "easeIn" | "easeOut" | "keyboard" | "bezier";
   property?: "opacity" | "scaleXY" | "scale";
   duration?: number;
   delay?: number;
-  springDamping?: number;          // 0..1, default 0.7
+  springDamping?: number;          // 0..1, default 0.7: a spring fitted into `duration`
+  stiffness?: number;              // a physical spring (default 170): it lasts until it settles
+  damping?: number;                // its damping coefficient (default 26)
+  mass?: number;                   // its mass (default 1)
+  bezier?: [number, number, number, number];
 }
 ```
 
@@ -898,18 +946,6 @@ interface LayoutAnimationAnimation {
 | `Presets.spring` | `LayoutAnimation::SPRING` | 700 ms; frames spring (damping 0.4), views fade linearly. |
 | `easeInEaseOut(onEnd?)`, `linear(onEnd?)`, `spring(onEnd?)` | `animate_layout(LayoutAnimation::…)` | Shorthands for `configureNext(Presets.…)`. |
 | `Types`, `Properties` | `LayoutCurve`, `LayoutProperty` | The names, as constants. |
-
-```rust tabs
-let open = signal(false);
-let toggle = move || {
-    animate_layout(LayoutAnimation::SPRING);
-    open.update(|o| *o = !*o);
-};
-
-view()
-    .child(text("Details").on_press(toggle))
-    .child(when(move || open.get(), || text("Shown with a spring.")))
-```
 
 ```tsx tabs
 const open = signal(false);
@@ -926,19 +962,31 @@ const toggle = () => {
 </View>
 ```
 
+```rust tabs
+let open = signal(false);
+let toggle = move || {
+    animate_layout(LayoutAnimation::SPRING);
+    open.update(|o| *o = !*o);
+};
+
+view()
+    .child(text("Details").on_press(toggle))
+    .child(when(move || open.get(), || text("Shown with a spring.")))
+```
+
 ## Device
 
 The device API tells the app about the device and its environment. Rust code calls the functions of `nsh_core::prelude` (`window()`, `dark()`, `font_scale()`, `locale()`, `locale_settings()`, `lifecycle()`, `os()`, `idiom()`, `pixel_ratio()`, `set_color_scheme()`, ...); TSX imports them from `nsh`. The window size, the color scheme, the font scale, the pixel ratio, the locale, the locale settings and the app state are reactive: read them in a binding (a closure passed to an element in Rust, JSX in TSX), `computed` or `effect`, and what reads them updates when the platform reports a change (rotation, a window resize, switching to dark mode, changing the text size, the language or the region's settings, moving to another time zone, moving to a screen of another density, leaving the app and coming back).
+
+```tsx tabs
+import { colorScheme, fontScale, lifecycle, locale, localeSettings, openUrl, pixelRatio, platform, setColorScheme, windowSize } from "nsh";
+```
 
 ```rust tabs
 use nsh_core::{
     platform::{Appearance, HourCycle, Idiom, Lifecycle, LocaleSettings, MeasurementSystem, Os, TemperatureUnit, TimeZone, Weekday},
     prelude::*, // window, dark, font_scale, locale, locale_settings, lifecycle, os, idiom, pixel_ratio, set_color_scheme, ...
 };
-```
-
-```tsx tabs
-import { colorScheme, fontScale, lifecycle, locale, localeSettings, openUrl, pixelRatio, platform, setColorScheme, windowSize } from "nsh";
 ```
 
 See [Device and environment](../docs/device-and-environment.md) for the guide.
@@ -949,7 +997,13 @@ See [Device and environment](../docs/device-and-environment.md) for the guide.
 const windowSize: Accessor<Size>;
 ```
 
-The size of the surface in points: the window, or the embedded `NshAppView` / `NshView`. Reactive. Rust: `window() -> Size<Points>`.
+The size of the surface in points: the window, or the embedded `NshAppView` / `NshView`. On macOS, Windows and Linux it is the content size of the app's primary window, the first of its own windows still open; a window's own size is its [`state()`](./nsh-desktop.md#the-windows-state-and-the-displays)`?.contentBounds`. Reactive. Rust: `window() -> Size<Points>`.
+
+```tsx tabs
+const wide = () => windowSize().width >= 600;
+
+<View style={{ flexDirection: wide() ? "row" : "column" }}>{/* ... */}</View>
+```
 
 ```rust tabs
 let wide = move || window().width >= px(600.0);
@@ -957,10 +1011,22 @@ let wide = move || window().width >= px(600.0);
 view().style_when(wide, |s| s.flex_row())
 ```
 
-```tsx tabs
-const wide = () => windowSize().width >= 600;
+### horizontalSizeClass / verticalSizeClass
 
-<View style={{ flexDirection: wide() ? "row" : "column" }}>{/* ... */}</View>
+```ts
+export type SizeClass = "compact" | "regular";
+const horizontalSizeClass: Accessor<SizeClass>;
+const verticalSizeClass: Accessor<SizeClass>;
+```
+
+Reactive classifications of the window's horizontal and vertical space. iOS reads the view's UIKit trait collection, following rotation and multitasking; an unspecified trait falls back to the window dimension. Other platforms (including desktops, Android and Web) use width and height respectively: below 600pt is `compact`, at least 600pt is `regular`. The horizontal breakpoint matches DockArea; points correspond to dp on Android and CSS pixels on the web. Readers are notified only when their class changes.
+
+Rust: `horizontal_size_class()` / `vertical_size_class()` return `SizeClass::Compact` or `SizeClass::Regular`, exported from `nsh_core::prelude`.
+
+```tsx
+import { horizontalSizeClass, Text } from "nsh";
+
+<Text>{horizontalSizeClass() === "compact" ? "Compact layout" : "Expanded layout"}</Text>
 ```
 
 ### colorScheme
@@ -971,14 +1037,14 @@ const colorScheme: Accessor<"light" | "dark">;
 
 The appearance shown: the system's, unless the app set its own (`nsh.json` `"appearance"`, [`setColorScheme`](#setcolorscheme)). Reactive. Rust: `dark() -> bool`; theme colors (`AdaptiveColor`) and the `.dark(…)` style variant follow it without reading it. Tailwind's `dark:` variant follows it too (see [Tailwind](../docs/tailwind.md)).
 
-```rust tabs
-view().flex_1().bg(move || if dark() { black() } else { white() })
-```
-
 ```tsx tabs
 const dark = () => colorScheme() === "dark";
 
 <View style={{ flex: 1, backgroundColor: dark() ? "#000" : "#fff" }} />
+```
+
+```rust tabs
+view().flex_1().bg(move || if dark() { black() } else { white() })
 ```
 
 ### fontScale
@@ -1050,9 +1116,16 @@ Headless tests have the locale's (it alone as the languages, its region's prefer
 const lifecycle: Accessor<"active" | "inactive" | "background">;
 ```
 
-Whether the app is in use, in React Native's `AppState` terms: `"active"` in the foreground and taking input, `"inactive"` while visible without the focus (another app or window has it, or the system shows something over it, such as the app switcher or an incoming call), `"background"` while not visible (in the background, minimized, a hidden browser tab). An app shown inside a native app follows that app's. Reactive. Rust: `lifecycle() -> Lifecycle` (`Lifecycle::Active`, `Inactive`, `Background`).
+Whether the app is in use, in React Native's `AppState` terms: `"active"` in the foreground and taking input, `"inactive"` while visible without the focus (another app or window has it, or the system shows something over it, such as the app switcher or an incoming call), `"background"` while not visible (in the background, minimized, a hidden browser tab, a page the browser keeps in its back / forward cache until the user comes back to it). An app shown inside a native app follows that app's. Reactive. Rust: `lifecycle() -> Lifecycle` (`Lifecycle::Active`, `Inactive`, `Background`).
 
 Read it in an effect to pause work nobody sees and resume it when the app comes back:
+
+```tsx tabs
+effect(() => {
+  if (lifecycle() === "background") feed.pause();
+  else feed.resume();
+});
+```
 
 ```rust tabs
 effect(move || {
@@ -1064,13 +1137,6 @@ effect(move || {
 });
 ```
 
-```tsx tabs
-effect(() => {
-  if (lifecycle() === "background") feed.pause();
-  else feed.resume();
-});
-```
-
 ### wakeCount
 
 ```ts
@@ -1078,6 +1144,12 @@ const wakeCount: Accessor<number>;
 ```
 
 How many times the system woke from sleep while the app ran: 0 at the start, one more after each wake. A sleep may leave `lifecycle()` as it was (a laptop's lid closed and opened with the app in front), while network connections and timers did not live through it. Reactive: an effect that reads it runs again after each wake, where the app checks its connections or opens them again. macOS, Windows and Linux count wakes; on iOS and Android a sleeping device takes the app to the background, which `lifecycle()` reports. Rust: `wake_count() -> u32`.
+
+```tsx tabs
+effect(() => {
+  if (wakeCount() > 0) feed.reconnect();
+});
+```
 
 ```rust tabs
 effect(move || {
@@ -1087,9 +1159,25 @@ effect(move || {
 });
 ```
 
+### network
+
+```ts
+const network: Accessor<NetworkState>;
+```
+
+How the device reaches the network now: `online` (false only while the system knows there is no route), the `kind` of link the route takes (`"wifi"`, `"cellular"`, `"wired"`, `"other"`, `"none"` offline, `"unknown"` where the platform does not say, which counts as online), whether that link is `expensive` or `constrained` (Low Data Mode, Data Saver), and on iOS whether the user lets the app use cellular data (`cellularData`: `"unknown"` until the user decides, `"restricted"`, `"notRestricted"`). Reactive: an effect that reads it runs again when the route changes, where a request that failed offline tries again. iOS and macOS follow the system's path monitor, Android its default network, the web `navigator.onLine` and `navigator.connection`; Windows, Linux, GPUI and terminals report `"unknown"` ([The network](../docs/device-and-environment.md#the-network)). Rust: `network() -> Network` (`network().online()`, `.kind`, `.expensive`, `.constrained`, `.cellular_data`).
+
 ```tsx tabs
 effect(() => {
-  if (wakeCount() > 0) feed.reconnect();
+  if (network().online && sync.failedOffline()) sync.retry();
+});
+```
+
+```rust tabs
+effect(move || {
+    if network().online() && sync.failed_offline() {
+        sync.retry();
+    }
 });
 ```
 
@@ -1131,10 +1219,11 @@ interface PerfStats {
   readonly fps: number;
   readonly refreshRate: number | null;
   readonly dropped: number;
+  readonly memory: number | null;
 }
 ```
 
-What the monitor measured over the last second, read once a second while it measures (`fpsEnabled()`), and `null` while it does not and until its first second, so an app can show it its own way. `fps` is the frames shown per second: an idle app reads low, which is not slowness (only display refreshes in which the app changed count). `refreshRate` is the rate the display refreshes at (Hz), `null` until the monitor saw it refresh; `dropped` is the share of recent frames that took longer than one refresh, from 0 to 1 (`0.05` is 5%; in Rust a `Percentage`, the same fraction). Headless test runs measure too and draw no frames: they read 0 fps. Rust: `perf_stats() -> Option<PerfStats>`.
+What the monitor measured over the last second, read once a second while it measures (`fpsEnabled()`), and `null` while it does not and until its first second, so an app can show it its own way. `fps` is the frames shown per second: an idle app reads low, which is not slowness (only display refreshes in which the app changed count). `refreshRate` is the rate the display refreshes at (Hz), `null` until the monitor saw it refresh; `dropped` is the share of recent frames that took longer than one refresh, from 0 to 1 (`0.05` is 5%; in Rust a `Percentage`, the same fraction). `memory` is the memory the process owns, in bytes, as the panel shows it: the physical footprint on Apple platforms (Activity Monitor's Memory column), the resident set elsewhere; `null` where the platform does not say, and in headless test runs. Headless test runs measure too and draw no frames: they read 0 fps. Rust: `perf_stats() -> Option<PerfStats>`.
 
 ```tsx
 <If when={perfStats()}>
@@ -1187,12 +1276,12 @@ The platform the app runs on, constant while it runs.
 | `catalyst` | `is_catalyst() -> bool` | The app runs under Mac Catalyst, in the Mac or the iPad idiom (`os` is `"ios"`). |
 | `select(spec)` | `match os() { … }` | The value for this platform (see below). |
 
-```rust tabs
-let columns = if is_desktop() { 3 } else { 1 };
-```
-
 ```tsx tabs
 const columns = platform.desktop ? 3 : 1;
+```
+
+```rust tabs
+let columns = if is_desktop() { 3 } else { 1 };
 ```
 
 #### platform.select
@@ -1215,6 +1304,13 @@ interface PlatformSelectSpec<T> {
 
 Returns the value for `platform.name` (on a platform built outside NSH), else the current OS (`ios`, `android`, `web`, ...), else `desktop` or `mobile` (by `platform.desktop`), else `native` (every platform but the web), else `default`, else `undefined`. Rust code matches on `os()` (with `platform_name()` and `is_desktop()`).
 
+```tsx tabs
+const shadow = platform.select({
+  ios: { boxShadow: "0px 2px 8px rgb(0 0 0 / 0.15)" },
+  android: { elevation: 4 },
+});
+```
+
 ```rust tabs
 use nsh_core::platform::Os;
 
@@ -1231,13 +1327,6 @@ let card = match os() {
 };
 ```
 
-```tsx tabs
-const shadow = platform.select({
-  ios: { boxShadow: "0px 2px 8px rgb(0 0 0 / 0.15)" },
-  android: { elevation: 4 },
-});
-```
-
 > [!TIP]
 > For props that only one platform has, prefer the `ios={{…}}` / `android={{…}}` props of TSX elements and components to branching on `platform` (see [Platform-specific code](../docs/platform-specific.md)).
 
@@ -1247,14 +1336,14 @@ const shadow = platform.select({
 const pixelRatio: Accessor<number>;
 ```
 
-Device pixels per point (e.g. `3` on most iPhones). Reactive: it changes when the window moves to a screen of another density (on Mac Catalyst, the desktops, or an external display) and when Android's display size setting changes the density. Rust: `pixel_ratio() -> f32`, and `round_to_nearest_pixel(points)` for a length on whole device pixels; in TSX that length is `Math.round(x * pixelRatio()) / pixelRatio()`.
-
-```rust tabs
-let hairline = move || px(1.0 / pixel_ratio());
-```
+Device pixels per point (e.g. `3` on most iPhones). Reactive: it changes when the surface moves to a screen of another density (on Mac Catalyst or an external display) and when Android's display size setting changes the density. On the desktops it is the host display's scale; a window's own scale is `currentWindow().state()?.scaleFactor`. Rust: `pixel_ratio() -> f32`, and `round_to_nearest_pixel(points)` for a length on whole device pixels; in TSX that length is `Math.round(x * pixelRatio()) / pixelRatio()`.
 
 ```tsx tabs
 const hairline = () => 1 / pixelRatio();
+```
+
+```rust tabs
+let hairline = move || px(1.0 / pixel_ratio());
 ```
 
 ### openUrl
@@ -1269,18 +1358,6 @@ interface OpenUrlResult {
 
 Opens `url` outside the app: a web page in the browser, a `mailto:` link in the mail app, a `tel:` link in the phone app, and any scheme another app registered (`maps:`, a host app's own `lb://` links). It resolves with `{ opened }`, whether something opened it: `false` when no app handles the scheme. Rust: `open_url(url)` of `nsh_core::prelude`, an answer to await in a task (or to drop), the same `bool`.
 
-```rust tabs
-button()
-    .child(text("Contact us"))
-    .on_press(|| {
-        spawn(async {
-            if !open_url("mailto:help@example.com").await {
-                log::warn!("no mail app");
-            }
-        });
-    })
-```
-
 ```tsx tabs
 <Button
   onPress={async () => {
@@ -1294,7 +1371,19 @@ button()
 </Button>
 ```
 
-- The URL is absolute (it has a scheme). URLs that would run code or reach the app's own data, `javascript:`, `data:`, `blob:`, `file:`, `about:` and `asset:`, reject the promise with a `TypeError`, as do relative addresses. `openUrl` never throws: every failure rejects.
+```rust tabs
+button()
+    .child(text("Contact us"))
+    .on_press(|| {
+        spawn(async {
+            if !open_url("mailto:help@example.com").await {
+                log::warn!("no mail app");
+            }
+        });
+    })
+```
+
+- The URL is absolute (it has a scheme). URLs that would run code or reach the app's own data, `javascript:`, `data:`, `blob:`, `file:`, `about:` and `asset:`, reject the promise with a `TypeError`, as do relative addresses and file paths (`C:/…` on Windows). `openUrl` never throws: every failure rejects.
 - An app that declares capabilities needs `openUrl`: `"openUrl": true` for every scheme, or `"openUrl": { "schemes": ["https", "mailto"] }` for those listed; other URLs reject with an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission` `"openUrl"` and `resource` the URL (see [Sandbox and capabilities](../docs/sandbox-and-capabilities.md)). In Rust, `open_url` answers `false` for them and logs why.
 - The embedding app sees the URL first and can route it through its own router instead (Swift `NshAppView.onOpenURL`, Java `NshView.setOpenUrlHandler`, Rust `AppView::host().handle_open_url`; see [iOS](../docs/ios.md#links-the-app-opens) and [Android](../docs/android.md#links-the-app-opens)). `opened` is then `true`.
 - Each platform opens it with its own opener: `UIApplication.open` on iOS (the host app's application when embedded), an `ACTION_VIEW` intent on Android, `NSWorkspace` on macOS, `ShellExecuteW` on Windows, `GtkUriLauncher` on Linux, GPUI's `open_url`, a new tab on the web. `nsh test` records the URLs instead of opening them.
@@ -1306,15 +1395,15 @@ The layout direction follows the user's language: in a right-to-left language (A
 
 A view's `direction` style (`"ltr"`, `"rtl"` or `"inherit"`, the default) sets the direction of its own subtree; in Rust, `.direction(LayoutDirection::..)`.
 
-```rust tabs
-view().direction(LayoutDirection::Rtl).flex_row().gap_2().child(text("First")).child(text("Second"))
-```
-
 ```tsx tabs
 <View style={{ direction: "rtl", flexDirection: "row", gap: 8 }}>
   <Text>First</Text>
   <Text>Second</Text>
 </View>
+```
+
+```rust tabs
+view().direction(LayoutDirection::Rtl).flex_row().gap_2().child(text("First")).child(text("Second"))
 ```
 
 ### Related
@@ -1338,12 +1427,12 @@ Registers a font while the app runs and resolves with `{ family }`, its family n
 
 Pan responders are drag gestures on top of the gesture responder system: the element claims the touches of a gesture, then hears them alone with the gesture state, which tracks the touches' centroid, the distance moved and the velocity for you. Rust code claims them with `.claim_touches(TouchClaim::…)` and hears them with `.on_responder_*` listeners whose `ResponderEvent` carries a `PanGesture`, all in `nsh_core::prelude`; TSX imports `PanResponder` from `nsh`, whose `onPanResponder…` callbacks receive the touch event and the gesture state.
 
-```rust tabs
-use nsh_core::prelude::*; // TouchClaim, ClaimRequest, ResponderEvent, PanGesture
-```
-
 ```tsx tabs
 import { PanResponder, type PanResponderGestureState } from "nsh";
+```
+
+```rust tabs
+use nsh_core::prelude::*; // TouchClaim, ClaimRequest, ResponderEvent, PanGesture
 ```
 
 > [!TIP]
@@ -1360,6 +1449,43 @@ interface PanResponderInstance {
 ```
 
 Creates a pan responder. Spread its `panHandlers` on the view that should receive the gesture. In Rust, the view claims the touches and listens itself:
+
+```tsx tabs
+import { mount, signal, View } from "nsh";
+import { PanResponder } from "nsh";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const pos = signal({ x: 0, y: 0 });
+  let start = { x: 0, y: 0 };
+  const pan = PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onPanResponderGrant: () => (start = pos()),
+    onPanResponderMove: (_, g) => pos.set({ x: start.x + g.dx, y: start.y + g.dy }),
+    onPanResponderRelease: (_, g) => console.log(`released at ${g.vx.toFixed(0)} pt/s`),
+  });
+  return (
+    <View style={{ flex: 1 }}>
+      <View
+        {...pan.panHandlers}
+        style={{
+          width: 64,
+          height: 64,
+          borderRadius: 32,
+          backgroundColor: "#6366f1",
+          transform: [{ translateX: pos().x }, { translateY: pos().y }],
+        }}
+      />
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -1390,38 +1516,6 @@ pub fn App() -> impl IntoElement {
             }),
     )
 }
-```
-
-```tsx tabs
-import { mount, signal, View } from "nsh";
-import { PanResponder } from "nsh";
-
-function App() {
-  const pos = signal({ x: 0, y: 0 });
-  let start = { x: 0, y: 0 };
-  const pan = PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onPanResponderGrant: () => (start = pos()),
-    onPanResponderMove: (_, g) => pos.set({ x: start.x + g.dx, y: start.y + g.dy }),
-    onPanResponderRelease: (_, g) => console.log(`released at ${g.vx.toFixed(0)} pt/s`),
-  });
-  return (
-    <View style={{ flex: 1 }}>
-      <View
-        {...pan.panHandlers}
-        style={{
-          width: 64,
-          height: 64,
-          borderRadius: 32,
-          backgroundColor: "#6366f1",
-          transform: [{ translateX: pos().x }, { translateY: pos().y }],
-        }}
-      />
-    </View>
-  );
-}
-
-mount(App);
 ```
 
 ### Callbacks
@@ -1480,6 +1574,15 @@ Rust: `PanGesture`, with points as `Point<Points>`.
 
 While a pan responder is the responder, native scroll views around it do not scroll (`onShouldBlockNativeResponder` defaults to `true`). To let a horizontal swipe coexist with vertical scrolling, become the responder only on horizontal moves:
 
+```tsx tabs
+const swipe = PanResponder.create({
+  onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy),
+  onPanResponderMove: (_, g) => offset.set(g.dx),
+  onPanResponderRelease: (_, g) => (Math.abs(g.dx) > 120 ? remove() : offset.set(0)),
+  onPanResponderTerminate: () => offset.set(0),
+});
+```
+
 ```rust tabs
 view()
     .claim_touches(TouchClaim::on_move().ask(|request: &ClaimRequest| {
@@ -1495,34 +1598,25 @@ view()
     .on_responder_terminate(move |_: &ResponderEvent| offset.set(0.0))
 ```
 
-```tsx tabs
-const swipe = PanResponder.create({
-  onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy),
-  onPanResponderMove: (_, g) => offset.set(g.dx),
-  onPanResponderRelease: (_, g) => (Math.abs(g.dx) > 120 ? remove() : offset.set(0)),
-  onPanResponderTerminate: () => offset.set(0),
-});
-```
-
 For a pan the platform recognizes, `TouchClaim::on_pan(PanActivation::horizontal(10.0, 10.0))` decides on the main thread as the fingers move. The underlying responder props (`onStartShouldSetResponder`, `onResponderGrant`, `onTouchStart`, ...) can also be used directly on any element; see [Elements](../elements/index.md).
 
 ## Clipboard
 
 The clipboard API reads and writes the system clipboard: text everywhere (`UIPasteboard` on iOS, `ClipboardManager` on Android, `NSPasteboard`, GDK and the Win32 clipboard on desktops, `navigator.clipboard` on the web), images on iOS, the desktops and the web, and the files copied in a file manager on the desktops and Mac Catalyst. Rust code calls the functions of `nsh_core::prelude` (`set_clipboard`, `clipboard_string`, ...); TSX imports `Clipboard` from `nsh`.
 
+```tsx tabs
+import { Clipboard } from "nsh";
+```
+
 ```rust tabs
 use nsh_core::prelude::*; // set_clipboard, clipboard_string, clipboard_image, ...
 use nsh_core::element::ClipboardImage;
 ```
 
-```tsx tabs
-import { Clipboard } from "nsh";
-```
-
 ```ts
 const Clipboard: {
-  writeText(text: string): Promise<void>;
-  write(item: ClipboardItem): Promise<void>;
+  writeText(text: string): Promise<ClipboardWrite>;
+  write(item: ClipboardItem): Promise<ClipboardWrite>;
   readText(): Promise<string>;
   hasText(): Promise<boolean>;
   writeImage(src: string): Promise<void>;
@@ -1530,6 +1624,8 @@ const Clipboard: {
   hasImage(): Promise<boolean>;
   readFiles(): Promise<string[]>;
 };
+
+type ClipboardWrite = "written" | "failed" | "requested";
 
 interface ClipboardItem {
   text: string; // the content as plain text
@@ -1544,8 +1640,8 @@ interface ClipboardImage {
 
 | TS | Rust (`nsh_core::prelude`) |
 |---|---|
-| `await Clipboard.writeText(text)` | `set_clipboard(text)` |
-| `await Clipboard.write({ text, html })` | `set_clipboard_item(item)` (a `ClipboardItem`) |
+| `await Clipboard.writeText(text)` | `set_clipboard(text).await -> ClipboardWrite` |
+| `await Clipboard.write({ text, html })` | `set_clipboard_item(item).await -> ClipboardWrite` (a `ClipboardItem`) |
 | `await Clipboard.readText()` | `clipboard_string().await -> String` |
 | `await Clipboard.hasText()` | `clipboard_has_string().await -> bool` |
 | `await Clipboard.writeImage(src)` | `set_clipboard_image(src)` |
@@ -1564,25 +1660,16 @@ The user can also copy from a [selectable text](../elements/text.md) themselves;
 ### Clipboard.writeText
 
 ```ts
-writeText(text: string): Promise<void>;
+writeText(text: string): Promise<ClipboardWrite>;
 ```
 
 Puts `text` on the clipboard, replacing what was there. Rust: `set_clipboard(text)`.
 
-```rust tabs
-use nsh_core::prelude::*;
-
-fn copy_button(code: Signal<String>) -> impl IntoElement {
-    let copied = signal(false);
-    view()
-        .role(AccessibilityRole::Button)
-        .on_press(move || {
-            set_clipboard(code.get());
-            copied.set(true);
-        })
-        .child(text(move || if copied.get() { "Copied" } else { "Copy" }))
-}
-```
+It resolves to what became of the write: `"written"` when the system clipboard took it (Windows, macOS, the web),
+`"failed"` when it refused it (another app holds the clipboard, the browser declined), and `"requested"` where the
+platform does not say (iOS, Android, Linux, a GPUI host, a terminal). NSH never reads the clipboard back to find out.
+Show "Copied" only for `"written"`, and keep a way to copy by hand for `"failed"`. In Rust the answer is a
+`ClipboardWrite`; drop it when the result does not matter, the write happens either way.
 
 ```tsx tabs
 import { signal, Text, View } from "nsh";
@@ -1600,10 +1687,25 @@ const copied = signal(false);
 </View>;
 ```
 
+```rust tabs
+use nsh_core::prelude::*;
+
+fn copy_button(code: Signal<String>) -> impl IntoElement {
+    let copied = signal(false);
+    view()
+        .role(AccessibilityRole::Button)
+        .on_press(move || {
+            set_clipboard(code.get());
+            copied.set(true);
+        })
+        .child(text(move || if copied.get() { "Copied" } else { "Copy" }))
+}
+```
+
 ### Clipboard.write
 
 ```ts
-write(item: ClipboardItem): Promise<void>;
+write(item: ClipboardItem): Promise<ClipboardWrite>;
 ```
 
 Puts the same content as plain text and as HTML on the clipboard, replacing what was there, as a browser copies a
@@ -1621,6 +1723,12 @@ On the web, a write made while the user's key or press is handled (a `RichEditor
 event, as a browser copies a selection. `Clipboard.readText` reads the text back; a paste reads the HTML (`onPaste`'s
 `html`).
 
+```tsx tabs
+import { Clipboard } from "nsh";
+
+await Clipboard.write({ text: "Hello world", html: "<p>Hello <b>world</b></p>" });
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -1628,12 +1736,6 @@ let mut item = ClipboardItem::default();
 item.text = "Hello world".into();
 item.html = Some("<p>Hello <b>world</b></p>".into());
 set_clipboard_item(item);
-```
-
-```tsx tabs
-import { Clipboard } from "nsh";
-
-await Clipboard.write({ text: "Hello world", html: "<p>Hello <b>world</b></p>" });
 ```
 
 ### Clipboard.readText
@@ -1644,6 +1746,11 @@ readText(): Promise<string>;
 
 Resolves with the clipboard's text, or `""` when it holds none. Rust: `clipboard_string()`. On iOS, reading the clipboard can show the system's paste notice ("App pasted from …"), and on Android 10 and later only the app in the foreground can read it. Read it when the user asks to paste, not on every screen.
 
+```tsx tabs
+const pasted = await Clipboard.readText();
+if (pasted) code.set(pasted.trim());
+```
+
 ```rust tabs
 spawn(async move {
     let pasted = clipboard_string().await;
@@ -1651,11 +1758,6 @@ spawn(async move {
         code.set(pasted.trim().to_string());
     }
 });
-```
-
-```tsx tabs
-const pasted = await Clipboard.readText();
-if (pasted) code.set(pasted.trim());
 ```
 
 ### Clipboard.hasText
@@ -1666,14 +1768,14 @@ hasText(): Promise<boolean>;
 
 Resolves with whether the clipboard holds text, without reading it: no paste notice on iOS. Rust: `clipboard_has_string()`. Use it to decide whether to show a Paste button. On the web, browsers only tell by reading, so it may ask the user for permission.
 
-```rust tabs
-let can_paste = signal(false);
-spawn(async move { can_paste.set(clipboard_has_string().await) });
-```
-
 ```tsx tabs
 const canPaste = signal(false);
 Clipboard.hasText().then((has) => canPaste.set(has));
+```
+
+```rust tabs
+let can_paste = signal(false);
+spawn(async move { can_paste.set(clipboard_has_string().await) });
 ```
 
 ### Clipboard.readImage
@@ -1689,6 +1791,30 @@ clipboard's own JPEG, GIF, WebP or BMP) that an [`Image`](../elements/image.md) 
 `readText`, read it when the user asks to paste. Images of up to 48 MB (encoded) are read, so the image fits in the
 app's memory; a larger one rejects with an `Error` whose `code` is `"ERR_NSH_QUOTA_EXCEEDED"` (its message gives the
 image's size and the limit), while `hasImage` resolves `true`. Rust: `clipboard_image()` answers `None` for it.
+
+```tsx tabs
+import { Image, signal, View } from "nsh";
+import { Clipboard, type ClipboardImage } from "nsh";
+
+const attachments = signal<ClipboardImage[]>([]);
+
+async function paste() {
+  const image = await Clipboard.readImage();
+  if (image) attachments.set([...attachments(), image]);
+}
+
+async function upload(image: ClipboardImage) {
+  const body = new FormData();
+  body.append("file", await (await fetch(image.url)).blob(), "screenshot.png");
+  await fetch("https://example.com/upload", { method: "POST", body });
+}
+
+<View class="flex-row gap-2">
+  <Each of={attachments()}>
+    {(image) => <Image src={image().url} style={{ width: 64, height: 64, borderRadius: 8 }} />}
+  </Each>
+</View>;
+```
 
 ```rust tabs
 use base64::Engine as _;
@@ -1724,32 +1850,17 @@ async fn upload(image: &ClipboardImage) -> Result<HttpResponse, String> {
 }
 ```
 
-```tsx tabs
-import { Image, signal, View } from "nsh";
-import { Clipboard, type ClipboardImage } from "nsh";
-
-const attachments = signal<ClipboardImage[]>([]);
-
-async function paste() {
-  const image = await Clipboard.readImage();
-  if (image) attachments.set([...attachments(), image]);
-}
-
-async function upload(image: ClipboardImage) {
-  const body = new FormData();
-  body.append("file", await (await fetch(image.url)).blob(), "screenshot.png");
-  await fetch("https://example.com/upload", { method: "POST", body });
-}
-
-<View class="flex-row gap-2">
-  <Each of={attachments()}>
-    {(image) => <Image src={image().url} style={{ width: 64, height: 64, borderRadius: 8 }} />}
-  </Each>
-</View>;
-```
-
 A chat-style app where users paste screenshots into a composer binds the paste shortcut while its input has the focus
 and takes the image when there is one:
+
+```tsx tabs
+import { keymap } from "nsh";
+
+keymap.bind("mod+v", async () => {
+  if (await Clipboard.hasImage()) return paste();
+  insertText(await Clipboard.readText());
+}, { when: "always" });
+```
 
 ```rust tabs
 use nsh_core::keymap::When;
@@ -1763,15 +1874,6 @@ on_key_with("mod+v", KeyOptions { when: When::Always, ..KeyOptions::default() },
         }
     });
 });
-```
-
-```tsx tabs
-import { keymap } from "nsh";
-
-keymap.bind("mod+v", async () => {
-  if (await Clipboard.hasImage()) return paste();
-  insertText(await Clipboard.readText());
-}, { when: "always" });
 ```
 
 ### Clipboard.hasImage
@@ -1796,12 +1898,12 @@ on as it is, as HTML (`<img>`, in a paste's `html`) and, in Chromium browsers, a
 GIF keeps its frames. On Android it rejects with
 `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"`.
 
-```rust tabs
-set_clipboard_image(image.url.clone());
-```
-
 ```tsx tabs
 await Clipboard.writeImage(image.url);
+```
+
+```rust tabs
+set_clipboard_image(image.url.clone());
 ```
 
 ### Clipboard.readFiles
@@ -1814,17 +1916,17 @@ Resolves with the `file:` URLs of the files and folders copied in a file manager
 order, or `[]`: the same URLs a [file drop](../elements/view.md#desktop-file-drops) gives. Rust: `clipboard_files()`.
 Parse a URL to get its path.
 
+```tsx tabs
+const files = await Clipboard.readFiles();
+const names = files.map((url) => decodeURIComponent(new URL(url).pathname.split("/").pop()!));
+```
+
 ```rust tabs
 let paths: Vec<std::path::PathBuf> = clipboard_files()
     .await
     .iter()
     .filter_map(|file| url::Url::parse(file).ok()?.to_file_path().ok())
     .collect();
-```
-
-```tsx tabs
-const files = await Clipboard.readFiles();
-const names = files.map((url) => decodeURIComponent(new URL(url).pathname.split("/").pop()!));
 ```
 
 > [!NOTE]
@@ -1848,13 +1950,13 @@ needs no photo library permission. Each picked image arrives as a `File` (TSX) o
 native: show it with `URL.createObjectURL(file)` in an [`Image`](../elements/image.md), upload it with `fetch` and
 `FormData`. Rust code calls `pick_images` of `nsh_core::prelude`; TSX imports `Picker` from `nsh`.
 
+```tsx tabs
+import { Picker, type PickedImage } from "nsh";
+```
+
 ```rust tabs
 use nsh_core::picker::{PickRequest, PickedFile};
 use nsh_core::prelude::*; // pick_images
-```
-
-```tsx tabs
-import { Picker, type PickedImage } from "nsh";
 ```
 
 ```ts
@@ -1933,36 +2035,6 @@ GIF and WebP) and the files come as they are stored, at their own size.
 
 A chat composer attaches a photo, shows it while the message is written, and uploads it when it is sent:
 
-```rust tabs
-use nsh_core::geometry::{DevicePixels, Percentage};
-use nsh_core::picker::{PickRequest, PickedFile};
-use nsh_core::prelude::*;
-
-fn attach_button(attached: Signal<Option<PickedFile>>) -> impl IntoElement {
-    view()
-        .role(AccessibilityRole::Button)
-        .accessibility_label("Choose a photo")
-        .on_press(move || {
-            let mut request = PickRequest::new(false, 1);
-            request.max_dimension = Some(DevicePixels(2048));
-            request.quality = Some(Percentage(0.85));
-            let picked = pick_images(request);
-            spawn(async move {
-                if let Some(file) = picked.await.into_iter().next() {
-                    attached.set(Some(file));
-                }
-            });
-        })
-        .child(text("Photo"))
-}
-
-async fn upload(file: &PickedFile) -> Result<HttpResponse, String> {
-    let request = HttpRequest::post("https://example.com/upload", file.data.to_vec())
-        .header("Content-Type", file.mime.as_str());
-    fetch(request).await
-}
-```
-
 ```tsx tabs
 import { Image, signal, Text, View } from "nsh";
 import { Picker } from "nsh";
@@ -1993,7 +2065,42 @@ async function send(text: string) {
 </View>;
 ```
 
+```rust tabs
+use nsh_core::geometry::{DevicePixels, Percentage};
+use nsh_core::picker::{PickRequest, PickedFile};
+use nsh_core::prelude::*;
+
+fn attach_button(attached: Signal<Option<PickedFile>>) -> impl IntoElement {
+    view()
+        .role(AccessibilityRole::Button)
+        .accessibility_label("Choose a photo")
+        .on_press(move || {
+            let mut request = PickRequest::new(false, 1);
+            request.max_dimension = Some(DevicePixels(2048));
+            request.quality = Some(Percentage(0.85));
+            let picked = pick_images(request);
+            spawn(async move {
+                if let Some(file) = picked.await.into_iter().next() {
+                    attached.set(Some(file));
+                }
+            });
+        })
+        .child(text("Photo"))
+}
+
+async fn upload(file: &PickedFile) -> Result<HttpResponse, String> {
+    let request = HttpRequest::post("https://example.com/upload", file.data.to_vec())
+        .header("Content-Type", file.mime.as_str());
+    fetch(request).await
+}
+```
+
 Several photos at once:
+
+```tsx tabs
+const images = await Picker.pickImages({ multiple: true, limit: 9, maxDimension: 2048 });
+photos.set([...photos(), ...images.map((image) => URL.createObjectURL(image.file))]);
+```
 
 ```rust tabs
 let picked = pick_images(PickRequest::new(true, 9));
@@ -2001,11 +2108,6 @@ spawn(async move {
     let files = picked.await;
     photos.update(|list| list.extend(files));
 });
-```
-
-```tsx tabs
-const images = await Picker.pickImages({ multiple: true, limit: 9, maxDimension: 2048 });
-photos.set([...photos(), ...images.map((image) => URL.createObjectURL(image.file))]);
 ```
 
 ### Picker.pickFiles
@@ -2070,6 +2172,175 @@ and without a handler a pick is cancelled. See [Testing](../docs/testing-and-tra
 > `"picker"` and `resource` `""`. In Rust, `pick_images` and `pick_files` answer no files and the refusal is logged. See
 > [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
 
+## Share
+
+The share API hands text, a link or local files to the system's share sheet, where the user sends them on: to another
+app, a message, a mail, AirDrop or a saved file. On iOS it is `UIActivityViewController`, on Android the chooser of
+`Intent.ACTION_SEND`, on macOS the share menu (`NSSharingServicePicker`) and in a browser `navigator.share`. Rust code
+calls `share` of `nsh_core::prelude`; TSX imports `Share` from `nsh`.
+
+```tsx tabs
+import { Share, type ShareResult } from "nsh";
+```
+
+```rust tabs
+use nsh_core::share::{ShareAction, ShareRequest};
+use nsh_core::prelude::*; // share, share_available
+```
+
+```ts
+const Share: {
+  available(): Promise<boolean>;
+  show(content: ShareContent): Promise<ShareResult>;
+};
+
+interface ShareContent {
+  title?: string; // the subject (a mail's subject line) and the sheet's title where it has one
+  text?: string;
+  url?: string; // a link: http(s), mailto, an app's own scheme
+  files?: string[]; // local files by absolute path (up to 100)
+  anchor?: ViewRef; // the view the sheet points at where it is a popover (iPad, macOS)
+}
+
+interface ShareResult {
+  action: "shared" | "dismissed";
+  target: string | null; // what the user shared with, as the platform names it
+}
+```
+
+| TS | Rust |
+|---|---|
+| `await Share.available()` | `share_available().await -> bool` |
+| `await Share.show(content)` | `share(request).await -> Result<ShareOutcome, ShareError>` |
+| `title`, `text`, `url`, `files` | `ShareRequest::new().title(..).text(..).url(..).file(..)` |
+| `anchor` | `.anchor(&element_ref)` |
+| `result.action`, `.target` | `outcome.action` (`ShareAction`), `outcome.target` |
+| `error.code` | `error.code` |
+
+### Share.show
+
+```ts
+show(content: ShareContent): Promise<ShareResult>;
+```
+
+Shows the share sheet and resolves with what the user did: `"shared"` with the `target` the user shared with (an
+activity type on iOS, an app's package on Android, a service's title on macOS, `null` where the platform does not say),
+or `"dismissed"` when the user closed the sheet. A dismissal is the user's answer, not a failure. Rust: `share(request)`,
+an answer to await in a task (`spawn`, or an `async` module function).
+
+`"shared"` says as much as the platform knows:
+
+| Platform | `"shared"` means |
+|---|---|
+| iOS | The target finished sharing (a cancelled mail or message is `"dismissed"`) |
+| macOS | The service reported that it finished, or it reported nothing and the user came back to the window the menu opened from (after copying or adding to a list, and also with a mail draft still open); a service that reports a cancel is `"dismissed"`, and so is one that reports nothing while the user stays away for ten minutes |
+| Android | The user chose an app; Android tells nothing of what the app does next |
+| Web | `navigator.share` resolved |
+
+`show` never throws; every failure rejects the promise:
+
+- content with none of `text`, `url` and `files` (empty text counts as none), or a URL that does not parse or that runs
+  code (`javascript:`) or names a local file (`file:`; share it as `files`): a `TypeError`;
+- more than 100 files, text or a title past 1 MiB, or a URL past 16 KiB: a `RangeError`;
+- a file the app's `capabilities.fs.read` does not grant: `ERR_ACCESS_DENIED`, and a file that does not exist: `ENOENT`;
+- a share where the platform has no share sheet, or of content it does not share (a file outside an Android app's own
+  storage, files in a browser, a browser that does not allow sharing here or still shows an earlier share's sheet): an
+  `Error` whose `code` is `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`. `Share.available()` tells beforehand where the platform has no sheet.
+
+A `show` while a sheet is open resolves the earlier promise `"dismissed"` at once. On iOS and macOS the new sheet takes
+the earlier one's place; on Android and the web the earlier sheet stays until the user closes it, and a browser
+refuses the new share while it is open. On an iPad and on macOS the sheet is a popover: give `anchor` the view that opened it (the share button,
+in a page, a header, a dialog or another window), and without one it shows at the middle of the window.
+
+On iOS the sheet offers saving an image to Photos when the app says why it adds to the photo library:
+`NSPhotoLibraryAddUsageDescription` in `ios.infoPlist` ([Info.plist keys](../docs/packaging.md#infoplist-keys-and-entitlements)).
+
+A trip planner shares a trip from its share button:
+
+```tsx tabs
+import { Share, Text, View, type ViewRef } from "nsh";
+
+function ShareButton(props: { trip: string }) {
+  let button: ViewRef | undefined;
+  const share = async () => {
+    try {
+      const { action } = await Share.show({
+        title: "Weekend in Kyoto",
+        url: `https://example.com/trips/${props.trip}`,
+        anchor: button,
+      });
+      if (action === "shared") console.log("shared");
+    } catch (e) {
+      console.warn("cannot share", e);
+    }
+  };
+  return (
+    <View ref={button} role="button" accessibilityLabel="Share" onPress={share}>
+      <Text>Share</Text>
+    </View>
+  );
+}
+```
+
+```rust tabs
+use nsh_core::prelude::*;
+use nsh_core::share::{ShareAction, ShareRequest};
+
+fn share_button(trip: &'static str) -> impl IntoElement {
+    let button = element_ref();
+    view()
+        .element_ref(&button)
+        .role(AccessibilityRole::Button)
+        .accessibility_label("Share")
+        .on_press(move || {
+            let request = ShareRequest::new()
+                .title("Weekend in Kyoto")
+                .url(format!("https://example.com/trips/{trip}"))
+                .anchor(&button);
+            let shared = share(request);
+            spawn(async move {
+                match shared.await {
+                    Ok(outcome) if outcome.action == ShareAction::Shared => log::info!("shared"),
+                    Ok(_) => {}
+                    Err(error) => log::warn!("cannot share: {error}"),
+                }
+            });
+        })
+        .child(text("Share"))
+}
+```
+
+| Platform | Share sheet | Files |
+|---|---|---|
+| iOS | `UIActivityViewController`; a popover on an iPad | Any file the app reads |
+| Android | The chooser of `ACTION_SEND` (`ACTION_SEND_MULTIPLE` for several files) | Files in the app's own storage (`process.dataDir`, the cache), as `content:` URIs |
+| macOS | The share menu, `NSSharingServicePicker` | Any file the app reads |
+| Web | `navigator.share`, where the browser has it and the page allows `web-share` | Text and links |
+
+On Windows, Linux and in GPUI windows, `Share.available()` resolves `false` and `show` rejects with
+`ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`, so the app can offer another way (copying the link, say).
+
+### Share.available
+
+```ts
+available(): Promise<boolean>;
+```
+
+Whether `show` can show a share sheet here: the platform has one and the app's capabilities grant it. An app shows its
+share button by it. Rust: `share_available()`.
+
+### Tests
+
+`nsh test` answers shares in headless runs: `app.onShare({ action, target })` sets the answer (`"dismissed"` until one
+is set) and makes `Share.available()` true, and `app.shares()` returns what the app shared (`{ title, text, url, files }`).
+See [Testing](../docs/testing-and-trace.md).
+
+> [!NOTE]
+> When your app declares `capabilities` in `nsh.json`, the share sheet must be granted with `"share": true`, and each
+> shared file must also be readable by `fs.read`. Without the grant `Share.available()` resolves `false` and `show`
+> rejects with an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission` `"share"` and `resource` `""`. See
+> [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
+
 ## Notifications
 
 `Notifications` shows system notifications and sets the app's icon badge, the Dock's on macOS. Ask for the permission
@@ -2115,6 +2386,20 @@ to the browser.
 await Notifications.show({ id: "sync", title: "Synced", body: "12 new photos", silent: true });
 ```
 
+`sound` plays a sound the app ships instead of the system's default, so the user tells the app's notifications apart
+(a new customer message, say); `silent: true` wins over it. Name a bundled asset, by its path or an imported sound.
+`nsh package` copies the app's sounds where the system plays them from: Apple platforms play `.caf`, `.aiff` and `.wav`
+files of at most 30 s from `Library/Sounds`, found by file name, so give each sound its own file name; Android plays
+`.ogg`, `.mp3` and `.wav` raw resources, one notification channel per sound, whose sound the user can change in the
+system's settings; Linux passes the file to the daemon (`sound-file`). Windows (an unpackaged app), the web, and a
+platform that cannot find the sound play the default.
+
+```tsx
+import ding from "./sounds/message.caf";
+
+await Notifications.show({ id: "chat:42", title: "Ada", body: "Are you there?", sound: ding });
+```
+
 ### Notifications.closeAll
 
 `closeAll()` removes every notification the app showed, shown or waiting to show. Call it when the user signs out, so
@@ -2133,14 +2418,23 @@ async function signOut() {
 
 `press` reports the `id` of the notification the user pressed. A press can start the app: it waits for the first
 listener, so listen when the app starts, and keep what the press opens in the `id`. On Android an embedding app's
-activity passes its intents to `NshView.handleNotificationIntent`, in `onCreate` and `onNewIntent`. On Apple platforms an
-embedding app that has a notification center delegate keeps it, and its delegate gets the presses. On Linux a press reaches
+activity passes its intents to `NshView.handleNotificationIntent`, in `onCreate` and `onNewIntent`; presses of the
+notifications other code showed (a push service's SDK's) go to the handler Rust code sets with
+`nsh::notifications::set_foreign_handler` ([Android](../docs/android.md#notifications-from-other-code)), never to
+`press`. On Apple platforms an
+embedding app that has a notification center delegate keeps it, and its delegate gets the presses; otherwise remote
+notifications and those other native code scheduled go to the handler Rust code sets with
+`nsh_platform_apple::notifications::set_foreign_handler` ([iOS](../docs/ios.md#notifications-from-other-code)), never to
+`press`. On Linux a press reaches
 only the running app: one left on screen after the app exits does nothing.
+
+On Windows, pressing a notification brings a focusable app window to the foreground, preferring an unminimized window and restoring a minimized one if none is open on screen.
+Hidden windows stay hidden, and the app still receives `press` when there is no window to activate.
 
 ### Notifications.permission
 
 `permission()` answers without asking, `requestPermission()` shows the system's prompt the first time. Both resolve with
-`"default"` (not asked yet), `"granted"`, `"denied"` (only the system's settings change it) or `"unavailable"`. On Apple
+`"default"` (not asked yet), `"granted"`, `"denied"` (only the system's settings change it; [`AppSettings.open`](./nsh-mobile.md#appsettings) of `nsh/mobile` takes the user there) or `"unavailable"`. On Apple
 platforms `requestPermission()` resolves with the permission the system's settings hold once it has asked: `"denied"` for
 an app the user turned notifications off for.
 
@@ -2182,13 +2476,64 @@ files and the system's apps (`http`, `https`, `file`, `mailto`, `tel`, `sms`, ..
 | iOS, Mac Catalyst | `CFBundleURLTypes` in the app's `Info.plist`; the link that launched the app and those that come while it runs |
 | Android | An `ACTION_VIEW` intent filter in the manifest `nsh package` writes; the activity runs as `singleTask`, so a link reaches the running app |
 | Windows | The app, under `HKEY_CURRENT_USER\\Software\\Classes`, each time it starts; a second launch hands its URL to the running app |
-| Linux | The app: its desktop entry in `~/.local/share/applications` with `x-scheme-handler/<scheme>`, made the default handler when it starts; `nsh run` registers the development host the same way. A second launch hands its URL to the running app |
+| Linux | The app: its desktop entry in `~/.local/share/applications` (`<app id>.desktop`) with `x-scheme-handler/<scheme>`, written when it starts. An entry an installer put there for this executable is kept, with the schemes it lacks added; one for another copy of the app is left alone. The app becomes a scheme's default handler only where no application handles it yet. `nsh run` registers the development host the same way. A second launch hands its URL to the running app |
+
+### Web links
+
+An app also claims web links: `https` links of its own sites that open it, Universal Links on iOS and macOS and App
+Links on Android. A link such as `https://example.com/orders/42` in an email, a chat or a search result then opens the
+app where it is installed, and the web page everywhere else. It reaches the same `open` listener as a scheme's link, so
+one listener handles both, and on the web the same address is the page's own (`UrlScheme.url()`).
+
+```json
+{
+  "links": [
+    { "host": "example.com", "paths": ["/orders/*", "/invite"] },
+    { "host": "*.example.com" }
+  ]
+}
+```
+
+- `host` is a domain name, compared in lower case (an internationalized name may be written as is), or `*.` and one
+  for its subdomains: `*.example.com` does not cover `example.com` itself, so list both. No scheme, port, path or IP
+  address.
+- `paths` lists the paths of the host that open the app: a whole path (`/invite`), or the start of one ending in `*`
+  (`/orders/*`, which takes `/orders/42` but not `/orders`). `*` comes only at the end. Paths compare with their case,
+  after percent-decoding the link's (`/café/*` takes `/caf%C3%A9/1`): write them decoded, with no query or fragment.
+  Without `paths`, every path of the host opens the app, so a site whose app shows only some of its pages lists them:
+  the others (`/blog`, `/login`) keep opening in the browser.
+
+NSH lets through the `https` links of these hosts and paths only, with no port or user name, wherever they come from:
+another app can send any URL to the Android activity, and the core drops what the app does not claim. As with a scheme,
+anyone can make such a link, so check what it asks for. A link `nsh` cannot read whole (a key of a newer NSH, a path of
+another form, `"paths": []`) is left out with a warning, never claimed in part.
+
+The site proves that the app is its own, over HTTPS and without a redirect:
+
+- `/.well-known/apple-app-site-association` names the app as `<team id>.<app id>`, with `components` that match
+  `paths` (`{ "/": "/orders/*" }`): iOS checks the paths there, NSH checks `paths`, and a link reaches the app only when
+  both take it.
+- `/.well-known/assetlinks.json` names the package and the SHA-256 fingerprint of its signing certificate.
+
+Until it does, the system opens the links in the browser.
+
+| Platform | How the app claims its links |
+| --- | --- |
+| iOS | `applinks:<host>` in the `com.apple.developer.associated-domains` entitlement `nsh package` signs the app with, after those `ios.entitlements` lists; a device build's provisioning profile must grant Associated Domains. The link that launched the app and those that come while it runs |
+| macOS | The same entitlement, which macOS honors only under a provisioning profile: `nsh package`'s ad hoc signed app leaves it out, so list it in `macos.entitlements` and sign the app with a profile that grants it. The app then takes the links |
+| Android | An `ACTION_VIEW` intent filter with `android:autoVerify="true"` for each link, with its host as an `https` host and each path as an `android:path` (or `android:pathPrefix` for one ending in `*`), which Android verifies as the app installs; the activity runs as `singleTask`, so a link reaches the running app |
+| Web | The page is the link: `nsh package` leaves `links` out, with a warning |
+| Windows, Linux | No app links: the browser opens them, and `nsh package` leaves `links` out, with a warning |
+
+A Rust app's generated code passes the links to its root (`Root::links`).
 
 `nsh test` hands a test's app links: `App.open(entry, { url })` launches the app with one, and
 `app.openWithUrl(url)` opens one while it runs, both headless.
 
 An app that embeds NSH owns its schemes and hands a URL to its view: `AppView.open_url` (Linux, iOS), `NshAppView.openURL`
-(Swift), `NshView.openUrl` or `NshView.handleUrlSchemeIntent` (Android).
+(Swift), `NshView.openUrl` or `NshView.handleUrlSchemeIntent` (Android). A Universal Link reaches the embedding app's
+`scene(_:continue:)` as an activity: hand its `webpageURL` to `NshAppView.openURL` too, which checks it against the
+links the app claims.
 
 ### UrlScheme.url
 
@@ -2209,7 +2554,7 @@ const UrlScheme: {
 | Platform | `url()` | `setUrl(url)` |
 | --- | --- | --- |
 | The web, the app the whole page | The page's address: the one it loaded, what `setUrl` set, or the entry's the browser's back went back to | Replaces the current history entry's address, resolved as `history.replaceState` resolves it (against the page's `<base href>`), after the entries of the pages pushed or popped in the same turn; with `history: "push"`, an entry of its own after it, as `history.pushState` makes one (below) |
-| The native platforms, and the web in an iframe | The last link that opened the app (the link that launched it also comes as the first `open`), or what `setUrl` set after it; `null` before either | Keeps the URL for `url()`, with `history: "push"` too (there is no history to push to); giving it to the system (Handoff, App Links) is the embedding app's |
+| The native platforms, and the web in an iframe | The last link that opened the app (the link that launched it also comes as the first `open`), or what `setUrl` set after it; `null` before either | Keeps the URL for `url()`, with `history: "push"` too (there is no history to push to); on iOS and macOS, an app that opts in also gives it to the system ([below](#handoff)) |
 
 A URL that is not a string, longer than 16 KiB or with whitespace is a `TypeError`, and so on the web, when the app is
 the whole page, is one that is not a URL of the page's origin. The app keeps one address, which Rust reads too, and `url()` reads it as it is: a link,
@@ -2281,6 +2626,10 @@ own (as `onChange` sets it); in the turn that pops one, it is an entry after the
 address shown makes no entry, and in one turn the last address wins and a push wins over a replace. `history` of
 another value is a `TypeError`. Rust calls `set_app_url_with(url, HistoryBehavior::Push)` (`nsh_core::url_scheme`).
 
+#### Handoff
+
+On iOS and macOS an app gives its address to the system with `nsh.json` `"handoff": true` (an embedding app sets `NshAppView.handoff`, or `handoff` in the Rust options): the address `setUrl` sets becomes the current `NSUserActivity`, which Handoff continues on the user's other devices. An `http(s)` address is a web page, which the other device opens in its browser. Any other absolute address is continued by the app itself on the other device (Handoff pairs apps signed by the same team), as a link to `open` (a scheme of `schemes`); `nsh package` declares its activity type, `<id>.url`, in `NSUserActivityTypes`. A relative address stays the app's. Android has no outgoing counterpart of App Links, and keeps the address for `url()` only.
+
 ### UrlScheme.on("change")
 
 `change` reports a move of the app's address that the app did not make and that its pages do not account for, with the
@@ -2302,150 +2651,6 @@ kept: `url()` has them. The native platforms, GPUI hosts and terminals have no h
 only on the web. Rust code awaits `next_app_url_change()` of `nsh_core::prelude`, an `AppUrlChange` with the `url` and
 its `reason`.
 
-## Speech
-
-The speech API turns what the user says into text (dictation): the app starts a session, the platform listens to the
-microphone, and the transcript arrives as it grows. macOS and iOS recognize with the system's Speech framework; the
-system asks the user for the microphone and for speech recognition once. On other platforms a session ends at once
-with the error `"unavailable"`, so check `Speech.available()` before showing a microphone button. Rust code calls
-`recognize_speech` of `nsh_core::prelude`; TSX imports `Speech` from `nsh`.
-
-```rust tabs
-use nsh_core::speech::{SpeechEvent, SpeechRequest};
-```
-
-```tsx tabs
-import { Speech, type SpeechSession } from "nsh";
-```
-
-```ts
-const Speech: {
-  available(): Promise<boolean>;
-  start(options?: SpeechOptions): SpeechSession;
-};
-
-interface SpeechOptions {
-  /** The language spoken, a BCP 47 tag ("en-US", "zh-CN"); the user's when left out. */
-  lang?: string;
-  /** Results while the user speaks (true, the default), or only the final one. */
-  interim?: boolean;
-}
-
-interface SpeechSession {
-  on(event: "start", listener: () => void): () => void;
-  on(event: "result", listener: (result: SpeechResult) => void): () => void;
-  on(event: "end", listener: (end: SpeechEnd) => void): () => void;
-  /** The whole transcript so far. */
-  readonly text: string;
-  readonly ended: boolean;
-  stop(): void;
-  abort(): void;
-}
-
-interface SpeechResult { text: string; isFinal: boolean }
-interface SpeechEnd { text: string; error?: SpeechErrorCode }
-
-type SpeechErrorCode =
-  | "not-allowed" | "no-speech" | "audio-capture" | "network"
-  | "language-not-supported" | "unavailable" | "failed";
-```
-
-| TSX | Rust |
-|---|---|
-| `await Speech.available()` | `speech_available().await -> bool` |
-| `Speech.start(options)` | `recognize_speech(request) -> SpeechRecognition` |
-| `session.on("result", ...)` | `recognition.next().await -> Option<SpeechEvent>` |
-| `session.stop()` / `abort()` | `recognition.stop()` / `abort()` (dropping it aborts) |
-
-### Speech.start
-
-Starts a session and returns it at once. A session reports, in this order: `start` when the microphone is on and the
-recognizer listens, `result` each time the transcript changes (`text` is always the whole transcript so far, so the
-app shows it as it is), and one `end`, after which nothing comes. `stop()` stops listening and lets the recognizer
-finish what it heard: a last result with `isFinal: true`, then `end`. `abort()` ends the session at once, without an
-error, and drops what was not reported. One session runs at a time: starting another aborts the one running.
-
-`end` carries the last transcript and, when the session failed, `error`, named as in the Web Speech API:
-
-| `error` | When |
-|---|---|
-| `"not-allowed"` | The user or the system does not allow the microphone or speech recognition. |
-| `"no-speech"` | Nothing was said. |
-| `"audio-capture"` | The microphone could not be used. |
-| `"network"` | The recognizer needs the network and could not reach it. |
-| `"language-not-supported"` | The recognizer does not know `lang`. |
-| `"unavailable"` | This platform recognizes no speech, or not now. |
-| `"failed"` | The recognizer failed for another reason. |
-
-`start` throws a `TypeError` for options of the wrong types and a `RangeError` for a `lang` that is no language tag.
-
-```tsx
-import { signal, Speech, type SpeechSession } from "nsh";
-
-const transcript = signal("");
-let session: SpeechSession | null = null;
-
-function toggle() {
-  if (session && !session.ended) {
-    session.stop();
-    return;
-  }
-  session = Speech.start({ lang: "en-US" });
-  session.on("result", ({ text }) => transcript.set(text));
-  session.on("end", ({ text, error }) => {
-    if (error) console.warn("dictation ended:", error);
-    else transcript.set(text);
-  });
-}
-```
-
-```rust
-use nsh_core::prelude::*;
-use nsh_core::speech::{SpeechEvent, SpeechRequest};
-
-async fn dictate() -> String {
-    let mut recognition = recognize_speech(SpeechRequest::default());
-    let mut text = String::new();
-    while let Some(event) = recognition.next().await {
-        match event {
-            SpeechEvent::Result { text: heard, .. } => text = heard,
-            SpeechEvent::End { .. } => break,
-            _ => {}
-        }
-    }
-    text
-}
-```
-
-### Speech.available
-
-Resolves `true` where a session can run: on macOS and iOS, and wherever the embedding app recognizes speech itself.
-
-### Info.plist
-
-On macOS and iOS the system shows why the app wants the microphone and speech recognition. `nsh package` and
-`nsh run` write `NSMicrophoneUsageDescription` and `NSSpeechRecognitionUsageDescription` into the app's Info.plist
-when the app may use speech (its `capabilities` grant `speech`, or it declares none).
-
-### Embedding apps
-
-An app that embeds NSH and recognizes speech its own way (its own engine or service) answers the sessions itself: in
-Rust, a `SpeechBackend` (`nsh_core::speech`) given to the engine (`EngineConfig::speech`) receives every session's
-`SpeechRequest` and a `SpeechSink` it reports to from any thread, and returns the `SpeechControl` the core stops and
-aborts the session with. The platform's recognizer is not used then.
-
-### Tests
-
-`nsh test` runs sessions on a fake recognizer in headless runs: a session starts at once, `app.hear(text)` reports
-`text` as the transcript so far, `app.endSpeech(error?)` ends it, and `app.speechRequests()` lists the sessions the
-app started. See [Testing](../docs/testing-and-trace.md).
-
-> [!NOTE]
-> When your app declares `capabilities` in `nsh.json`, speech must be granted with `"speech": true`. Without it
-> `Speech.start` throws an `Error` whose `code` is `"ERR_ACCESS_DENIED"`, `permission` `"speech"` and `resource` `""`.
-> In Rust, the session ends with `not-allowed` and the refusal is logged. See
-> [Sandbox and capabilities](../docs/sandbox-and-capabilities.md).
-
 ## Sound
 
 Two primitives make sound, one for each kind of audio. A `Sound` is a short clip (a tap, a notice, an alert) decoded
@@ -2459,12 +2664,12 @@ audio element (sound starts after the user's first gesture on the page). Check `
 and `play()` fail with `"unavailable"`. Rust code calls `load_sound` and `audio_player` of `nsh_core::prelude`; TSX
 imports `Sound` and `AudioPlayer` from `nsh`.
 
-```rust tabs
-use nsh_core::prelude::*; // load_sound, audio_player, Sound, AudioPlayer
-```
-
 ```tsx tabs
 import { AudioPlayer, Sound } from "nsh";
+```
+
+```rust tabs
+use nsh_core::prelude::*; // load_sound, audio_player, Sound, AudioPlayer
 ```
 
 ```ts
@@ -2600,12 +2805,12 @@ what the app asked (`load`, `play`, `open`, `resume`, `seek`, ...). See [Testing
 
 The storage API keeps the app's data on the device: strings by string key, still there the next time the app starts. Use it for settings, drafts, the last tab the user had open, a cache of what the server sent — any state that should outlive the app's process. Rust code uses `nsh_core::storage::Storage`, TSX imports `Storage` from `nsh`; both read and write the same entries, so an app with a Rust entry and a TSX entry sees one set of data.
 
-```rust tabs
-use nsh_core::storage::Storage;
-```
-
 ```tsx tabs
 import { Storage } from "nsh";
+```
+
+```rust tabs
+use nsh_core::storage::Storage;
 ```
 
 ```ts
@@ -2615,6 +2820,7 @@ const Storage: {
   removeItem(key: string): Promise<void>;
   keys(): Promise<string[]>;
   clear(): Promise<void>;
+  on(event: "change", listener: (change: { key: string | null; value: string | null }) => void): () => void;
 };
 ```
 
@@ -2625,6 +2831,7 @@ const Storage: {
 | `await Storage.removeItem(key)` | `Storage::remove_item(key)` |
 | `await Storage.keys()` | `Storage::get_all_keys() -> Vec<String>` |
 | `await Storage.clear()` | `Storage::clear()` |
+| `Storage.on("change", listener)` | `Storage::on_change(f)` |
 
 The Rust functions are synchronous, as the entries are in memory: call them where components run (their bodies, handlers and tasks).
 
@@ -2641,6 +2848,8 @@ Each app has a storage of its own, up to 5 MB of keys and values. Calls run in t
 
 A `storage.json` that is damaged is kept as `storage.json.corrupt` next to it, and the app starts with an empty storage; one that cannot be read leaves the app's changes in memory, so the file is never replaced.
 
+On the web, the app's other tabs share its storage: what one of them sets, removes or clears, the others read from then on, and hear as [`change`](#storageon). Windows of a desktop app share it the same way. A value the browser refuses to keep (its own quota, or site data the user blocked) is refused as one past 5 MB is.
+
 The app id is the `id` in `nsh.json`, and it travels with the app: `nsh build` and `nsh package` write it next to the bundle, the dev server sends it, and a signed package carries the one its release key's certificate vouches for. So every app keeps its own data with no setting, wherever it runs; an app without an id keeps it under `default`. An embedding app can choose another place (see [Embedding on iOS](../docs/ios.md) and [Embedding on Android](../docs/android.md)).
 
 ### Storage.getItem
@@ -2651,12 +2860,12 @@ getItem(key: string): Promise<string | null>;
 
 Resolves with the value of `key`, or `null` when it has none. Rust: `Storage::get_item(key)`, `None` when it has none.
 
-```rust tabs
-let theme = Storage::get_item("theme").unwrap_or_else(|| "system".into());
-```
-
 ```tsx tabs
 const theme = (await Storage.getItem("theme")) ?? "system";
+```
+
+```rust tabs
+let theme = Storage::get_item("theme").unwrap_or_else(|| "system".into());
 ```
 
 ### Storage.setItem
@@ -2665,17 +2874,17 @@ const theme = (await Storage.getItem("theme")) ?? "system";
 setItem(key: string, value: string): Promise<void>;
 ```
 
-Sets `key` to `value`, replacing what it held. Rejects with an `Error` whose `code` is `"ERR_NSH_QUOTA_EXCEEDED"` when the storage would grow past 5 MB; the value is not kept then. Rust: `Storage::set_item(key, value)`, which returns `Err(StorageFull)` then. Values are strings: keep structured data as JSON (`serde_json::to_string` in Rust, `JSON.stringify` in TSX) and read it back (`serde_json::from_str`, `JSON.parse`).
+Sets `key` to `value`, replacing what it held. Rejects with an `Error` whose `code` is `"ERR_NSH_QUOTA_EXCEEDED"` when the storage would grow past 5 MB, or when the browser refuses to keep the value on the web; the value is not kept then. Rust: `Storage::set_item(key, value)`, which returns `Err(StorageFull)` then. Values are strings: keep structured data as JSON (`serde_json::to_string` in Rust, `JSON.stringify` in TSX) and read it back (`serde_json::from_str`, `JSON.parse`).
+
+```tsx tabs
+Storage.setItem("draft", JSON.stringify({ title: title(), body: body() }));
+```
 
 ```rust tabs
 let draft = serde_json::json!({ "title": title.get(), "body": body.get() });
 if let Err(full) = Storage::set_item("draft", draft.to_string()) {
     log::warn!("{full}");
 }
-```
-
-```tsx tabs
-Storage.setItem("draft", JSON.stringify({ title: title(), body: body() }));
 ```
 
 ### Storage.removeItem
@@ -2702,9 +2911,59 @@ clear(): Promise<void>;
 
 Removes every key of the app, such as when the user signs out. Rust: `Storage::clear()`.
 
+### Storage.on
+
+```ts
+on(event: "change", listener: (change: { key: string | null; value: string | null }) => void): () => void;
+```
+
+Calls `listener` each time the storage is changed elsewhere: by another tab of the app on the web, or by another window or view of the app that shares its storage. `key` is the key changed, `null` when every key was removed; `value` is what it holds now, `null` when it was removed. `getItem` already reads the new value when the listener runs. The app's own changes in this tab or window do not come, nor a change that leaves an entry as it was, and changes made while nothing listened are not kept: read what you need when you start listening. Returns a function that stops listening; a listener a component adds stops with the component. Rust: `Storage::on_change(f)`, which runs `f` with a `StorageChange` (`key()`, `value()`) while the current owner lives.
+
+Use it to keep settings in step across tabs and windows:
+
+```tsx tabs
+const theme = signal(await Storage.getItem("theme"));
+Storage.on("change", ({ key, value }) => {
+  if (key === null || key === "theme") theme.set(value);
+});
+```
+
+```rust tabs
+let theme = signal(Storage::get_item("theme"));
+Storage::on_change(move |change| {
+    if change.key().is_none_or(|key| key == "theme") {
+        theme.set(change.value().map(str::to_owned));
+    }
+});
+```
+
 ### Keeping a signal on the device
 
 Read the stored value when the app starts, then write it back whenever the signal changes:
+
+```tsx tabs
+import { effect, mount, signal, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
+import { Storage } from "nsh";
+
+const count = signal(0);
+const loaded = signal(false);
+Storage.getItem("count").then((saved) => {
+  count.set(Number(saved ?? 0));
+  loaded.set(true);
+});
+effect(() => {
+  if (loaded()) Storage.setItem("count", String(count()));
+});
+
+mount(() => (
+  <Window id="main">
+    <View onPress={() => count.update((n) => n + 1)}>
+      <Text>Pressed {count()} times</Text>
+    </View>
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_core::{storage::Storage, prelude::*};
@@ -2724,33 +2983,16 @@ pub fn App() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { effect, mount, signal, Text, View } from "nsh";
-import { Storage } from "nsh";
-
-const count = signal(0);
-const loaded = signal(false);
-Storage.getItem("count").then((saved) => {
-  count.set(Number(saved ?? 0));
-  loaded.set(true);
-});
-effect(() => {
-  if (loaded()) Storage.setItem("count", String(count()));
-});
-
-mount(() => (
-  <View onPress={() => count.update((n) => n + 1)}>
-    <Text>Pressed {count()} times</Text>
-  </View>
-));
-```
-
 ## host
 
-`host` reaches the app that embeds NSH: the native app around an `NshAppView` / `NshView`, or on the web the page that runs the player. The app calls the host's functions by name with JSON arguments and listens to the events the host sends.
+`host` reaches the app that embeds NSH: the native app around an `NshAppView` / `NshView`, or on the web the page that runs the player. The app calls the host's functions by name with JSON arguments and listens to the events the host sends. Rust code calls `host_call`, `host_call_with`, `host_post` and `on_host_event` of `nsh_core::prelude`; TSX imports `host` from `nsh`. Both reach the same host, with the same names, capability and error codes, so an app writes its calls once and each host answers them its own way.
 
-```ts
+```tsx tabs
 import { host } from "nsh";
+```
+
+```rust tabs
+use nsh_core::prelude::*; // host_call, host_call_with, host_post, on_host_event, HostCallOptions, HostError
 ```
 
 ```ts
@@ -2796,6 +3038,8 @@ Calls the host's function `name` with `args` (any JSON value; `null` without one
 
 A name that is no valid name (1 to 128 of `A`–`Z`, `a`–`z`, `0`–`9`, `_`, `.`, `:`, `-`, without `..`) rejects with a `TypeError`.
 
+The checks run in this order, so a call fails with the first that applies: a `TypeError` for a name that is not valid, then `ERR_ACCESS_DENIED` for one the app is not granted, then `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` where there is no host. A call the app is not granted rejects with `ERR_ACCESS_DENIED` also where there is no host.
+
 A call waits 30 seconds for the host's answer, then rejects with `ETIMEDOUT`; an answer that comes later is dropped. `options.timeout` sets the wait in milliseconds, `0` for no limit; a timeout so large the clock never gets there (about 1e22 ms) waits without limit too, and a negative, `NaN` or infinite one rejects the call with a `RangeError`. The time is the app's, as its timers': in `nsh test` with a manual clock it moves with the clock.
 
 ```ts
@@ -2804,6 +3048,38 @@ const quote = await host.call("quote.refresh", { symbol: "AAPL" }, { timeout: 50
   if (error.code === "ETIMEDOUT" || error.code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM") return null;
   throw error;
 });
+```
+
+In Rust, `host_call(name, args)` is an `async fn` to await in a task, settling with `Result<JsonValue, HostError>`. `HostError`'s variants are the failures above (`Failed` with the host's message, `Denied`, `InvalidName`, `Unavailable`, `TimedOut`, `TooManyCalls`), and `code()` gives the same codes. `host_call_with(name, args, options)` takes `HostCallOptions::default().timeout(duration)`, where `Duration::ZERO` waits as long as the host takes.
+
+```rust
+// use nsh_core::JsonValue; use serde_json::json; use std::time::Duration;
+spawn(async move {
+    let user = host_call("getUserInfo", JsonValue::Null).await;
+    let options = HostCallOptions::default().timeout(Duration::from_secs(5));
+    match host_call_with("quote.refresh", json!({ "symbol": "AAPL" }), options).await {
+        Ok(quote) => show(quote),
+        Err(HostError::TimedOut { .. } | HostError::Unavailable) => {}
+        Err(error) => log::warn!("{error}"),
+    }
+});
+```
+
+### host.post
+
+```ts
+post(name: string, data?: unknown): void;
+```
+
+Hands `data` to the host's function `name` without waiting for an answer: the host's handler of `name` gets it as it gets calls. Where nothing embeds the app, or the host has no handler of `name`, the post goes nowhere. Where there is a host, a name the app is not granted, or no valid name, throws (`ERR_ACCESS_DENIED`, a `TypeError`). Rust's `host_post(name, data)` returns nothing: it checks the name wherever the app runs, and a refused post is logged and dropped.
+
+```tsx tabs
+host.post("analytics.track", { event: "signup" });
+```
+
+```rust tabs
+// use serde_json::json;
+host_post("analytics.track", json!({ "event": "signup" }));
 ```
 
 ### host.on
@@ -2820,6 +3096,12 @@ const stop = host.on("loginChanged", (payload) => console.log(payload));
 stop();
 ```
 
+In Rust, `on_host_event(event, listener)` runs `listener` with each payload (`&JsonValue`) while the component that added it lives, as `on_key` does. An event that comes while no Rust listener of its name is there, including one the host sent before the app started, is kept until one is added (at most 256, the oldest going first), so a listener added after the app loaded something still receives it; an event a listener already received is not replayed to later ones.
+
+```rust
+on_host_event("loginChanged", move |payload| signed_in.set(payload["signedIn"] == true));
+```
+
 ### Capability
 
 Every function the app calls must be listed in `nsh.json`'s `capabilities.host`: exact names or prefixes ending in `*`, or `true` for all of them. This holds for every app, also one without other `capabilities`: the host's functions are never granted by default. A call that is not granted rejects with `ERR_ACCESS_DENIED` and is logged, a `host.post` of such a name to an embedding app throws the same error, and building an app that imports `host` from `nsh` without `capabilities.host` warns. Events need no grant. See [Sandbox and capabilities](../docs/sandbox-and-capabilities.md#host).
@@ -2830,7 +3112,7 @@ Every function the app calls must be listed in `nsh.json`'s `capabilities.host`:
 
 ### The host on the web
 
-On the web the page is the host. `createPlayer`'s `host` option answers the calls, and `player.hostEvent(event, payload)` sends events:
+On the web the page is the host. `createPlayer`'s `host` option answers the calls, and `player.hostEvent(event, payload)` sends events, for TSX and Rust apps alike:
 
 ```js
 const player = await createPlayer(container, {
@@ -2852,7 +3134,11 @@ The parameters the embedding app set before it started your app, read synchronou
 
 ```tsx
 const conversation = host.params.conversation as string | undefined;
-mount(() => (conversation ? <Conversation id={conversation} /> : <Inbox />));
+mount(() => (
+  <Window id="main">
+    {conversation ? <Conversation id={conversation} /> : <Inbox />}
+  </Window>
+));
 ```
 
 
@@ -2909,18 +3195,18 @@ nsh.send("conversation.open", Map.of("id", "43"));
 See [Embedding on iOS](../docs/ios.md#talking-to-the-app), [Embedding on Android](../docs/android.md#talking-to-the-app) and [GPUI](../docs/gpui.md).
 
 > [!NOTE]
-> Native SDK calls and posts use the same [`host` capability](../docs/sandbox-and-capabilities.md#host) as platform calls. A Rust app reaches the embedding app's Rust directly, through the functions it registers ([`nativeModule`](#nativemodule) and Rust imports).
+> Native SDK calls and posts use the same [`host` capability](../docs/sandbox-and-capabilities.md#host) as platform calls. A Rust app's `host_call`, `host_post` and `on_host_event` reach the same handlers and events, on every platform.
 
 ## keymap
 
 The keymap binds the app's keyboard shortcuts: a keystroke such as `"mod+k"` and the function it runs. Rust code calls `on_key`, `on_key_with` and `key_label` from `nsh_core::prelude`; TSX imports `keymap` from `nsh`. Both take the same keystrokes and follow the same rules.
 
-```rust tabs
-use nsh_core::prelude::*; // on_key, on_key_with, KeyOptions, key_label
-```
-
 ```tsx tabs
 import { keymap } from "nsh";
+```
+
+```rust tabs
+use nsh_core::prelude::*; // on_key, on_key_with, KeyOptions, key_label
 ```
 
 ```ts
@@ -2931,21 +3217,23 @@ const keymap: {
 };
 
 interface KeyBindingOptions {
+  scope?: "window" | "app";
   when?: "always" | "notEditing";
   repeat?: boolean;
   passThrough?: boolean;
   forFocus?: boolean;
+  overFocused?: boolean | "pointer";
 }
 ```
 
 | TS | Rust |
 |---|---|
 | `keymap.bind(keystroke, handler)` | `on_key(keystroke, handler)` |
-| `keymap.bind(keystroke, handler, { when, repeat, passThrough, forFocus })` | `on_key_with(keystroke, KeyOptions { when, repeat, pass_through, for_focus }, handler)`; `when` is `nsh_core::keymap::When` (`Auto`, `Always`, `NotEditing`) |
+| `keymap.bind(keystroke, handler, { scope, when, repeat, passThrough, forFocus, overFocused })` | `on_key_with(keystroke, KeyOptions { scope, when, repeat, pass_through, for_focus, over_focused }, handler)`; `scope` is `KeyScope::Window` (default) or `KeyScope::App`; `when` is `nsh_core::keymap::When` (`Auto`, `Always`, `NotEditing`); `over_focused` is `nsh_core::keymap::OverFocused` (`Never`, default; `Always`, which `true` gives; `Pointer`) |
 | `keymap.bind({ … })` | one `on_key` per keystroke |
 | `keymap.label(keystroke)` | `key_label(keystroke)` |
 
-A Rust binding lives as long as the component (the owner) that made it; the handler gets the keystroke as written.
+A binding made inside a `<Window>` is window-scoped: it fires only while that window has the focus. A binding made in the app root is app-wide; `scope: "app"` makes that explicit, and `scope: "window"` in the app root is an error (there is no window to scope to). A Rust binding lives as long as the component (the owner) that made it; the handler gets the keystroke as written.
 
 Shortcuts work on macOS, Windows, Linux and in browsers (the browser's own keys, such as Ctrl+T or Cmd+W, never reach the page), and on iOS and Android with a hardware keyboard: an iPad's, a Mac's running an iPad app, a tablet's or a Chromebook's, the simulator's and the emulator's. The same code runs everywhere; without a keyboard, no key fires the bindings.
 
@@ -2956,6 +3244,18 @@ bind(keystroke: string, handler: (e: { keystroke: string }) => void, options?: K
 ```
 
 Runs `handler` when `keystroke` is pressed and returns a function that removes the binding. The handler gets `{ keystroke }`: the keystroke as you wrote it, in its case. Rust: `on_key(keystroke, handler)`, whose handler gets the keystroke itself.
+
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { keymap } from "nsh";
+import { Window } from "nsh/desktop";
+
+const open = signal(false);
+keymap.bind("mod+k", () => open.set(true), { scope: "app" });
+keymap.bind("escape", () => open.set(false), { scope: "app" });
+
+mount(() => <Window id="main"><Text>{open() ? "Search…" : "Press ⌘K"}</Text></Window>);
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -2969,24 +3269,7 @@ pub fn App() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { keymap } from "nsh";
-
-const open = signal(false);
-keymap.bind("mod+k", () => open.set(true));
-keymap.bind("escape", () => open.set(false));
-
-mount(() => <Text>{open() ? "Search…" : "Press ⌘K"}</Text>);
-```
-
 Pass an object to bind several keystrokes at once; the function returned removes them all. In Rust, each keystroke is one `on_key`:
-
-```rust tabs
-on_key("mod+s", move |_| save());
-on_key("mod+shift+p", move |_| open_palette());
-on_key("f5", move |_| refresh());
-```
 
 ```tsx tabs
 const unbind = keymap.bind({
@@ -2996,20 +3279,26 @@ const unbind = keymap.bind({
 });
 ```
 
+```rust tabs
+on_key("mod+s", move |_| save());
+on_key("mod+shift+p", move |_| open_palette());
+on_key("f5", move |_| refresh());
+```
+
 A binding made while a component renders is removed with the component, so a screen's shortcuts live as long as the screen:
+
+```tsx tabs
+function Editor() {
+  keymap.bind("mod+enter", send);
+  return <Input multiline />;
+}
+```
 
 ```rust tabs
 #[component]
 fn Editor() -> impl IntoElement {
     on_key("mod+enter", move |_| send());
     input().multiline(true)
-}
-```
-
-```tsx tabs
-function Editor() {
-  keymap.bind("mod+enter", send);
-  return <Input multiline />;
 }
 ```
 
@@ -3023,12 +3312,12 @@ label(keystroke: string): string;
 
 Returns `keystroke` as menus and hints show it where the app runs: `"⇧⌘L"` on macOS and iOS (and in a browser on a Mac, iPhone or iPad), `"Ctrl+Shift+L"` on Windows, Linux and other browsers, for `"mod+shift+l"`. Rust: `key_label(keystroke)`. Use it to show an app's shortcuts with the keys that work:
 
-```rust tabs
-text(format!("Search {}", key_label("mod+k")))
-```
-
 ```tsx tabs
 <Text>Search {keymap.label("mod+k")}</Text>
+```
+
+```rust tabs
+text(format!("Search {}", key_label("mod+k")))
 ```
 
 It throws a `TypeError` for an invalid keystroke, as `bind` does; `key_label` and `on_key` panic with the same message.
@@ -3073,6 +3362,13 @@ A text input with the keyboard focus needs its keys: typing, moving the caret, d
 | `"always"` | Also in text inputs, before the input sees the key |
 | `"notEditing"` | Never while a text input has the focus |
 
+```tsx tabs
+// Sends from the message field too.
+keymap.bind("mod+enter", send, { when: "always" });
+// Only when the user is not typing.
+keymap.bind("mod+e", archive, { when: "notEditing" });
+```
+
 ```rust tabs
 use nsh_core::keymap::When;
 
@@ -3080,13 +3376,6 @@ use nsh_core::keymap::When;
 on_key_with("mod+enter", KeyOptions { when: When::Always, ..KeyOptions::default() }, move |_| send());
 // Only when the user is not typing.
 on_key_with("mod+e", KeyOptions { when: When::NotEditing, ..KeyOptions::default() }, move |_| archive());
-```
-
-```tsx tabs
-// Sends from the message field too.
-keymap.bind("mod+enter", send, { when: "always" });
-// Only when the user is not typing.
-keymap.bind("mod+e", archive, { when: "notEditing" });
 ```
 
 On iOS and Android, a key an input method is composing with (choosing a candidate, committing) stays the input method's. On the GPUI backend, a native component with the keyboard focus counts as a text input, since it may be a text editor. It sees each key first: a key it handles itself never reaches the bindings, and the bindings that fire while text is edited get the keys it lets through.
@@ -3097,29 +3386,25 @@ A key that fires a binding is consumed (a binding with `passThrough` lets it go 
 
 Holding a key down fires its binding once, until the key is released; with `repeat: true` it fires again on every auto-repeat (to step through a list, say):
 
-```rust tabs
-on_key_with("alt+down", KeyOptions { repeat: true, ..KeyOptions::default() }, move |_| next_item());
-```
-
 ```tsx tabs
 keymap.bind("alt+down", nextItem, { repeat: true });
 ```
 
-With `passThrough: true` the binding runs and the key goes on as if nothing were bound: Tab still moves the focus, a text input still types. A popup that closes when Tab leaves it binds Tab this way, and the focus moves to the next control:
-
 ```rust tabs
-on_key_with("tab", KeyOptions { pass_through: true, ..KeyOptions::default() }, move |_| close());
+on_key_with("alt+down", KeyOptions { repeat: true, ..KeyOptions::default() }, move |_| next_item());
 ```
+
+With `passThrough: true` the binding runs and the key goes on as if nothing were bound: Tab still moves the focus, a text input still types. A popup that closes when Tab leaves it binds Tab this way, and the focus moves to the next control:
 
 ```tsx tabs
 keymap.bind("tab", close, { passThrough: true });
 ```
 
-With the keyboard focus on a view that takes presses (`onPress`), a plain Return or Space (Shift allowed) presses that view, and the app's other bindings of those keys give way to it: a dialog's Return for its main action does not act instead of the button the user moved the focus to. A view's own Return or Space binds with `forFocus: true`: bound while the view has the focus, it takes those keys before the press. A tile whose Space flips its switch and whose Return opens it:
-
 ```rust tabs
-on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| flip());
+on_key_with("tab", KeyOptions { pass_through: true, ..KeyOptions::default() }, move |_| close());
 ```
+
+With the keyboard focus on a view that takes presses (`onPress`), a plain Return or Space (Shift allowed) presses that view, and the app's other bindings of those keys give way to it: a dialog's Return for its main action does not act instead of the button the user moved the focus to. A view's own Return or Space binds with `forFocus: true`: bound while the view has the focus, it takes those keys before the press. A tile whose Space flips its switch and whose Return opens it:
 
 ```tsx tabs
 <View
@@ -3129,18 +3414,46 @@ on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, mo
 />
 ```
 
+```rust tabs
+on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| flip());
+```
+
+Single-key shortcuts such as a media player's Space take the key from a control the pointer focused with `overFocused: "pointer"`. On Windows a click focuses the button it lands on, as native buttons do, and except on macOS and iOS a `Select`, `Menu`, `Popover` or `DatePicker` that a click opened gives the focus back to its trigger as it closes. (On macOS and iOS a click leaves the focus where it was, so the option rarely has anything to take.) Without the option, Space presses that control again: after a click on Mute, Space mutes again; after choosing a quality, Space opens the list again. With it, the binding fires instead. A control the keyboard focused (Tab, the arrows) still takes Return and Space, so keyboard users press what they moved to, and text inputs keep their keys as `when` says:
+
+```tsx tabs
+keymap.bind("space", togglePlayback, { when: "notEditing", overFocused: "pointer" });
+```
+
+```rust tabs
+let options = KeyOptions { when: When::NotEditing, over_focused: OverFocused::Pointer, ..KeyOptions::default() };
+on_key_with("space", options, move |_| toggle_playback());
+```
+
+The keys belong to the newest dialog: when the focus stays on a view a dialog covers (a menu gives it back to its trigger as its item opens a dialog), Return and Space go to the dialog's bindings, and that view's `forFocus` bindings and its press wait until the dialog closes.
+
+A focused component's own bindings come before the app's: while an `Editor` has the focus, its Mod+Enter inserts a line below, whatever the app bound to that key. A binding with `overFocused: true` comes before them instead, so the app takes a key a focused component binds, as a query editor running its text with Mod+Enter does. Bind it while that view has the focus and let it go as the focus leaves, so the component keeps the key elsewhere (Rust: `KeyOptions { over_focused: OverFocused::Always, .. }`). Without the option the order is as before, and a popup's Escape still closes the popup first.
+
+```tsx
+const focused = signal(false);
+effect(() => {
+  if (focused()) keymap.bind("mod+enter", runQuery, { when: "always", overFocused: true });
+});
+
+<Editor onFocus={() => focused.set(true)} onBlur={() => focused.set(false)} />
+```
+
 Menu shortcuts give way to a binding of the same keystroke: the application menu's ([`nsh/desktop`](./nsh-desktop)) on every desktop, and on macOS the built-in menus' too (Cmd+W, Cmd+C, ...). While you develop with `nsh run`, Cmd+R / Ctrl+R always reloads the app, even if it binds `mod+r`; a packaged app can bind it.
 
 ## nativeComponent and nativeModule
 
 `nativeComponent` and `nativeModule` connect your app to what the host app provides, by name, at run time. An iOS or Android app that embeds NSH can register its own views (a map, a chart, a camera preview) by name; `nativeComponent` gives you a typed component for one of them. Because NSH renders with real native views, such a component sits in the view hierarchy like any other view: it is laid out by NSH, clips and scrolls with its parents, and overlaps correctly. An app that embeds NSH from Rust can also register functions, classes and Rust components; `nativeModule` gives you them as one typed object. Your app builds with the stock `nsh build` either way: the host connects what it provides when it runs the app. Rust code places a registered view with `native(name)` from `nsh_core::prelude`, sets its props with `.prop(name, value)` (a JSON value, or a signal or closure of one) or binds one to an animated value with `.bind_prop(name, &value)`, hears its events with `.on_native_event(…)` and calls its commands through an `ElementRef`; TSX imports `nsh`.
 
-```rust tabs
-use nsh_core::prelude::*; // native, NativeEvent, element_ref
-```
-
 ```tsx tabs
 import { nativeComponent, nativeModule } from "nsh";
+```
+
+```rust tabs
+use nsh_core::prelude::*; // native, NativeEvent, element_ref
 ```
 
 See [Native components](../docs/native-components.md) for registering the native side, and [Embedding on iOS](../docs/ios.md) / [Embedding on Android](../docs/android.md).
@@ -3180,12 +3493,12 @@ The component is laid out like a view, at the size its style gives it. Where the
 
 Its `ref` receives a `NativeComponentRef`; `ref.command(name, args)` calls command `name` of the native component with `args` (any JSON value). Rust: `ElementRef::command(name, args)`.
 
-```rust tabs
-map.command("zoomTo", json!({ "level": 3 }));
-```
-
 ```tsx tabs
 map.command("zoomTo", { level: 3 });
+```
+
+```rust tabs
+map.command("zoomTo", json!({ "level": 3 }));
 ```
 
 #### When nothing is registered
@@ -3195,6 +3508,42 @@ Where nothing is registered under `name` (a different host app, the dev host, th
 ### Example
 
 The badge here is a native view of the host app, registered as `embed.badge`. NSH lays it out, sends it `text` and `color`, receives its `tap` events, and calls its `pulse` command:
+
+```tsx tabs
+import { mount, type NativeComponentRef, signal, View } from "nsh";
+import { nativeComponent } from "nsh";
+import { Window } from "nsh/desktop";
+
+const Badge = nativeComponent<{ text: string; color?: string }, { tap: { count: number } }>("embed.badge", {
+  props: ["text", "color"],
+  events: ["tap"],
+});
+
+function App() {
+  const taps = signal(0);
+  let badge: NativeComponentRef | undefined;
+  return (
+    <View style={{ flex: 1, padding: 20, paddingTop: "calc(env(safe-area-inset-top) + 20px)", gap: 16 }}>
+      <Badge
+        ref={(node) => (badge = node)}
+        text={taps() === 0 ? "Tap the native badge" : `Tapped ${taps()}×`}
+        color="#8250df"
+        onTap={(e) => {
+          taps.set(e.count);
+          badge?.command("pulse");
+        }}
+        style={{ alignSelf: "flex-start", borderRadius: 8, overflow: "hidden" }}
+      />
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -3225,37 +3574,6 @@ pub fn App() -> impl IntoElement {
         )
         .child(text(move || format!("Tapped {}×", taps.get())))
 }
-```
-
-```tsx tabs
-import { mount, type NativeComponentRef, signal, View } from "nsh";
-import { nativeComponent } from "nsh";
-
-const Badge = nativeComponent<{ text: string; color?: string }, { tap: { count: number } }>("embed.badge", {
-  props: ["text", "color"],
-  events: ["tap"],
-});
-
-function App() {
-  const taps = signal(0);
-  let badge: NativeComponentRef | undefined;
-  return (
-    <View style={{ flex: 1, padding: 20, paddingTop: "calc(env(safe-area-inset-top) + 20px)", gap: 16 }}>
-      <Badge
-        ref={(node) => (badge = node)}
-        text={taps() === 0 ? "Tap the native badge" : `Tapped ${taps()}×`}
-        color="#8250df"
-        onTap={(e) => {
-          taps.set(e.count);
-          badge?.command("pulse");
-        }}
-        style={{ alignSelf: "flex-start", borderRadius: 8, overflow: "hidden" }}
-      />
-    </View>
-  );
-}
-
-mount(App);
 ```
 
 ### nativeModule
@@ -3334,16 +3652,93 @@ nsh_platform_gpui::set_ui_sets(vec![nsh_base::registry(), trading]);
 > [!NOTE]
 > Props, events and command arguments cross to the native side as JSON. Registered components and functions are the host app's own code: NSH's [sandbox limits and capabilities](../docs/sandbox-and-capabilities.md) do not apply to what they do.
 
+## gpuView
+
+`gpuView` gives you a component whose box your own Rust code draws with [wgpu](https://wgpu.rs), on every frame it needs one: a drawing of hundreds of thousands of lines, a 3D model, a simulation, at the display's rate. The renderer runs on a render thread, never in JS and never on the main thread, and its frames are shown under the view's children like a background, clipped to its rounded corners, scrolled and overlapped like any view.
+
+```ts
+function gpuView<P extends object = {}, E extends object = {}>(
+  name: string,
+  spec: NativeComponentSpec<P, E>,
+): (props: GpuViewProps<P, E>) => JSX.Element;
+
+type GpuViewProps<P, E> = ViewProps & P & NativeEventHandlers<E>;
+```
+
+`name` is a renderer your app's Rust crate registers; `spec` lists its props and events as [`nativeComponent`](#nativecomponent)'s does. Each prop is sent to the renderer when it changes, and a prop bound to an animated value moves it on every frame without JS. Children are drawn over the renderer's frame.
+
+The renderer implements `GpuRenderer` from the `nsh-gpu` crate, which re-exports `wgpu`. It builds its pipelines once in `prepare`, takes its props in `set_prop`, and encodes a frame into `frame.target()` in `render`. A frame is rendered when a prop, the view's size or its scale changed, and on every display frame while `animating()` returns `true`. `frame.emit(name, data)` sends an event: `pick` reaches `onPick`.
+
+```tsx tabs
+import { gpuView } from "nsh";
+
+const Spinner = gpuView<{ speed: number }, { pick: { x: number; y: number } }>("app/spinner", {
+  props: ["speed"],
+  events: ["pick"],
+});
+
+<Spinner speed={2} onPick={(e) => console.log(e.x, e.y)} style={{ height: 240, borderRadius: 12 }} />;
+```
+
+```rust tabs
+use nsh_core::{JsonValue, prelude::*};
+use nsh_gpu::{GpuFrame, GpuRegistry, GpuRenderer, wgpu};
+
+#[derive(Default)]
+struct Spinner {
+    speed: f64,
+}
+
+impl GpuRenderer for Spinner {
+    fn set_prop(&mut self, name: &str, value: Option<&JsonValue>) {
+        if name == "speed" {
+            self.speed = value.and_then(JsonValue::as_f64).unwrap_or(1.0);
+        }
+    }
+
+    fn animating(&self) -> bool {
+        true
+    }
+
+    fn render(&mut self, frame: &mut GpuFrame<'_>) {
+        let t = frame.time().as_secs_f64() * self.speed;
+        let target = frame.target().clone();
+        frame.encoder().begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r: t.sin() * 0.5 + 0.5, g: 0.3, b: 0.6, a: 1.0 }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+}
+
+#[native_module("app/scenes")]
+fn scenes(registry: &mut Registry) {
+    registry.gpu_renderer("app/spinner", Spinner::default);
+}
+```
+
+Rust UI places one with `gpu_view().renderer(Spinner::default)` (or `.renderer_named("app/spinner")`), sets props with `.prop(name, value)`, binds them with `.bind_animated_prop(name, &value)` and hears events with `.on_native_event(…)`.
+
+The frame is `frame.width()` × `frame.height()` pixels of `frame.format()`, 8-bit RGBA or BGRA: clear it first, and write sRGB-encoded colors with premultiplied alpha, as CSS colors. The device is shared by the views of a window: a high-performance GPU, with all of its features and limits. Where no GPU is available, or nothing is registered under `name`, the view draws only its own style and children. GPU views draw on Linux, macOS and iOS today; the other platforms show their style and children while their support lands.
+
 ## Accessibility
 
 The accessibility API reads the user's accessibility settings (is a screen reader running, did they ask for less motion) and talks to the screen reader. Rust code calls `screen_reader()`, `reduce_motion()` and `announce_for_accessibility()` from `nsh_core::prelude` and moves the focus with an `ElementRef`; TSX imports `screenReaderEnabled()`, `reduceMotion()`, `announce()` and `setAccessibilityFocus()` from `nsh`. The settings are reactive: read them in a binding, `computed` or `effect`, and what reads them updates when the user changes them. The accessibility props of elements (`accessibilityLabel`, `role`, ...) are documented under [Elements](../elements/index.md); the guide is [Accessibility](../docs/accessibility.md).
 
-```rust tabs
-use nsh_core::prelude::*; // screen_reader, reduce_motion, announce_for_accessibility, element_ref
-```
-
 ```tsx tabs
 import { announce, reduceMotion, screenReaderEnabled, setAccessibilityFocus } from "nsh";
+```
+
+```rust tabs
+use nsh_core::prelude::*; // screen_reader, reduce_motion, announce_for_accessibility, element_ref
 ```
 
 ### screenReaderEnabled
@@ -3354,15 +3749,15 @@ const screenReaderEnabled: Accessor<boolean>;
 
 Whether a screen reader (VoiceOver, TalkBack) is running. Reactive: what reads it updates when the user turns the screen reader on or off. Rust: `screen_reader() -> bool`, reactive in the same way.
 
-```rust tabs
-when(move || !screen_reader(), || text("Swipe for the next photo"))
-    .otherwise(move || text("Next photo").on_press(next))
-```
-
 ```tsx tabs
 <If when={!screenReaderEnabled()} else={<Text onPress={next}>Next photo</Text>}>
   <Text>Swipe for the next photo</Text>
 </If>
+```
+
+```rust tabs
+when(move || !screen_reader(), || text("Swipe for the next photo"))
+    .otherwise(move || text("Next photo").on_press(next))
 ```
 
 ### reduceMotion
@@ -3373,6 +3768,13 @@ const reduceMotion: Accessor<boolean>;
 
 Whether the user asked for less motion (Reduce Motion on iOS, Remove animations on Android). Reactive. Rust: `reduce_motion() -> bool`. Tailwind classes follow it too with the `motion-reduce:` variant.
 
+```tsx tabs
+const open = () => {
+  if (reduceMotion()) panel.set(0);
+  else panel.spring(0);
+};
+```
+
 ```rust tabs
 let open = move || {
     if reduce_motion() {
@@ -3380,13 +3782,6 @@ let open = move || {
     } else {
         let _ = panel.spring(0.0, Spring::default());
     }
-};
-```
-
-```tsx tabs
-const open = () => {
-  if (reduceMotion()) panel.set(0);
-  else panel.spring(0);
 };
 ```
 
@@ -3406,25 +3801,6 @@ function setAccessibilityFocus(node: ViewRef): void;
 
 Moves the screen reader's focus to `node` (an element's `ref`). Rust: `ElementRef::set_accessibility_focus()`.
 
-```rust tabs
-use nsh_core::prelude::*;
-
-#[component]
-fn Saved() -> impl IntoElement {
-    let note = element_ref();
-    let save = move || {
-        announce_for_accessibility("Saved");
-        note.set_accessibility_focus();
-    };
-    // Runs again when the setting changes, until the component goes.
-    effect(|| log::info!("screen reader {}", screen_reader()));
-    view()
-        .gap_2()
-        .child(text("Save").role(AccessibilityRole::Button).on_press(save))
-        .child(text("Your changes are kept on this device.").element_ref(&note))
-}
-```
-
 ```tsx tabs
 import { effect, Text, View, type ViewRef } from "nsh";
 import { announce, screenReaderEnabled, setAccessibilityFocus } from "nsh";
@@ -3443,6 +3819,25 @@ function Saved() {
       <Text ref={note}>Your changes are kept on this device.</Text>
     </View>
   );
+}
+```
+
+```rust tabs
+use nsh_core::prelude::*;
+
+#[component]
+fn Saved() -> impl IntoElement {
+    let note = element_ref();
+    let save = move || {
+        announce_for_accessibility("Saved");
+        note.set_accessibility_focus();
+    };
+    // Runs again when the setting changes, until the component goes.
+    effect(|| log::info!("screen reader {}", screen_reader()));
+    view()
+        .gap_2()
+        .child(text("Save").role(AccessibilityRole::Button).on_press(save))
+        .child(text("Your changes are kept on this device.").element_ref(&note))
 }
 ```
 

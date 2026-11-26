@@ -14,13 +14,56 @@ opens the list, presented as each device expects:
   width sets another, as `gpui-component`'s `menu_width`) and as tall as its rows up to the room on the screen. On
   macOS it opens with the selected row laid over the trigger, so the chosen title stays where it was, as the
   system's pop-up buttons do (shadcn/ui's `item-aligned` position); with nothing selected it opens below the
-  trigger. On Windows, Linux and in browsers it opens below the trigger, as their drop-down lists do. The keyboard
-  moves through the items and chooses one.
+  trigger. On Windows, Linux and in browsers it opens below the trigger, as their drop-down lists do; `cover` chooses
+  one way on every desktop. The keyboard moves through the items and chooses one.
 - On phones and tablets, a sheet at the bottom of the screen over a backdrop.
 
 The select owns the behavior: the value (the app's, or its own), the open state, the keyboard, typeahead, search,
 sections, the highlighted row and what screen readers hear. The look is the app's: it styles the trigger, the popup,
 the list, the rows, the sections' headers and the search field, or draws the rows itself.
+
+```tsx tabs
+import { mount, signal, Text, View } from "nsh";
+import { Select } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+const FRUITS = [
+  { value: "apple", title: "Apple" },
+  { value: "banana", title: "Banana" },
+  { value: "blueberry", title: "Blueberry" },
+  { value: "grapes", title: "Grapes", disabled: true },
+  { value: "pineapple", title: "Pineapple" },
+];
+
+function App() {
+  const fruit = signal<string | null>(null);
+  const title = () => FRUITS.find((f) => f.value === fruit())?.title;
+  return (
+    <Select
+      items={FRUITS}
+      value={fruit()}
+      onChange={({ value }) => fruit.set(value)}
+      accessibilityLabel="Fruit"
+      offset={4}
+      popupClass="rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
+      backdropClass="bg-black/40"
+      itemClass="rounded-md px-2 py-1.5 text-sm focus:bg-accent focus:text-accent-foreground disabled:opacity-50"
+      trigger={
+        <View class="h-9 w-48 flex-row items-center justify-between rounded-md border border-input px-3 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
+          <Text class={fruit() ? "text-foreground" : "text-muted-foreground"}>{title() ?? "Pick a fruit"}</Text>
+          <Text class="text-muted-foreground">▾</Text>
+        </View>
+      }
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_base::{SelectEntry, SelectItem, select, theme};
@@ -91,44 +134,6 @@ fn fruit_select() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, signal, Text, View } from "nsh";
-import { Select } from "nsh/base";
-
-const FRUITS = [
-  { value: "apple", title: "Apple" },
-  { value: "banana", title: "Banana" },
-  { value: "blueberry", title: "Blueberry" },
-  { value: "grapes", title: "Grapes", disabled: true },
-  { value: "pineapple", title: "Pineapple" },
-];
-
-function App() {
-  const fruit = signal<string | null>(null);
-  const title = () => FRUITS.find((f) => f.value === fruit())?.title;
-  return (
-    <Select
-      items={FRUITS}
-      value={fruit()}
-      onChange={({ value }) => fruit.set(value)}
-      accessibilityLabel="Fruit"
-      offset={4}
-      popupClass="rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-md"
-      backdropClass="bg-black/40"
-      itemClass="rounded-md px-2 py-1.5 text-sm focus:bg-accent focus:text-accent-foreground disabled:opacity-50"
-      trigger={
-        <View class="h-9 w-48 flex-row items-center justify-between rounded-md border border-input px-3 hover:bg-accent active:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
-          <Text class={fruit() ? "text-foreground" : "text-muted-foreground"}>{title() ?? "Pick a fruit"}</Text>
-          <Text class="text-muted-foreground">▾</Text>
-        </View>
-      }
-    />
-  );
-}
-
-mount(App);
-```
-
 `Select` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. In Rust, `select()` makes one
 with a setter per prop (`.items(..)`, `.value(..)`, `.item_style(..)`) and a listener per event (`.on_change(..)`);
 `SelectItem::new(value, title)` makes an item, with `.disabled(..)` and `.group(..)`.
@@ -194,11 +199,12 @@ shown and gone (a sheet once it came in and once it went), `onCancel` that the u
 ## Entrance and exit
 
 On the desktops the popup comes and goes with your transitions, as a [Popover](./popover.md#entrance-and-exit)'s:
-`popupStartingClass` is its look in its first frame, and the `transition-*` classes of `popupClass` carry it to its
-own look; `popupEndingClass` is its look once closed, which it keeps, taking no presses, while those transitions run,
-and `onClose` follows. The keyboard focus is back on the trigger as it closes. Opened again on its way out, it returns to
-its look from where it is. `popupStartingStyle` and `popupEndingStyle` do the same with inline styles. When the user
-asks for less motion it appears and goes at once; the sheet of touch screens slides in and out on its own.
+`popupStartingClass` is its look in its first frame, and the `transition-*` classes of `popupClass` carry it to its own
+look; `popupEndingClass` is its look once closed, which it keeps, taking no presses, while those transitions run, and
+`onClose` follows. The keyboard focus is back on the trigger as it closes, unless the choice's `onChange` focused
+another view (the next field of a form), which keeps it. Opened again on its way out, it returns to its look from where
+it is. `popupStartingStyle` and `popupEndingStyle` do the same with inline styles. When the user asks for less motion it
+appears and goes at once; the sheet of touch screens slides in and out on its own.
 
 ```tsx
 <Select
@@ -276,6 +282,7 @@ choice draws nothing again. `renderGroup` draws a section's header the same way:
 | `align` | `.align(..)` | `"start" \| "center" \| "end"` | `"start"` | Desktops: how it lines up with the trigger. |
 | `offset` | `.offset(..)` | `number` | `0` | Desktops: the gap between the trigger and the list. |
 | `margin` | `.margin(..)` | `number` | `0` | Desktops: the distance it keeps from the edges of the safe area. |
+| `cover` | `.cover(..)` | `boolean` | `true` on macOS, `false` elsewhere | Desktops: the list opens with the chosen row over the trigger (`true`) or on the `placement` side of it (`false`), so a select can open the same way on every desktop. With nothing chosen it opens on the side. |
 | `popupClass`, `popupStyle` | `.popup_class(..)`, `.popup_style(..)` | `string`, `StyleProp<ViewStyle>` | none | The popup (desktops) or the sheet (touch screens) the list is in. |
 | `popupStartingClass`, `popupStartingStyle` | `.popup_starting_class(..)`, `.popup_starting_style(..)` | `string`, `StyleProp<ViewStyle>` | none | Desktops: the popup's look in its first frame, over its own: its transitions run from it. |
 | `popupEndingClass`, `popupEndingStyle` | `.popup_ending_class(..)`, `.popup_ending_style(..)` | `string`, `StyleProp<ViewStyle>` | none | Desktops: the popup's look once closed, over its own: it stays while its transitions run. |
@@ -358,14 +365,16 @@ open:
 | Escape | Closes the list without choosing. |
 | Tab, Shift+Tab | Closes the list (`reason: "focus"`) and moves the focus to the next or previous control. |
 
-Once the list closes, the keyboard focus returns to the trigger, unless a press outside or Tab took it elsewhere. The
-pointer highlights the row it moves over; the highlighted row is revealed as the keys move to it.
+Once the list closes, the keyboard focus returns to the trigger, unless a press outside, Tab or the choice's `onChange`
+took it elsewhere. On macOS and iOS, a list a pointer opened gives the focus back where it was before it opened instead: a
+press leaves the focus where it is there, as AppKit and UIKit do, so the trigger never had it, and Space and Return go on to your app's
+shortcuts rather than opening the list again. The pointer highlights the row it moves over; the highlighted row is revealed as the keys move to it.
 
 ## On each device
 
 | | Desktops and desktop browsers | Phones and tablets |
 | --- | --- | --- |
-| The list | a popup over the trigger with the selected row on it on macOS (below it while none is), below the trigger on Windows, Linux and in browsers, as wide as the trigger unless `popupStyle` sets a width, as tall as its rows up to the room on the screen | a sheet at the bottom over a backdrop, as tall as its rows up to the status bar |
+| The list | a popup over the trigger with the selected row on it on macOS (below it while none is), below the trigger on Windows, Linux and in browsers (`cover` chooses), as wide as the trigger unless `popupStyle` sets a width, as tall as its rows up to the room on the screen | a sheet at the bottom over a backdrop, as tall as its rows up to the status bar |
 | Closing it | a choice, Escape, a press outside (which goes on to what is under the pointer) | a choice, the backdrop, the Android back button |
 | Search | the field takes the keyboard as the list opens | the keyboard comes up when the field is pressed |
 | A choice | the press going down chooses, so the search field keeps the keyboard | a tap |

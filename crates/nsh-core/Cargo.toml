@@ -28,9 +28,12 @@ ordered-float.workspace = true
 resvg = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
 url.workspace = true
+percent-encoding.workspace = true
 sha2.workspace = true
 # Picked images' sizes and types (`picker.rs`).
 imagesize.workspace = true
+# Animated GIF and WebP frames for the native backends (`image/animation.rs`).
+image = { workspace = true, optional = true }
 # A GIF's first frame for the SVG layer budget (`svg/layers.rs`).
 gif = { workspace = true, optional = true }
 # Inline SVG style declarations, parsed as usvg parses them (`svg/mod.rs`).
@@ -40,11 +43,17 @@ naga = { workspace = true, optional = true }
 wuff.workspace = true
 # Fonts' family names (`text::font_family`).
 ttf-parser.workspace = true
+# `nsh/mobile`'s `DateTimePicker` values (`mobile.rs`).
+chrono.workspace = true
 
 [features]
 # SVG images for the native backends (`svg`: sniffing, sizes and rasters with
 # resvg). The web runtime leaves it off: the browser draws SVG itself.
 svg = ["dep:resvg", "dep:flate2", "dep:gif", "dep:simplecss"]
+# Animated GIF and WebP for the native backends that decode with the
+# `image` crate (`image::animation`: frames kept decoded, or streamed when
+# too large to keep).
+animation = ["dep:image", "image/gif", "image/webp"]
 # Remote images for the shared image loader (`image::loader`: downloads with
 # ureq). Without it, the loader reads files, assets and inline bytes only.
 loader = ["dep:ureq"]
@@ -66,7 +75,6 @@ websocket = [
   "dep:tokio-tungstenite",
   "dep:rustls",
   "dep:rustls-platform-verifier",
-  "dep:webpki-roots",
 ]
 # App self-updates (`nsh/updater`, on nsh-updater). Without it a check finds
 # nothing and downloads, installs and package restarts reject.
@@ -92,13 +100,9 @@ nsh-updater = { workspace = true, optional = true }
 # `process`'s children: their process groups and exits (`runtime/process.rs`);
 # the names of Unix error numbers (`element/system.rs`). Emscripten is wasm32
 # and `unix` both, so it needs libc for the `cfg(unix)` code too.
-# WebSocket TLS roots: the system trust store, except on Android, whose
-# verifier needs a JNI init the host does not run; there the bundled roots.
-[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+# WebSocket TLS roots: the system trust store. On Android the host
+# initializes it over JNI (nsh-platform-android).
 rustls-platform-verifier = { workspace = true, optional = true }
-
-[target.'cfg(target_os = "android")'.dependencies]
-webpki-roots = { workspace = true, optional = true }
 
 [target.'cfg(any(not(target_arch = "wasm32"), target_os = "emscripten"))'.dependencies]
 libc.workspace = true

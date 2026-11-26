@@ -9,39 +9,10 @@ demo: el-dock
 
 停靠区域是用户自行安排的工作区：面板放在标签组里，标签组并排或上下分栏，左、右、下三条边上的停靠区可以打开、关闭和调整大小。把标签页拖到另一个标签组上，它就加入那个组；拖到一个组的边缘，就把那个组分开；面板移动时，它里面的东西都保留着。`DockArea` 负责行为：标签页的拖放（以原生方式逐帧运行）、调整分栏和停靠区的大小、打开和关闭停靠区、放大和锁定。外观由应用决定：标签页、标签栏、手柄、放置指示和每个面板的内容都由应用绘制和设置样式，区域自己什么也不画。
 
-```rust tabs
-use nsh_base::{
-    dock::{DockAreaLayout, DockLayout, DockPanel, DockPlacement, DockRegion, DockTab},
-    dock_area, theme,
-};
-use nsh_core::prelude::*;
-
-fn workspace() -> impl IntoElement {
-    let layout = signal(
-        DockAreaLayout::new(
-            DockLayout::h_split()
-                .child(DockLayout::tabs().panel("readme").panel("main"), None)
-                .child(DockLayout::tabs().panel("preview"), Some(px(320.0))),
-        )
-        .with_dock(DockPlacement::Left, DockRegion::new(DockLayout::tabs().panel("files")))
-        .with_dock(DockPlacement::Bottom, DockRegion::new(DockLayout::tabs().panel("terminal"))),
-    );
-    dock_area()
-        .layout(move || layout.get())
-        .on_layout_change(move |next: &DockAreaLayout| layout.set(next.clone()))
-        .handle_style(|s| s.bg(move || theme().border()))
-        .tab_bar_style(|s| s.flex_row().border_b_1().border_color(move || theme().border()))
-        .tab_style(|s| s.px_3().py_1().selected(|s| s.bg(move || theme().muted())))
-        .render_tab(|tab: &DockTab| text(tab.panel.to_string()).text_sm().text_color(move || theme().foreground()))
-        .render_panel(|panel: &DockPanel| {
-            text(format!("{} content", panel.id)).p_4().text_color(move || theme().foreground())
-        })
-}
-```
-
 ```tsx tabs
 import { mount, signal, Text } from "nsh";
 import { DockArea, type DockAreaLayout } from "nsh/base";
+import { Window } from "nsh/desktop";
 
 const titles: Record<string, string> = {
   files: "Files", readme: "README.md", main: "main.rs", preview: "Preview", terminal: "Terminal",
@@ -75,7 +46,41 @@ function App() {
   );
 }
 
-mount(App);
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
+```rust tabs
+use nsh_base::{
+    dock::{DockAreaLayout, DockLayout, DockPanel, DockPlacement, DockRegion, DockTab},
+    dock_area, theme,
+};
+use nsh_core::prelude::*;
+
+fn workspace() -> impl IntoElement {
+    let layout = signal(
+        DockAreaLayout::new(
+            DockLayout::h_split()
+                .child(DockLayout::tabs().panel("readme").panel("main"), None)
+                .child(DockLayout::tabs().panel("preview"), Some(px(320.0))),
+        )
+        .with_dock(DockPlacement::Left, DockRegion::new(DockLayout::tabs().panel("files")))
+        .with_dock(DockPlacement::Bottom, DockRegion::new(DockLayout::tabs().panel("terminal"))),
+    );
+    dock_area()
+        .layout(move || layout.get())
+        .on_layout_change(move |next: &DockAreaLayout| layout.set(next.clone()))
+        .handle_style(|s| s.bg(move || theme().border()))
+        .tab_bar_style(|s| s.flex_row().border_b_1().border_color(move || theme().border()))
+        .tab_style(|s| s.px_3().py_1().selected(|s| s.bg(move || theme().muted())))
+        .render_tab(|tab: &DockTab| text(tab.panel.to_string()).text_sm().text_color(move || theme().foreground()))
+        .render_panel(|panel: &DockPanel| {
+            text(format!("{} content", panel.id)).p_4().text_color(move || theme().foreground())
+        })
+}
 ```
 
 `DockArea` 和它使用的值来自 [`nsh/base`](../modules/nsh-base.md)，在 Rust 中是 `nsh-base` crate（`nsh_base::dock_area()`，值在 `nsh_base::dock` 中）。在 Rust 中，`dock_area()` 创建它，每个属性对应一个设置方法，每个事件对应一个监听方法，外观用类型化的样式方法；`DockLayout` 用面板的键描述布局（`h_split()`、`v_split()`、`tabs()`、`.child(layout, size)`、`.panel(key)`）。
@@ -136,6 +141,25 @@ mount(App);
 | `active` | `boolean` | 它是组里当前显示的标签页。 |
 | `closable` | `boolean` | 区域会关闭它：它可以关闭，区域没有锁定，它的组也可以交出它。 |
 | `zoomed` | `boolean` | 它的组已放大。 |
+
+标签页在标签栏里的横向滚动视图中排成一行：放不下的标签页可以滚动，而不是超出标签栏的末尾；成为当前显示的标签页会滚动到可见位置。标签栏的类名只设置标签栏本身的样式，所以标签页之间的间距用 `tabClass`（外边距）设置，而不是 `tabBarClass` 上的 `gap`。
+
+`renderToolbar` 为组当前显示的标签页绘制标签栏末尾的工具栏：这个面板自己的操作，例如新建标签页或放大按钮，对应 GPUI dock 面板的 toolbar buttons。它拿到的是和 `renderTab` 相同的 `DockTab`（`panel`、`group`、`index`、`zoomed` 等），所以不同面板可以显示不同的操作，ref 的 `toggleZoom(tab.group)` 作用于它所在的组。它是标签栏里位于标签页滚动视图之后的子元素，标签页滚动时它保持原位，由标签栏自己的布局摆放（在 `flex-row` 的标签栏里，给返回的元素加 `ml-auto` 可以把它推到末尾）。在紧凑方式中，唯一的标签栏以当前显示的标签页的工具栏结尾。
+
+```tsx
+renderToolbar={(tab) => (
+  <View class="ml-auto flex-row items-center gap-2 px-2">
+    {tab.panel === "editor" && (
+      <Button onPress={() => openFile(tab.group)}>
+        <Text>新建</Text>
+      </Button>
+    )}
+    <Button onPress={() => area.toggleZoom(tab.group)}>
+      <Text>{tab.zoomed ? "还原" : "放大"}</Text>
+    </Button>
+  </View>
+)}
+```
 
 ```tsx
 let area!: DockAreaRef;
@@ -281,16 +305,18 @@ const terminalOpen = signal(true);
 | `panels` | `.panels(..)` | `DockPanelOptions[]` | `[]` | 按键设置每个面板允许什么：`closable`、`zoomable`、`visible`。 |
 | `renderPanel` | `.render_panel(\|panel\| ..)` | `(panel: DockPanel) => JSX.Element` | 无 | 面板的内容，按它的键（`panel.id`）。 |
 | `renderTab` | `.render_tab(\|tab\| ..)` | `(tab: DockTab) => JSX.Element` | 面板的键 | 标签页显示的内容。 |
+| `renderToolbar` | `.render_toolbar(\|tab\| ..)` | `(tab: DockTab) => JSX.Element` | 无 | 标签栏末尾的工具栏，对应组当前显示的标签页：这个面板自己的操作（新建标签页、放大按钮）。 |
 | `renderDropIndicator` | `.render_drop_indicator(\|drop\| ..)` | `(drop: DockDropIndicator) => JSX.Element` | 无 | 放置指示里的内容：`group`、`side`、`index`。 |
 | `renderDock` | `.render_dock(\|dock\| ..)` | `(dock: DockInfo) => JSX.Element` | 无 | 停靠区自己的装饰，位于它的布局之前：`placement`、`open`（在当前呈现方式中是否显示）、`size`、`collapsible`。 |
 | `renderEmpty` | `.render_empty(\|placement\| ..)` | `(placement: DockPlacement) => JSX.Element` | 无 | 中心区域为空时显示的内容。 |
 | `renderDragPreview` | `.render_drag_preview(\|tab\| ..)` | `(tab: DockTab) => JSX.Element` | 无 | 拖动标签页时跟随指针或手指的内容。 |
 | `groupClass`、`groupStyle` | `.group_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个标签组的框架。 |
-| `tabBarClass`、`tabBarStyle` | `.tab_bar_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个标签栏（`flex-row` 排成一行）。 |
+| `tabBarClass`、`tabBarStyle` | `.tab_bar_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个标签栏：它的高度、背景和边框。标签页在它里面的滚动视图中排成一行；用 `tabClass` 设置标签页之间的间距。 |
 | `tabClass`、`tabStyle` | `.tab_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个标签页；`selected:` 用于当前显示的那个。 |
 | `contentClass`、`contentStyle` | `.content_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个组的内容框架，面板显示在其中。 |
 | `dropIndicatorClass`、`dropIndicatorStyle` | `.drop_indicator_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 放置指示。 |
 | `handleClass`、`handleStyle` | `.handle_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个手柄的指示器，位于分栏的组之间以及每个停靠区的边缘；`group-hover:` 和 `group-active:` 跟随手柄。除非另有指定，它横跨手柄 1 点粗、与手柄等长，所以 `bg-border` 在两个方向上都是一条细线；`w-[3px]` / `h-[3px]` 可以加粗。 |
+| `renderHandle` | `.render_handle(\|handle\| ..)` | `(handle: ResizeHandleContext) => JSX.Element` | 无 | 分栏的组之间每个手柄的指示器里的内容，手柄的 `state` 变化时重新绘制：一个抓手、一个图标（即 [Resizable](./resizable.md) 的 `renderHandle`）。停靠区边缘的手柄仍使用由类名设置样式的指示器。 |
 | `handleThumbClass`、`handleThumbStyle` | `.handle_thumb_class(..)`、`.handle_thumb_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个手柄的握把：居中在线上，按竖线的方向竖着绘制，在横线上转四分之一圈，所以一个类在两个方向上都适用。手柄悬停、按下和拖动时它始终是同一个视图，所以 `group-hover:` 和 `group-active:` 类会以过渡动画改变它（`h-11 w-[3px] rounded-full bg-muted-foreground opacity-0 scale-y-0 transition group-hover:opacity-40 group-hover:scale-y-[0.45] group-active:opacity-90 group-active:scale-y-100`）。 |
 | `dockClass`、`dockStyle` | `.dock_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 每个停靠区的框架。 |
 | `drawerClass`、`drawerStyle` | `.drawer_style(\|s\| ..)` | `string`、`StyleProp<ViewStyle>` | 无 | 紧凑方式：左右停靠区的抽屉。 |
@@ -322,6 +348,7 @@ const terminalOpen = signal(true);
 | 标签组 | 区域里 | `groupClass`、`groupStyle` | |
 | 标签栏 | 组里 | `tabBarClass`、`tabBarStyle` | |
 | 标签页 | 标签栏里 | `tabClass`、`tabStyle`；`renderTab` | `selected:`、`active:`、`hover:` |
+| 工具栏 | 标签栏末尾 | `renderToolbar` | |
 | 组的内容 | 组里 | `contentClass`、`contentStyle`；`renderPanel` | |
 | 手柄的指示器 | 分栏的组之间、停靠区的边缘 | `handleClass`、`handleStyle` | `group-hover:`、`group-active:` |
 | 手柄的握把 | 居中在手柄的线上 | `handleThumbClass`、`handleThumbStyle` | `group-hover:`、`group-active:`（直到拖动结束都保持按下） |
@@ -336,6 +363,7 @@ const terminalOpen = signal(true);
 ## 无障碍
 
 - 每个标签页对屏幕阅读器来说是带选中状态的标签页，和 [`Tab`](./tabs.md) 一样，激活它就会选中。它的标签是 `renderTab` 绘制的文字。
+- 每个组的内容是一个标签页面板，组里的标签页都把它标为自己控制的元素：屏幕阅读器进入时会说这是选中标签页的面板。
 - 每个手柄（分栏之间和停靠区边缘的）都是可调节的元素，标签是 `handleAccessibilityLabel`。分栏中组之间的手柄就是 [Resizable](./resizable.md) 的手柄：屏幕阅读器每次把它移动 10 点，通过 `onLayoutChange` 报告。
 - 在紧凑方式中，Escape 和返回会收起显示的抽屉或底部面板。
 

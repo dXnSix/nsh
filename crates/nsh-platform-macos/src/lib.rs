@@ -38,6 +38,7 @@ mod file_requests;
 mod fps;
 mod global_shortcut;
 mod gpu;
+mod gpu_view;
 mod image;
 mod input;
 mod keyboard;
@@ -47,14 +48,16 @@ mod mount;
 mod native;
 mod navigation;
 mod net;
+mod panels;
 mod picker;
 mod screen_color;
 mod scroll;
 mod selectable_view;
 mod shader;
+mod share;
 mod sight;
 // Shared with iOS.
-use nsh_platform_apple::{audio, notifications, speech};
+use nsh_platform_apple::{audio, notifications};
 mod surface;
 #[cfg(feature = "dev")]
 mod synth;

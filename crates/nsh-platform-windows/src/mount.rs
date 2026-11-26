@@ -337,6 +337,9 @@ impl Mounter {
                     crate::canvas::set(surface, view, drawing.clone());
                 }
             }
+            // GPU views draw nothing on this backend yet
+            // (`docs/dev/gpu-views.md`).
+            MountItem::GpuView { .. } => {}
             MountItem::Shader { id, layer } => {
                 if let Some(view) = &self.get(*id) {
                     crate::shader::set(surface, view, layer.clone());
@@ -467,10 +470,15 @@ impl Mounter {
                     crate::text_input::set_selection(view, *start, *end);
                 }
             }
-            // Not carried out on this platform yet: the app's paste is lost,
-            // so say so.
-            Command::InsertText(_) => {
-                log::warn!("insertText is not supported on Windows yet; nothing inserted")
+            Command::ClearSelection => {
+                if let Some(view) = view {
+                    crate::selectable_view::clear_in(view);
+                }
+            }
+            Command::InsertText(text) => {
+                if let Some(view) = view {
+                    crate::text_input::insert_text(view, text);
+                }
             }
             Command::ScrollTo { y, .. } if view.is_some_and(|v| v.kind() == ViewKind::Input) => {
                 crate::text_input::scroll_to(view.expect("an input"), *y);
@@ -513,6 +521,16 @@ impl Mounter {
             Command::Desktop(desktop) if id != ROOT_ID => {
                 crate::app_window::command(surface, id, view, desktop);
             }
+            // A dialog shows over the window whose content raised it. The
+            // app raises an alert without naming one (`AlertDialog.show`):
+            // it is the focused window's, else the first's.
+            Command::Dialog(dialog) => {
+                let window = match view {
+                    Some(v) if id != ROOT_ID => crate::app_window::window_of(surface, v),
+                    _ => crate::app_window::dialog_window(surface),
+                };
+                crate::system::show_dialog(surface, window, dialog);
+            }
             other => crate::system::command(surface, id, other),
         }
     }
@@ -529,7 +547,9 @@ enum Redraw {
 
 /// What `item` may change on screen once applied. Insertions and removals
 /// draw their parents again themselves ([`NshView::insert_before`],
-/// [`NshView::unparent`]); a new view is drawn when it is inserted.
+/// [`NshView::unparent`]), and so does a shader's layer, only when it
+/// changes what is drawn before its next frame ([`crate::shader::set`]); a
+/// new view is drawn when it is inserted.
 fn redrawn(item: &MountItem) -> Redraw {
     match item {
         MountItem::Create { .. }
@@ -547,6 +567,8 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::ComponentPropSlots { .. }
         | MountItem::TreeOrder(_)
         | MountItem::ProjectStates { .. }
+        | MountItem::Shader { .. }
+        | MountItem::GpuView { .. }
         | MountItem::NavShader { .. } => Redraw::Nothing,
         MountItem::Frame { id, .. }
         | MountItem::ViewStyle { id, .. }
@@ -560,7 +582,6 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::ScrollBehavior { id, .. }
         | MountItem::Refreshing { id, .. }
         | MountItem::Canvas { id, .. }
-        | MountItem::Shader { id, .. }
         | MountItem::ShaderInput { id }
         | MountItem::ShaderTransition { id, .. }
         | MountItem::ViewProps { id, .. }

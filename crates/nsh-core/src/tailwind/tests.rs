@@ -413,6 +413,76 @@ fn theme_tokens() {
 }
 
 #[test]
+fn number_tokens_take_the_value_type_of_their_utility() {
+    // A factor for `scale`, a length for `ring` and `ring-offset`, with or
+    // without the `length:` hint: each as its arbitrary value would be.
+    let mut tokens = ui_theme();
+    tokens.set_number("press", 0.97);
+    tokens.set_number("squash", 0.93);
+    tokens.set_number("ring-width", 3.0);
+    tokens.set_number("ring-gap", 2.0);
+    let mut theme = Theme::default();
+    theme.set_tokens(&tokens);
+    let same = |token: &str, literal: &str| {
+        let (a, b) = (styled_in(&theme, token), styled_in(&theme, literal));
+        assert_eq!(a.view.transform, b.view.transform, "{token} vs {literal}");
+        assert_eq!(a.view.effects, b.view.effects, "{token} vs {literal}");
+    };
+    same("scale-(--press)", "scale-[0.97]");
+    same("scale-(number:--press)", "scale-[0.97]");
+    same(
+        "scale-x-(--press) scale-y-(--squash)",
+        "scale-x-[0.97] scale-y-[0.93]",
+    );
+    same("-scale-(--press)", "-scale-[0.97]");
+    same("ring-(length:--ring-width)", "ring-3");
+    same("ring-(--ring-width)", "ring-3");
+    same(
+        "ring-2 ring-offset-(length:--ring-gap)",
+        "ring-2 ring-offset-2",
+    );
+    same("inset-ring-(length:--ring-width)", "inset-ring-3");
+    let op = styled_in(&theme, "scale-(--press)").view.transform.ops()[0];
+    assert_eq!(op.kind, TransformKind::Scale);
+    assert!((op.value - 0.97).abs() < 1e-6);
+    // A color is no factor, a factor no length.
+    for class in [
+        "scale-(--primary)",
+        "scale-(length:--press)",
+        "ring-(number:--ring-width)",
+    ] {
+        assert_eq!(parse(&theme, class).unknown().len(), 1, "{class}");
+    }
+    // A state variant takes it too.
+    let list = parse(&theme, "active:scale-(--press)");
+    assert!(list.unknown().is_empty(), "{:?}", list.unknown());
+    let group = |_: &str| 0;
+    let mut pressed = Style::default();
+    let context = Context {
+        env: ClassEnvironment::default(),
+        window: crate::geometry::size_pt(390.0, 844.0),
+        rtl: false,
+        states: state::PRESSED,
+        position: 0,
+        group: &group,
+    };
+    list.apply(
+        &context,
+        &theme,
+        &mut pressed,
+        &mut ClassProps::default(),
+        |_| {},
+    );
+    assert!((pressed.view.transform.ops()[0].value - 0.97).abs() < 1e-6);
+    // Other lengths keep their pixels.
+    let (a, b) = (
+        styled_in(&theme, "p-(--ring-width)"),
+        styled_in(&theme, "p-[3px]"),
+    );
+    assert_eq!(a.layout.padding, b.layout.padding);
+}
+
+#[test]
 fn tailwind_colors_win_over_tokens_and_tokens_come_from_the_theme() {
     let mut theme = Theme::from_json(r##"{ "colors": { "primary": "#ff0000" } }"##).unwrap();
     let mut ui = crate::element::Tokens::default();
@@ -906,6 +976,43 @@ fn transitions_and_animations() {
     assert!(!t.properties.has(crate::effects::TransitionProps::TRANSFORM));
     let s = styled("transition");
     assert_eq!(s.view.transition.unwrap().duration, 150.0);
+    // NSH's spring: it times itself, so the duration is kept but not used.
+    let t = styled("transition-transform ease-spring-[620,36]")
+        .view
+        .transition
+        .unwrap();
+    let spring = t.spring.expect("a spring");
+    assert_eq!(
+        (spring.stiffness, spring.damping, spring.mass),
+        (620.0, 36.0, 1.0)
+    );
+    assert!((t.run_ms() - spring.settle_ms()).abs() < f32::EPSILON);
+    let t = styled("transition ease-spring-[992,45,2]")
+        .view
+        .transition
+        .unwrap();
+    assert_eq!(t.spring.unwrap().mass, 2.0);
+    // The later timing function wins.
+    let t = styled("transition ease-spring-[620,36] ease-out")
+        .view
+        .transition
+        .unwrap();
+    assert_eq!((t.easing, t.spring), ([0.0, 0.0, 0.2, 1.0], None));
+    for unknown in [
+        "ease-spring-[620]",
+        "ease-spring-[620,0]",
+        "ease-spring",
+        "ease-spring-620",
+    ] {
+        let list = parse(&themed(), unknown);
+        assert_eq!(list.unknown(), [Box::<str>::from(unknown)], "{unknown}");
+    }
+    // A Bézier past 0..1 is kept as written: it overshoots.
+    let t = styled("transition ease-[cubic-bezier(0.3,1.25,0.6,1)]")
+        .view
+        .transition
+        .unwrap();
+    assert_eq!((t.easing, t.spring), ([0.3, 1.25, 0.6, 1.0], None));
     let s = styled("animate-spin");
     assert_eq!(s.view.animation.unwrap().keyframes, Keyframes::Spin);
 }

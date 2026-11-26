@@ -9,12 +9,17 @@
 //! gestures on the area: a long press selects the word under the finger
 //! (a drag after it extends by words), two handles (a stem and a round
 //! knob in the tint, subviews of the area kept in front) move the ends, a
-//! tap clears, and the edit menu (`UIEditMenuInteraction` from iOS 16,
+//! tap clears (a finger that scrolls a scroll view is no tap), and the edit menu (`UIEditMenuInteraction` from iOS 16,
 //! `UIMenuController` before) offers Copy and Select All, which the
 //! responder answers as the first responder (so do ⌘C and ⌘A on hardware
-//! keyboards). Pointers (Mac Catalyst's mouse, iPad trackpads) select as
-//! on the desktops: a press and drag, double and triple clicks, Shift
-//! extends; no handles then.
+//! keyboards); the other hardware keys go through the area's raw key path
+//! (`KeyDown` / `KeyUp`, capture rules, bubbling to listening ancestors)
+//! while it holds the selection, as on the other backends. As in UIKit's text views, the long press plays an impact
+//! (the weight of a long press opening a menu) when it selects, and each
+//! time a drag moves an end a selection tick.
+//! Pointers (Mac Catalyst's mouse, iPad trackpads) select as on the
+//! desktops: a press and drag, double and triple clicks, Shift extends; no
+//! handles or haptics then.
 //!
 //! The texts are the area's `TextView`s in document order (subviews depth
 //! first; texts with `selectable={false}` stay out), listed again whenever
@@ -25,13 +30,18 @@
 //! is part of the outer one: its own gestures never begin. Becoming first
 //! responder resigns any other selection, so a surface shows one.
 
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    ptr::NonNull,
+};
 
+use block2::RcBlock;
 use nsh_core::{
     AttributedText, Bounds, Color, EventKind, EventPayload, NodeId, PayloadValue, Point, Points,
     geometry::{bounds, point, px, size},
     selection::{
-        Handle, KeptRows, SelectionModel, SelectionTexts, TextPosition, reading_order, reorder,
+        Handle, KeptRows, SelectionModel, SelectionTexts, TextPosition, autoscroll_step, marker_of,
+        reading_order, reorder,
     },
 };
 use nsh_engine::EngineControl;
@@ -42,11 +52,15 @@ use objc2::{
     sel,
 };
 use objc2_core_foundation::{CGFloat, CGPoint, CGRect, CGSize};
-use objc2_foundation::{NSArray, NSNumber, NSObject};
+use objc2_foundation::{
+    NSArray, NSNumber, NSObject, NSRunLoop, NSRunLoopCommonModes, NSSet, NSString,
+};
+use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
     UIGestureRecognizer, UIGestureRecognizerDelegate, UIGestureRecognizerState,
-    UILongPressGestureRecognizer, UIPanGestureRecognizer, UIResponder, UIScrollView,
-    UITapGestureRecognizer, UITouch, UITraitEnvironment, UIView,
+    UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UILongPressGestureRecognizer, UIMenu,
+    UIMenuElement, UIPanGestureRecognizer, UIPress, UIPressesEvent, UIResponder, UIScrollView,
+    UISelectionFeedbackGenerator, UITapGestureRecognizer, UITouch, UITraitEnvironment, UIView,
 };
 
 use crate::{native_view::NshView, text_view::TextView};
@@ -76,6 +90,8 @@ struct Entry {
     frame: Bounds<Points>,
     /// It continues the text before it (`ViewProps::continues_text`).
     continues: bool,
+    /// The list marker beside it (`selection::marker_of`).
+    marker: Option<String>,
 }
 
 /// The texts of an area as the model sees them.
@@ -106,6 +122,10 @@ impl SelectionTexts for AreaTexts {
         self.entries[i].text.copied_text(range)
     }
 
+    fn attributed(&self, i: usize) -> Option<&AttributedText> {
+        Some(&self.entries[i].text)
+    }
+
     fn frame(&self, i: usize) -> Bounds<Points> {
         self.entries[i].frame
     }
@@ -119,6 +139,22 @@ impl SelectionTexts for AreaTexts {
         e.view.closest_offset(local) as u32
     }
 
+    fn range_bounds(&self, i: usize, range: std::ops::Range<u32>) -> Option<Bounds<Points>> {
+        let e = self.entries.get(i)?;
+        let area = self.area.as_ref()?;
+        e.view
+            .range_rects(range.start as usize, range.end as usize)
+            .into_iter()
+            .map(|(rect, ..)| {
+                let r = e.view.convertRect_toView(rect, Some(area));
+                bounds(
+                    pt(r.origin),
+                    size(px(r.size.width as f32), px(r.size.height as f32)),
+                )
+            })
+            .reduce(|a, b| a.union(&b))
+    }
+
     fn key(&self, i: usize) -> u64 {
         // The text's node id.
         self.entries[i].view.tag() as u64
@@ -127,12 +163,17 @@ impl SelectionTexts for AreaTexts {
     fn continues(&self, i: usize) -> bool {
         self.entries[i].continues
     }
+
+    fn marker(&self, i: usize) -> Option<&str> {
+        self.entries[i].marker.as_deref()
+    }
 }
 
 impl AreaTexts {
     /// The texts of `area`'s subtree, in document order.
     fn list(area: &UIView) -> Self {
-        fn walk(view: &UIView, area: &UIView, out: &mut Vec<Entry>) {
+        type Chrome = Option<(String, Bounds<Points>)>;
+        fn walk(view: &UIView, area: &UIView, out: &mut Vec<Entry>, chrome: &mut Chrome) {
             // In reading order: a virtual list's recycled cells are mounted
             // in no particular order.
             let start = out.len();
@@ -153,24 +194,29 @@ impl AreaTexts {
                     let Some(content) = text.attributed() else {
                         continue;
                     };
-                    if content.selectable == Some(false) {
-                        continue;
-                    }
                     let Some(rect) = text.content_box() else {
                         continue;
                     };
                     let r = text.convertRect_toView(rect, Some(area));
+                    let frame = bounds(
+                        pt(r.origin),
+                        size(px(r.size.width as f32), px(r.size.height as f32)),
+                    );
+                    if content.selectable == Some(false) {
+                        // A list marker, maybe: the next text's copy starts
+                        // with it.
+                        *chrome = Some((content.text.to_string(), frame));
+                        continue;
+                    }
                     out.push(Entry {
                         continues: text.continues_text(),
                         view: text.retain(),
+                        marker: marker_of(chrome.take().as_ref(), frame),
                         text: content,
-                        frame: bounds(
-                            pt(r.origin),
-                            size(px(r.size.width as f32), px(r.size.height as f32)),
-                        ),
+                        frame,
                     });
                 } else {
-                    walk(&child, area, out);
+                    walk(&child, area, out, chrome);
                 }
                 runs.push((frame, from..out.len()));
             }
@@ -179,7 +225,7 @@ impl AreaTexts {
             }
         }
         let mut entries = Vec::new();
-        walk(area, area, &mut entries);
+        walk(area, area, &mut entries, &mut None);
         Self {
             area: Some(area.retain()),
             entries,
@@ -240,10 +286,41 @@ impl AreaTexts {
     }
 }
 
+/// The least and the greatest content offset of `scroll`.
+fn offset_limits(scroll: &UIScrollView) -> (CGPoint, CGPoint) {
+    let (b, content) = (scroll.bounds(), scroll.contentSize());
+    let inset = scroll.adjustedContentInset();
+    let min = CGPoint::new(-inset.left, -inset.top);
+    let max = CGPoint::new(
+        (content.width + inset.right - b.size.width).max(min.x),
+        (content.height + inset.bottom - b.size.height).max(min.y),
+    );
+    (min, max)
+}
+
+/// `scroll`'s content offset moved by `d`, within its limits.
+fn scrolled_to(scroll: &UIScrollView, d: CGPoint) -> CGPoint {
+    let (b, (min, max)) = (scroll.bounds(), offset_limits(scroll));
+    CGPoint::new(
+        (b.origin.x + d.x).clamp(min.x, max.x),
+        (b.origin.y + d.y).clamp(min.y, max.y),
+    )
+}
+
 /// `color` at `alpha` of its opacity.
 fn faded(color: Color, alpha: f64) -> Color {
     let a = (color.0 & 0xff) as f64 * alpha;
     Color((color.0 & !0xff) | a.round().clamp(0.0, 255.0) as u32)
+}
+
+/// The last callback's selection and its position, including ancestor scrolling.
+#[derive(Clone, Default, PartialEq)]
+struct Selected {
+    text: String,
+    start: u32,
+    bounds: Option<Bounds<Points>>,
+    /// Only for change detection; the core computes the callback's page bounds.
+    origin: Point<Points>,
 }
 
 #[derive(Default)]
@@ -271,12 +348,23 @@ pub(crate) struct AreaIvars {
     edit_menu: RefCell<Option<Retained<AnyObject>>>,
     /// The interaction's menu shows (its delegate hears).
     menu_shown: Cell<bool>,
+    /// The haptic of touch selection, made on first use.
+    feedback: RefCell<Option<Retained<UISelectionFeedbackGenerator>>>,
+    /// The haptic of a long press selecting, made on first use.
+    press_feedback: RefCell<Option<Retained<UIImpactFeedbackGenerator>>>,
     /// The area's node id.
     id: Cell<NodeId>,
     /// JS listens to the area's `onSelectionChange`.
     listens: Cell<bool>,
-    /// The selected text last reported to `onSelectionChange`.
-    reported: RefCell<String>,
+    /// The selection last reported to `onSelectionChange`.
+    reported: RefCell<Selected>,
+    /// Where a selecting pointer drag is (window coordinates), while its
+    /// button is down.
+    pointer: Cell<Option<CGPoint>>,
+    /// The autoscroll's display link while it runs ([`AreaResponder::autoscroll`]),
+    /// and when its last frame was.
+    autoscroll: RefCell<Option<Retained<CADisplayLink>>>,
+    last_frame: Cell<Option<f64>>,
 }
 
 define_class!(
@@ -303,6 +391,36 @@ define_class!(
             resigned
         }
 
+        /// Hardware keys: Copy and Select All come as key commands
+        /// (`canPerformAction:withSender:`); the presses left go through
+        /// the area's raw key path ([`crate::keyboard::area_began`]), so
+        /// the area and its ancestors hear them while it holds the
+        /// selection, as a focused view's would.
+        #[unsafe(method(pressesBegan:withEvent:))]
+        fn presses_began(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.area_presses(presses, crate::keyboard::area_began) {
+                // SAFETY: calling the superclass implementation.
+                let _: () = unsafe { msg_send![super(self), pressesBegan: presses, withEvent: event] };
+            }
+        }
+
+        #[unsafe(method(pressesEnded:withEvent:))]
+        fn presses_ended(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.area_presses(presses, crate::keyboard::area_ended) {
+                // SAFETY: calling the superclass implementation.
+                let _: () = unsafe { msg_send![super(self), pressesEnded: presses, withEvent: event] };
+            }
+        }
+
+        #[unsafe(method(pressesCancelled:withEvent:))]
+        fn presses_cancelled(&self, presses: &NSSet<UIPress>, event: Option<&UIPressesEvent>) {
+            if !self.area_presses(presses, crate::keyboard::area_cancelled) {
+                // SAFETY: calling the superclass implementation.
+                let _: () =
+                    unsafe { msg_send![super(self), pressesCancelled: presses, withEvent: event] };
+            }
+        }
+
         #[unsafe(method(canPerformAction:withSender:))]
         fn can_perform_action(&self, action: Sel, _sender: Option<&AnyObject>) -> bool {
             if action == sel!(copy:) {
@@ -317,12 +435,16 @@ define_class!(
 
         #[unsafe(method(copy:))]
         fn copy(&self, _sender: Option<&AnyObject>) {
-            let text = {
+            let (text, html) = {
                 let texts = self.ivars().texts.borrow();
-                self.ivars().model.borrow().text(&*texts)
+                let model = self.ivars().model.borrow();
+                (model.text(&*texts), model.html(&*texts))
             };
-            if !text.is_empty() {
-                crate::system::set_clipboard(&text);
+            // Bold, italic and links go as HTML too, for rich text editors.
+            match html {
+                _ if text.is_empty() => {}
+                Some(html) => crate::system::set_clipboard_html(&text, &html),
+                None => crate::system::set_clipboard(&text),
             }
         }
 
@@ -350,13 +472,17 @@ define_class!(
                 self.hide_menu();
                 self.refresh_texts();
                 self.ivars().touch.set(true);
-                let changed = {
+                let (changed, selected) = {
                     let texts = self.ivars().texts.borrow();
-                    self.ivars().model.borrow_mut().select_word_at(&*texts, at)
+                    let mut model = self.ivars().model.borrow_mut();
+                    (model.select_word_at(&*texts, at), !model.is_empty())
                 };
                 self.becomeFirstResponder();
                 if changed {
                     self.redraw();
+                }
+                if selected {
+                    self.press_haptic();
                 }
             } else if state == UIGestureRecognizerState::Changed {
                 let changed = {
@@ -365,6 +491,7 @@ define_class!(
                 };
                 if changed {
                     self.redraw();
+                    self.selection_haptic();
                 }
             } else if state == UIGestureRecognizerState::Ended {
                 self.show_menu();
@@ -424,6 +551,31 @@ define_class!(
                 if changed {
                     self.redraw();
                 }
+                // A drag held near or past the edge of a scroll view around
+                // its focus scrolls it (#2996).
+                let window_at = recognizer.locationInView(None);
+                self.ivars().pointer.set(Some(window_at));
+                if self.past_edge(window_at).is_some() {
+                    self.autoscroll();
+                }
+            } else {
+                self.ivars().pointer.set(None);
+                self.stop_autoscroll();
+            }
+        }
+
+        #[unsafe(method(autoscrollFrame:))]
+        fn autoscroll_frame(&self, link: &CADisplayLink) {
+            // Frames as long as at 60 Hz move as far whatever the display's
+            // rate.
+            let now = link.timestamp();
+            let scale = self
+                .ivars()
+                .last_frame
+                .replace(Some(now))
+                .map_or(1.0, |l| ((now - l) * 60.0).clamp(0.25, 4.0));
+            if !self.autoscroll_step(scale) {
+                self.stop_autoscroll();
             }
         }
 
@@ -446,6 +598,7 @@ define_class!(
                     })
                 };
                 let Some(caret) = caret else { return };
+                self.prepare_haptic();
                 let mid = CGPoint::new(
                     caret.origin.x + caret.size.width / 2.0,
                     caret.origin.y + caret.size.height / 2.0,
@@ -483,6 +636,7 @@ define_class!(
                 }
                 if changed {
                     self.redraw();
+                    self.selection_haptic();
                 }
             } else if state == UIGestureRecognizerState::Ended
                 || state == UIGestureRecognizerState::Cancelled
@@ -498,6 +652,18 @@ define_class!(
         fn edit_menu_target_rect(&self, _interaction: &AnyObject, _configuration: &AnyObject) -> CGRect {
             self.selection_rect()
                 .unwrap_or(CGRect::new(CGPoint::ZERO, CGSize::ZERO))
+        }
+
+        /// `UIEditMenuInteractionDelegate`: the system's actions, then the
+        /// area's own (`selectionMenu`).
+        #[unsafe(method_id(editMenuInteraction:menuForConfiguration:suggestedActions:))]
+        fn edit_menu_for_configuration(
+            &self,
+            _interaction: &AnyObject,
+            _configuration: &AnyObject,
+            suggested: &NSArray<UIMenuElement>,
+        ) -> Option<Retained<UIMenu>> {
+            Some(self.menu_with(suggested))
         }
 
         #[unsafe(method(editMenuInteraction:willPresentMenuForConfiguration:animator:))]
@@ -520,15 +686,20 @@ define_class!(
         }
 
         /// Taps and pointer presses leave the presses of the views in the
-        /// area alone (long presses and handle drags take the touches).
+        /// area alone (long presses and handle drags take the touches). A
+        /// finger that scrolls a scroll view is no tap, as in a text view:
+        /// once the scroll begins, the tap fails and the selection stays.
         #[unsafe(method(gestureRecognizer:shouldRecognizeSimultaneouslyWithGestureRecognizer:))]
         fn should_recognize_simultaneously(
             &self,
             recognizer: &UIGestureRecognizer,
-            _other: &UIGestureRecognizer,
+            other: &UIGestureRecognizer,
         ) -> bool {
-            recognizer.isKindOfClass(UITapGestureRecognizer::class())
-                || self.is_pointer(recognizer)
+            if recognizer.isKindOfClass(UITapGestureRecognizer::class()) {
+                !is_scroll_pan(other)
+            } else {
+                self.is_pointer(recognizer)
+            }
         }
 
         /// Scroll views around wait for a handle's drag to fail.
@@ -552,13 +723,30 @@ define_class!(
                     .iter()
                     .any(|(h, _)| v.isDescendantOfView(h))
             });
-            let ours = self.ivars().recognizers.borrow().iter().any(|r| {
-                std::ptr::eq::<UIGestureRecognizer>(&**r, recognizer)
-            });
+            let (ours, long_press) = {
+                let recognizers = self.ivars().recognizers.borrow();
+                let is = |r: &Retained<UIGestureRecognizer>| {
+                    std::ptr::eq::<UIGestureRecognizer>(&**r, recognizer)
+                };
+                (recognizers.iter().any(is), recognizers.first().is_some_and(is))
+            };
+            if long_press && !on_handle {
+                // A finger down that may become a selection: ready the
+                // haptic before the long press selects.
+                self.prepare_press_haptic();
+            }
             !(ours && on_handle)
         }
     }
 );
+
+/// Whether `recognizer` is a scroll view's drag.
+fn is_scroll_pan(recognizer: &UIGestureRecognizer) -> bool {
+    recognizer.isKindOfClass(UIPanGestureRecognizer::class())
+        && recognizer
+            .view()
+            .is_some_and(|v| v.isKindOfClass(UIScrollView::class()))
+}
 
 impl AreaResponder {
     /// Makes `area` a selectable view.
@@ -633,6 +821,17 @@ impl AreaResponder {
         this
     }
 
+    /// Runs `path` (one of [`crate::keyboard`]'s area entries) for presses
+    /// delivered to the responder as the first responder: whether they
+    /// were consumed.
+    fn area_presses(
+        &self,
+        presses: &NSSet<UIPress>,
+        path: fn(&UIView, &NSSet<UIPress>) -> bool,
+    ) -> bool {
+        self.isFirstResponder() && self.superview().is_some_and(|area| path(&area, presses))
+    }
+
     /// Whether JS listens to the area's `onSelectionChange`.
     pub(crate) fn set_listens(&self, listens: bool) {
         self.ivars().listens.set(listens);
@@ -647,6 +846,8 @@ impl AreaResponder {
 
     /// The area is no longer one: its gestures, handles and highlight go.
     pub(crate) fn detach(&self) {
+        self.ivars().pointer.set(None);
+        self.stop_autoscroll();
         self.clear_selection();
         if self.isFirstResponder() {
             self.resignFirstResponder();
@@ -673,6 +874,11 @@ impl AreaResponder {
         }
     }
 
+    /// Clears the selection (`ref.clearSelection()`).
+    pub(crate) fn clear(&self) {
+        self.clear_selection();
+    }
+
     /// A mount batch was applied: while something is selected, the
     /// texts, highlight and handles follow what changed.
     pub(crate) fn batch_applied(&self) {
@@ -688,7 +894,106 @@ impl AreaResponder {
         if !self.ivars().model.borrow().is_empty() {
             self.refresh_texts();
             self.place_handles();
+            self.report();
         }
+    }
+
+    /// The innermost scroll view around the selection's focus (inside the
+    /// area or around it) that can still move toward where the pointer at
+    /// `at` (window coordinates) is near or past its edge, and its new
+    /// content offset after one 60 Hz frame ([`autoscroll_step`]).
+    fn past_edge(&self, at: CGPoint) -> Option<(Retained<UIScrollView>, CGPoint)> {
+        let start: Retained<UIView> = {
+            let focus = self.ivars().model.borrow().focus();
+            let texts = self.ivars().texts.borrow();
+            match focus.and_then(|f| texts.entries.get(f.text)) {
+                Some(e) => Retained::into_super(Retained::into_super(e.view.clone())),
+                None => self.superview()?,
+            }
+        };
+        let mut view = Some(start);
+        while let Some(v) = view {
+            if let Some(scroll) = v.downcast_ref::<UIScrollView>()
+                && scroll.isScrollEnabled()
+            {
+                let b = scroll.bounds();
+                let (min, max) = offset_limits(scroll);
+                let p = scroll.convertPoint_fromView(at, None);
+                let step = |at: CGFloat, origin: CGFloat, extent: CGFloat| {
+                    autoscroll_step(Points((at - origin) as f32), Points(extent as f32)).0
+                        as CGFloat
+                };
+                // Along the axes it scrolls only.
+                let dx = if max.x > min.x {
+                    step(p.x, b.origin.x, b.size.width)
+                } else {
+                    0.0
+                };
+                let dy = if max.y > min.y {
+                    step(p.y, b.origin.y, b.size.height)
+                } else {
+                    0.0
+                };
+                let to = scrolled_to(scroll, CGPoint::new(dx, dy));
+                if (to.x - b.origin.x).abs() > 0.5 || (to.y - b.origin.y).abs() > 0.5 {
+                    return Some((scroll.retain(), CGPoint::new(dx, dy)));
+                }
+            }
+            view = v.superview();
+        }
+        None
+    }
+
+    /// Scrolls on every frame while the selecting pointer stays near or
+    /// past the edge of a scroll view around the focus, held still too:
+    /// faster the further past, the selection extended each frame. It
+    /// stops when the button goes up, the pointer comes back inside or the
+    /// content ends.
+    fn autoscroll(&self) {
+        if self.ivars().autoscroll.borrow().is_some() {
+            return;
+        }
+        // SAFETY: `autoscrollFrame:` is implemented by the responder; the
+        // link retains it until `stop_autoscroll` invalidates the link (the
+        // drag ends or the area is detached).
+        let link =
+            unsafe { CADisplayLink::displayLinkWithTarget_selector(self, sel!(autoscrollFrame:)) };
+        crate::animation::full_rate(&link);
+        // SAFETY: the main run loop; common modes keep it running while a
+        // scroll view tracks.
+        unsafe { link.addToRunLoop_forMode(&NSRunLoop::mainRunLoop(), NSRunLoopCommonModes) };
+        self.ivars().last_frame.set(None);
+        *self.ivars().autoscroll.borrow_mut() = Some(link);
+    }
+
+    fn stop_autoscroll(&self) {
+        if let Some(link) = self.ivars().autoscroll.take() {
+            link.invalidate();
+        }
+    }
+
+    /// One frame of the autoscroll, `scale` frames at 60 Hz long; false
+    /// when it is over.
+    fn autoscroll_step(&self, scale: f64) -> bool {
+        let (Some(at), Some(area)) = (self.ivars().pointer.get(), self.superview()) else {
+            return false;
+        };
+        let Some((scroll, d)) = self.past_edge(at) else {
+            return false;
+        };
+        let to = scrolled_to(&scroll, CGPoint::new(d.x * scale, d.y * scale));
+        scroll.setContentOffset_animated(to, false);
+        // The texts moved: the focus follows the pointer over them.
+        self.refresh_texts();
+        let local = area.convertPoint_fromView(at, None);
+        let changed = {
+            let texts = self.ivars().texts.borrow();
+            self.ivars().model.borrow_mut().drag(&*texts, pt(local))
+        };
+        if changed {
+            self.redraw();
+        }
+        true
     }
 
     /// Lists the texts again; the model hears of new ones.
@@ -786,6 +1091,63 @@ impl AreaResponder {
         }
     }
 
+    /// The haptic of touch selection, made on first use.
+    // `init` is deprecated from iOS 17.5 for `feedbackGeneratorForView:`,
+    // which iOS 15 lacks.
+    #[allow(deprecated)]
+    fn feedback(&self) -> Retained<UISelectionFeedbackGenerator> {
+        self.ivars()
+            .feedback
+            .borrow_mut()
+            .get_or_insert_with(|| UISelectionFeedbackGenerator::new(self.mtm()))
+            .clone()
+    }
+
+    /// The haptic of a long press selecting, made on first use: a medium
+    /// impact, the weight of a long press opening a menu.
+    // `initWithStyle:` is deprecated from iOS 17.5 for
+    // `feedbackGeneratorForView:`, which iOS 15 lacks.
+    #[allow(deprecated)]
+    fn press_feedback(&self) -> Retained<UIImpactFeedbackGenerator> {
+        self.ivars()
+            .press_feedback
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                UIImpactFeedbackGenerator::initWithStyle(
+                    self.mtm().alloc(),
+                    UIImpactFeedbackStyle::Medium,
+                )
+            })
+            .clone()
+    }
+
+    /// Readies the Taptic Engine for [`Self::selection_haptic`]; UIKit
+    /// keeps it ready for a few seconds.
+    fn prepare_haptic(&self) {
+        self.feedback().prepare();
+    }
+
+    /// Readies the Taptic Engine for [`Self::press_haptic`].
+    fn prepare_press_haptic(&self) {
+        self.press_feedback().prepare();
+    }
+
+    /// A long press selected: heavier than the ticks that follow, as in
+    /// UIKit's text views.
+    fn press_haptic(&self) {
+        self.press_feedback().impactOccurred();
+        // Ready for the ticks of the drag after it.
+        self.prepare_haptic();
+    }
+
+    /// Touch selection changed: the tick UIKit's text views play.
+    fn selection_haptic(&self) {
+        let feedback = self.feedback();
+        feedback.selectionChanged();
+        // Ready for the next tick of the same drag.
+        feedback.prepare();
+    }
+
     /// Whether every text is selected whole.
     fn all_selected(&self) -> bool {
         self.refresh_texts();
@@ -865,34 +1227,45 @@ impl AreaResponder {
     }
 
     /// Reports the selected text (`""` once nothing is) to the area's
-    /// `onSelectionChange` when it changed and JS listens.
+    /// `onSelectionChange` when it or its position changed and JS listens.
     fn report(&self) {
         if !self.ivars().listens.get() {
             return;
         }
-        let (text, start) = {
+        let selected = {
             let model = self.ivars().model.borrow();
             if model.is_empty() {
-                (String::new(), 0)
+                Selected::default()
             } else {
                 let texts = self.ivars().texts.borrow();
-                (model.text(&*texts), model.start_offset(&*texts))
+                Selected {
+                    text: model.text(&*texts),
+                    start: model.start_offset(&*texts),
+                    bounds: model.selected_bounds(&*texts),
+                    origin: texts.area.as_ref().map_or(Point::default(), |area| {
+                        pt(area.convertPoint_toView(CGPoint::ZERO, None))
+                    }),
+                }
             }
         };
-        if *self.ivars().reported.borrow() == text {
+        if *self.ivars().reported.borrow() == selected {
             return;
         }
-        *self.ivars().reported.borrow_mut() = text.clone();
+        self.ivars().reported.borrow_mut().clone_from(&selected);
+        let mut fields = vec![
+            ("text", PayloadValue::Str(selected.text)),
+            ("start", PayloadValue::Number(f64::from(selected.start))),
+        ];
+        if let Some(bounds) = selected.bounds {
+            fields.push(("bounds", PayloadValue::Bounds(bounds)));
+        }
         // Not borrowed while the handler runs: it may detach the area.
         let control = self.ivars().control.borrow().clone();
         if let Some(control) = control {
             control.dispatch_event(
                 self.ivars().id.get(),
                 EventKind::SelectionChange,
-                EventPayload::Map(vec![
-                    ("text", PayloadValue::Str(text)),
-                    ("start", PayloadValue::Number(f64::from(start))),
-                ]),
+                EventPayload::Map(fields),
             );
         }
     }
@@ -1048,6 +1421,79 @@ impl AreaResponder {
                         && local.y <= r.origin.y + r.size.height
                 })
         })
+    }
+
+    /// The edit menu: the system's `suggested` actions, then the area's
+    /// items (`selectionMenu`), each group between separators an inline
+    /// section; a chosen item reports its id as the root's `Menu` event.
+    fn menu_with(&self, suggested: &NSArray<UIMenuElement>) -> Retained<UIMenu> {
+        use nsh_core::desktop::MenuItem;
+        use objc2_ui_kit::{UIAction, UIMenuElementAttributes, UIMenuOptions};
+
+        let mtm = self.mtm();
+        let items = self
+            .superview()
+            .and_then(|area| area.downcast_ref::<NshView>().map(NshView::selection_menu))
+            .unwrap_or_default();
+        let mut children: Vec<Retained<UIMenuElement>> = suggested.to_vec();
+        let mut group: Vec<Retained<UIMenuElement>> = Vec::new();
+        let flush = |group: &mut Vec<Retained<UIMenuElement>>,
+                     children: &mut Vec<Retained<UIMenuElement>>| {
+            if group.is_empty() {
+                return;
+            }
+            let section = UIMenu::menuWithTitle_image_identifier_options_children(
+                &NSString::from_str(""),
+                None,
+                None,
+                UIMenuOptions::DisplayInline,
+                &NSArray::from_retained_slice(group),
+                mtm,
+            );
+            children.push(Retained::into_super(section));
+            group.clear();
+        };
+        for item in items.iter() {
+            match item {
+                MenuItem::Action(action) => {
+                    let (id, control) = (action.id, self.ivars().control.borrow().clone());
+                    let handler = RcBlock::new(move |_: NonNull<UIAction>| {
+                        if let Some(control) = control.as_ref().filter(|_| id != 0) {
+                            control.dispatch_event(
+                                nsh_core::ROOT_ID,
+                                EventKind::Menu,
+                                EventPayload::Map(vec![(
+                                    "id",
+                                    PayloadValue::Number(f64::from(id)),
+                                )]),
+                            );
+                        }
+                    });
+                    let image = action.symbol.as_deref().and_then(|name| {
+                        objc2_ui_kit::UIImage::systemImageNamed(&NSString::from_str(name))
+                    });
+                    // SAFETY: UIKit copies the handler; the block stays while
+                    // the action does.
+                    let element = unsafe {
+                        UIAction::actionWithTitle_image_identifier_handler(
+                            &NSString::from_str(&action.label),
+                            image.as_deref(),
+                            None,
+                            (&*handler as *const block2::DynBlock<_>).cast_mut(),
+                            mtm,
+                        )
+                    };
+                    if !action.enabled {
+                        element.setAttributes(UIMenuElementAttributes::Disabled);
+                    }
+                    group.push(Retained::into_super(element));
+                }
+                MenuItem::Separator => flush(&mut group, &mut children),
+                MenuItem::Submenu { .. } => {}
+            }
+        }
+        flush(&mut group, &mut children);
+        UIMenu::menuWithChildren(&NSArray::from_retained_slice(&children), mtm)
     }
 
     /// `UIEditMenuInteraction` on the responder, if the system has it

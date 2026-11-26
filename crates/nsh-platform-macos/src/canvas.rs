@@ -51,25 +51,32 @@ use nsh_core::{
     },
     geometry::{Corners, Points, Radians, size},
 };
-use objc2_core_foundation::{
-    CFAttributedString, CFMutableAttributedString, CFRange, CFRetained, CFString, CFType,
-    CGAffineTransform, CGFloat, CGPoint, CGRect, CGSize,
-};
+use objc2_core_foundation::{CFRetained, CGAffineTransform, CGFloat, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{
     CGBlendMode, CGContext, CGGradient, CGGradientDrawingOptions, CGImage, CGLayer, CGLineCap,
     CGLineJoin, CGMutablePath, CGPath, CGTextDrawingMode,
 };
-use objc2_core_text::{CTLine, kCTFontAttributeName, kCTForegroundColorFromContextAttributeName};
 use rustc_hash::FxHashMap;
 
+mod lines;
 mod offscreen;
 
 pub(crate) use offscreen::render as render_offscreen;
 
 use crate::{
+    image::CanvasBitmap,
     surface::Surface,
     view::{NshView, ViewState},
 };
+
+/// What a canvas's content layer last painted unclipped: partial redraws
+/// (`setNeedsDisplayInRect`) may run only while it matches the layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Painted {
+    pub(crate) frame: CGRect,
+    pub(crate) scale: f64,
+    pub(crate) prefix_only: bool,
+}
 
 /// What a canvas draws.
 #[derive(Default)]
@@ -80,7 +87,12 @@ pub(crate) struct CanvasState {
     args: Vec<Option<AnimationValue>>,
     /// The images the drawing names, by URI: `None` while loading (or
     /// when they failed to load).
-    images: FxHashMap<Arc<str>, Option<CFRetained<CGImage>>>,
+    images: FxHashMap<Arc<str>, Option<CanvasBitmap>>,
+    /// The parts of `images` that `drawImage`s with a source rectangle
+    /// draw ([`ImageParts`]).
+    parts: RefCell<ImageParts>,
+    /// The lines of its texts ([`lines`]).
+    text: RefCell<lines::TextCache>,
     /// Finds what a change of slots redraws ([`set_args`]).
     scan: DamageScan,
     /// The slots that changed (scratch space of [`set_args`]).
@@ -95,11 +107,41 @@ pub(crate) struct CanvasState {
     prefix: RefCell<Option<Prefix>>,
     /// How often the drawing was painted since it was set.
     redrawn: Cell<u32>,
+    /// What its content layer currently holds unclipped.
+    painted: Cell<Option<Painted>>,
     /// How often it paints ([`CanvasState::draws_asynchronously`]).
     cadence: Cadence,
     /// A bounded, source-over animated suffix that can draw in its own layer.
     layer_split: Option<usize>,
     layer_scan: RefCell<DamageScan>,
+    /// Cached painted bounds when no operation reads an animated slot.
+    static_bounds: Cell<Option<Damage>>,
+    /// The slots of a `translate` that pans the whole drawing ([`pan_op`]).
+    pan: Option<(Num, Num)>,
+    /// The pan its content layer was placed for ([`CanvasState::pan_shift`]).
+    pan_origin: Cell<(f64, f64)>,
+    /// Only the view's part of a panned canvas's layer was drawn again (a
+    /// zoom): its margin is drawn on the next pan.
+    pan_margin_stale: Cell<bool>,
+    /// The margin its content layer was last sized with ([`pan_margin`]);
+    /// 0: drawn as other canvases.
+    margin: Cell<f64>,
+}
+
+/// How far a panned canvas ([`pan_op`]) draws past each side of its view,
+/// at most, in points. A pan moves that picture (Core Animation composites
+/// it) until it nears its edge, when it is drawn again around the new pan.
+pub(crate) const PAN_MARGIN: f64 = 256.0;
+
+/// The margin a panned canvas of `size` draws with: less on a large one,
+/// so that its layer stays within the 4096 pixels a side that keep it at a
+/// Retina screen's density ([`crate::view`]'s `content_density`); 0 (drawn
+/// as other canvases) when less than a quarter of [`PAN_MARGIN`] fits.
+fn pan_margin(size: CGSize) -> f64 {
+    let m = ((2048.0 - size.width.max(size.height)) / 2.0)
+        .min(PAN_MARGIN)
+        .floor();
+    if m < PAN_MARGIN / 4.0 { 0.0 } else { m }
 }
 
 /// How many paints a second make a canvas draw on Core Animation's threads.
@@ -167,6 +209,14 @@ pub(crate) fn create(view: &NshView) {
     view.state_mut().canvas = Some(Box::default());
 }
 
+/// Whether `view` has a drawing to paint.
+pub(crate) fn has_drawing(view: &NshView) -> bool {
+    view.state()
+        .canvas
+        .as_ref()
+        .is_some_and(|c| c.drawing.is_some())
+}
+
 /// A new drawing: loads the images it names that are new.
 pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, drawing: Arc<Drawing>) {
     let mut load = Vec::new();
@@ -175,9 +225,16 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, drawing: Arc<Drawing>) 
         let Some(c) = state.canvas.as_mut() else {
             return;
         };
-        // Images no longer drawn are let go.
+        // Images no longer drawn are let go, with their parts.
         c.images
             .retain(|uri, _| drawing.images().any(|i| &i.uri == uri));
+        let images = &c.images;
+        c.parts.get_mut().retain(|whole| {
+            images
+                .values()
+                .flatten()
+                .any(|b| std::ptr::eq::<CGImage>(&*b.image, whole))
+        });
         for image in drawing.images() {
             if !c.images.contains_key(&image.uri) {
                 c.images.insert(image.uri.clone(), None);
@@ -185,19 +242,39 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, drawing: Arc<Drawing>) 
             }
         }
         c.split = first_animated(&drawing.ops);
+        c.pan = pan_op(&drawing.ops, c.split).and_then(|i| match drawing.ops[i] {
+            CanvasOp::Translate(x, y) => Some((x, y)),
+            _ => None,
+        });
+        c.pan_margin_stale.set(false);
+        let animated = c.split < drawing.ops.len();
         c.layer_split = layer_split(&drawing.ops, c.split);
         // Short static parts replay faster than a layer draws.
         if c.split < MIN_PREFIX || !drawing.ops[..c.split].iter().any(CanvasOp::paints) {
             c.split = 0;
         }
         c.split_path = prefix_path_needed(&drawing.ops, c.split);
+        c.static_bounds.set(if animated {
+            None
+        } else {
+            Some(
+                c.layer_scan
+                    .borrow_mut()
+                    .painted_after(&drawing.ops, 0, |_| 0.0),
+            )
+        });
+        c.text.get_mut().trim();
         c.redrawn.set(0);
+        c.painted.set(None);
         c.drawing = Some(drawing);
+        c.pan_origin.set(c.pan_now().unwrap_or_default());
     }
+    // An SVG is rasterized for the screen it shows on.
+    let scale = view.ns().window().map_or(2.0, |w| w.backingScaleFactor()) as f32;
     for uri in load {
         let view = view.clone();
         let key = uri.clone();
-        crate::image::load(surface, &uri, move |result| {
+        crate::image::load(surface, &uri, scale, move |result| {
             let image = match result {
                 Ok(image) => image,
                 Err(e) => {
@@ -207,10 +284,14 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, drawing: Arc<Drawing>) 
             };
             {
                 let mut state = view.state_mut();
-                let Some(slot) = state.canvas.as_mut().and_then(|c| c.images.get_mut(&key)) else {
+                let Some(c) = state.canvas.as_mut() else {
+                    return;
+                };
+                let Some(slot) = c.images.get_mut(&key) else {
                     return;
                 };
                 *slot = Some(image);
+                c.painted.set(None);
             }
             view.changed();
         });
@@ -222,32 +303,73 @@ pub(crate) fn set(surface: &Rc<Surface>, view: &NshView, drawing: Arc<Drawing>) 
 /// Animated value slots changed (`(slot, value)`, every bound slot on each
 /// frame): what has to be drawn again ([`crate::mount::Mounter::draw_when_shown`]).
 /// Only the operations reading a slot whose value changed are redrawn,
-/// where they were and where they are now ([`DamageScan`]).
+/// where they were and where they are now ([`DamageScan`]), once the
+/// current drawing has been painted whole at the layer's size and scale.
 pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) -> Damage {
+    let target = (!view.is_stale()).then(|| view.canvas_painted()).flatten();
+    let dropped = view.take_dropped_draw();
     let mut state = view.state_mut();
-    let Some(CanvasState {
-        drawing,
-        args,
-        scan,
-        changed,
-        ..
-    }) = state.canvas.as_deref_mut()
-    else {
+    let Some(c) = state.canvas.as_deref_mut() else {
         return Damage::None;
     };
-    changed.clear();
-    for &(k, value) in values {
-        let i = k as usize;
-        if args.get(i).copied().flatten() != Some(value) {
-            changed.push(k);
+    if dropped {
+        c.clear_painted();
+    }
+    c.set_args(values, target)
+}
+
+/// Whether the drawing is panned as a whole by a `translate` at `split`
+/// (its first operation reading a slot), and the translate's index: nothing
+/// before it paints, transforms or clips, and nothing after it reads the
+/// translate's slots, sets the transform or paints outside its `save`.
+/// Other slots (an animated zoom `scale`) may still be read. A pan of such
+/// a drawing moves all of it by the pan's change, in the view's points.
+fn pan_op(ops: &[CanvasOp], split: usize) -> Option<usize> {
+    let CanvasOp::Translate(x, y) = ops.get(split)? else {
+        return None;
+    };
+    if !matches!(x, Num::Slot(_)) && !matches!(y, Num::Slot(_)) {
+        return None;
+    }
+    let mut depth = 0i32;
+    for op in &ops[..split] {
+        match op {
+            CanvasOp::Save => depth += 1,
+            CanvasOp::Restore => depth -= 1,
+            CanvasOp::Translate(..)
+            | CanvasOp::Scale(..)
+            | CanvasOp::Rotate(_)
+            | CanvasOp::Transform(_)
+            | CanvasOp::SetTransform(_)
+            | CanvasOp::Clip(..) => return None,
+            op if op.paints() => return None,
+            _ => {}
         }
     }
-    if changed.is_empty() {
-        return Damage::None;
+    let rest = &ops[split + 1..];
+    let own = |k: u16| [x, y].iter().any(|v| matches!(v, Num::Slot(s) if *s == k));
+    if DamageScan::default().damage(rest, |_| 0.0, own) != Damage::None {
+        return None;
     }
-    let ops = drawing.as_ref().map_or(&[][..], |d| &d.ops[..]);
-    let is_changed = |s: u16| changed.contains(&s);
-    let before = scan.damage(ops, |s| slot_number(args, s), is_changed);
+    let pan_depth = depth;
+    let mut below = false;
+    for op in rest {
+        match op {
+            CanvasOp::Save => depth += 1,
+            CanvasOp::Restore => {
+                depth -= 1;
+                below |= depth < pan_depth;
+            }
+            CanvasOp::SetTransform(_) => return None,
+            op if below && op.paints() => return None,
+            _ => {}
+        }
+    }
+    Some(split)
+}
+
+/// Stores animated `values` in their slots.
+fn store(args: &mut Vec<Option<AnimationValue>>, values: &[(u16, AnimationValue)]) {
     for &(k, value) in values {
         let i = k as usize;
         if args.len() <= i {
@@ -255,11 +377,6 @@ pub(crate) fn set_args(view: &NshView, values: &[(u16, AnimationValue)]) -> Dama
         }
         args[i] = Some(value);
     }
-    if before == Damage::All {
-        return before;
-    }
-    let after = scan.damage(ops, |s| slot_number(args, s), is_changed);
-    before.union(after)
 }
 
 /// The number in slot `s` (0 while unset).
@@ -320,31 +437,231 @@ fn layer_split(ops: &[CanvasOp], split: usize) -> Option<usize> {
     Some(split)
 }
 
+/// Whether `dirty` (in the view's space) covers the layer's `frame` at
+/// `scale` (within the pixel rounding of the backing store's integer bounds).
+fn covers(dirty: CGRect, frame: CGRect, scale: f64) -> bool {
+    let pixel = 1.0 / scale.max(1.0);
+    frame.size.width > 0.0
+        && frame.size.height > 0.0
+        && dirty.size.width > 0.0
+        && dirty.size.height > 0.0
+        && dirty.origin.x <= frame.origin.x + pixel
+        && dirty.origin.y <= frame.origin.y + pixel
+        && dirty.origin.x + dirty.size.width >= frame.origin.x + frame.size.width - pixel
+        && dirty.origin.y + dirty.size.height >= frame.origin.y + frame.size.height - pixel
+}
+
 /// Draws a canvas view's drawing (in its content layer's
-/// `drawLayer:inContext:`; the context is y down, in points, `size` points
-/// at `scale` pixels each) where it is `dirty`: Core Graphics skips the
-/// rest. `base` takes the view's space to the context's base space, in
-/// which Core Graphics takes shadow offsets and blurs (no transform
-/// reaches them).
+/// `drawLayer:inContext:`; the context is y down, translated into the view's
+/// space, `frame` in points at `scale` pixels each) where it is `dirty`: Core
+/// Graphics skips the rest. `base` takes the view's space to the context's
+/// base space, in which Core Graphics takes shadow offsets and blurs (no
+/// transform reaches them).
 pub(crate) fn draw(
     cx: &CGContext,
     state: &ViewState,
     dirty: CGRect,
-    size: CGSize,
+    frame: CGRect,
     scale: f64,
     base: CGAffineTransform,
     part: LayerPart,
 ) {
     if let Some(canvas) = state.canvas.as_ref() {
         if let LayerPart::Whole { asynchronous } = part {
-            canvas.paint(cx, dirty, size, scale, asynchronous, base);
+            canvas.paint_in(cx, dirty, frame, scale, asynchronous, base);
         } else {
-            canvas.paint_layer(cx, dirty, part, base);
+            canvas.paint_layer(cx, dirty, frame, scale, part, base);
         }
     }
 }
 
 impl CanvasState {
+    /// Forgets what the content layer painted (called when the whole layer
+    /// is invalidated or its draw was skipped).
+    pub(crate) fn clear_painted(&self) {
+        self.painted.set(None);
+    }
+
+    pub(crate) fn has_layer_split(&self) -> bool {
+        self.layer_split.is_some()
+    }
+
+    /// Whether the drawing is panned as a whole ([`pan_op`]).
+    pub(crate) fn is_panned(&self) -> bool {
+        self.pan.is_some() && self.drawing.is_some() && 0.0 < self.margin.get()
+    }
+
+    /// The pan now, for a panned canvas.
+    fn pan_now(&self) -> Option<(f64, f64)> {
+        let (x, y) = self.pan?;
+        let n = |v: Num| f64::from(v.get(|s| slot_number(&self.args, s)));
+        Some((n(x), n(y)))
+    }
+
+    /// How far a panned canvas was panned since its content layer was
+    /// placed: the layer moves that far, without drawing again.
+    pub(crate) fn pan_shift(&self) -> Option<(f64, f64)> {
+        let (x, y) = self.pan_now()?;
+        let (x0, y0) = self.pan_origin.get();
+        Some((x - x0, y - y0))
+    }
+
+    fn set_args(&mut self, values: &[(u16, AnimationValue)], target: Option<Painted>) -> Damage {
+        let whole_ready = match (target, self.painted.get()) {
+            // A panned canvas's layer moves with the pan: only its size and
+            // density say it holds the whole picture.
+            (Some(t), Some(p)) if self.is_panned() => {
+                t.frame.size.width == p.frame.size.width
+                    && t.frame.size.height == p.frame.size.height
+                    && t.scale == p.scale
+                    && t.prefix_only == p.prefix_only
+            }
+            (target, painted) => target.is_some() && painted == target,
+        };
+        self.changed.clear();
+        for &(k, value) in values {
+            let i = k as usize;
+            if self.args.get(i).copied().flatten() != Some(value) {
+                self.changed.push(k);
+            }
+        }
+        if !whole_ready {
+            store(&mut self.args, values);
+            if let Some(pan) = self.pan_now() {
+                self.pan_origin.set(pan);
+            }
+            return if self.drawing.is_some() {
+                Damage::All
+            } else {
+                Damage::None
+            };
+        }
+        if self.changed.is_empty() {
+            return Damage::None;
+        }
+        if let (Some((x, y)), Some(target), true) = (self.pan, target, self.is_panned()) {
+            let margin = self.margin.get();
+            let own = |k: u16| [x, y].iter().any(|v| matches!(v, Num::Slot(s) if *s == k));
+            let only_pan = self.changed.iter().all(|&k| own(k));
+            store(&mut self.args, values);
+            if only_pan {
+                // A pan frame counts as a paint: during a drag the canvas
+                // keeps drawing on Core Animation's threads, so the drawing
+                // around the pan every few frames does not block the main
+                // thread (a few paints a second alone would draw it there).
+                self.cadence.paint(Instant::now());
+                let (dx, dy) = self.pan_shift().unwrap_or_default();
+                let half = margin / 2.0;
+                if !self.pan_margin_stale.get() && dx.abs() <= half && dy.abs() <= half {
+                    // Only the layer moves (`NshView::shift_canvas`).
+                    return Damage::None;
+                }
+                // Drawn again around the pan, the layer placed back.
+                self.pan_origin.set(self.pan_now().unwrap_or_default());
+                self.pan_margin_stale.set(false);
+                return Damage::All;
+            }
+            // Anything else (a zoom) changes all of it: only what the view
+            // shows is drawn again, as for other canvases (the layer moved
+            // with any pan first), and the margin waits for the next pan.
+            let (dx, dy) = self.pan_shift().unwrap_or_default();
+            let half = margin / 2.0;
+            let w = target.frame.size.width - 2.0 * margin;
+            let h = target.frame.size.height - 2.0 * margin;
+            if w <= 0.0 || h <= 0.0 || dx.abs() > half || dy.abs() > half {
+                self.pan_origin.set(self.pan_now().unwrap_or_default());
+                self.pan_margin_stale.set(false);
+                return Damage::All;
+            }
+            self.pan_margin_stale.set(true);
+            return Damage::Rect(nsh_core::geometry::Bounds {
+                origin: nsh_core::geometry::Point::new(Points(0.0), Points(0.0)),
+                size: nsh_core::geometry::Size::new(Points(w as f32), Points(h as f32)),
+            });
+        }
+        let ops = self.drawing.as_ref().map_or(&[][..], |d| &d.ops[..]);
+        let changed = &self.changed;
+        let args = &mut self.args;
+        let is_changed = |s: u16| changed.contains(&s);
+        let before = self.scan.damage(ops, |s| slot_number(args, s), is_changed);
+        for &(k, value) in values {
+            let i = k as usize;
+            if args.len() <= i {
+                args.resize(i + 1, None);
+            }
+            args[i] = Some(value);
+        }
+        if before == Damage::All {
+            return before;
+        }
+        let after = self.scan.damage(ops, |s| slot_number(args, s), is_changed);
+        before.union(after)
+    }
+
+    /// Bounds of everything this canvas paints inside `size`, rounded out to
+    /// stable 32-point tiles, or `None` when nothing visible is painted so no
+    /// content layer or backing store is allocated.
+    pub(crate) fn content_bounds(&self, size: CGSize) -> Option<CGRect> {
+        if size.width <= 0.0 || size.height <= 0.0 {
+            return None;
+        }
+        let drawing = self.drawing.as_ref()?;
+        if drawing.ops.is_empty() {
+            return None;
+        }
+        let m = if self.pan.is_some() {
+            pan_margin(size)
+        } else {
+            0.0
+        };
+        self.margin.set(m);
+        if 0.0 < m
+            && let Some((dx, dy)) = self.pan_shift()
+        {
+            return Some(CGRect::new(
+                CGPoint::new(dx - m, dy - m),
+                CGSize::new(size.width + 2.0 * m, size.height + 2.0 * m),
+            ));
+        }
+        if 0 < self.split || self.layer_split.is_some() {
+            return Some(CGRect::new(CGPoint::ZERO, size));
+        }
+        let painted = match self.static_bounds.get() {
+            Some(painted) => painted,
+            None => {
+                let painted = self
+                    .layer_scan
+                    .borrow_mut()
+                    .painted_after(&drawing.ops, 0, |s| slot_number(&self.args, s));
+                if first_animated(&drawing.ops) == drawing.ops.len() {
+                    self.static_bounds.set(Some(painted));
+                }
+                painted
+            }
+        };
+        match painted {
+            Damage::None => None,
+            Damage::All => Some(CGRect::new(CGPoint::ZERO, size)),
+            Damage::Rect(rect) => {
+                let x = ((f64::from(rect.origin.x.0) / 32.0).floor() * 32.0).max(0.0);
+                let y = ((f64::from(rect.origin.y.0) / 32.0).floor() * 32.0).max(0.0);
+                let right = ((f64::from(rect.origin.x.0 + rect.size.width.0) / 32.0).ceil() * 32.0)
+                    .min(size.width);
+                let bottom = ((f64::from(rect.origin.y.0 + rect.size.height.0) / 32.0).ceil()
+                    * 32.0)
+                    .min(size.height);
+                let (w, h) = (right - x, bottom - y);
+                if w <= 0.0 || h <= 0.0 {
+                    return None;
+                }
+                if w * h >= size.width * size.height * 0.75 {
+                    return Some(CGRect::new(CGPoint::ZERO, size));
+                }
+                Some(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)))
+            }
+        }
+    }
+
     /// Bounds in canvas coordinates, rounded out to stable 32-point tiles.
     /// A growing ring then keeps its backing store through most frames.
     pub(crate) fn layer_bounds(&self, size: CGSize) -> Option<CGRect> {
@@ -375,12 +692,27 @@ impl CanvasState {
         Some(CGRect::new(CGPoint::new(x, y), CGSize::new(w, h)))
     }
 
-    fn paint_layer(&self, cx: &CGContext, dirty: CGRect, part: LayerPart, base: CGAffineTransform) {
+    fn paint_layer(
+        &self,
+        cx: &CGContext,
+        dirty: CGRect,
+        frame: CGRect,
+        scale: f64,
+        part: LayerPart,
+        base: CGAffineTransform,
+    ) {
         let (Some(split), Some(drawing)) = (self.layer_split, &self.drawing) else {
             return;
         };
         let suffix = part == LayerPart::Suffix;
         self.cadence.paint(Instant::now());
+        if !suffix && covers(dirty, frame, scale) {
+            self.painted.set(Some(Painted {
+                frame,
+                scale,
+                prefix_only: true,
+            }));
+        }
         let ops = if suffix {
             &drawing.ops[..]
         } else {
@@ -427,8 +759,7 @@ impl CanvasState {
         self.cadence.frequent.get() && !self.keeps_prefix()
     }
 
-    /// [`draw`]'s replay; `asynchronous`: `cx` records for Core Animation's
-    /// drawing threads.
+    /// Replays `self` into an unshifted bitmap of `size` points (`offscreen`).
     fn paint(
         &self,
         cx: &CGContext,
@@ -438,11 +769,40 @@ impl CanvasState {
         asynchronous: bool,
         base: CGAffineTransform,
     ) {
+        self.paint_in(
+            cx,
+            dirty,
+            CGRect::new(CGPoint::ZERO, size),
+            scale,
+            asynchronous,
+            base,
+        );
+    }
+
+    /// [`draw`]'s replay; `asynchronous`: `cx` records for Core Animation's
+    /// drawing threads.
+    fn paint_in(
+        &self,
+        cx: &CGContext,
+        dirty: CGRect,
+        frame: CGRect,
+        scale: f64,
+        asynchronous: bool,
+        base: CGAffineTransform,
+    ) {
+        let size = frame.size;
         self.cadence.paint(Instant::now());
         let canvas = self;
         let Some(drawing) = canvas.drawing.as_ref() else {
             return;
         };
+        if covers(dirty, frame, scale) {
+            canvas.painted.set(Some(Painted {
+                frame,
+                scale,
+                prefix_only: false,
+            }));
+        }
         let ops = &drawing.ops[..];
         if ops.is_empty() {
             return;
@@ -659,7 +1019,9 @@ impl Default for State {
 struct Replay<'a> {
     c: &'a CGContext,
     args: &'a [Option<AnimationValue>],
-    images: &'a FxHashMap<Arc<str>, Option<CFRetained<CGImage>>>,
+    images: &'a FxHashMap<Arc<str>, Option<CanvasBitmap>>,
+    parts: &'a RefCell<ImageParts>,
+    text: &'a RefCell<lines::TextCache>,
     state: State,
     stack: Vec<State>,
     /// The current path, in the view's space.
@@ -681,6 +1043,8 @@ impl<'a> Replay<'a> {
             c,
             args: &canvas.args,
             images: &canvas.images,
+            parts: &canvas.parts,
+            text: &canvas.text,
             state: State::default(),
             stack: Vec::new(),
             path: CGMutablePath::new(),
@@ -826,7 +1190,7 @@ impl<'a> Replay<'a> {
                 dest,
             } => self.image(
                 &image.uri,
-                image.density(),
+                || f64::from(image.density()),
                 source.map(|b| [b.origin.x, b.origin.y, b.size.width, b.size.height].map(|v| v.0)),
                 dest,
             ),
@@ -1168,50 +1532,21 @@ impl<'a> Replay<'a> {
         }
     }
 
-    fn text(&self, text: &str, x: f64, y: f64, max_width: Option<f32>, stroke: bool) {
+    fn text(&self, text: &Arc<str>, x: f64, y: f64, max_width: Option<f32>, stroke: bool) {
         if text.is_empty() {
             return;
         }
         let c = self.cx();
         let s = &self.state;
-        let font = crate::text::make_font(&s.font.with_numeric(s.numeric).text_style());
-        let string =
-            CFMutableAttributedString::new(None, 0).expect("CFAttributedStringCreateMutable");
-        let whole = CFRange {
-            location: 0,
-            length: 0,
-        };
-        // SAFETY: a valid mutable string; attribute values have the types
-        // CoreText expects for their keys; the range covers the string.
-        unsafe {
-            CFMutableAttributedString::replace_string(
-                Some(&string),
-                whole,
-                Some(&CFString::from_str(text)),
-            );
-            let range = CFRange {
-                location: 0,
-                length: CFAttributedString::length(&string),
-            };
-            CFMutableAttributedString::set_attribute(
-                Some(&string),
-                range,
-                Some(kCTFontAttributeName),
-                Some(font.as_ref()),
-            );
-            let yes: &CFType = objc2_core_foundation::CFBoolean::new(true).as_ref();
-            CFMutableAttributedString::set_attribute(
-                Some(&string),
-                range,
-                Some(kCTForegroundColorFromContextAttributeName),
-                Some(yes),
-            );
-        }
-        // SAFETY: a valid attributed string.
-        let line = unsafe { CTLine::with_attributed_string(&string) };
-        let (mut ascent, mut descent, mut leading) = (0.0, 0.0, 0.0);
-        // SAFETY: valid out pointers.
-        let width = unsafe { line.typographic_bounds(&mut ascent, &mut descent, &mut leading) };
+        let lines::TextLine {
+            line,
+            width,
+            ascent,
+            descent,
+        } = self
+            .text
+            .borrow_mut()
+            .line(text, &s.font.with_numeric(s.numeric));
         let dx = match s.align {
             CanvasTextAlign::Start | CanvasTextAlign::Left => 0.0,
             CanvasTextAlign::Center => -width / 2.0,
@@ -1272,40 +1607,45 @@ impl<'a> Replay<'a> {
         CGContext::restore_g_state(c);
     }
 
-    fn image(&self, uri: &str, density: f32, source: Option<[f32; 4]>, dest: &[Num; 4]) {
-        let Some(Some(image)) = self.images.get(uri) else {
+    fn image(
+        &self,
+        uri: &str,
+        density: impl Fn() -> f64,
+        source: Option<[f32; 4]>,
+        dest: &[Num; 4],
+    ) {
+        let Some(Some(CanvasBitmap { image, scale })) = self.images.get(uri) else {
             return;
         };
         let mut part: Option<CFRetained<CGImage>> = None;
         // Its pixels over its file name's density (`@3x`), as an `Image`'s,
-        // never the screen's: the same size on every display.
-        let density = f64::from(density);
-        let size = (
-            CGImage::width(Some(image)) as f64 / density,
-            CGImage::height(Some(image)) as f64 / density,
-        );
+        // never the screen's: the same size on every display. The source
+        // rectangle and the default size are in the image's own units: an
+        // SVG drawn sharp has `scale` pixels to each.
+        // Parsed only when a size is missing: a sprite sheet drawn with
+        // both sizes, thousands of times a frame, never needs it.
         let [dx, dy, mut dw, mut dh] = dest.map(|v| self.n(v));
         if let Some([sx, sy, sw, sh]) = source {
             let rect = CGRect::new(
-                CGPoint::new(sx as f64, sy as f64),
-                CGSize::new(sw as f64, sh as f64),
+                CGPoint::new(sx as f64 * scale, sy as f64 * scale),
+                CGSize::new(sw as f64 * scale, sh as f64 * scale),
             );
-            part = CGImage::with_image_in_rect(Some(image), rect);
+            part = self.parts.borrow_mut().get(image, rect);
             if part.is_none() {
                 return;
             }
             if dw.is_nan() {
-                dw = sw as f64 / density;
+                dw = sw as f64 / density();
             }
             if dh.is_nan() {
-                dh = sh as f64 / density;
+                dh = sh as f64 / density();
             }
         }
         if dw.is_nan() {
-            dw = size.0;
+            dw = CGImage::width(Some(image)) as f64 / scale / density();
         }
         if dh.is_nan() {
-            dh = size.1;
+            dh = CGImage::height(Some(image)) as f64 / scale / density();
         }
         let c = self.cx();
         CGContext::save_g_state(c);
@@ -1321,6 +1661,62 @@ impl<'a> Replay<'a> {
             Some(drawn),
         );
         CGContext::restore_g_state(c);
+    }
+}
+
+/// The parts of a canvas's images that `drawImage`s with a source
+/// rectangle draw (sprites of a sheet), each made once and drawn again on
+/// every frame. Core Graphics converts an image's pixels to the color
+/// space it draws into on its first draw and keeps the result with the
+/// image: a part made again for each draw converts again each time (a
+/// sprite sheet zoomed in on: hundreds of milliseconds a frame).
+#[derive(Default)]
+struct ImageParts {
+    /// By the whole image (kept alive here, so its address stays its own)
+    /// and the rectangle, in its pixels.
+    parts: FxHashMap<(usize, [u64; 4]), ImagePart>,
+}
+
+/// A part of an image: the whole image, kept alive, and the part cut from
+/// it.
+type ImagePart = (CFRetained<CGImage>, CFRetained<CGImage>);
+
+impl ImageParts {
+    /// At most this many parts are kept: a drawing whose source
+    /// rectangles keep changing (an animation) starts over past it.
+    const MAX: usize = 4096;
+
+    /// The part `rect` of `whole`; `None` when it has none
+    /// (`CGImageCreateWithImageInRect`).
+    fn get(&mut self, whole: &CFRetained<CGImage>, rect: CGRect) -> Option<CFRetained<CGImage>> {
+        let key = (
+            std::ptr::from_ref::<CGImage>(whole) as usize,
+            [
+                rect.origin.x.to_bits(),
+                rect.origin.y.to_bits(),
+                rect.size.width.to_bits(),
+                rect.size.height.to_bits(),
+            ],
+        );
+        if let Some((_, part)) = self.parts.get(&key) {
+            return Some(part.clone());
+        }
+        let part = CGImage::with_image_in_rect(Some(whole), rect)?;
+        if self.parts.len() >= Self::MAX {
+            self.parts.clear();
+        }
+        self.parts.insert(key, (whole.clone(), part.clone()));
+        Some(part)
+    }
+
+    /// Keeps only the parts of the images `keep` says.
+    fn retain(&mut self, mut keep: impl FnMut(&CGImage) -> bool) {
+        self.parts.retain(|_, (whole, _)| keep(whole));
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.parts.len()
     }
 }
 
@@ -1575,16 +1971,14 @@ mod tests {
                 canvas.paint_layer(
                     &cx,
                     CGRect::new(CGPoint::ZERO, size),
+                    CGRect::new(CGPoint::ZERO, size),
+                    scale,
                     LayerPart::Prefix,
                     base,
                 );
                 CGContext::begin_transparency_layer(Some(&cx), None);
-                canvas.paint_layer(
-                    &cx,
-                    canvas.layer_bounds(size).unwrap(),
-                    LayerPart::Suffix,
-                    base,
-                );
+                let sub = canvas.layer_bounds(size).unwrap();
+                canvas.paint_layer(&cx, sub, sub, scale, LayerPart::Suffix, base);
                 CGContext::end_transparency_layer(Some(&cx));
             } else {
                 canvas.paint(
@@ -1847,9 +2241,15 @@ mod tests {
                     }],
                     ..Drawing::default()
                 })),
-                images: [(Arc::from(uri), Some(opaque_image(60, 30)))]
-                    .into_iter()
-                    .collect(),
+                images: [(
+                    Arc::from(uri),
+                    Some(CanvasBitmap {
+                        image: opaque_image(60, 30),
+                        scale: 1.0,
+                    }),
+                )]
+                .into_iter()
+                .collect(),
                 ..CanvasState::default()
             };
             let bytes = pixels(&canvas);
@@ -1858,5 +2258,691 @@ mod tests {
             assert_eq!(pixel(&bytes, true, w + 0.5, 0.5)[3], 0, "{what}");
             assert_eq!(pixel(&bytes, true, 0.5, h + 0.5)[3], 0, "{what}");
         }
+    }
+
+    #[test]
+    fn a_part_of_an_image_is_made_once_for_every_frame() {
+        // Two sprites of one sheet, the first drawn twice: two parts,
+        // the same ones on the next paint.
+        let c = Num::Const;
+        let part = |x: f32| {
+            Some(Bounds {
+                origin: Point::new(ScaledPixels(x), ScaledPixels(0.0)),
+                size: Size {
+                    width: ScaledPixels(10.0),
+                    height: ScaledPixels(10.0),
+                },
+            })
+        };
+        let draw = |x: f32, at: f32| CanvasOp::DrawImage {
+            image: CanvasImage {
+                uri: "asset:/sheet.png".into(),
+            },
+            source: part(x),
+            dest: [c(at), c(0.0), c(10.0), c(10.0)],
+        };
+        let canvas = CanvasState {
+            drawing: Some(Arc::new(Drawing {
+                ops: vec![draw(0.0, 0.0), draw(10.0, 10.0), draw(0.0, 20.0)],
+                ..Drawing::default()
+            })),
+            images: [(
+                Arc::from("asset:/sheet.png"),
+                Some(CanvasBitmap {
+                    image: opaque_image(20, 10),
+                    scale: 1.0,
+                }),
+            )]
+            .into_iter()
+            .collect(),
+            ..CanvasState::default()
+        };
+        let first = pixels(&canvas);
+        assert_eq!(canvas.parts.borrow().len(), 2);
+        let made: Vec<usize> = canvas
+            .parts
+            .borrow()
+            .parts
+            .values()
+            .map(|(_, p)| std::ptr::from_ref::<CGImage>(p) as usize)
+            .collect();
+        assert_eq!(pixels(&canvas), first);
+        let again: Vec<usize> = canvas
+            .parts
+            .borrow()
+            .parts
+            .values()
+            .map(|(_, p)| std::ptr::from_ref::<CGImage>(p) as usize)
+            .collect();
+        assert_eq!(made, again);
+        assert_eq!(pixel(&first, true, 25.5, 5.5)[3], 255);
+    }
+
+    #[test]
+    fn partial_redraw_waits_for_a_whole_paint() {
+        let c = Num::Const;
+        // Static top and bottom bands (y = 0..10 and y = 30..40) with an
+        // animated middle band reading slot 0 (y = 16..24).
+        let drawing = Arc::new(Drawing {
+            ops: vec![
+                CanvasOp::FillStyle(Paint::Color(Color(0xff0000ff))),
+                CanvasOp::FillRect([c(0.0), c(0.0), c(100.0), c(10.0)]),
+                CanvasOp::FillRect([c(0.0), c(30.0), c(100.0), c(10.0)]),
+                CanvasOp::FillStyle(Paint::Color(Color(0x00ff00ff))),
+                CanvasOp::FillRect([Num::Slot(0), c(16.0), c(12.0), c(8.0)]),
+            ],
+            ..Drawing::default()
+        });
+        let mut canvas = CanvasState {
+            drawing: Some(drawing),
+            ..CanvasState::default()
+        };
+        let size = CGSize::new(100.0, 40.0);
+        let target = Some(Painted {
+            frame: CGRect::new(CGPoint::ZERO, size),
+            scale: 2.0,
+            prefix_only: false,
+        });
+
+        // Before the content layer has painted the drawing unclipped, slot
+        // updates must request `Damage::All` rather than clipping to the
+        // animated strip.
+        assert_eq!(
+            canvas.set_args(&[(0, AnimationValue::Number(10.0))], target),
+            Damage::All
+        );
+        // Even if the slot holds steady on the next tick while still
+        // unpainted, `Damage::All` is returned until the whole paint lands.
+        assert_eq!(
+            canvas.set_args(&[(0, AnimationValue::Number(10.0))], target),
+            Damage::All
+        );
+
+        // A clipped `paint` (only the animated middle strip) must not satisfy
+        // the whole-paint requirement.
+        let space = CGColorSpace::new_device_rgb().unwrap();
+        let cx = unsafe {
+            CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                200,
+                80,
+                8,
+                800,
+                Some(&space),
+                CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0,
+            )
+        }
+        .unwrap();
+        let base = CGContext::ctm(Some(&cx));
+        canvas.paint(
+            &cx,
+            CGRect::new(CGPoint::new(0.0, 14.0), CGSize::new(100.0, 12.0)),
+            size,
+            2.0,
+            false,
+            base,
+        );
+        assert_eq!(
+            canvas.set_args(&[(0, AnimationValue::Number(14.0))], target),
+            Damage::All
+        );
+
+        // Once painted across the full bounds (including half-pixel rounding
+        // of fractional heights), partial redraws take over.
+        pixels(&canvas);
+        let damage = canvas.set_args(&[(0, AnimationValue::Number(18.0))], target);
+        let Damage::Rect(rect) = damage else {
+            panic!("expected partial damage after whole paint, got {damage:?}");
+        };
+        assert!(
+            rect.origin.y.0 > 10.0 && rect.origin.y.0 + rect.size.height.0 < 30.0,
+            "partial damage stays within the animated band: {rect:?}"
+        );
+        assert_eq!(
+            canvas.set_args(&[(0, AnimationValue::Number(18.0))], target),
+            Damage::None
+        );
+
+        // A new size, scale or invalidated backing store demands a whole
+        // paint again before partial redraws resume.
+        let resized = Some(Painted {
+            frame: CGRect::new(CGPoint::ZERO, CGSize::new(120.0, 48.0)),
+            scale: 2.0,
+            prefix_only: false,
+        });
+        assert_eq!(
+            canvas.set_args(&[(0, AnimationValue::Number(22.0))], resized),
+            Damage::All
+        );
+        canvas.clear_painted();
+        assert_eq!(
+            canvas.set_args(&[(0, AnimationValue::Number(24.0))], target),
+            Damage::All
+        );
+    }
+
+    #[test]
+    fn content_bounds_crops_sparse_drawings_and_omits_empty_ones() {
+        let c = Num::Const;
+        let full = CGSize::new(1000.0, 500.0);
+
+        let empty = CanvasState {
+            drawing: Some(Arc::new(Drawing {
+                ops: vec![
+                    CanvasOp::FillStyle(Paint::Color(Color::TRANSPARENT)),
+                    CanvasOp::FillRect([c(0.0), c(0.0), c(1000.0), c(500.0)]),
+                ],
+                ..Drawing::default()
+            })),
+            ..CanvasState::default()
+        };
+        assert_eq!(empty.content_bounds(full), None);
+
+        let mut sparse = CanvasState {
+            drawing: Some(Arc::new(Drawing {
+                ops: vec![
+                    CanvasOp::FillStyle(Paint::Color(Color(0xff0000ff))),
+                    CanvasOp::FillRect([Num::Slot(0), c(40.0), c(10.0), c(20.0)]),
+                ],
+                ..Drawing::default()
+            })),
+            args: vec![Some(AnimationValue::Number(70.0))],
+            ..CanvasState::default()
+        };
+        let sub = CGRect::new(CGPoint::new(64.0, 32.0), CGSize::new(32.0, 32.0));
+        assert_eq!(sparse.content_bounds(full), Some(sub));
+
+        // Unclipped paint of an offset tile satisfies `Painted` for that tile,
+        // and moving into another tile requires a whole paint again.
+        let space = CGColorSpace::new_device_rgb().unwrap();
+        // SAFETY: Core Graphics allocates and owns the 64 × 64 pixel buffer.
+        let cx = unsafe {
+            CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                64,
+                64,
+                8,
+                256,
+                Some(&space),
+                CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0,
+            )
+        }
+        .unwrap();
+        CGContext::translate_ctm(Some(&cx), 0.0, 64.0);
+        CGContext::scale_ctm(Some(&cx), 2.0, -2.0);
+        let base = CGContext::ctm(Some(&cx));
+        CGContext::translate_ctm(Some(&cx), -sub.origin.x, -sub.origin.y);
+        let dirty = CGContext::clip_bounding_box(Some(&cx));
+        sparse.paint_in(&cx, dirty, sub, 2.0, false, base);
+
+        let painted_sub = Some(Painted {
+            frame: sub,
+            scale: 2.0,
+            prefix_only: false,
+        });
+        assert!(matches!(
+            sparse.set_args(&[(0, AnimationValue::Number(72.0))], painted_sub),
+            Damage::Rect(_)
+        ));
+        let shifted_sub = Some(Painted {
+            frame: CGRect::new(CGPoint::new(96.0, 32.0), CGSize::new(32.0, 32.0)),
+            scale: 2.0,
+            prefix_only: false,
+        });
+        assert_eq!(
+            sparse.set_args(&[(0, AnimationValue::Number(100.0))], shifted_sub),
+            Damage::All
+        );
+
+        // Shadows cast from a cropped offset tile land at the exact same view
+        // pixels as a full-view paint in both flipped and unflipped contexts.
+        let shadowed = CanvasState {
+            drawing: Some(Arc::new(Drawing {
+                ops: vec![
+                    CanvasOp::ShadowColor(Color(0xff0000ff)),
+                    CanvasOp::ShadowBlur(Points(0.0)),
+                    CanvasOp::ShadowOffset(Point::new(Points(12.0), Points(10.0))),
+                    CanvasOp::FillStyle(Paint::Color(Color(0x000000ff))),
+                    CanvasOp::FillRect([c(40.0), c(10.0), c(10.0), c(10.0)]),
+                ],
+                ..Drawing::default()
+            })),
+            ..CanvasState::default()
+        };
+        let sub_shadow = shadowed.content_bounds(CGSize::new(100.0, 40.0)).unwrap();
+        assert_eq!(
+            sub_shadow,
+            CGRect::new(CGPoint::new(32.0, 0.0), CGSize::new(32.0, 32.0))
+        );
+        for flipped in [true, false] {
+            let full_bytes = pixels_in(&shadowed, flipped);
+            // SAFETY: Core Graphics allocates and owns the 200 × 80 pixel buffer.
+            let cx = unsafe {
+                CGBitmapContextCreate(
+                    std::ptr::null_mut(),
+                    200,
+                    80,
+                    8,
+                    800,
+                    Some(&space),
+                    CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0,
+                )
+            }
+            .unwrap();
+            // Place the 32 × 32 sublayer at (32, 0) inside the 100 × 40 view.
+            if flipped {
+                CGContext::translate_ctm(Some(&cx), 32.0 * 2.0, 80.0 - 0.0);
+                CGContext::scale_ctm(Some(&cx), 2.0, -2.0);
+            } else {
+                CGContext::translate_ctm(Some(&cx), 32.0 * 2.0, 0.0);
+                CGContext::scale_ctm(Some(&cx), 2.0, 2.0);
+            }
+            let base = CGContext::ctm(Some(&cx));
+            CGContext::translate_ctm(Some(&cx), -sub_shadow.origin.x, -sub_shadow.origin.y);
+            let dirty = CGRect::new(sub_shadow.origin, sub_shadow.size);
+            shadowed.paint_in(&cx, dirty, sub_shadow, 2.0, false, base);
+            // SAFETY: Core Graphics allocates and owns the 200 × 80 pixel buffer while read.
+            let sub_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    CGBitmapContextGetData(Some(&cx)).cast::<u8>(),
+                    200 * 80 * 4,
+                )
+            };
+            assert_eq!(
+                sub_bytes,
+                full_bytes.as_slice(),
+                "cropped tile matches full paint (flipped={flipped})"
+            );
+        }
+    }
+
+    /// A quote table: `rows` × 8 prices in tabular figures.
+    fn table(rows: usize, tick: usize, color: u32) -> Arc<Drawing> {
+        let c = Num::Const;
+        let mut ops = vec![
+            CanvasOp::Font(CanvasFont::parse("12px system-ui").unwrap()),
+            CanvasOp::FontVariantNumeric(FontVariant(FontVariant::TABULAR_NUMS)),
+            CanvasOp::TextAlign(CanvasTextAlign::Right),
+            CanvasOp::FillStyle(Paint::Color(Color(color))),
+        ];
+        for row in 0..rows {
+            for col in 0..8 {
+                ops.push(CanvasOp::FillText {
+                    text: format!("{}.{:02}", 100 + row * 8 + col + tick, (row + col) % 100).into(),
+                    x: c(90.0 + col as f32 * 90.0),
+                    y: c(16.0 + row as f32 * 20.0),
+                    max_width: None,
+                });
+            }
+        }
+        Arc::new(Drawing {
+            ops,
+            ..Drawing::default()
+        })
+    }
+
+    #[test]
+    fn a_text_drawn_in_another_color_reuses_its_line() {
+        let drawing = |color: u32| {
+            Arc::new(Drawing {
+                ops: vec![
+                    CanvasOp::Font(CanvasFont::parse("bold 36px system-ui").unwrap()),
+                    CanvasOp::FillStyle(Paint::Color(Color(color))),
+                    CanvasOp::FillText {
+                        text: "88".into(),
+                        x: Num::Const(4.0),
+                        y: Num::Const(36.0),
+                        max_width: None,
+                    },
+                ],
+                ..Drawing::default()
+            })
+        };
+        // BGRA rows, premultiplied.
+        let has = |bytes: &[u8], bgra: [u8; 4]| bytes.chunks(4).any(|p| p == bgra);
+        let mut canvas = CanvasState {
+            drawing: Some(drawing(0xff0000ff)),
+            ..CanvasState::default()
+        };
+        let red = pixels(&canvas);
+        assert!(has(&red, [0, 0, 255, 255]));
+        canvas.text.get_mut().trim();
+        canvas.drawing = Some(drawing(0x0000ffff));
+        let blue = pixels(&canvas);
+        assert!(has(&blue, [255, 0, 0, 255]));
+        assert!(!has(&blue, [0, 0, 255, 255]), "no red left");
+        assert_eq!(canvas.text.borrow().len(), 1);
+        // The same glyphs: only the color differs.
+        let coverage = |bytes: &[u8]| bytes.chunks(4).map(|p| p[3]).collect::<Vec<_>>();
+        assert_eq!(coverage(&red), coverage(&blue));
+    }
+
+    /// Paints of a 40 × 8 quote table into a 760 × 820 point bitmap at
+    /// scale 2: the same texts (a window being resized), and a new drawing
+    /// with every text changed before each paint (no line reused).
+    /// A tree view panned as a whole, as pobt's passive tree: `translate`
+    /// by slots 0 and 1, `scale` by slot 2, then `nodes` circles and as
+    /// many edges spread over a 6000 point square.
+    fn panned_tree(nodes: usize) -> Arc<Drawing> {
+        let c = Num::Const;
+        let at = |i: usize| {
+            let x = (i * 7919 % 6000) as f32;
+            let y = (i * 104_729 % 6000) as f32;
+            (x, y)
+        };
+        let mut ops = vec![
+            CanvasOp::Save,
+            CanvasOp::Translate(Num::Slot(0), Num::Slot(1)),
+            CanvasOp::Scale(Num::Slot(2), Num::Slot(2)),
+            CanvasOp::StrokeStyle(Paint::Color(Color(0x80808080))),
+            CanvasOp::LineWidth(c(2.0)),
+        ];
+        for i in 0..nodes {
+            let (x0, y0) = at(i);
+            let (x1, y1) = at(i + 1);
+            ops.extend([
+                CanvasOp::BeginPath,
+                CanvasOp::Path(PathOp::MoveTo(c(x0), c(y0))),
+                CanvasOp::Path(PathOp::LineTo(c(x1), c(y1))),
+                CanvasOp::Stroke(None),
+            ]);
+        }
+        ops.push(CanvasOp::FillStyle(Paint::Color(Color(0xc8a050ff))));
+        for i in 0..nodes {
+            let (x, y) = at(i);
+            ops.extend([
+                CanvasOp::BeginPath,
+                CanvasOp::Path(PathOp::Arc {
+                    x: c(x),
+                    y: c(y),
+                    radius: c(12.0),
+                    start: c(0.0),
+                    end: c(TAU as f32),
+                    ccw: false,
+                }),
+                CanvasOp::Fill(None, FillRule::NonZero),
+            ]);
+        }
+        ops.push(CanvasOp::Restore);
+        Arc::new(Drawing {
+            ops,
+            ..Drawing::default()
+        })
+    }
+
+    #[test]
+    fn a_leading_slot_translate_pans_the_whole_drawing() {
+        let ops = &panned_tree(4).ops;
+        assert_eq!(pan_op(ops, first_animated(ops)), Some(1));
+        let c = Num::Const;
+        let dot = CanvasOp::FillRect([c(0.0), c(0.0), c(4.0), c(4.0)]);
+        let pan = CanvasOp::Translate(Num::Slot(0), Num::Slot(1));
+        // Something painted before the pan stays put.
+        let ops = [dot.clone(), pan.clone(), dot.clone()];
+        assert_eq!(pan_op(&ops, first_animated(&ops)), None);
+        // So does what is painted after the pan's `restore`.
+        let ops = [
+            CanvasOp::Save,
+            pan.clone(),
+            dot.clone(),
+            CanvasOp::Restore,
+            dot.clone(),
+        ];
+        assert_eq!(pan_op(&ops, first_animated(&ops)), None);
+        // A constant translate is no pan; a slot read again is not one pan.
+        let ops = [CanvasOp::Translate(c(1.0), c(2.0)), dot.clone()];
+        assert_eq!(pan_op(&ops, 0), None);
+        let ops = [
+            pan.clone(),
+            CanvasOp::FillRect([Num::Slot(0), c(0.0), c(4.0), c(4.0)]),
+        ];
+        assert_eq!(pan_op(&ops, first_animated(&ops)), None);
+        // Large canvases draw a smaller margin, the largest none.
+        assert_eq!(pan_margin(CGSize::new(1200.0, 800.0)), PAN_MARGIN);
+        assert_eq!(pan_margin(CGSize::new(1728.0, 1000.0)), 160.0);
+        assert_eq!(pan_margin(CGSize::new(2000.0, 1000.0)), 0.0);
+    }
+
+    #[test]
+    fn a_pan_moves_the_layer_until_it_nears_its_margin() {
+        let mut canvas = CanvasState {
+            drawing: Some(panned_tree(64)),
+            ..CanvasState::default()
+        };
+        canvas.pan = Some((Num::Slot(0), Num::Slot(1)));
+        let (w, h) = (300.0, 200.0);
+        canvas.content_bounds(CGSize::new(w, h));
+        let m = PAN_MARGIN;
+        let frame = CGRect::new(CGPoint::new(-m, -m), CGSize::new(w + 2.0 * m, h + 2.0 * m));
+        let painted = Painted {
+            frame,
+            scale: 2.0,
+            prefix_only: false,
+        };
+        let target = Some(painted);
+        let args = |x: f32, y: f32, zoom: f32| {
+            [
+                (0, AnimationValue::Number(x)),
+                (1, AnimationValue::Number(y)),
+                (2, AnimationValue::Number(zoom)),
+            ]
+        };
+        assert_eq!(canvas.set_args(&args(0.0, 0.0, 1.0), target), Damage::All);
+        assert_eq!(
+            canvas.content_bounds(CGSize::new(w, h)),
+            Some(frame),
+            "drawn around the view"
+        );
+        canvas.painted.set(target);
+        // Within half the margin only the layer moves.
+        assert_eq!(
+            canvas.set_args(&args(40.0, -60.0, 1.0), target),
+            Damage::None
+        );
+        assert_eq!(canvas.pan_shift(), Some((40.0, -60.0)));
+        assert_eq!(
+            canvas.content_bounds(CGSize::new(w, h)).map(|r| r.origin),
+            Some(CGPoint::new(40.0 - m, -60.0 - m))
+        );
+        // A moved layer still holds the whole picture.
+        let moved = Some(Painted {
+            frame: CGRect::new(CGPoint::new(40.0 - m, -60.0 - m), frame.size),
+            ..painted
+        });
+        assert_eq!(
+            canvas.set_args(&args(41.0, -60.0, 1.0), moved),
+            Damage::None
+        );
+        // A zoom draws what the view shows; the margin waits for a pan.
+        let Damage::Rect(rect) = canvas.set_args(&args(41.0, -60.0, 1.5), moved) else {
+            panic!("a zoom redraws the view");
+        };
+        assert_eq!(
+            (rect.size.width.0, rect.size.height.0),
+            (w as f32, h as f32)
+        );
+        assert_eq!(canvas.set_args(&args(42.0, -60.0, 1.5), moved), Damage::All);
+        assert_eq!(canvas.pan_shift(), Some((0.0, 0.0)), "placed back");
+        canvas.painted.set(target);
+        // Past half the margin it is drawn again around the pan.
+        assert_eq!(
+            canvas.set_args(&args(42.0 + m as f32, -60.0, 1.5), target),
+            Damage::All
+        );
+        assert_eq!(canvas.pan_shift(), Some((0.0, 0.0)));
+    }
+
+    #[test]
+    fn a_drag_keeps_a_panned_canvas_drawing_asynchronously() {
+        let mut canvas = CanvasState {
+            drawing: Some(panned_tree(64)),
+            ..CanvasState::default()
+        };
+        canvas.pan = Some((Num::Slot(0), Num::Slot(1)));
+        let (w, h) = (300.0, 200.0);
+        canvas.content_bounds(CGSize::new(w, h));
+        let m = PAN_MARGIN;
+        let target = Some(Painted {
+            frame: CGRect::new(CGPoint::new(-m, -m), CGSize::new(w + 2.0 * m, h + 2.0 * m)),
+            scale: 2.0,
+            prefix_only: false,
+        });
+        let pan = |x: f32| {
+            [
+                (0, AnimationValue::Number(x)),
+                (1, AnimationValue::Number(0.0)),
+            ]
+        };
+        canvas.set_args(&pan(0.0), target);
+        canvas.painted.set(target);
+        assert!(!canvas.draws_asynchronously());
+        // Frames that only move the layer, as a drag's: it is drawn again
+        // around the pan on Core Animation's threads.
+        for f in 1..=FREQUENT {
+            assert_eq!(canvas.set_args(&pan(f as f32), target), Damage::None);
+        }
+        assert!(canvas.draws_asynchronously());
+    }
+
+    /// What a pan of a whole drawing costs a frame, replayed in full each
+    /// frame (`before`), and as panned canvases draw (`after`): moved, and
+    /// drawn again around the pan only past half the margin.
+    /// `cargo test --release -p nsh-platform-macos --lib bench_panned_canvas -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_panned_canvas() {
+        let (w, h, scale) = (1200.0, 800.0, 2.0);
+        let m = PAN_MARGIN;
+        let (pw, ph) = (
+            ((w + 2.0 * m) * scale) as usize,
+            ((h + 2.0 * m) * scale) as usize,
+        );
+        let space = CGColorSpace::new_device_rgb().unwrap();
+        // SAFETY: a context with pixels of its own.
+        let cx = unsafe {
+            CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                pw,
+                ph,
+                8,
+                pw * 4,
+                Some(&space),
+                CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0,
+            )
+        }
+        .unwrap();
+        // The view's origin `m` points in from the top left, y down.
+        CGContext::translate_ctm(Some(&cx), 0.0, ph as CGFloat);
+        CGContext::scale_ctm(Some(&cx), scale, -scale);
+        CGContext::translate_ctm(Some(&cx), m, m);
+        let base = CGContext::ctm(Some(&cx));
+        let size = CGSize::new(w, h);
+        let view = CGRect::new(CGPoint::ZERO, size);
+        let wide = CGRect::new(CGPoint::new(-m, -m), CGSize::new(w + 2.0 * m, h + 2.0 * m));
+        let frames = 120u32;
+        for zoom in [0.25f32, 0.5, 1.0] {
+            for after in [false, true] {
+                let mut canvas = CanvasState {
+                    drawing: Some(panned_tree(6000)),
+                    ..CanvasState::default()
+                };
+                let frame = if after {
+                    canvas.pan = Some((Num::Slot(0), Num::Slot(1)));
+                    canvas.content_bounds(size);
+                    wide
+                } else {
+                    view
+                };
+                let target = Some(Painted {
+                    frame,
+                    scale,
+                    prefix_only: false,
+                });
+                // About 4 points a frame: 480 points over 120 frames.
+                let pan = |f: u32| {
+                    let x = f as f32 * 4.0;
+                    [
+                        (0, AnimationValue::Number(-x)),
+                        (1, AnimationValue::Number(-x * 0.5)),
+                        (2, AnimationValue::Number(zoom)),
+                    ]
+                };
+                canvas.set_args(&pan(0), target);
+                canvas.paint_in(&cx, frame, frame, scale, false, base);
+                let (mut drawn, mut total, mut worst) = (0, Duration::ZERO, Duration::ZERO);
+                for f in 1..=frames {
+                    let dirty = match canvas.set_args(&pan(f), target) {
+                        Damage::None => continue,
+                        Damage::All => frame,
+                        Damage::Rect(r) => CGRect::new(
+                            CGPoint::new(r.origin.x.0.into(), r.origin.y.0.into()),
+                            CGSize::new(r.size.width.0.into(), r.size.height.0.into()),
+                        ),
+                    };
+                    drawn += 1;
+                    let t = Instant::now();
+                    canvas.paint_in(&cx, dirty, frame, scale, false, base);
+                    let spent = t.elapsed();
+                    total += spent;
+                    worst = worst.max(spent);
+                }
+                println!(
+                    "6000 nodes + 6000 edges, zoom {zoom}, {}: {drawn}/{frames} frames replay, {:?}/frame on average, worst {worst:?}",
+                    if after { "after" } else { "before" },
+                    total / frames,
+                );
+            }
+        }
+    }
+
+    /// `cargo test --release -p nsh-platform-macos --lib bench_canvas_text -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_canvas_text() {
+        let (w, h, scale) = (760.0, 820.0, 2.0);
+        let (pw, ph) = (1520, 1640);
+        let space = CGColorSpace::new_device_rgb().unwrap();
+        // SAFETY: a context with pixels of its own.
+        let cx = unsafe {
+            CGBitmapContextCreate(
+                std::ptr::null_mut(),
+                pw,
+                ph,
+                8,
+                pw * 4,
+                Some(&space),
+                CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0,
+            )
+        }
+        .unwrap();
+        CGContext::translate_ctm(Some(&cx), 0.0, ph as CGFloat);
+        CGContext::scale_ctm(Some(&cx), scale, -scale);
+        let base = CGContext::ctm(Some(&cx));
+        let size = CGSize::new(w, h);
+        let rect = CGRect::new(CGPoint::ZERO, size);
+        let rounds = 200;
+        let mut canvas = CanvasState {
+            drawing: Some(table(40, 0, 0x202020ff)),
+            ..CanvasState::default()
+        };
+        canvas.paint(&cx, rect, size, scale, false, base);
+        let t = Instant::now();
+        for _ in 0..rounds {
+            canvas.paint(&cx, rect, size, scale, false, base);
+        }
+        let same = t.elapsed() / rounds;
+        let drawings: Vec<_> = (1..=rounds as usize)
+            .map(|tick| table(40, tick * 1000, 0x202020ff))
+            .collect();
+        let t = Instant::now();
+        for d in drawings {
+            canvas.text.get_mut().trim();
+            canvas.drawing = Some(d);
+            canvas.paint(&cx, rect, size, scale, false, base);
+        }
+        let changed = t.elapsed() / rounds;
+        println!(
+            "canvas text, 320 texts: same texts {same:?}/paint, all changed {changed:?}/paint"
+        );
     }
 }

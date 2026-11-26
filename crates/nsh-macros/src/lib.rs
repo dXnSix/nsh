@@ -706,7 +706,7 @@ fn props(input: DeriveInput) -> syn::Result<TokenStream2> {
                 specs.push(quote! {
                     #ui::PropSpec {
                         name: #js,
-                        ts: ::std::format!("(value: {}) => JSX.Element", #ui::ts_of::<#t>()(types)),
+                        ts: ::std::format!("({}) => JSX.Element", #ui::render_params_of::<#t>()(types)),
                         optional: true,
                         doc: #field_doc,
                         kind: #ui::PropKind::Renderer,
@@ -2937,9 +2937,9 @@ mod tests {
 /// }
 /// ```
 ///
-/// The platform is `windows`, `macos`, `linux` or `ios`; the function and what it
-/// makes compile only there (`#[cfg(target_os = "…")]`), so the crate
-/// depends on the platform's crate under the same `cfg` (with
+/// The platform is `windows`, `macos`, `linux`, `ios` or `android`; the
+/// function and what it makes compile only there (`#[cfg(target_os = "…")]`),
+/// so the crate depends on the platform's crate under the same `cfg` (with
 /// `default-features = false`). A crate has at most one per platform, at
 /// its root: a second fails as the entry defined twice, one in a module as
 /// not at the root. A crate without one registers nothing.

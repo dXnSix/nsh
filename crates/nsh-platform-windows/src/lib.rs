@@ -28,7 +28,9 @@ mod agent;
 mod animation;
 mod app;
 mod app_window;
+#[cfg_attr(not(feature = "media"), path = "audio_off.rs")]
 mod audio;
+mod backdrop;
 mod canvas;
 mod chrome;
 mod compose;
@@ -74,7 +76,7 @@ mod window_close;
 mod window_state;
 
 pub use nsh_core::{
-    file_type,
+    Cursor, file_type,
     platform::{Appearance, Locale},
 };
 pub use nsh_engine::{
@@ -89,7 +91,11 @@ pub use crate::{
         AppOptions, AppSource, AppView, debug_output, fatal_error, run_app, set_components,
         set_ui_sets,
     },
+    compose::Placement,
     image::AssetBase,
-    native::{ComponentContext, ComponentFactory, Components, NativeComponent, Wheel},
+    native::{
+        ComponentContext, ComponentFactory, Components, NativeComponent, Pointer, PointerKind,
+        Wheel,
+    },
     text::DWriteTextEngine,
 };

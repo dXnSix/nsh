@@ -2,8 +2,10 @@ package com.longbridge.nsh;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
+import android.graphics.drawable.Drawable;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
@@ -11,6 +13,7 @@ import android.media.MediaPlayer;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
+import android.widget.ImageView;
 import android.widget.MediaController;
 import java.util.Objects;
 
@@ -23,12 +26,20 @@ import java.util.Objects;
 final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureListener,
         MediaController.MediaPlayerControl {
     private final TextureView texture;
+    private final ImageView poster;
     private final NshView host;
     private MediaPlayer player;
     private Surface surface;
     private String source;
+    private String posterSource;
+    /** The poster has not been replaced by the video's first frame. */
+    private boolean posterVisible;
+    /** The video drew a frame since it was opened. */
+    private boolean framed;
     private boolean prepared;
     private boolean paused, muted, repeat;
+    /** The `paused` prop last configured (the controller plays and pauses without it). */
+    private boolean pausedProp;
     private float volume = 1, rate = 1;
     /** 0 cover, 1 contain, 2 stretch. */
     private int resizeMode = 1;
@@ -47,11 +58,20 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
         this.host = host;
         texture = (TextureView) widget;
         texture.setSurfaceTextureListener(this);
+        poster = new ImageView(context);
+        poster.setVisibility(GONE);
+        addView(poster);
     }
 
-    void configure(String source, boolean paused, boolean muted, float volume, float rate, boolean repeat,
-            int resizeMode, boolean controls, float progressInterval, int audioSession) {
-        this.paused = paused;
+    void configure(String source, String poster, boolean paused, boolean muted, float volume, float rate,
+            boolean repeat, int resizeMode, boolean controls, float progressInterval, int audioSession) {
+        // `paused` is acted on when it changes (or for a new source):
+        // `start()` on a video that ended plays it over, and one the
+        // controller paused would play on, whenever another prop (the
+        // volume, say) changed.
+        boolean toggled = paused != pausedProp || !Objects.equals(source, this.source);
+        pausedProp = paused;
+        if (toggled) this.paused = paused;
         this.muted = muted;
         this.volume = volume;
         this.rate = rate;
@@ -70,6 +90,12 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
         if (resizeMode != this.resizeMode) {
             this.resizeMode = resizeMode;
             fit();
+            applyPosterScale();
+        }
+        if (!Objects.equals(poster, posterSource)) {
+            posterSource = poster;
+            posterVisible = poster != null && !framed;
+            showPoster();
         }
         if (controls && controller == null) {
             controller = new MediaController(getContext());
@@ -83,12 +109,15 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
             this.source = source;
             open();
         } else {
-            apply();
+            apply(toggled);
         }
     }
 
     private void open() {
         release();
+        framed = false;
+        posterVisible = posterSource != null;
+        showPoster();
         if (source == null) return;
         MediaPlayer p = new MediaPlayer();
         player = p;
@@ -99,7 +128,7 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
             if (paused) mp.seekTo(0);
             mounter.eventMap(id, Native.LOAD, new String[] {"duration", "width", "height"},
                     new Object[] {mp.getDuration() / 1000.0, (double) mp.getVideoWidth(), (double) mp.getVideoHeight()});
-            apply();
+            apply(true);
         });
         p.setOnVideoSizeChangedListener((mp, w, h) -> {
             videoWidth = w;
@@ -145,24 +174,33 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
         }
     }
 
-    /** Applies the playback properties to a prepared player. */
-    private void apply() {
+    /**
+     * Applies the playback properties to a prepared player; `toggled`: it
+     * plays or pauses as `paused` says.
+     */
+    private void apply(boolean toggled) {
         MediaPlayer p = player;
         if (p == null || !prepared) return;
         float v = muted ? 0 : Math.max(0, Math.min(1, volume));
         p.setVolume(v, v);
-        if (paused) {
-            if (p.isPlaying()) p.pause();
-        } else {
-            // Setting a speed starts playback, so only while playing.
-            if (!p.isPlaying()) p.start();
-            if (rate > 0 && p.getPlaybackParams().getSpeed() != rate) {
-                p.setPlaybackParams(p.getPlaybackParams().setSpeed(rate));
+        if (toggled) {
+            if (paused) {
+                if (p.isPlaying()) p.pause();
+            } else if (!p.isPlaying()) {
+                p.start();
             }
         }
+        applySpeed(p);
         removeCallbacks(progress);
         if (!paused) postDelayed(progress, (long) progressInterval);
         updateFocus();
+    }
+
+    /** Sets `rate` on a player that plays: setting a speed starts playback. */
+    private void applySpeed(MediaPlayer p) {
+        if (p.isPlaying() && rate > 0 && p.getPlaybackParams().getSpeed() != rate) {
+            p.setPlaybackParams(p.getPlaybackParams().setSpeed(rate));
+        }
     }
 
     private void progress() {
@@ -200,6 +238,50 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         fit();
+        fillPoster(w, h);
+        if (posterVisible && poster.getDrawable() == null) showPoster();
+    }
+
+    /** Shows `posterSource` under the video until its first frame. */
+    private void showPoster() {
+        poster.setImageDrawable(null);
+        poster.setVisibility(GONE);
+        if (!posterVisible || posterSource == null) return;
+        applyPosterScale();
+        int maxPx = Math.max(getWidth(), getHeight());
+        if (maxPx <= 0) return;
+        String uri = posterSource;
+        Images.Image cached = mounter.images.request(uri, maxPx, 0, (image, error) -> {
+            if (!posterVisible || !Objects.equals(uri, posterSource) || image == null) return;
+            if (image.content instanceof Bitmap) poster.setImageBitmap((Bitmap) image.content);
+            else if (image.content instanceof Drawable) poster.setImageDrawable((Drawable) image.content);
+            poster.setVisibility(VISIBLE);
+        });
+        if (cached != null) {
+            if (cached.content instanceof Bitmap) poster.setImageBitmap((Bitmap) cached.content);
+            else if (cached.content instanceof Drawable) poster.setImageDrawable((Drawable) cached.content);
+            poster.setVisibility(VISIBLE);
+        }
+    }
+
+    private void applyPosterScale() {
+        poster.setScaleType(resizeMode == 0
+                ? ImageView.ScaleType.CENTER_CROP
+                : resizeMode == 2 ? ImageView.ScaleType.FIT_XY : ImageView.ScaleType.FIT_CENTER);
+    }
+
+    private void fillPoster(int w, int h) {
+        Box.Frame f = Box.frame(poster);
+        f.left = 0;
+        f.top = 0;
+        f.right = w;
+        f.bottom = h;
+        Box.place(poster);
+    }
+
+    private void hidePoster() {
+        posterVisible = false;
+        poster.setVisibility(GONE);
     }
 
     @Override
@@ -263,11 +345,16 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
         MediaPlayer p = player;
         if (change == AudioManager.AUDIOFOCUS_GAIN) {
             hasFocus = true;
-            if (p != null && prepared && !paused && !p.isPlaying()) p.start();
+            if (p != null && prepared && !paused && !p.isPlaying()) {
+                p.start();
+                applySpeed(p);
+            }
         } else if (change == AudioManager.AUDIOFOCUS_LOSS) {
-            // Gone for good: the app plays it again by its props.
+            // Gone for good: paused as by the controller, until the
+            // `paused` prop changes or the controller plays it.
             hasFocus = false;
             if (p != null && prepared && p.isPlaying()) p.pause();
+            paused = true;
         } else if (p != null && prepared && p.isPlaying()) {
             // Lost for a while (a call, a navigation prompt): back on GAIN.
             p.pause();
@@ -316,7 +403,10 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
     }
 
     @Override
-    public void onSurfaceTextureUpdated(SurfaceTexture st) {}
+    public void onSurfaceTextureUpdated(SurfaceTexture st) {
+        framed = true;
+        if (posterVisible) hidePoster();
+    }
 
     // --- MediaController.MediaPlayerControl ------------------------------------
     // The controller plays and pauses the player directly; JS learns about it
@@ -326,6 +416,7 @@ final class VideoBox extends WidgetBox implements TextureView.SurfaceTextureList
     public void start() {
         if (player != null && prepared) {
             player.start();
+            applySpeed(player);
             paused = false;
             removeCallbacks(progress);
             post(progress);

@@ -19,6 +19,7 @@ use ratatui_core::{buffer::Buffer, layout::Rect, terminal::Frame, widgets::Widge
 use crate::{
     Appearance, CellSize, CellTextEngine, ComponentFactory, Handled, Input,
     input::Pointer,
+    key_event::{self, Phase},
     mount::Mounter,
     render::{self, Hit},
     surface::{Message, Sink, Surface},
@@ -62,6 +63,26 @@ pub struct TerminalCapabilities {
     /// drawn as a hyperlink to its `href`. Without it, as on the Linux
     /// console, which shows the sequence, links are plain text.
     pub hyperlinks: bool,
+    /// How the terminal shows pictures.
+    pub graphics: Graphics,
+    /// The size of a Cell in the terminal's pixels (`CSI 16 t`), which
+    /// pictures are fitted at with [`Graphics::KittyPlaceholders`];
+    /// `None`: guessed from the Cell's proportion in points.
+    pub cell_pixels: Option<nsh_core::Size<nsh_core::geometry::DevicePixels>>,
+}
+
+/// How a terminal shows pictures (image views).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum Graphics {
+    /// Upper half blocks (`▀`), two pixels a Cell in the terminal's colors,
+    /// at 256 colors or more; with fewer, an image keeps its box blank.
+    #[default]
+    Blocks,
+    /// The kitty graphics protocol's Unicode placeholders (kitty, Ghostty),
+    /// at 24-bit color: pictures at the terminal's own pixels, placed in
+    /// the Cells as text is.
+    KittyPlaceholders,
 }
 
 /// The colors a terminal shows.
@@ -89,6 +110,8 @@ impl Default for TerminalCapabilities {
             foreground_color: None,
             command_key: false,
             hyperlinks: true,
+            graphics: Graphics::default(),
+            cell_pixels: None,
         }
     }
 }
@@ -108,7 +131,9 @@ pub struct AppOptions {
     pub limits: Limits,
     /// Image and response cache policy.
     pub cache: nsh_engine::CacheOptions,
-    /// Persistent app data directory.
+    /// The app's data directory, used as it is
+    /// ([`nsh_engine::EngineConfig::data_dir`]); `None`: the one under its
+    /// id in the system's directory for apps' data.
     pub data_dir: Option<PathBuf>,
     /// Registries available to app code.
     pub ui_sets: Vec<nsh_core::element::Registry>,
@@ -138,9 +163,9 @@ impl Default for AppOptions {
             wake: None,
             limits: Limits::default(),
             cache: nsh_engine::CacheOptions::default(),
-            data_dir: None,
             ui_sets: vec![nsh_base::registry()],
             host: HostChannel::default(),
+            data_dir: None,
             storage: None,
             assets: None,
             clipboard: None,
@@ -239,6 +264,8 @@ impl AppView {
             // report Command: Ctrl stands in for it, and labels say so.
             ctrl_for_command: OS == nsh_core::platform::Os::MacOs
                 && !options.capabilities.command_key,
+            // No link of the app's schemes reaches a terminal app.
+            scheme_links: Some(false),
             ..Default::default()
         };
         let clipboard = options
@@ -250,6 +277,15 @@ impl AppView {
         let fps = options.fps || nsh_engine::perf::enabled_by_env();
         let output = crate::perf::SharedOutput::default();
         output.enabled.set(fps);
+        let mut tree = Mounter::default();
+        tree.menus.ctrl_for_command = environment.ctrl_for_command;
+        tree.images.configure(
+            options.capabilities.graphics,
+            options.capabilities.colors,
+            options.capabilities.cell_pixels,
+            options.cells,
+            output.graphics.clone(),
+        );
         Self {
             perf: fps.then(crate::perf::Monitor::new),
             output,
@@ -263,11 +299,7 @@ impl AppView {
             #[cfg(feature = "dev")]
             test: None,
             surface,
-            tree: {
-                let mut tree = Mounter::default();
-                tree.menus.ctrl_for_command = environment.ctrl_for_command;
-                tree
-            },
+            tree,
             area: Rect::default(),
             focused: true,
             clipboard,
@@ -305,6 +337,11 @@ impl AppView {
         let (sender, inbox) = crossbeam_channel::unbounded();
         let viewport = self.size();
         self.environment.window = viewport;
+        // What the app's images may load (`crate::image`).
+        let access = Arc::new(match &app {
+            App::Js(bundle) => bundle.policy.access(),
+            App::Rust(_) => nsh_engine::Policy::default().access(),
+        });
         let mut config = EngineConfig::new(app);
         config.viewport = viewport;
         config.environment = self.environment;
@@ -316,6 +353,7 @@ impl AppView {
         }
         config.limits = self.options.limits;
         config.cache = self.options.cache.clone();
+        config.support_dir = nsh_engine::support_dir();
         config.data_dir = self.options.data_dir.clone();
         config.assets = self.options.assets.clone();
         #[cfg(feature = "dev")]
@@ -336,6 +374,8 @@ impl AppView {
             .unwrap_or_else(|| Arc::new(nsh_core::clipboard::MemoryClipboard::default()));
         let cells = self.options.cells;
         self.keyboard.sync = Some((sender.clone(), self.surface.wake.clone()));
+        let assets = config.assets.clone();
+        let images = (sender.clone(), self.surface.wake.clone());
         let engine = Engine::start(
             config,
             move || CellTextEngine::new(cells),
@@ -351,6 +391,21 @@ impl AppView {
         if let Some(perf) = &self.perf {
             engine.control().set_perf_monitor(Some(perf.engine.clone()));
         }
+        self.tree.images.start(
+            images,
+            nsh_core::image::loader::Context {
+                asset_base: assets.as_ref().and_then(|assets| assets.base()),
+                read_asset: assets.map(|assets| {
+                    Arc::new(move |uri: &str| assets.read(uri))
+                        as nsh_core::image::loader::ReadAsset
+                }),
+                access,
+                media_files: engine.media_files(),
+                // The app's downloaded images go through its disk cache.
+                disk: engine.image_cache(),
+                transport: None,
+            },
+        );
         self.surface.engine = Some(engine);
         self.surface.inbox = inbox;
         self.surface.laid_out = viewport;
@@ -587,6 +642,9 @@ impl AppView {
             }
             _ => None,
         };
+        if let Some(modality) = modality {
+            self.tree.pointer_focus = modality == nsh_core::platform::InputModality::Pointer;
+        }
         if let (Some(modality), Some(engine)) = (modality, &self.surface.engine) {
             engine.control().set_input_modality(modality);
         }
@@ -749,14 +807,18 @@ impl AppView {
                 key,
                 modifiers,
                 release,
-            } => {
-                if release {
-                    Handled::Ignored
+            } => self.handle_key(
+                &key,
+                modifiers,
+                Some(if release {
+                    Phase::Up
                 } else {
-                    self.handle_key(&key, modifiers, false)
-                }
+                    Phase::Down { repeat: false }
+                }),
+            ),
+            Input::KeyRepeat { key, modifiers } => {
+                self.handle_key(&key, modifiers, Some(Phase::Down { repeat: true }))
             }
-            Input::KeyRepeat { key, modifiers } => self.handle_key(&key, modifiers, true),
             Input::Paste(text) => {
                 let Some(id) = self.editing_field() else {
                     return Handled::Ignored;
@@ -929,7 +991,7 @@ impl AppView {
             shift,
             ..Default::default()
         };
-        self.handle_key(key, modifiers, false);
+        self.handle_key(key, modifiers, None);
     }
 
     /// A shortcut of the application menu's items, after the app's own
@@ -1015,30 +1077,65 @@ impl AppView {
         true
     }
 
-    fn handle_key(&mut self, key: &str, modifiers: crate::Modifiers, repeat: bool) -> Handled {
+    /// `phase` is the terminal's transition, or `None` for a key an
+    /// application menu's item stands for: that runs what the key does
+    /// without reporting a transition no key made.
+    fn handle_key(
+        &mut self,
+        key: &str,
+        modifiers: crate::Modifiers,
+        phase: Option<Phase>,
+    ) -> Handled {
         if !self.focused {
             return Handled::Ignored;
         }
-        let Some(stroke) = crate::key_scheme::keystroke(key, modifiers) else {
-            return Handled::Ignored;
-        };
+        let stroke = crate::key_scheme::keystroke(key, modifiers);
         let Some(engine) = &self.surface.engine else {
             // No app to ask: Ctrl+C still quits.
-            if let Some(crate::key_scheme::Action::Quit) = crate::key_scheme::terminal(stroke) {
+            if stroke.is_some_and(|stroke| {
+                matches!(
+                    crate::key_scheme::terminal(stroke),
+                    Some(crate::key_scheme::Action::Quit)
+                )
+            }) {
                 self.tree.exit = true;
                 return Handled::Yes;
             }
             return Handled::Ignored;
         };
         let control = engine.control();
+        // A release is no command: the views that listen hear it, and
+        // nothing acts on it.
+        if let Some(Phase::Up) = phase {
+            let Some((id, captured)) = self.raw_target(stroke.as_ref()) else {
+                return Handled::Ignored;
+            };
+            Self::notify_key(
+                id,
+                key,
+                modifiers,
+                stroke.as_ref(),
+                Phase::Up,
+                captured,
+                &control,
+            );
+            return if captured {
+                Handled::Yes
+            } else {
+                Handled::Ignored
+            };
+        }
+        let repeat = matches!(phase, Some(Phase::Down { repeat: true }));
         if self.minibuffer.is_open()
+            && let Some(stroke) = stroke
             && let Some(crate::search::Outcome::Consumed) =
                 self.search(|minibuffer, scene| minibuffer.key(key, stroke, scene))
         {
             return Handled::Yes;
         }
         // F10 gives the menu bar the keys (the open bar takes the next).
-        if stroke.key == nsh_core::keymap::Key::F(10)
+        if let Some(stroke) = stroke
+            && stroke.key == nsh_core::keymap::Key::F(10)
             && stroke.modifiers == nsh_core::keymap::Modifiers::default()
             && let Some(outcome) = self.tree.menus.toggle_bar()
         {
@@ -1049,29 +1146,57 @@ impl AppView {
         self.catch_up_with_focus();
         let command_key = self.options.capabilities.command_key;
         let selecting = self.selection.is_active();
-        let handled = if self
-            .keyboard
-            .shortcut(&self.tree, stroke, repeat, command_key, &control)
-            || self.menu_shortcut(stroke, repeat, false)
-            || self.handle_field_key(key, stroke, &control)
-            || self.selection.key(
+        // The app's shortcuts and its menus' come first.
+        if let Some(stroke) = stroke
+            && (self
+                .keyboard
+                .shortcut(&self.tree, stroke, repeat, command_key, &control)
+                || self.menu_shortcut(stroke, repeat, false))
+        {
+            self.surface.wake.notify();
+            return Handled::Yes;
+        }
+        // The focused view and its ancestors hear the key before the
+        // terminal's defaults do; a capture of theirs takes it from them.
+        if let Some(phase) = phase
+            && let Some((id, captured)) = self.raw_target(stroke.as_ref())
+        {
+            Self::notify_key(
+                id,
                 key,
                 modifiers,
-                &self.tree,
-                &self.geometry,
-                self.clipboard.as_ref(),
-            )
-            || crate::key_scheme::arrow(stroke).is_some_and(|arrow| {
-                self.keyboard
-                    .shortcut(&self.tree, arrow, repeat, command_key, &control)
-            }) {
+                stroke.as_ref(),
+                phase,
+                captured,
+                &control,
+            );
+            if captured {
+                return Handled::Yes;
+            }
+        }
+        let handled = if let Some(stroke) = stroke
+            && (self.handle_field_key(key, stroke, &control)
+                || self.selection.key(
+                    key,
+                    modifiers,
+                    &self.tree,
+                    &self.geometry,
+                    self.clipboard.as_ref(),
+                )
+                || crate::key_scheme::arrow(stroke).is_some_and(|arrow| {
+                    self.keyboard
+                        .shortcut(&self.tree, arrow, repeat, command_key, &control)
+                })) {
             Handled::Yes
-        } else if let Some(crate::key_scheme::Action::Search(forward)) =
-            crate::key_scheme::terminal(stroke)
+        } else if let Some(stroke) = stroke
+            && let Some(crate::key_scheme::Action::Search(forward)) =
+                crate::key_scheme::terminal(stroke)
         {
             self.search(|minibuffer, scene| minibuffer.start(forward, scene));
             Handled::Yes
-        } else if let Some(action) = crate::key_scheme::terminal(stroke) {
+        } else if let Some(stroke) = stroke
+            && let Some(action) = crate::key_scheme::terminal(stroke)
+        {
             self.keyboard
                 .action(action, &mut self.tree, &self.geometry, &control, modifiers)
         } else {
@@ -1081,6 +1206,43 @@ impl AppView {
             self.surface.wake.notify();
         }
         handled
+    }
+
+    /// Where a raw transition goes — the focused view — and whether the
+    /// mounted capture rules of its enabled ancestry take it, read now.
+    /// `None` when no view has the keyboard focus, when none of them and no
+    /// ancestor hears raw keys or captures them, or when a native control
+    /// owns the keys: a capture rule around a text field or the Minibuffer
+    /// must not intercept what is typed into them.
+    fn raw_target(
+        &self,
+        stroke: Option<&nsh_core::keymap::Keystroke>,
+    ) -> Option<(nsh_core::NodeId, bool)> {
+        if self.minibuffer.is_open() || self.editing_field().is_some() {
+            return None;
+        }
+        let id = key_event::target(&self.tree, self.keyboard.focused)?;
+        if !key_event::listens(&self.tree, id) {
+            return None;
+        }
+        Some((id, key_event::captures(&self.tree, id, stroke)))
+    }
+
+    /// Reports a key transition to `id`, which the engine bubbles to its
+    /// ancestors within its window, carrying the capture decision made for
+    /// this transition.
+    fn notify_key(
+        id: nsh_core::NodeId,
+        key: &str,
+        modifiers: crate::Modifiers,
+        stroke: Option<&nsh_core::keymap::Keystroke>,
+        phase: Phase,
+        captured: bool,
+        control: &nsh_engine::EngineControl,
+    ) {
+        let mut event = key_event::event(key, modifiers, stroke, phase);
+        event.default_prevented = captured;
+        control.dispatch_event(id, phase.kind(), nsh_core::EventPayload::Key(event));
     }
 
     fn apply_batch(&mut self, batch: nsh_core::MountBatch) {
@@ -1281,7 +1443,8 @@ impl AppView {
             id,
             last,
             clicks,
-            anchor,
+            mut anchor,
+            select_all,
         }) = self.field_drag
         {
             if self.keyboard.focused != Some(id)
@@ -1296,7 +1459,12 @@ impl AppView {
                     && let Some(view) = self.tree.get_mut(id)
                 {
                     let field = view.field.as_mut().unwrap();
-                    field.drag(view.input.as_ref().unwrap(), position, clicks, anchor);
+                    let config = view.input.as_ref().unwrap();
+                    // The press's drag selects from where it went down.
+                    if select_all {
+                        anchor = field.click(config, last, false, clicks);
+                    }
+                    field.drag(config, position, clicks, anchor);
                     field.report(id, &control, false);
                 }
                 self.field_drag = if matches!(mouse.kind, MouseKind::Up(_)) {
@@ -1307,6 +1475,7 @@ impl AppView {
                         last: position,
                         clicks,
                         anchor,
+                        select_all: select_all && position == last,
                     })
                 };
                 return true;
@@ -1346,25 +1515,37 @@ impl AppView {
             // way up, after the focus the field takes now.
             let press = self.pointer.take_press(id);
             self.pointer.cancel(&mut self.tree, Some(&control));
-            self.keyboard.focus(Some(id), &mut self.tree, &control);
+            let shift = mouse.modifiers.shift;
+            let clicks = self.pointer.clicks();
+            // A plain press that focuses a field which selects its text on
+            // focus leaves the whole text selected until the press drags.
+            let select_all = !shift
+                && clicks <= 1
+                && self.keyboard.focused != Some(id)
+                && self
+                    .tree
+                    .get(id)
+                    .and_then(|view| view.input.as_ref())
+                    .is_some_and(|config| config.select_text_on_focus);
+            self.keyboard
+                .focus_field(Some(id), &mut self.tree, &control, !shift);
             self.field_press = press.map(|(press, origin)| {
                 (press, origin, hit.map(|hit| hit.area).unwrap_or_default())
             });
-            let clicks = self.pointer.clicks();
             let view = self.tree.get_mut(id).unwrap();
             let field = view.field.as_mut().unwrap();
-            let anchor = field.click(
-                view.input.as_ref().unwrap(),
-                position,
-                mouse.modifiers.shift,
-                clicks,
-            );
+            let anchor = if select_all {
+                (0, 0)
+            } else {
+                field.click(view.input.as_ref().unwrap(), position, shift, clicks)
+            };
             field.report(id, &control, false);
             self.field_drag = Some(FieldDrag {
                 id,
                 last: position,
-                clicks: if mouse.modifiers.shift { 1 } else { clicks },
+                clicks: if shift { 1 } else { clicks },
                 anchor,
+                select_all,
             });
             true
         } else {
@@ -1482,6 +1663,9 @@ impl AppView {
                 Message::Resized(size) => self.surface.laid_out = size,
                 Message::Focused(moved) => self.keyboard.caught_up(moved),
                 Message::Run(task) => task.run(),
+                Message::Image(loaded) => {
+                    crate::image::deliver(&mut self.tree.views, loaded, &mut self.tree.images)
+                }
                 #[cfg(feature = "dev")]
                 Message::Reload => {
                     if let Some(mut dev) = self.dev.take() {
@@ -1657,6 +1841,10 @@ impl AppView {
             {
                 self.surface.wake.notify();
             }
+            for id in std::mem::take(&mut self.tree.clear_selection_requests) {
+                self.selection.clear_in(&self.tree, id);
+                self.surface.wake.notify();
+            }
             if let Some(engine) = &self.surface.engine {
                 let control = engine.control();
                 for (id, focus) in std::mem::take(&mut self.tree.focus_requests) {
@@ -1694,11 +1882,15 @@ impl AppView {
         self.diagnostics.draw(area, buffer);
         if self.options.capabilities.colors == ColorDepth::Monochrome {
             crate::palette::strip_colors(buffer, area);
+        } else if self.options.capabilities.colors == ColorDepth::TrueColor {
+            crate::palette::brand_accent(buffer, area, self.environment.color_scheme);
         }
         if let (Some(drawing), Some(perf)) = (drawing, &mut self.perf) {
             perf.pending.draw = drawing.elapsed();
             perf.draw(area, buffer);
         }
+        self.tree.images.finish(buffer);
+        self.report_images();
         let painted = if self.options.capabilities.hyperlinks {
             &self.tree.links
         } else {
@@ -1732,6 +1924,27 @@ impl AppView {
         self.stop_engine();
     }
 
+    /// Reports the image events of the frame (`onLoadStart`, `onLoad`,
+    /// `onError`, `onLoadEnd`) the views listen to.
+    fn report_images(&mut self) {
+        let events = std::mem::take(&mut self.tree.images.events);
+        let Some(engine) = &self.surface.engine else {
+            return;
+        };
+        let control = engine.control();
+        for (id, kind, payload) in events {
+            // The root's `ImageInfo` answers the core, whatever it listens to.
+            if kind == nsh_core::EventKind::ImageInfo
+                || self
+                    .tree
+                    .get(id)
+                    .is_some_and(|view| view.events.contains(kind))
+            {
+                control.dispatch_event(id, kind, payload);
+            }
+        }
+    }
+
     fn stop_engine(&mut self) {
         self.pointer.cancel(
             &mut self.tree,
@@ -1740,6 +1953,7 @@ impl AppView {
         self.selection.clear();
         self.pointer = Pointer::default();
         self.surface.stop();
+        self.tree.images.stop();
         self.tree.clear();
         self.hits.clear();
         self.geometry.clear();
@@ -1760,6 +1974,9 @@ struct FieldDrag {
     last: ratatui_core::layout::Position,
     clicks: u32,
     anchor: (usize, usize),
+    /// The press focused a field that selected its whole text, which stays
+    /// selected unless the press drags.
+    select_all: bool,
 }
 
 impl Widget for &mut AppView {

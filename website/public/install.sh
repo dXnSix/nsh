@@ -20,8 +20,79 @@ bin="$HOME/.local/bin"
 version="${NSH_VERSION:-latest}"
 
 fail() {
+  [ -z "${tty:-}" ] || printf '\r\033[K' >&2
   echo "nsh: $*" >&2
   exit 1
+}
+
+# Progress goes to stderr, which stays a terminal under `curl ... | sh`.
+# Without a terminal (CI, logs) every step prints one plain line.
+tty=
+if [ -t 2 ] && [ "${TERM:-dumb}" != dumb ]; then
+  tty=1
+fi
+
+# Ctrl-C must stop the install. A non-interactive shell starts background
+# commands with SIGINT ignored, so the step running under the spinner is
+# stopped here, then the temporary directory goes and the script exits.
+pid=
+work=
+cleanup() {
+  [ -z "$work" ] || rm -rf "$work"
+}
+interrupted() {
+  trap '' INT TERM
+  [ -z "$pid" ] || kill "$pid" 2> /dev/null || true
+  [ -z "$tty" ] || printf '\r\033[K' >&2
+  cleanup
+  exit "$1"
+}
+trap cleanup EXIT
+trap 'interrupted 130' INT
+trap 'interrupted 143' TERM
+
+# step LABEL COMMAND...: run COMMAND with a spinner, then mark it done.
+step() {
+  label="$1"
+  shift
+  if [ -z "$tty" ]; then
+    echo "$label"
+    "$@"
+    return
+  fi
+  "$@" &
+  pid=$!
+  i=0
+  while kill -0 "$pid" 2> /dev/null; do
+    i=$(((i % 10) + 1))
+    case "$i" in
+      1) frame=⠋ ;; 2) frame=⠙ ;; 3) frame=⠹ ;; 4) frame=⠸ ;; 5) frame=⠼ ;;
+      6) frame=⠴ ;; 7) frame=⠦ ;; 8) frame=⠧ ;; 9) frame=⠇ ;; 10) frame=⠏ ;;
+    esac
+    # Build the whole line first and write it once, then clear what is
+    # left of the previous frame. Clearing first and appending the size
+    # from a separate command shows a frame without it: the size blinks.
+    size=
+    if [ -n "${download_file:-}" ] && [ -f "$download_file" ]; then
+      size=$(wc -c < "$download_file" | awk -v total="${download_total:-0}" '{
+        mb = $1 / 1048576
+        if (total > 0) {
+          pct = int($1 * 100 / total); if (pct > 100) pct = 100
+          printf "  \033[2m%.1f / %.1f MB\033[0m  %d%%", mb, total / 1048576, pct
+        } else {
+          printf "  \033[2m%.1f MB\033[0m", mb
+        }
+      }')
+    fi
+    printf '\r\033[36m%s\033[0m %s%s\033[K' "$frame" "$label" "$size" >&2
+    sleep 0.1
+  done
+  status=0
+  wait "$pid" || status=$?
+  pid=
+  printf '\r\033[K' >&2
+  [ "$status" -eq 0 ] || return "$status"
+  printf '\033[32m✓\033[0m %s\n' "$label" >&2
 }
 
 source_install() {
@@ -103,6 +174,16 @@ esac
 command -v curl > /dev/null 2>&1 || fail "curl is required"
 
 asset="nsh-$platform.tar.gz"
+# Name the release before downloading it: `releases/latest` redirects to
+# `releases/tag/<tag>`. The download then uses that tag, so a release
+# published meanwhile cannot mix in. Without an answer it falls back to
+# the `latest` download URL.
+if [ "$version" = "latest" ]; then
+  tag=$(curl -fsSI -o /dev/null -w '%{redirect_url}' "https://github.com/$repository/releases/latest" 2> /dev/null) || tag=
+  case "$tag" in
+    */releases/tag/?*) version="${tag##*/releases/tag/}" ;;
+  esac
+fi
 if [ "$version" = "latest" ]; then
   url="https://github.com/$repository/releases/latest/download/$asset"
 else
@@ -110,31 +191,48 @@ else
 fi
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT INT TERM
 
-echo "Downloading $url"
-curl -fsSL "$url" -o "$work/$asset"
-curl -fsSL "$url.sha256" -o "$work/$asset.sha256"
+case "$version" in
+  latest) echo "Installing the latest NSH release for $platform" ;;
+  *) echo "Installing NSH $version for $platform" ;;
+esac
+if [ -n "$tty" ]; then
+  download_file="$work/$asset"
+  # The total size comes from Content-Length after redirects; without it the
+  # spinner falls back to the downloaded size only.
+  download_total=$(curl -fsSIL "$url" 2> /dev/null | tr -d '\r' |
+    awk 'tolower($1) == "content-length:" { n = $2 } END { print n + 0 }') || download_total=0
+  step "Downloading $asset" curl -fsSL "$url" -o "$download_file" || fail "could not download $url"
+  download_file=
+else
+  echo "Downloading $url"
+  curl -fsSL "$url" -o "$work/$asset" || fail "could not download $url"
+fi
+curl -fsSL "$url.sha256" -o "$work/$asset.sha256" || fail "could not download $url.sha256"
 
-(
+verify() (
   cd "$work"
   if command -v shasum > /dev/null 2>&1; then
     shasum -a 256 -c "$asset.sha256" > /dev/null
   else
     sha256sum -c "$asset.sha256" > /dev/null
   fi
-) || fail "the checksum of $asset does not match"
+)
+step "Verifying checksum" verify || fail "the checksum of $asset does not match"
 
-tar -xzf "$work/$asset" -C "$work"
+step "Extracting $asset" tar -xzf "$work/$asset" -C "$work" || fail "could not extract $asset"
 [ -x "$work/nsh/bin/nsh" ] || fail "$asset holds no nsh/bin/nsh"
 
 # Replace the whole directory: runtimes of an older release must not stay.
-mkdir -p "$(dirname "$dir")" "$bin"
-rm -rf "$dir.old"
-[ ! -e "$dir" ] || mv "$dir" "$dir.old"
-mv "$work/nsh" "$dir"
-rm -rf "$dir.old"
-ln -sf "$dir/bin/nsh" "$bin/nsh"
+place() {
+  mkdir -p "$(dirname "$dir")" "$bin"
+  rm -rf "$dir.old"
+  [ ! -e "$dir" ] || mv "$dir" "$dir.old"
+  mv "$work/nsh" "$dir"
+  rm -rf "$dir.old"
+  ln -sf "$dir/bin/nsh" "$bin/nsh"
+}
+step "Installing to $dir" place || fail "could not install to $dir"
 
 echo "Installed $("$dir/bin/nsh" --version) to $dir"
 case ":$PATH:" in

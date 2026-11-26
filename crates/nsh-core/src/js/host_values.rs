@@ -8,8 +8,9 @@ use crate::{
     CellSlot, EdgeInsets, HeaderItem, HeaderItemContent, HeaderSystemItem, ImageScales,
     ImageSource, KeyboardTaps, ListContentStyle, MacOsBackdrop, MacOsBackdropBlending,
     MacOsBackdropMaterial, MacOsBackdropState, ModalProp, Prop, RevealOptions, ScreenProp,
-    ScrollAlignment, ScrollProp, StatusBarSetting, StatusBarStyle, Viewability,
-    element::{ElementTarget, TsTypes},
+    ScrollAlignment, ScrollProp, StatusBarSetting, StatusBarStyle, Viewability, WindowsBackdrop,
+    WindowsBackdropMaterial,
+    element::{ElementTarget, ScrollEdgeTarget, TsTypes},
     geometry::{Bounds, Percentage, Points, point, size},
     mount::ModalConfig,
     ops::OverlayProp,
@@ -17,7 +18,7 @@ use crate::{
     props::{AccessibilityActionDef, AccessibilityValue, Checked, PanActivation, Ripple},
 };
 
-/// `"none"`, `"all"`, or the canonical keystrokes a view captures
+/// `"none"`, `"all"`, `"text"`, or the canonical keystrokes a view captures
 /// (`"mod+k"`, `"shift+tab"`): parsed once here with the shortcut rules
 /// and this platform's `mod`, which the engine's environment names
 /// ([`crate::element::try_apple_keys`]); a JS host decoding outside that
@@ -32,7 +33,7 @@ impl HostValue for crate::KeyCapture {
     }
 
     fn ts_type(_: &mut TsTypes) -> String {
-        "\"none\" | \"all\" | readonly string[]".into()
+        "\"none\" | \"all\" | \"text\" | readonly string[]".into()
     }
 }
 
@@ -136,8 +137,8 @@ impl HostValue for RevealOptions {
     }
 }
 
-/// A list's `contentStyle`: the padding properties (numbers) and
-/// `gap` / `rowGap` / `columnGap`.
+/// A list's `contentStyle`: the padding properties (numbers),
+/// `gap` / `rowGap` / `columnGap`, and cross-axis `alignItems`.
 impl HostValue for ListContentStyle {
     fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
         let n = |key| points(input, key);
@@ -145,6 +146,16 @@ impl HostValue for ListContentStyle {
         let inline = n("paddingHorizontal").unwrap_or(all);
         let block = n("paddingVertical").unwrap_or(all);
         let gap = n("gap").unwrap_or_default();
+        let align_items = input
+            .field("alignItems")
+            .and_then(|v| v.as_string())
+            .and_then(|v| match v.as_str() {
+                "stretch" => Some(taffy::AlignItems::STRETCH),
+                "flex-start" => Some(taffy::AlignItems::FLEX_START),
+                "center" => Some(taffy::AlignItems::CENTER),
+                "flex-end" => Some(taffy::AlignItems::FLEX_END),
+                _ => None,
+            });
         Some(ListContentStyle {
             padding: EdgeInsets {
                 top: n("paddingTop").unwrap_or(block),
@@ -154,16 +165,17 @@ impl HostValue for ListContentStyle {
             },
             row_gap: n("rowGap").unwrap_or(gap),
             column_gap: n("columnGap").unwrap_or(gap),
+            align_items,
         })
     }
 
     fn ts_type(types: &mut TsTypes) -> String {
         types.declare("ListContentStyle", |_| {
-            "/** Padding and gaps of a list's content (`contentStyle`). */\n\
+            "/** Padding, gaps and cell alignment of a list's content (`contentStyle`). */\n\
              export interface ListContentStyle {\n  padding?: number;\n  paddingHorizontal?: number;\n  \
              paddingVertical?: number;\n  paddingTop?: number;\n  paddingRight?: number;\n  \
              paddingBottom?: number;\n  paddingLeft?: number;\n  gap?: number;\n  rowGap?: number;\n  \
-             columnGap?: number;\n}"
+             columnGap?: number;\n  alignItems?: \"stretch\" | \"flex-start\" | \"center\" | \"flex-end\";\n}"
                 .into()
         })
     }
@@ -194,6 +206,86 @@ impl HostValue for MacOsBackdrop {
                  blending?: {blending};\n  state?: {state};\n}}"
             )
         })
+    }
+}
+
+/// `ios={{ scrollEdgeElement }}`: `{ scrollView, edge }`, the scroll
+/// view a ref holds and the edge (`"bottom"` when left out or unknown);
+/// without a scroll view it is none.
+impl HostValue for ScrollEdgeTarget {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
+        let scroll_view = input.field("scrollView")?.node()?;
+        let edge = field::<crate::ScrollEdge, _>(input, "edge", cx).unwrap_or_default();
+        Some(ScrollEdgeTarget::of_node(scroll_view, edge))
+    }
+
+    fn ts_type(types: &mut TsTypes) -> String {
+        let edge = <crate::ScrollEdge as HostValue>::ts_type(types);
+        types.declare("ScrollEdgeElement", |_| {
+            format!(
+                "/** The scroll view a view floats over and the edge of it the view sits at \
+                 (`ios={{{{ scrollEdgeElement }}}}`). */\n\
+                 export interface ScrollEdgeElement {{\n  scrollView: ViewRef;\n  \
+                 edge?: {edge};\n}}"
+            )
+        })
+    }
+}
+
+impl HostValue for WindowsBackdrop {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
+        if !input.is_object() {
+            return None;
+        }
+        Some(Self {
+            material: field(input, "material", cx)?,
+        })
+    }
+
+    fn ts_type(types: &mut TsTypes) -> String {
+        let material = <WindowsBackdropMaterial as HostValue>::ts_type(types);
+        types.declare("WindowsBackdrop", |_| {
+            format!(
+                "/** The material a view draws with on Windows (`windows={{{{ backdrop }}}}`). */\n\
+                 export interface WindowsBackdrop {{\n  material: {material};\n}}"
+            )
+        })
+    }
+}
+
+/// A dialog's `detents`, `detent`, `defaultDetent` and
+/// `largestUndimmedDetent`: `"medium"`, `"large"`, `{ height }` or
+/// `{ fraction }`; anything else is left out with a warning.
+impl HostValue for crate::SheetDetent {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
+        use crate::SheetDetent;
+        if input.is_nullish() {
+            return None;
+        }
+        if let Some(name) = input.as_string() {
+            match name.as_str() {
+                "medium" => return Some(SheetDetent::Medium),
+                "large" => return Some(SheetDetent::Large),
+                _ => {}
+            }
+        } else if input.is_object() {
+            let number = |key| input.field(key).and_then(|v| v.as_number());
+            let detent = match number("height") {
+                Some(height) => SheetDetent::of_height(height),
+                None => number("fraction").and_then(SheetDetent::of_fraction),
+            };
+            if detent.is_some() {
+                return detent;
+            }
+        }
+        cx.warn(
+            r#"detent: expected "medium", "large", `{ height }` (0 or more) or `{ fraction }` (0 to 1)"#,
+        );
+        None
+    }
+
+    fn ts_type(types: &mut TsTypes) -> String {
+        <crate::SheetDetent as crate::element::JsValue>::ts_type(types)
     }
 }
 
@@ -235,10 +327,11 @@ impl HostValue for Viewability {
     }
 }
 
-/// `{ activeOffsetX, activeOffsetY, failOffsetX, failOffsetY }` (points;
-/// the sign is ignored).
+/// `{ activeOffsetX, activeOffsetY, failOffsetX, failOffsetY, direction,
+/// edge }` (points, the sign ignored; an unknown `direction` or `edge` is
+/// left out).
 impl HostValue for PanActivation {
-    fn decode<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Self> {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
         if !input.is_object() {
             return None;
         }
@@ -248,11 +341,32 @@ impl HostValue for PanActivation {
             active_offset_y: offset("activeOffsetY"),
             fail_offset_x: offset("failOffsetX"),
             fail_offset_y: offset("failOffsetY"),
+            direction: field(input, "direction", cx),
+            edge: field(input, "edge", cx),
         })
     }
 
-    fn ts_type(_: &mut TsTypes) -> String {
-        "PanActivation".into()
+    fn ts_type(types: &mut TsTypes) -> String {
+        let direction = <crate::PanDirection as HostValue>::ts_type(types);
+        let edge = <crate::PanEdge as HostValue>::ts_type(types);
+        types.declare("PanActivation", |_| {
+            format!(
+                "/** When a view's pans activate (`panActivation`; react-native-gesture-handler's\n \
+                 * `activeOffsetX` / `failOffsetY`), decided natively on the main thread as the\n \
+                 * finger moves: past an active offset the view becomes the responder, its `pan`\n \
+                 * starts and the scroll views around it can no longer take the touches; past a\n \
+                 * fail offset first it never does, and they keep them. Distances in points along\n \
+                 * one axis, either direction; without active offsets it activates after 10 points. */\n\
+                 export interface PanActivation {{\n  \
+                 activeOffsetX?: number;\n  activeOffsetY?: number;\n  \
+                 failOffsetX?: number;\n  failOffsetY?: number;\n  \
+                 /** The one way it activates in: a drag the other way, or mostly across it, fails it. */\n  \
+                 direction?: {direction};\n  \
+                 /** Only a finger that goes down within 20 points of this edge of the screen (the\n   \
+                 * window on desktops, the page on the web) starts it, moving away from the edge. */\n  \
+                 edge?: {edge};\n}}"
+            )
+        })
     }
 }
 
@@ -613,6 +727,23 @@ fn menu_role(name: &str) -> Option<crate::desktop::MenuRole> {
 
 // --- Whole variants ---------------------------------------------------------
 
+/// `selectionMenu`: `nsh/desktop`'s `MenuItem` items. Handlers (`onSelect`)
+/// are taken by the JS runtime when it sets the prop; this decode leaves
+/// their ids at 0.
+pub(crate) fn selection_menu<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Prop> {
+    if input.is_nullish() {
+        return Some(Prop::SelectionMenu(Vec::new()));
+    }
+    input.as_list()?;
+    Some(Prop::SelectionMenu(
+        input
+            .items()
+            .iter()
+            .filter_map(|item| decode_menu_item(item, cx))
+            .collect(),
+    ))
+}
+
 /// `slot`: a recycling slot (a number) or a role.
 pub(crate) fn slot<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop> {
     Some(Prop::Slot(match input.as_string() {
@@ -839,10 +970,14 @@ pub(crate) fn deceleration<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Sc
     }))
 }
 
-/// `maintainVisibleContentPosition`: `{ autoscrollToBottomThreshold }`.
+/// `maintainVisibleContentPosition`: `{ autoscrollToBottomThreshold, animated }`.
 pub(crate) fn visible_content<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop> {
     Some(Prop::FollowEnd(
         points(input, "autoscrollToBottomThreshold").map(|t| t.max(Points::ZERO)),
+        input
+            .field("animated")
+            .and_then(|a| a.as_bool())
+            .unwrap_or(false),
     ))
 }
 
@@ -865,15 +1000,26 @@ pub(crate) fn scrollbar<I: HostInput>(input: &I, _: &mut HostCx) -> Option<Prop>
     Some(Prop::Scrollbar(match input.as_bool() {
         Some(shows) => shows.into(),
         None if input.is_object() => {
-            crate::ScrollbarSetting::Themed(std::sync::Arc::new(json_of(input)))
+            crate::ScrollbarSetting::Themed(std::sync::Arc::new(json_of(input, 0, &mut {
+                JSON_ENTRIES
+            })))
         }
         None => crate::ScrollbarSetting::Shown,
     }))
 }
 
+/// Deepest nesting [`json_of`] reads.
+const JSON_DEPTH: u32 = 64;
+/// Most array items and object fields [`json_of`] reads in all.
+const JSON_ENTRIES: usize = 1 << 20;
+
 /// `input` as JSON: what is neither a boolean, number, string, array nor
-/// object (a function) is `null`.
-fn json_of<I: HostInput>(input: &I) -> crate::JsonValue {
+/// object (a function) is `null`, and so is what is nested more than
+/// [`JSON_DEPTH`] deep or past `left` entries (of [`JSON_ENTRIES`]): the
+/// app's value is read natively, where neither the time budget nor the
+/// interpreter's stack limit applies, and one that holds itself would
+/// recurse until the engine thread's stack overflows.
+fn json_of<I: HostInput>(input: &I, depth: u32, left: &mut usize) -> crate::JsonValue {
     use crate::JsonValue;
     if let Some(b) = input.as_bool() {
         return JsonValue::Bool(b);
@@ -884,17 +1030,32 @@ fn json_of<I: HostInput>(input: &I) -> crate::JsonValue {
     if let Some(s) = input.as_string() {
         return JsonValue::String(s);
     }
-    if input.as_list().is_some() {
-        return JsonValue::Array(input.items().iter().map(json_of).collect());
+    if depth >= JSON_DEPTH {
+        return JsonValue::Null;
+    }
+    if let Some(list) = input.as_list() {
+        let mut items = Vec::new();
+        for i in 0..list.len() {
+            if *left == 0 {
+                break;
+            }
+            *left -= 1;
+            if let Some(item) = list.item(i) {
+                items.push(json_of(&item, depth + 1, left));
+            }
+        }
+        return JsonValue::Array(items);
     }
     if input.is_object() {
-        return JsonValue::Object(
-            input
-                .entries()
-                .into_iter()
-                .map(|(k, v)| (k, json_of(&v)))
-                .collect(),
-        );
+        let mut fields = serde_json::Map::new();
+        for (key, value) in input.entries() {
+            if *left == 0 {
+                break;
+            }
+            *left -= 1;
+            fields.insert(key, json_of(&value, depth + 1, left));
+        }
+        return JsonValue::Object(fields);
     }
     JsonValue::Null
 }

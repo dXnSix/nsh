@@ -4,6 +4,352 @@ Performance is the project's first priority; the rules are in `AGENTS.md`. Chang
 after `nsh test --trace` timings and item counts (`nsh trace` before it, in the records below). Current baselines
 (Apple Silicon except where noted):
 
+Resolved class styles cached and style records shared (`core/classes.rs`, `core/mod.rs`, `core/layout_tree.rs`,
+`core/components.rs`, `tailwind/mod.rs`, `tailwind/utilities.rs`, 2026-11-25, macOS arm64, Apple M5, release against
+`main` at `b729299a0`): every restyle unconditionally cloned `Style` (~900 B) for TUI resting fills, zero-initialized
+a ~700 B `Parts` builder and ran three rule passes in `ClassList::apply_with`, scanned rules redundantly for
+`currentColor`, missed layout/style sharing across repeated `Rc<ClassList>`s once `LayoutTree`'s 4-entry window
+overflowed, and cloned `unstyled_layout()` on every node creation. `ClassList` now records `rule_flags` (`add`) to
+skip empty passes and `Parts` allocation, `Core::resolved_styles` (4,096-entry per-`Core` cache normalized to
+`ClassList::deps()`, including inherited `currentColor`) caches resolved outputs sharing `Rc<taffy::Style>`,
+`Rc<ViewStyle>`, `Rc<TextStyle>`, `Rc<PaintStyle>`, and `Rc<ClassProps>`, `Core::create` shares `LayoutTree::default_style`,
+and `Components::apply_styles` reuses `merge_user`. `resolved_class_style_cache_matches_uncached_resolution` and
+`repeated_classes_share_resolved_styles_and_layout_records` pin exact mount-item/style equivalence and sharing; every
+workload below keeps identical ops, mount items, and nodes (five alternating rounds except `bench_large_document` and
+headless `PositionalClasses`, three alternating rounds):
+
+| Benchmark | Metric | Before | After |
+|---|---|---:|---:|
+| `nsh-core` `bench_restyle_colors` | 900 boxes min / median | 364–367 / 371–383 µs | 128–133 / 137–140 µs |
+| `nsh-core` `bench_tailwind_class_mount` | Repeated 10,000 views median | 13.31 ms (12.79–23.66) | 7.42 ms (7.17–7.52) |
+| `nsh-core` `bench_tailwind_class_mount` | Dark toggle 5,000 views median | 0.39 ms/toggle | 0.09 ms/toggle |
+| `nsh-core` `bench_tailwind_class_mount` (0% hit control) | Unique 10,000 views median | 31.27 ms (30.69–44.23) | 28.18 ms (27.99–38.89) |
+| `nsh-core` `bench_row_relayout` (control) | Median per commit | 803 ns | 797 ns |
+| `nsh-engine` `GridTs.tsx` | First frame core min | 612.6–618.3 µs | 455.6–461.5 µs |
+| `nsh-engine` `GridRust.tsx` | First frame core min | 934.3–956.0 µs | 801.8–836.0 µs |
+| `nsh-engine` `RowsTs.tsx` / `RowsRust.tsx` | First frame core min | 117.0–118.5 / 138.2–140.2 µs | 102.6–109.8 / 125.3–127.4 µs |
+| `nsh-base` `bench_large_document` (1.9 MB, 34,326 blocks) | Mount culling off / on | 789.1–800.7 / 735.9–767.4 ms | 637.4–644.9 / 653.3–670.2 ms |
+| `examples/bench/PositionalClasses.tsx` (release `--trace`) | First commit median (range) | 1,918 µs (1,563–2,314) | 954 µs (823–1,225) |
+
+The debug `examples/counter/App.tsx --trace` control keeps 56 ops, 50 mount items, and 15 nodes with every mount item identical (`Node` record stays at 600 B).
+
+Sibling position classes looked at once per parent (`core/classes.rs`, 2026-11-23, macOS arm64, release, the change on
+`cc19b8b38` against `main` at `2c17143e7`): every child inserted or removed ran `positions_changed` over all of its
+siblings at once (cloning the list and counting them), so mounting N rows with `odd:` or `last:` classes looked at
+N²/2 siblings, although only the rows whose bits moved were restyled (the 2026-11-15 change below). A parent whose
+children move is now queued once and its children's positions looked at before the next flush (`flush_positions`, once
+a commit round's components rendered and at each flush), and restyling a row (its hover, its press) takes the bits it
+was last styled at while its siblings did not move (`known_position`) instead of counting them. Headless
+`nsh test --trace` of an `<Each>` of rows with `odd:bg-neutral-100 last:border-b-0 border-b`, the first commit, three
+alternating rounds (the same rows without the positional classes are the control, untouched by this change and by the
+commits between the two bases); every mount item is the same:
+
+| Rows | Before | After | Without positional classes |
+|---:|---:|---:|---:|
+| 1,000 | 6.7–8.9 ms | 4.5–5.8 ms | 4.2–4.7 ms |
+| 4,000 | 53–57 ms | 19–21 ms | 17–21 ms |
+| 8,000 | 174–184 ms | 43–50 ms | 36–42 ms |
+
+`positions_are_looked_at_once_per_parent_as_rows_mount` keeps the siblings looked at in step with the rows (80,200 and
+1,280,800 for 400 and 1,600 rows before, sixteen times).
+
+A long RichEditor document with tables (2026-11-21, Linux x86_64, Intel Core Ultra 7 270K Plus, debug, against
+`ca7b8fba3`): every block reports its frame in a layout event of its own, and each event went through all of the
+component's handlers to find the block's (a list of every node's), then ran the tables' controls again, one region
+laying out every table and making all their handles: the first commit grew with the square of the blocks. The
+component's handlers are now kept by node (`Handlers`), and each table's controls are a region that runs again when
+that table, a cell of it or a box around it moves (`docs/dev/rich-editor.md`). `examples/bench/RichEditorLongDocument.tsx`
+with `LINES` set, `echo 'await app.wait(100)' | nsh test … --trace`, the first commit:
+
+| Source lines | Mount items | Nodes | Before: commit (list js) | After: commit (list js) |
+|---:|---:|---:|---:|---:|
+| 200 | 2,921 | 1,039 | 109 ms (46 ms) | 71 ms (9 ms) |
+| 400 | 5,783 | 2,065 | 272 ms (154 ms) | 137 ms (19 ms) |
+| 800 | 11,507 | 4,117 | 951 ms (714 ms) | 278 ms (38 ms) |
+| 1,600 | 22,478 | 8,050 | 3,260 ms (2,792 ms) | 537 ms (74 ms) |
+| 5,000 | 70,178 | 25,150 | 28,518 ms (27,019 ms), test failed | 1,724 ms (240 ms) |
+
+The rows were measured with the same app mounted without a `Window` (the bench file wraps it in one: 70,177 items at
+5,000 lines). Item and node counts are unchanged. The same document without tables went from 75 ms to 37 ms of list js at
+1,600 lines (the handlers alone). `examples/bench/RichEditor.tsx` keeps its counts (13,054 items and 4,011 nodes first,
+3 or 4 items an edit); its first commit went from 312 to 246 ms (list js 109 → 50 ms), and its edits, five interleaved
+runs of the last four, from 409–703 µs (list js 96–134 µs) to 386–610 µs (79–95 µs). The counter keeps 56 / 10 ops,
+50 / 7 mount items and 15 / 18 nodes. `an_event_looks_only_at_its_nodes_handlers` keeps an event's handler lookups the
+same at 50, 200 and 800 rows.
+
+Rust components' events read by atom (`nsh-js` `components.rs`, 2026-11-20, macOS arm64, release, against the
+change below): a Rust component's event reached its `on<Event>` prop through two `String`s of its name, a `format!`
+of the handler's name, a `CString` per property read and a `Vec` of one argument; its creation checked each event's
+handler the same way, and slot and children readers made a `String` and a `CString` per read. Handler atoms are now
+made once per event name (`Components::handlers`), names are compared borrowed (`dom::with_str`), and the other reads
+take atoms without a `CString`. `bench_components`, JS time of three rounds of each version run in turn (a press: the
+mean of 2,000; a first frame: the least of 40); ops and mount items are the same:
+
+| Entry | Before | After |
+|---|---:|---:|
+| `PressRust.tsx`, a press delivered to `onPress` | 552–575 ns | 433–449 ns |
+| `GridRust.tsx` first frame | 588–604 µs | 573–583 µs |
+
+`PressTs.tsx` (990–1,039 ns a press) is the control. GridRust's update of 200 titles, a path this change does not
+touch, read 114–116 µs before and 117–118 µs after; the other entries stay within the runs' spread.
+
+Render keys holding a NUL: the table of what a render function rendered was written and cleared through a
+`CString`, which made every such key `""`, so two of them replaced each other's content. The table is now keyed
+by the whole key (`keys_holding_a_nul_render_and_go_as_others`).
+
+Rust components' props read by atom (`nsh-js` `components.rs`, 2026-11-19, macOS arm64, release, against
+`2ede573ac`): a Rust component's props effect read each of its keys (its value and renderer props and the about 20
+host props it does not declare) by name on every run, making the key list again (`ComponentSpec::host_props`, one
+`format!` per host prop and event) and a `CString` and an atom per key. The keys and their atoms are now made once per
+spec (`Components::prop_keys`) and read with `JS_GetProperty`. `cargo test --release -p nsh-engine --test engine
+bench_components -- --ignored --nocapture`, JS time, the least of three rounds of each version run in turn; ops and
+mount items are the same before and after:
+
+| Entry | Before | After | Ops | Mount items |
+|---|---:|---:|---:|---:|
+| `GridRust.tsx` first frame | 988 µs | 598 µs | 1,015 | 386 |
+| `GridRust.tsx` update 200 titles | 485 µs | 112 µs | 200 | 63 |
+| `RowsRust.tsx` first frame | 289 µs | 263 µs | 263 | 323 |
+| `RowsRust.tsx` scrolling, per rebinding frame | 4.04 µs | 1.85 µs | — | — |
+
+The TSX twins (`GridTs.tsx` 1,053 / 127 µs, `RowsTs.tsx` 320 / 2.18 µs) are the controls, unchanged. Apps that set
+no props of Rust components after they mount do not show it: headless `nsh test --trace` (debug, three alternating
+rounds) of `examples/bench/data-table` (open, press row `#1`), `examples/bench/Inputs.tsx` (open the Select, type a
+search) and the counter keep every commit's ops, mount items and nodes, and their commit times stay within the runs'
+spread (data-table's first commit 16.6–17.9 ms before, 16.9–19.0 ms after; the Select's 30.0–34.8 ms, 26.4–32.4 ms).
+
+Many children of one parent mounted at once (2026-11-18, Linux x86_64, Intel Core Ultra 7 270K Plus, release, one
+CPU, against `6442c86be`): an `each` placed its new rows by searching the parent's children for each one, and a view
+made last among its siblings looked through every overlay of the surface (a document's links each have a hint
+overlay) for the one it goes below, so mounting a long document grew with the square of its blocks. A new row is now
+known from its own parent, the rows are placed next to the one placed before them, and only a root view or a modal
+is looked up among the overlays. `cargo test --release -p nsh-core --lib bench_each_mount -- --ignored --nocapture`,
+ms from `mount_root` to the finished first `MountBatch` (`FakeEngine`, 320 × 480), the least of three rounds of the
+two test binaries run in turn:
+
+| Rows of an `each` | 1,000 | 10,000 | 50,000 |
+|---|---:|---:|---:|
+| In a view | 10.2 → 9.4 | 195.6 → 145.3 | 3,636.7 → 955.4 |
+| In a scroll view (the rows out of sight culled) | 7.3 → 6.7 | 143.3 → 140.2 | 3,683.7 → 845.3 |
+| In a scroll view, a hint overlay in each row | 16.8 → 13.1 | 437.1 → 214.6 | 12,531.1 → 1,361.5 |
+
+A scrolled frame of the same rows (20 points a frame) is unchanged: it lays the whole column out again when rows
+come into sight. A long Markdown document in a `TextView` in a scroll view (`cargo test --release -p nsh-base --test
+base bench_large_document -- --ignored --nocapture`, ms to mount a document read before; with content culling off,
+as test drivers have it, every block's view is made):
+
+| Document | Blocks | Culling on | Culling off |
+|---|---:|---:|---:|
+| 190 KB | 3,474 | 167.9 → 125.8 | 144.4 → 103.8 |
+| 950 KB | 17,211 | 907.3 → 647.0 | 1,247.4 → 586.0 |
+| 1.9 MB | 34,326 | 2,707.6 → 1,296.7 | 4,473.4 → 1,210.6 |
+
+`rows_mounted_at_once_are_placed_without_a_search_for_each` keeps the siblings and overlays looked at in step with
+the rows (four times the rows: about four times the work, sixteen before).
+
+Many components whose root is not a plain view mounted at once (2026-11-18, Linux x86_64, Intel Core Ultra 7 270K
+Plus, release, against `0713ce96d`): a tooltip's hint overlay or a text as a component's root takes its kind when
+the component renders, and each such root went through all the mount items of the batch, so a document with a
+tooltip in every code block grew with the square of its blocks. It now grows with them within a round of renders (a
+batch that makes such roots over several rounds, as rows scroll into sight, still goes over its items once a round).
+`cargo test --release -p
+nsh-core --lib bench_component_roots_mount -- --ignored --nocapture`, ms from `mount_root` to the first
+`MountBatch` (`FakeEngine`), the least of three rounds; the mount items are the same before and after:
+
+| Rows of an `each`, a tooltip in each | 1,000 | 10,000 | 20,000 |
+|---|---:|---:|---:|
+| In a view | 20.4 → 6.7 | 1,745.8 → 198.5 | 6,786.7 → 339.5 |
+| In a scroll view (the rows out of sight culled) | 8.9 → 8.6 | 156.2 → 142.5 | 427.9 → 323.8 |
+
+`component_roots_mounted_at_once_take_their_kind_without_a_pass_for_each` keeps the mount items looked at in step
+with the rows: for 400 and 1,600 rows in a view, 4,814 and 19,214 items looked at (1,606,400 and 25,625,600
+before, sixteen times).
+
+Words fading into a long paragraph (`text_view` with a Markdown plugin, 2026-11-18, Linux x86_64, Ryzen 9 7950X,
+release, one CPU): a streamed paragraph whose newest words are spans, hidden until their turn and then fading in
+by their text color, about 30 frames a second, two words arriving a frame; a word done fading joins the plain text
+again. The text engine is `ApproxTextEngine` drawing colors from the text, as the desktop engines do; it counts
+the characters it typesets. `cargo test --release -p nsh-base --test base bench_word_fade -- --ignored
+--nocapture`, µs a frame, medians of three rounds of fading off and on in turn (the paragraph grows by 240 words
+over a round):
+
+| Words at first | Arrival: reading + commit, off / on | Frame (colors only), on | Extra a frame | Characters typeset a frame |
+|---:|---:|---:|---:|---:|
+| 200 | 85.8 + 3.5 / 101.1 + 21.3 | 13.7 | +46.5 | 6,053 both |
+| 800 | 222.6 + 6.2 / 235.6 + 24.0 | 14.5 | +45.1 | 16,403 both |
+| 1,600 | 397.8 + 9.7 / 413.6 + 27.8 | 15.6 | +49.3 | 30,203 both |
+| 3,200 | 753.1 + 16.0 / 769.4 + 35.5 | 18.1 | +53.7 | 57,803 both |
+
+Fading costs the engine about 50 µs a frame whatever the paragraph's length: the frames of colors and hidden runs
+typeset nothing and mount the text once with the layout drawn, and arriving words typeset the paragraph once
+either way (`fading_words_typeset_the_paragraph_only_for_new_words` keeps both). What grows with the paragraph is
+each arrival, fading or not: reading the Markdown again and one typesetting of the whole paragraph. Where a
+platform's cost of a fading frame grows with the paragraph, it is its drawing, not the engine.
+
+Out-of-line rare attributes (`core/element/builder.rs`, 2026-11-18, macOS arm64, release `bench_components`
+and `size_of` on the same machine, `main` against the change): `Attrs` keeps its common
+fields inline and boxes eighteen rare ones (`src`, `drawing`, `element_ref`, `animated`, `bound`, `inset_*`,
+`projected_*`, `render`, `window`, the accessibility set) behind `Option<Box<RareAttrs>>`, allocated on first
+non-default write; `Expanded` boxes its `VirtualList`-only `ListConfig` the same way. `Attrs::PartialEq`,
+`Attrs::changes`, `slots::split` / `merged` and attribute application take a `rare.is_none()` fast path, and
+`None` equals an all-default box, so cleared rare fields do not keep a node unequal.
+
+| Record | Before | After |
+|---|---:|---:|
+| `Attrs` | 360 B | 104 B (-71%) |
+| `Expanded` | 624 B | 312 B (-50%) |
+| `BoundNode` | 464 B | 208 B (-55%) |
+
+`size_tests::rare_attrs_keep_element_records_compact_and_default_equal` pins the ceilings. In the 45,304-node
+case of `#1345` the smaller `Expanded` saves ~16 MiB of resident heap. `component_bench` (`cargo test --release
+-p nsh-engine --test engine bench_components -- --ignored --nocapture`, min / median, the same ops and mount
+items both ways):
+
+| Phase | Before | After | Ops | Mount items |
+|---|---:|---:|---:|---:|
+| `GridRust.tsx` first frame core | 1.166 / 1.285 ms | 1.090 / 1.118 ms (-6.5%) | 1016 | 387 |
+| `GridRust.tsx` update 200 titles core | 169.7 / 177.8 µs | 152.0 / 157.0 µs (-10.5%) | 200 | 63 |
+| `RowsRust.tsx` first frame core | 147.2 / 157.1 µs | 142.2 / 145.4 µs | 264 | 324 |
+| `RowsRust.tsx` scrolling core | 7.885 µs/frame | 7.443 µs/frame | — | — |
+
+The `*Ts.tsx` runs, which build their views without Rust component nodes, stayed within their run-to-run
+spread (`GridTs` first frame 764.5 / 750.7 µs, `RowsTs` 120.1 / 119.0 µs).
+
+Rows an `each` keeps (2026-11-17, Linux x86_64, Ryzen 9 7950X, release, against `e2479085c`): every update of an
+`each` (the rows of Rust components, `element/flow.rs`; TSX's `<Each>` is `nsh-js`'s own) built a map of all its
+rows, wrote each row's item and index, and sent the core an element per kept row, which the core copied, matched
+and placed again. A row added also searched the old elements once per kept row and the parent's children once per
+node, so an append grew with the square of the rows. Rows are now passed in order and kept while the key in its
+place is each row's own, the core matches only what follows the elements a run keeps in place, and kept rows and
+nodes in order are found where the last one was (`components.md`, "What comes and goes is a region").
+
+`cargo test --release -p nsh-core --lib bench_each_update -- --ignored --nocapture`: N rows of a view and a text,
+one press an update, from `Core::component_event` to the finished `MountBatch` (`FakeEngine`, 320 × 480). µs an
+update, the rows' pass + the commit, means of 200 updates; medians of three rounds of the two test binaries run
+in turn on one CPU:
+
+| Rows | Update | Before | After | Mount items |
+|---:|---|---:|---:|---:|
+| 640 | The last row's item changes | 102.7 + 42.2 = 144.9 | 9.0 + 7.7 = 16.7 | 1 |
+| 640 | A row is added at the end | 113.9 + 841.9 = 955.8 | 13.6 + 429.9 = 443.6 | 9 |
+| 1,280 | The last row's item changes | 200.7 + 83.1 = 283.9 | 19.0 + 15.0 = 33.9 | 1 |
+| 1,280 | A row is added at the end | 230.3 + 2172.2 = 2402.5 | 23.1 + 815.0 = 837.9 | 9 |
+| 5,000 | The last row's item changes | 820.4 + 338.0 = 1158.4 | 73.9 + 66.3 = 140.2 | 1 |
+| 5,000 | A row is added at the end | 1200.6 + 22137.8 = 23338.3 | 137.9 + 3614.4 = 3752.3 | 9 |
+| 1,280 | Control: a text beside the rows changes | 0.2 + 4.6 = 4.9 | 0.2 + 4.6 = 4.9 | 1 |
+| 1,280 | Control: a view after the rows changes its height | 0.4 + 723.9 = 724.3 | 0.4 + 729.7 = 730.1 | 2 |
+
+A row that stays costs 222 → 26 ns an update (1,280 rows, one item changed). With keys that allocate, as
+`TextView`'s `(usize, String)`, the same updates take 331.8 → 42.2 µs and 2405.8 → 858.0 µs at 1,280 rows. What
+is left of a row added is not the `each`: the second control lays the rows' parent out again with no row set, and
+costs 0.57 µs a row (724 µs of the 838), which this change leaves as it is.
+
+The mount items are the same: a list changed at random (rows changed, added, removed, moved, a key twice; four
+row shapes, 7,680 commits) writes the same items in both versions (`NSH_EACH_ITEMS` with the two `random_lists_`
+tests of `each_updates`), and so does every step of the traces below.
+
+A streamed reply in a `TextView`, whose blocks are rows of an `each`
+(`cargo test --release -p nsh-base --test base bench_text_view_streaming -- --ignored --nocapture`; total over the
+stream / average of the last 10 updates, ms, medians of three rounds of the two test binaries run in turn on one
+CPU; the item counts of all 4,822 updates are equal):
+
+| Reply | Before | After | Mount items |
+|---|---|---|---|
+| Typical, 20 KB | 391.4 / 0.855 | 294.3 / 0.586 | 16,421 |
+| Typical, 40 KB | 1557.6 / 2.058 | 1025.7 / 1.245 | 32,809 |
+| Ends in a 400-row table | 5171.9 / 16.646 | 5087.2 / 16.513 | 18,698 |
+| Ends in a 400-item tight list | 2131.3 / 6.533 | 2099.1 / 6.358 | 9,742 |
+| Ends in a 400-line code block | 354.6 / 0.771 | 359.0 / 0.782 | 3,666 |
+
+The last three replies are one block made again on each update, the same work in both versions: they stay within
+the 2% two builds of the same work differ by. Of what a typical update still costs per block, the layout of the
+view's column is the likely larger part: by the second control above it is about 0.7 ms of the 1.25 ms at 1,280
+blocks (an estimate from that control, not measured inside the `TextView`).
+
+Headless `nsh test <entry> --trace`, three runs of each version in turn on one CPU, every mount item of every
+step equal. `Bench.tsx` and the counter are plain debug builds; the two entries with a long `each` are built with
+`nsh-core` and `nsh-base` at `opt-level=3` (`--config 'profile.dev.package.nsh-core.opt-level=3'`, the same for
+`nsh-base`), as the plain build takes longer to mount them than a step waits. Median of the runs' mean commit:
+
+| Entry | Commits | Before (µs/commit) | After (µs/commit) | Ops | Mount items | Nodes |
+|---|---|---:|---:|---:|---:|---:|
+| `examples/bench/TextViewStream.tsx`, 40 presses of 24 bytes after 600 blocks | 40 | 4,503 | 3,394 | 1 | 1 to 12 | 5,409 to 5,550 |
+| `examples/bench/RichEditor.tsx`, 8 edits of the first of 1,000 paragraphs | 8 | 3,858 | 3,412 | 0 | 4 or 5 | 5,013 |
+| `examples/gallery/Bench.tsx`, `app.scroll("id:photos", 3000)` | 66 | 693 | 696 | 0 to 162 | 1 to 132 | 306 to 684 |
+| Counter, press `+1` | 1 | 261 | 269 | 10 | 7 | 24 |
+
+The first commits keep their counts (19 ops / 4,220 items / 5,406 nodes, 20 / 13,058 / 5,013, 756 / 622 / 252 and
+57 / 51 / 21). The last two rows are controls of unchanged work.
+
+Per-block RichEditor updates (2026-11-17, macOS arm64, against `126d7701`): block offsets moved out
+of the reactive block items into `Tree`, the blocks' `selectedNode`/`focusedNode` state and each
+textblock's selection boxes are per-block signals updated only for the blocks a selection or an edit
+touches, and the geometry's ordered textblock index turns `text_at` / `range_rects` into binary
+searches. Headless `nsh test examples/bench/… --trace`, debug profile:
+
+| Phase | Before | After | Ops | Mount items | Nodes |
+|---|---:|---:|---:|---:|---:|
+| `RichEditorMount.tsx` initial population | 353,344 µs | 34,293 µs | 10 | 2,648 → 2,644 | 1,010 → 1,009 |
+| `RichEditor.tsx` initial commit (1,000 paragraphs) | 8,346,483 µs, test failed | 216,569 µs | 20 | 13,058 → 13,054 | 5,013 → 5,012 |
+| `RichEditor.tsx` single-character edit ×8 | — (never reached) | 995–1,563 µs, 3–4 items | 0 | 3–4 | 5,012 |
+
+The 1,000-paragraph run is `for (let i = 0; i < 8; i++) await app.press("id:edit")` on standard input;
+the before version's initial commit alone exceeds the step timeout, so its edits never ran. Every
+edit's batch carries one Text op and its selection frames.
+
+Leaner data-table views (`base/data_table`, 2026-11-18, macOS arm64, debug `nsh test --trace` on
+`examples/bench/data-table/App.tsx`, 100,000 rows × 20 columns with the first column fixed, `main` against
+the change): `fixedEdge` separators and the `headerContent` wrapper of a non-sortable column mount only when
+the app styles their part, the sort chevrons position inside `SortIndicator` without a wrapping view, row
+marks and cell marks are separate signals so a row selection does not wake every cell's flags memo, and
+`Cell::Text` shares its `Arc<str>`.
+
+| Phase | Before | After |
+|---|---:|---:|
+| First commit | mount items 1,962 / nodes 594 | mount items 1,854 (-108) / nodes 558 (-36) |
+| Press row `#1` commit | 354 µs | 301 µs |
+
+`examples/counter/App.tsx` is unchanged (57 / 10 ops, 51 / 7 mount items, 21 / 24 nodes). macOS window
+screenshots of the bench before and after are pixel-identical.
+
+Batched region cleanup (2026-11-15, macOS arm64, Apple M4 Pro, against `9efc3a2c`): three interleaved before / after
+pairs, a fresh headless CLI process per sample. Both builds use the workspace's development profile with
+`CARGO_PROFILE_DEV_DEBUG=line-tables-only` and incremental compilation disabled. The 200-paragraph reproduction is
+`nsh test examples/bench/RichEditorMount.tsx --trace`, with `await app.wait(150)` on standard input.
+
+| Phase | Before (µs/commit, median) | After (µs/commit, median) | Ops | Mount items | Nodes |
+|---|---:|---:|---:|---:|---:|
+| RichEditor initial population | 3,710,044 | 292,158 | 10 | 2,644 | 1,009 |
+| Counter initial frame | 273 | 281 | 57 | 51 | 21 |
+| Counter press `+1` | 847 | 878 | 10 | 7 | 24 |
+
+Every sample passes and all work counts match. The RichEditor commit includes Rust view expansion, layout and
+mount-batch construction, excluding native input, mounting and drawing. The counter uses the command below and
+establishes unchanged work; three pairs do not establish a timing regression or speedup for its sub-millisecond commits.
+Initial region population skips listener/binding cleanup, and regions that release nodes share one sweep per
+affected view before the next event round. The core regression counts zero initial sweeps for 50–800 bound rows;
+simultaneous removals from 200 / 400 regions scan 1,200 / 2,400 entries in one sweep each.
+
+```sh
+echo 'await app.press("+1"); await app.wait(50)' | nsh test examples/counter/App.tsx --trace
+```
+
+Sibling position classes (`core/classes.rs`, 2026-11-15, Linux x86_64, Intel Core Ultra 7 270K Plus, dev/test profile, `FakeEngine`).
+`positions_changed` counts the element siblings once per pass and restyles only the children whose
+`first:` / `last:` / `odd:` / `even:` / `only:` bits differ from the bits they were last resolved with
+(`position_used`), so appending a row restyles the previous last row and the new one instead of every
+sibling. Mounting N rows with `odd:` + `last:` classes, one insert per row, then one commit:
+
+| Rows | Before (ms) | After (ms) |
+|---|---|---|
+| 500 | 277.0 | 18.6 |
+| 2,000 | 4109.1 | 98.5 |
+
+Mounting was then still quadratic in the passes over the siblings, one per insert (the 2026-11-23 entry above).
+Results match a full per-child restyle after every tree edit
+(`positional_regressions`). `examples/bench/PositionalClasses.tsx` (`COUNT`, `CLASSES`, `EACH`) reproduces
+the workload headless with `nsh test --trace`; these Core timings exclude QuickJS and native mounting and drawing.
+
 Cross-platform keyboard integration (2026-11-12, macOS arm64, debug, upstream `9fd11f836` against the core at
 `c46f72f8c`): one fresh process per version running the same counter command below on the same machine.
 
@@ -71,8 +417,9 @@ before / after rounds on one CPU, warmed and batched; medians, input constructio
 | 10,000 | 96.966 → 0.0914 ms | 100.688 → 8.911 ms |
 
 The ordered code spans are consumed with a cursor instead of searched from the start at
-each byte. With streaming repair enabled, the complete 10,000-span parse takes
-544.17 → 453.83 ms; other scans still contribute. A 35,200-byte control of 200 short
+each byte. With streaming repair enabled, the complete 10,000-span parse took
+544.17 → 453.83 ms; the repair's own scans made up the rest, until they got the same
+cursor (Markdown streaming repair, below). A 35,200-byte control of 200 short
 paragraphs takes 74.45 → 79.69 µs in TeX rewriting (about 5 µs more), while its complete
 parse stays around 5.2 ms. Short Markdown and code spans without TeX delimiters have
 unchanged complete-parse timings. These parser measurements exclude layout and drawing.
@@ -83,6 +430,167 @@ version, the same paragraphs in a mounted `TextView`): first-commit medians for 
 16 mount items, with 3,007 / 30,007 nodes respectively. The counter control keeps
 56 ops / 50 items / 21 nodes initially and 10 ops / 7 items / 24 nodes after `+1`;
 commit medians 497 / 379 → 500 / 310 µs, noisy samples establishing stable work counts.
+
+Markdown streaming repair (`text_view/markdown/streaming.rs`, 2026-11-15, Linux x86_64,
+release, against `32f16354`): the paragraph ``"`a` x ".repeat(k)`` and a 600-row table with
+three code spans per row (26,950 bytes), timed in `repair_streaming` alone and in a complete
+parse with `streaming: true` (math enabled, the default). Eleven alternating before / after
+rounds on one CPU, warmed and batched (at least 100 ms a sample); medians, input construction
+excluded:
+
+| Input | `repair_streaming`, before → after | Complete parse, streaming on, before → after |
+|---|---|---|
+| 1,000 spans | 3.893 → 0.0276 ms | 4.738 → 0.833 ms |
+| 5,000 spans | 96.628 → 0.138 ms | 100.681 → 4.154 ms |
+| 10,000 spans | 385.147 → 0.275 ms | 393.600 → 8.908 ms |
+| 600-row table | 26.785 → 0.0947 ms | 37.992 → 10.835 ms |
+
+The repair's TeX, link and closing scans carry a cursor into the ordered code spans instead
+of searching all of them at each byte, so the repair grows with the text, not with the
+square of its spans, and the complete 10,000-span parse is back at its time with streaming
+off (8.911 ms in the entry above). Streaming the table's first 400 rows in 24-byte updates
+(748 parses) takes 4.94 → 1.78 s in all, 6.60 → 2.38 ms an update. A 20,000-byte reply of
+short blocks is unchanged (0.018 ms of repair, 5.65 ms parsed). The repaired text equals the
+old scans' on 400,000 random inputs.
+
+`TextView` streaming (`text_view/markdown/incremental.rs`, 2026-11-16, Linux x86_64, release,
+against `e365872a`): replies arriving in 24-byte updates with `streaming: true` (math enabled),
+one run per version. A `TextView` keeps what it read and reads a text that grew from its last
+boundary on (`text-view.md` "Reading only what can change"); before, every update parsed the
+whole text, copied its blocks and compared them all. Total over the stream / average of the
+last 10 updates, in ms.
+
+Reading the Markdown and the view's two memos of the document, value made and compared
+(`cargo test --release -p nsh-base bench_streaming -- --ignored --nocapture`, which runs both
+ways):
+
+| Reply | Updates | Parse, before → after | Parse and memos, before → after |
+|---|---|---|---|
+| Typical (short blocks), 20 KB | 834 | 2481.8 / 5.886 → 29.0 / 0.036 | 2523.3 / 5.985 → 29.3 / 0.037 |
+| Typical, 40 KB | 1,667 | 10424.2 / 13.974 → 59.2 / 0.038 | 10594.5 / 14.187 → 60.2 / 0.039 |
+| Ends in a 400-row table | 748 | 1812.3 / 5.699 → 1799.4 / 5.684 | 1837.4 / 5.765 → 1802.4 / 5.694 |
+| Ends in a 400-item tight list | 680 | 858.4 / 2.504 → 854.9 / 2.502 | 878.5 / 2.565 → 858.0 / 2.513 |
+| Ends in a 400-line code block | 893 | 320.5 / 0.712 → 318.0 / 0.711 | 320.7 / 0.712 → 318.1 / 0.711 |
+
+A whole update of a mounted `TextView`, from the press that adds the text to the batch of mount
+items (`Core::component_event` and `Core::commit`, `ApproxTextEngine`, 390 × 844;
+`cargo test --release -p nsh-base --test base bench_text_view_streaming -- --ignored --nocapture`,
+run in a checkout of each version):
+
+| Reply | Before | After | Mount items |
+|---|---|---|---|
+| Typical, 20 KB | 3004.0 / 7.682 | 378.2 / 0.822 | 16,421 |
+| Typical, 40 KB | 13302.2 / 18.916 | 1461.3 / 1.872 | 32,809 |
+| Ends in a 400-row table | 4816.2 / 15.482 | 4616.4 / 14.677 | 18,698 |
+| Ends in a 400-item tight list | 2035.7 / 5.751 | 1950.9 / 5.710 | 9,742 |
+| Ends in a 400-line code block | 348.1 / 0.754 | 351.7 / 0.763 | 3,666 |
+
+Each update sends the same number of mount items in both versions (the counts of all 4,822
+updates compared, `NSH_BENCH_ITEMS`). Reading no longer grows with the reply: 0.04 ms an update
+at 20 KB and at 40 KB. What is left of a typical update does, about 1.2 µs a block (0.8 ms at
+640 blocks, 1.9 ms at 1,280): the pass over the blocks in the two memos and, mostly, `Each`'s
+pass over its rows and the commit in `nsh-core`, which this change leaves as they are. A reply
+that ends in one large block parses and shows that block again on each update, as before: only
+the blocks before it are kept.
+
+Headless `nsh test <entry> --trace` (debug, one run per version): a `TextView` in a TSX entry
+shows 24 bytes more of a 1,752-byte reply with each of 40 presses. Both versions make 47
+commits with the same ops, mount items and nodes in each (56 down to 1 items, 372 nodes at
+most), and every mount item of every step is the same; the presses' commits average
+1796 → 1101 µs.
+
+`TextView` definitions (2026-11-16, Linux x86_64, release, against `717b961b`): a text with a
+link or footnote definition read from its start (the first set, a replaced text, a definition
+in the block being written) built its tree, found the definition and parsed the whole text
+again. That tree is now converted as it is; a definition first seen in the tree of a tail drops
+what was kept and parses the whole text once (`text-view.md` "Reading only what can change").
+
+`cargo test --release -p nsh-base --lib bench_streaming_set -- --ignored --nocapture`: about
+40 KB of Markdown (78 KB in the quote's row), `streaming: true`, mean ms of 30 runs, the two
+readers in alternating order, a new `Incremental` for each run; making the state before the
+update, comparing and dropping the document are not timed. `Parser::markdown` is the full
+parse measured beside the reader after the change.
+
+| Update | `Parser::markdown` | `Incremental`, before → after |
+|---|---|---|
+| First set, no definition | 12.921 | 13.199 → 13.141 |
+| First set, a link definition | 12.978 | 26.211 → 13.169 |
+| First set, a footnote definition | 12.950 | 26.010 → 13.136 |
+| First set, both | 12.970 | 26.097 → 13.152 |
+| Replaced text, both | 12.941 | 26.052 → 13.129 |
+| A final link definition grows | 12.961 | 25.935 → 13.115 |
+| A final footnote definition grows | 12.917 | 25.916 → 13.110 |
+| A link definition arrives after a kept text | 13.016 | 13.234 → 13.191 |
+| A definition arrives in a 38 KB quote (the tail) | 25.174 | 33.728 → 33.223 |
+| `` `[docs]: /guide` `` in a code span arrives, then grows | 12.985 | 0.021 → 0.021 |
+
+Without `streaming` the rows read the same way. The second parse is gone; a first set
+costs about 1.5% more than `Parser::markdown` (the boundary's bookkeeping and the shared
+blocks), with and without definitions. The quote's row still read more than the whole text
+there: the update in which a definition first shows in a tail read the tail, then the whole
+text (the tail is the quote, half of the text). A tail with a line that looks like a
+definition is now not read first (`may_define`, `text-view.md`); the same benchmark, against
+`bde1a6af`, `Parser::markdown` beside the reader after the change:
+
+| A definition arrives in a 38 KB quote (the tail) | `Parser::markdown` | `Incremental`, before → after |
+|---|---|---|
+| `streaming: true` | 25.314 | 33.223 → 25.860 |
+| `streaming: false` | 26.456 | 33.413 → 26.951 |
+
+About 2% over `Parser::markdown` is left, the first set's bookkeeping. What looks like a
+definition is a guess, kept narrow: taking every `]:` in the tail for one was measured and
+dropped, because the sequence is common in code and a reply whose Python has `if seen[key]:`
+then parses the whole text on most updates. `bench_streaming` has such a reply (24-byte
+updates, total over the stream / average of the last 10, ms):
+
+| Reply | Updates | `Parser::markdown` | `Incremental`, any `]:` taken | `Incremental`, the guess |
+|---|---|---|---|---|
+| `]:` in its code, 20 KB | 834 | 1913.2 / 4.844 | 1686.5 / 4.425 | 28.5 / 0.034 |
+| `]:` in its code, 40 KB | 1,667 | 8581.6 / 11.322 | 7640.7 / 10.765 | 58.5 / 0.035 |
+
+The guess misses definitions it has no rule for (after indented code that looks like a fence,
+after a table's last row): such a tail is read, then the whole text, as before. On 40,000
+documents of random Markdown fragments it saw 3,577 of the 3,775 that define and took 1,039
+of the 36,193 that do not; replies are far tamer than those.
+
+The other replies of `bench_streaming` are as above (typical 20 / 40 KB: 28.5 / 0.036 and
+58.4 / 0.037).
+
+Headless `nsh test examples/bench/MarkdownDefinitions.tsx --trace` (debug, two runs per
+version, the steps in `examples/bench/README.md`): 40 KB of Markdown with a link and a footnote
+definition, set, then replaced six times by a text that differs near its start. Both versions
+make the same commits (19 ops, 9,277 mount items, 16,657 nodes, then 1 op and 1 item for each
+replacement) and every mount item of every step is the same. The first commit takes
+522 → 427 ms, a replacement's 204.5 → 106.9 ms (parsing, expansion and layout; no native
+mounting or drawing).
+
+`TextView` long text (`text_view/markdown/incremental.rs`, 2026-11-18, Linux x86_64, Intel Core
+Ultra 7 270K Plus, release, one CPU with `taskset`, least of three runs, other work on the
+machine): one parse of a whole text grows faster than the text, so a long text given at once is
+read in parts the way a streamed one is (`text-view.md` "Reading only what can change").
+`cargo test --release -p nsh-base --lib bench_long_texts -- --ignored --nocapture` reads each text
+both ways, without a plugin and with one that reads paragraphs, headings, code, formulas and tables
+(the test's `Where`), and checks that the documents are equal. Sections are a heading, a paragraph
+with a link and bold words, and a two-item list; the typical reply is the streaming benchmarks'
+text repeated. ms, one parse / in parts:
+
+| Text | Size | Without a plugin | With a plugin |
+|---|---|---|---|
+| Sections | 190 KB | 59.3 / 37.1 | 57.9 / 37.9 |
+| Sections | 475 KB | 234.2 / 91.1 | 237.6 / 94.5 |
+| Sections | 950 KB | 727.3 / 184.3 | 733.8 / 189.9 |
+| Sections | 1.9 MB | 2444.6 / 369.3 | 2435.8 / 376.7 |
+| Typical reply | 950 KB | 3902.6 / 454.9 | 3938.1 / 408.4 |
+| Typical reply | 1.9 MB | 21113.9 / 734.1 | 21153.4 / 805.1 |
+| One table, 20,000 rows | 928 KB | 18485.0 / 17214.1 | 17335.0 / 17283.7 |
+| One list, 20,000 items | 848 KB | 452.8 / 460.5 | 490.6 / 471.9 |
+| One code block, 20,000 lines | 1.1 MB | 101.3 / 101.5 | 99.4 / 101.2 |
+
+A plugin costs about nothing next to the parse; until plugins were read in parts, a text read
+with one took the one-parse column. A text up to twice the part's size, and one read whole
+(definitions, plugins that turn a construct on or off, containers, MDX), is parsed once as before.
+A text the boundary cannot cross costs what one parse does: the table, list and code block are
+within noise. The table's own parse still grows with the square of its rows, inside `markdown-rs`.
 
 Terminal `TextView` tables (2026-11-08, Linux x86_64, debug hosts,
 `nsh test <entry> --target tui --trace`, against `71aeb06a`, seven alternating runs per version, medians):
@@ -235,6 +743,26 @@ sends 2631 mount items instead of 2885 (no `ViewProps` set and set back in one c
   framestats` over the 300 ms slide, three runs each): 23 → 33 frames, mean frame time ~35 → ~13 ms, RenderThread
   issue ~12 → ~5.5 ms a frame once the slides move by whole pixels; after a back gesture's release ~13–19 → ~4–5 ms.
   The first frame still records the index again (it was `INVISIBLE`): 20–44 ms of UI-thread drawing.
+- Android, push and back (Pixel 10 Pro, Android 17, 120 Hz, packaged release, the gallery's Text, Image, Scroll,
+  List, Stocks and Canvas from the index and back with the back key, five rounds each, `gfxinfo framestats`): the
+  screen a pop reveals keeping its display list (`StackBox.dispatchDraw`, `Decor.setVisible`) and the slides moving
+  hardware layers take the slowest back frame's UI thread from 22–36 ms to 2–5 ms and missed frames from 23–32 to
+  7–14 per page (p90 frame 35–58 → 14–32 ms). What remains is the RenderThread drawing both screens into their layers
+  in the slide's first frames (14–29 ms). Pushes are unchanged (no push frame over 25 ms on the UI thread).
+- Android, clipping to continuous corners (Pixel 10 Pro, Android 17, 120 Hz, packaged release; the gallery's index,
+  whose banner of ~330 canvas dots and cards clip to continuous corners): a scrolled frame uploaded ~440 textures,
+  one clip mask per draw inside those boxes, and took 7–8 ms of RenderThread; drawing their children clipped to
+  rectangles and corner layers (`Box.drawInCorners`), ~20 uploads and 4–5 ms. Going back to the index (the same six
+  pages, five rounds each, two runs before and three after, interleaved): missed frames per back 1.3–2.2 → 0.4–2.1 and
+  the slowest RenderThread frame of a back 27–41 → 14–26 ms (Stocks 70 → 49 ms: its own page, live charts drawn into
+  the slide's layer, is what remains). GPU memory after scrolling the whole index: 146–149 MB before, 116–118 MB after,
+  of a 125 MB budget; layers of the whole box were ~1 missed frame per back faster but kept 167–169 MB.
+- Android, glass surfaces (x86_64 emulator, Android 15, SwiftShader, 1080 × 2400 at 2.625x, packaged release; an app
+  of four pages of about the screen's size in a horizontal pager, each with a 24 pt backdrop blur, a 28 pt outer
+  shadow and a 1 px inset rim, under a blurred header and tab bar; eight swipes, `gfxinfo` p50 over three
+  interleaved runs): 105 → 17 ms a frame (RenderThread ~61 → ~16 ms); shadows alone 32 → 10 ms, blur alone 34 →
+  12 ms, neither 6 ms. A blurred drawer sliding over them: 150 → 31 ms. Box shadows come from cached bitmaps
+  (`Decor.drawCachedShadow`), backdrops are recorded at the size their blur needs (`Backdrop`).
 - Android emulator (arm64, release): rebinding one gallery row while scrolling ~0.3–0.4ms (JS ~60µs); text costs per new
   text: `PrecomputedText` ~120µs, measure ~50µs, final layout reused. First gallery frame 20–50ms (noisy on the emulator).
 
@@ -352,6 +880,11 @@ sends 2631 mount items instead of 2885 (no `ViewProps` set and set back in one c
   it replaced did (0.57ms).
   The native context records into a Rust list (`nsh-js` `canvas.rs`): the same 17 500 calls take ~1.0–1.1ms
   (~1.7ms in the former JS runtime, measured A/B), and 12 of them plus decoding one commit 21–22ms (61ms).
+- Canvas text on macOS (`cargo test --release -p nsh-platform-macos --lib bench_canvas_text -- --ignored --nocapture`,
+  a 40 × 8 quote table of 320 `fillText`s painted into a 760 × 820 point bitmap at scale 2, Apple Silicon): with each
+  canvas keeping its fonts and `CTLine`s (`canvas/lines.rs`), a paint with the same texts (a window being resized)
+  takes ~0.34–0.41ms and one after a new drawing changed every text ~1.5–1.6ms, against ~11.2–11.8ms either way when
+  every paint made a font, an attributed string and a line per text.
 - `OffscreenCanvas` on Windows: the UI thread records, submits the drawing and its copy, and maps the read-back
   bitmap once a Direct3D event query polled every timer tick says the GPU is done, so a large image costs it the
   recording and one copy of its rows, never a wait for the GPU; unpremultiplying and PNG encoding run on a thread.
@@ -367,6 +900,105 @@ sends 2631 mount items instead of 2885 (no `ViewProps` set and set back in one c
   `<If>`, a 3-row `<Each>`) on both: bundle 886 B JS / 1.7 KB bytecode vs 14 KB / 19.6 KB, eval ~95µs vs ~390µs, tap
   median ~5µs vs ~14µs in JS, commit ~15µs vs ~22µs. Scrolling a 1000-row `List` (avatar, two texts, a bound color)
   6000 pt: ~77µs vs ~150µs of JS per rebinding frame, commit ~205µs vs ~276µs.
+
+## Keyed children reordered (all platforms)
+
+Measured on an Apple silicon Mac (jason-macmini-lb) on 2026-11-26, debug, `main` at `d04027d7c` against the change.
+Reordering n keyed rows was O(n²) in the engine, in two places:
+
+- `Core::match_children` looked up each kept row (`NewChild::Kept`) and each keyed element in the old elements with
+  `Iterator::position`, comparing keys (`SharedString`). Rows still in order were found where the last one was, but
+  a reversed list searched them all for each row. The old elements are now indexed by key the first time one is not
+  where it was (`OldKeys`; up to 16 old elements are still searched in order).
+- `LayoutTree::remove_child` ran `Vec::retain` over the parent's layout children for each child moved or removed.
+  It now stops at the child and removes it.
+
+`cargo test -p nsh-core --lib bench_each_reverse -- --ignored --nocapture` (`FakeEngine`, no content culling): n
+rows of an `each` set to their reverse, then to the first row moved last, from the signal write to the finished
+`MountBatch`. Milliseconds a commit, median of 5; the mount items are the same before and after:
+
+| Rows | Row | Update | Before | After | Mount items |
+|---:|---|---|---:|---:|---:|
+| 1,000 | text | reverse | 16.61 | 6.50 | 2,999 |
+| 4,000 | text | reverse | 201.34 | 34.16 | 11,999 |
+| 8,000 | text | reverse | 772.06 | 92.25 | 23,999 |
+| 1,000 | text + view | reverse | 43.54 | 10.50 | 4,998 |
+| 4,000 | text + view | reverse | 610.30 | 79.42 | 19,998 |
+| 8,000 | text + view | reverse | 2,425.50 | 272.95 | 39,998 |
+| 8,000 | text | control: first row moved last | 37.05 | 38.68 | 16,001 |
+| 8,000 | text + view | control: first row moved last | 53.18 | 55.96 | 24,002 |
+
+The control builds the index once (its last row is not where it was), about 4% more in debug.
+
+On macOS, with the leaf list change (#3377) applied, `NSH_LEAF_BENCH_ONLY=1` (`tests/native/mount.rs`,
+`leaf_bench`: n keyed texts in one plain view, each step timed until the leaf layers show it), three runs per size,
+medians, run at normal priority. Wall time in milliseconds, main thread CPU in brackets:
+
+| Leaves | Step | Before | After |
+|---:|---|---:|---:|
+| 1,000 | reverse | 51.3 (37.5) | 41.3 (37.4) |
+| 4,000 | reverse | 338.0 (158.2) | 171.5 (149.6) |
+| 8,000 | reverse | 1,056.5 (373.3) | 375.1 (311.1) |
+| 4,000 | clear | 83.1 (29.7) | 33.6 (26.9) |
+| 8,000 | clear | 270.1 (75.2) | 71.5 (57.1) |
+| 8,000 | mount (control) | 765.5 (621.3) | 765.6 (622.5) |
+| 8,000 | prepend (control) | 96.7 (79.7) | 99.6 (80.6) |
+
+Reverse now grows linearly. Clear is faster too: each removed leaf no longer ran `retain` over its parent's layout
+children.
+
+## End-to-end jank: startup and frame gaps (all desktops)
+
+The micro-benchmarks above time the work of a commit. They cannot see a frame that waits without working, as in
+#3365 (a new window waited out a 250 ms timeout on every launch), or a long frame in the middle of a scroll.
+`examples/bench/jank/` measures those from the outside, on the platform's development host:
+
+```sh
+python3 examples/bench/jank/jank.py              # against baseline.json; exits 1 over budget
+python3 examples/bench/jank/jank.py --stall 150  # the app blocks 150 ms before it mounts: must fail
+python3 examples/bench/jank/jank.py --runs 5 --write  # record this platform's baseline
+```
+
+What it measures, and when it fails:
+
+| Metric | What | Fails when |
+|---|---|---|
+| `startup_ms` | `open()` of a TSX app to its window on screen with the first rows (median of the runs) | baseline + 100 ms |
+| `frame_p95_ms` / `frame_max_ms` | main-thread time per drawn frame, the worst second's p95 and the max | p95 > 8.3 ms |
+| `gap_p50_ms` / `gap_p95_ms` / `gap_max_ms` | time between drawn frames while three loops animate, then while a 10,000-row List scrolls | p50 > one refresh + 1 ms, max > 50 ms |
+
+The frame cost budget is 8.3 ms, one refresh at 120 Hz, whatever the display's rate. Gaps follow the display: they
+are one refresh when nothing is dropped. Run it from a terminal (or `tools/interactive.sh` on an agent host): at
+background priority macOS stretches the main thread's timers, and the gaps measured are the scheduler's, not NSH's.
+
+Baseline, macOS (2026-11-26, Apple M6, `nsh 0.6.0` nightly 2026-11-24, debug development host, 800×600 window, 5
+runs; the screen was locked, so the display link ran at about 45 Hz, not the display's 60):
+
+| Scenario | Startup | Frame p95 / max | Gap p50 / p95 / max | Over one refresh |
+|---|---:|---:|---:|---:|
+| Launch | 576 ms (564–596) | | | |
+| Animation (3 loops) | | 0.60 / 0.65 ms | 22.3 / 26.0 / 28.4 ms | 0% |
+| List scroll (10,000 rows) | | 3.37 / 4.01 ms | 21.4 / 27.5 / 29.5 ms | 0% |
+
+The gate, checked: with `--stall 150` startup is 744 ms (730–779) and the run fails with
+`FAIL startup 744 ms > baseline 576 ms + 100 ms`; without it, 584 ms passes.
+
+Baseline, Linux (2026-11-26, Intel Core Ultra 7 270K Plus, Hyprland on Wayland, 60 Hz display, `nsh 0.7.1` (f78eace),
+5 runs at nice 0 on an idle machine):
+
+| Scenario | Startup | Frame p95 / max | Gap p50 / p95 / max | Over one refresh |
+|---|---:|---:|---:|---:|
+| Launch | 575 ms (563–595) | | | |
+| Animation (3 loops) | | 1.62 / 2.57 ms | 16.7 / 17.1 / 19.2 ms | 0% |
+| List scroll (10,000 rows) | | 2.24 / 3.71 ms | 16.7 / 17.4 / 18.4 ms | 0% |
+
+The gate, checked: with `--stall 150` startup is 732 ms and the run fails with `FAIL startup ... > baseline + 100 ms`.
+Run it on an idle machine: a first Linux run taken while parallel cargo builds kept the load at 18–20 measured the
+scroll's p95 frame cost at about 10 ms and failed the 8.3 ms budget, against 2.24 ms idle.
+
+Not covered yet: the Rust app's startup (the #3365 probe, a Rust app whose window content is in the commit that
+opens it, timed 783 ms median after the fix against 962 ms before it on the same host, debug), and p99: the monitor's
+line gives each second's p50 / p95 / max, so the worst p95 and the max stand in for it.
 
 ## Views made over frames (all platforms)
 
@@ -384,8 +1016,20 @@ frame on macOS, mostly the Core Animation commit). The core now spreads them (`c
 Views not made yet are not in the platform's accessibility tree, as culled content is not: they are out of sight and
 come within a few frames. Selection and select-all read the core's nodes, not native views. Test drivers turn content
 culling off, which turns pacing off, so their steps reach every view. Nothing waits that may show away from its frame
-(sticky, followers, overlays, screens, modals, transformed or animated views), nor anything outside scroll views and
-lists.
+(sticky, followers, overlays, screens, modals, views scaled, rotated or moved by a value of no known bound), nor
+anything outside scroll views and lists.
+
+A view translated by a value the core can bound waits like any other, its rectangle widened by how far it may move
+(`Core::reach_of`). The core follows every animation op on its way to the platform (`crates/nsh-core/src/animation/reach.rs`)
+and keeps the interval each value has held and may hold (its values, its animations' targets with their easings' and
+springs' overshoot, a decay's bounds) and how interpolations and math nodes map them; values a gesture or a scroll
+view drives, and decays without bounds, have none. Intervals only grow, and an op that widens one makes the core look at
+what it culls again in that commit, before the platform runs the animation. Animated opacity and colors move nothing.
+Before, a page of sections that fade and slide in (the gallery's `Appear`, every `DemoPage`) made every view of every
+section in one frame.
+
+A deleted subtree leaves its window with its root at once; on macOS the views are freed over the next frames, at most
+1 ms a frame (`nsh-platform-macos` `mount.rs`, `release_later`), not in the frame that shows what replaced them.
 
 Reproduce: `cargo test -p nsh-core --release --lib -- --ignored big_rows_bench --nocapture` (a 480 pt list of rows of
 420 views each, 5 rows bound). Linux x64, release:
@@ -938,6 +1582,34 @@ native hierarchy. At 8,600 rows it showed no improvement: release 3903.0 → 396
 use the append path. These are not first-paint timings. GPU/power and engine trace item counts
 were not measured; interactive-priority execution was unavailable in this session.
 
+## macOS leaf list clear and reorder
+
+Measured on an Apple silicon Mac (jason-macmini-lb) on 2026-11-26, debug, `7f72e2385`
+against the change that compacts a parent's leaf list once per batch and orders it from its
+layers when read. `NSH_LEAF_BENCH_ONLY=1` (`tests/native/mount.rs`, `leaf_bench`) mounts n texts
+with no listener (#2066 leaves: layers in their parent's leaf layer, no `NSView` in the
+hierarchy) in one plain view, then reverses them, adds one in front and clears them; each step
+is timed until the leaf layers show it. Three runs per size, medians, run through the hub's
+interactive launcher (normal priority). Main thread CPU in milliseconds, wall time in brackets.
+
+| Leaves | Step | Before main CPU (wall) | After main CPU (wall) |
+| --- | --- | --- | --- |
+| 1,000 | clear | 9.5 (14.8) | 6.5 (11.8) |
+| 4,000 | clear | 79.3 (133.3) | 29.5 (83.1) |
+| 8,000 | clear | 275.6 (471.2) | 75.3 (272.6) |
+| 1,000 | reverse | 44.2 (58.7) | 37.4 (51.3) |
+| 4,000 | reverse | 273.2 (457.6) | 158.0 (340.5) |
+| 8,000 | reverse | 842.4 (1538.3) | 372.8 (1064.5) |
+| 8,000 | mount | 627.7 (773.9) | 620.9 (764.1) |
+| 8,000 | prepend | 80.0 (97.2) | 79.5 (97.1) |
+
+Before, each leaf that left scanned and shifted its parent's list (`retain`) and each insert
+searched it for `before`: clearing or reordering n leaves was O(n²) on the main thread. Clear is
+now linear on the main thread. What remains of reverse grows with n² outside the platform: a
+`sample` of the 8,000-leaf reverse shows the engine's keyed `match_children` (`Iterator::position`
+over the old children per key). Only the platform changed, so the mount batches and their item
+counts are the same before and after.
+
 ## Windows painter culling
 
 Measured on Windows 11 on 2026-11-13, release, Intel Core Ultra X9 388H, Intel Arc B390 at 60 Hz;
@@ -962,3 +1634,19 @@ stale-records part was not measured alone, as what it fixes shows when panels mo
 and this scenario moves nothing. CPU differs by −4.5 points between revisions, about one
 standard error of its own spread (3–37% within one run): this bench shows no CPU difference
 either way; paint and frame times are what it resolves.
+
+## Cross-platform baseline sampler (`bench.py`)
+
+`examples/gallery/tools/bench.py` measures fresh processes from outside, in one versioned format (`nsh-bench/1`,
+`<out>.json` plus `<out>.csv`), next to `perf.py` (per-page frame rate through `nsh test`) and `memory.py` (smaps by file):
+
+- `startup --runs 10`: one new process per run; `window_ms` is when the compositor maps a window of the process tree
+  (Hyprland), never a test handshake. First presented frame and interactive are `null`: nothing outside the app
+  observes them yet.
+- `run --rounds 5 --seconds 30 [--action <cmd>]`: process-tree CPU (utime+stime over wall time, 100% = one core) and
+  memory (Linux: summed `smaps_rollup` RSS / PSS / USS in MiB, GPU excluded), with the sampler's own CPU reported.
+- `size name=path ...`: file or directory bytes.
+
+Every process runs in its own group and is killed with its descendants (SIGTERM, then SIGKILL) after each sample;
+timeouts, exits and leaked processes stay in the samples and the summary counts them apart. Tests:
+`python3 examples/gallery/tools/bench_test.py`. Compare optimizations with alternating A/B runs on the same machine.

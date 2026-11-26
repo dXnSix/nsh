@@ -16,7 +16,7 @@ NSH 本身就用系统原生视图渲染，所以原生组件只是同一视图�
 
 > [!NOTE]
 > 原生组件由嵌入 NSH 的应用注册（[iOS](./ios.md)、[Android](./android.md)、[macOS](./macos.md#嵌入-mac-应用)、[Linux](./linux.md#嵌入-gtk-应用)、[Windows](./windows.md#嵌入-win32-应用)）；
-> 在 Windows、macOS、Linux 和 iOS 上也可以由应用自己的 Rust crate 注册，开发宿主和打包出的应用（`nsh package`）会注册这些组件（见[从应用的 crate 注册](#从应用的-crate-注册)）。
+> 在 Windows、macOS、Linux、iOS 和 Android 上也可以由应用自己的 Rust crate 注册，开发宿主和打包出的应用（`nsh package`）会注册这些组件（见[从应用的 crate 注册](#从应用的-crate-注册)）。
 > 没有任何地方注册的名称会渲染成一个空视图（并记录一次“未知名称”日志）。
 
 ## 整体流程
@@ -33,6 +33,47 @@ NSH 本身就用系统原生视图渲染，所以原生组件只是同一视图�
 在 Rust 中，`native(name)` 创建这个元素：`.prop(name, value)` 给它一个 prop（`serde_json::Value`，或者它的 signal 或闭包，变化时重新发送），
 `.on_native_event(..)` 以 `NativeEvent { name, data }` 接收它的事件，用 `.element_ref(&r)` 挂上的 `element_ref()` 的方法发送它的命令。
 在 TSX 中，`nativeComponent()` 为这个名称声明一个组件，列出它用到的 props 和事件。
+
+```tsx tabs
+import { mount, type NativeComponentRef, signal, Text, View } from "nsh";
+import { nativeComponent } from "nsh";
+import { Window } from "nsh/desktop";
+
+/** The host app's badge: a label it draws, sized to its text. */
+const Badge = nativeComponent<{ text: string; color?: string }, { tap: { count: number } }>("embed.badge", {
+  props: ["text", "color"],
+  events: ["tap"],
+});
+
+const colors = ["#8250df", "#0969da", "#1a7f37", "#cf222e"];
+
+function App() {
+  const taps = signal(0);
+  let badge: NativeComponentRef | undefined;
+  return (
+    <View style={{ flex: 1, padding: 20, paddingTop: "calc(env(safe-area-inset-top) + 20px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 20px)", gap: 16, backgroundColor: "#f6f8fa" }}>
+      <Text style={{ fontSize: 22, fontWeight: "700" }}>Rendered by nsh</Text>
+      <Badge
+        ref={(node) => (badge = node)}
+        text={taps() === 0 ? "Tap the native badge" : `Tapped ${taps()}×`}
+        color={colors[taps() % colors.length]}
+        onTap={(e) => {
+          taps.set(e.count);
+          badge?.command("pulse");
+        }}
+        style={{ alignSelf: "flex-start", borderRadius: 8, overflow: "hidden" }}
+      />
+      <Text>{`JS saw ${taps()} taps`}</Text>
+    </View>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -73,42 +114,6 @@ pub fn App() -> impl IntoElement {
         )
         .child(text(move || format!("Rust saw {} taps", taps.get())))
 }
-```
-
-```tsx tabs
-import { mount, type NativeComponentRef, signal, Text, View } from "nsh";
-import { nativeComponent } from "nsh";
-
-/** The host app's badge: a label it draws, sized to its text. */
-const Badge = nativeComponent<{ text: string; color?: string }, { tap: { count: number } }>("embed.badge", {
-  props: ["text", "color"],
-  events: ["tap"],
-});
-
-const colors = ["#8250df", "#0969da", "#1a7f37", "#cf222e"];
-
-function App() {
-  const taps = signal(0);
-  let badge: NativeComponentRef | undefined;
-  return (
-    <View style={{ flex: 1, padding: 20, paddingTop: "calc(env(safe-area-inset-top) + 20px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 20px)", gap: 16, backgroundColor: "#f6f8fa" }}>
-      <Text style={{ fontSize: 22, fontWeight: "700" }}>Rendered by nsh</Text>
-      <Badge
-        ref={(node) => (badge = node)}
-        text={taps() === 0 ? "Tap the native badge" : `Tapped ${taps()}×`}
-        color={colors[taps() % colors.length]}
-        onTap={(e) => {
-          taps.set(e.count);
-          badge?.command("pulse");
-        }}
-        style={{ alignSelf: "flex-start", borderRadius: 8, overflow: "hidden" }}
-      />
-      <Text>{`JS saw ${taps()} taps`}</Text>
-    </View>
-  );
-}
-
-mount(App);
 ```
 
 TSX 版本就是 `examples/embedded/App.tsx`，仓库里的两个嵌入示例运行的都是它。
@@ -172,23 +177,6 @@ const pull = createAnimatedValue(0);
 
 组件按名称发出事件，可附带一个 JSON 负载。NSH 把它投递到引擎线程，并用该负载调用对应的处理函数（在 Rust 中是那个 `on_native_event` 监听函数，带着事件的 `name` 和 `data`）：
 
-```rust tabs
-use serde_json::json;
-
-native("acme.map")
-    .prop("latitude", json!(52.52))
-    .prop("longitude", json!(13.405))
-    .on_native_event(move |e: &NativeEvent| match &*e.name {
-        "regionChange" => center.set((
-            e.data["latitude"].as_f64().unwrap_or_default(),
-            e.data["longitude"].as_f64().unwrap_or_default(),
-        )),
-        "markerPress" => open(e.data["id"].as_str().unwrap_or_default()),
-        _ => {}
-    })
-    .flex_1()
-```
-
 ```tsx tabs
 const MapView = nativeComponent<
   { latitude: number; longitude: number; zoom?: number },
@@ -207,12 +195,37 @@ const MapView = nativeComponent<
 />;
 ```
 
+```rust tabs
+use serde_json::json;
+
+native("acme.map")
+    .prop("latitude", json!(52.52))
+    .prop("longitude", json!(13.405))
+    .on_native_event(move |e: &NativeEvent| match &*e.name {
+        "regionChange" => center.set((
+            e.data["latitude"].as_f64().unwrap_or_default(),
+            e.data["longitude"].as_f64().unwrap_or_default(),
+        )),
+        "markerPress" => open(e.data["id"].as_str().unwrap_or_default()),
+        _ => {}
+    })
+    .flex_1()
+```
+
 事件是异步的：主线程从不等待应用的代码。如果组件必须当场做出决定（这个手势能否开始、这个区域能否改变），就只能在原生端根据之前收到的
 props 来决定。
 
 ## 命令
 
 命令式调用（缩放到某个点、开始播放、播放一段动画）通过元素的 ref 发起（Rust 中是 `element_ref()`，TSX 中是 `ref`）：
+
+```tsx tabs
+let map: NativeComponentRef | undefined;
+
+<MapView ref={(node) => (map = node)} latitude={52.52} longitude={13.405} style={{ flex: 1 }} />;
+
+map?.command("zoomTo", { level: 3 });
+```
 
 ```rust tabs
 let map = element_ref();
@@ -224,14 +237,6 @@ native("acme.map")
     .flex_1()
 
 map.command("zoomTo", json!({ "level": 3 }));
-```
-
-```tsx tabs
-let map: NativeComponentRef | undefined;
-
-<MapView ref={(node) => (map = node)} latitude={52.52} longitude={13.405} style={{ flex: 1 }} />;
-
-map?.command("zoomTo", { level: 3 });
 ```
 
 `command(name, args)`（TSX：`command(name, args?)`）把名称和参数（任意 JSON 值）发送给组件的 `command` 方法。命令会和在它之前做出的变更按顺序应用，所以紧跟在
@@ -377,7 +382,7 @@ nsh.registerComponent("embed.badge") { context -> Badge(context) }
 | `NshView.registerComponent(String name, NshComponent.Factory factory)` | 以某个名称注册一个工厂；此后每创建一个元素，它就生成一个组件（UI 线程）。 |
 | `interface NshComponent` | `View view()`、`void setProp(String, Object)`、`default void command(String, Object)`、`default void destroy()`（元素已移除：被移除，或它的应用被 `NshView.destroy()` 停止、被再次加载替换；每个组件调用一次）。在 UI 线程上调用。 |
 | `setProp` 的值 | `String`、`Number`、`Boolean`、`java.util.List`、`java.util.Map`；被移除时（或 JSON `null`）为 `null`。 |
-| `NshComponentContext.getContext()` | 组件所在 `NshView` 的 context（即其 Activity 的），用于创建组件的视图、读取资源和获取系统服务；生命周期比组件长的对象应持有它的 `getApplicationContext()`。可在任意线程调用。 |
+| `NshComponentContext.getContext()` | 组件所在 `NshView` 的 context（即其 Activity 的），用于创建组件的视图、读取资源和获取系统服务；生命周期比组件长的对象应持有它的 `getApplicationContext()`。在 Native Shell 自己的 Activity 中，它是包着 Activity 的 `ContextWrapper`：系统因配置变化重建 Activity 时，应用继续运行，它随之换到新的 Activity；需要 `Activity` 时通过 `getBaseContext()` 取得，不要持有。可在任意线程调用。 |
 | `NshComponentContext.emit(String event, Object data)` | 发出一个事件；`data` 使用同样的 Java 类型，或 `null`。可在任意线程调用。 |
 | `NshComponentContext.setSize(float width, float height)` | 以 dp 为单位上报组件自身的尺寸。可在任意线程调用。 |
 
@@ -611,6 +616,40 @@ impl NativeComponent for ImageView {
 }
 ```
 
+绘制型组件也可以在自己有可命中内容的地方（比如画在图片上的标注）接收按下、移动和松开。`hit` 对每个点询问，默认返回
+`false`，此时按下仍交给视图的处理器（`onPress`、`onMouseMove`）。返回 `true` 的地方，`pointer` 会收到 `Pointer`
+（`kind`：`Down`、`Move`、`Up`、`Cancel`、`Leave`；`x`、`y` 为组件坐标的点；`clicks`；`shift`、`ctrl`、`alt`）：它接下的按下之后，
+移动和松开会一直送给它直到松开，即使移出边界；没有按键时，鼠标在它命中的区域上移动时收到移动，离开时收到 `Leave`。它返回
+`false` 的按下会交给下面的视图。只有左键会送给它，右键和上下文菜单仍归视图。`cursor` 设置它命中区域上的光标：
+
+```rust
+use nsh_platform_windows::{Cursor, Pointer, PointerKind};
+
+impl NativeComponent for ImageView {
+    // draw、set_prop、wheel ……
+
+    fn hit(&self, x: f32, y: f32, _size: (f32, f32)) -> bool {
+        self.annotation_at(x, y).is_some()
+    }
+
+    fn pointer(&mut self, event: &Pointer) -> bool {
+        match event.kind {
+            PointerKind::Down => self.grab(event.x, event.y),
+            PointerKind::Move => self.drag_or_hover(event.x, event.y),
+            PointerKind::Up | PointerKind::Cancel => self.release(),
+            PointerKind::Leave => self.unhover(),
+            _ => {}
+        }
+        self.context.redraw();
+        true
+    }
+
+    fn cursor(&self, _x: f32, _y: f32) -> Option<Cursor> {
+        Some(Cursor::Move)
+    }
+}
+```
+
 ## 从应用的 crate 注册
 
 带有自己 Rust crate 的应用（`nsh.json` 的 `"rust"`，见 [Rust](./rust.md)）可以在这个 crate 里注册原生组件，NSH 为应用构建的宿主都会用到它们：
@@ -633,16 +672,19 @@ fn components(components: &nsh_platform_windows::Components) {
 }
 ```
 
-平台可以是 `windows`、`macos`、`linux` 或 `ios`，对应的组件分别来自 `nsh_platform_windows`、`nsh_platform_macos`、
-`nsh_platform_linux` 和 `nsh_platform_ios`（见上面各节）。这个函数只在它的平台上编译，所以 crate 为支持的每个平台各写一个，注册相同的名称，
+平台可以是 `windows`、`macos`、`linux`、`ios` 或 `android`，对应的组件分别来自 `nsh_platform_windows`、`nsh_platform_macos`、
+`nsh_platform_linux`、`nsh_platform_ios`（见上面各节）以及 `nsh-platform-android`（`nsh::Components`、`nsh::NativeComponent` 及其 JNI 接口）。这个函数只在它的平台上编译，所以 crate 为支持的每个平台各写一个，注册相同的名称，
 并且只在对应平台上依赖该平台的 crate，版本和来源与它的其他 NSH crate（`nsh-core` 等）相同（CLI 会检查它们是否一致）：
 
 ```toml
 [target.'cfg(windows)'.dependencies]
-nsh-platform-windows = { version = "0.3", default-features = false }
+nsh-platform-windows = { version = "0.6", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { version = "0.3", default-features = false }
+nsh-platform-macos = { version = "0.6", default-features = false }
+
+[target.'cfg(target_os = "android")'.dependencies]
+nsh-platform-android = { version = "0.6", default-features = false }
 ```
 
 宿主在创建每个视图时注册 crate 的组件，早于持有该视图的代码自己的注册：之后在视图上注册的同名组件（`AppView::register_component`）会替换 crate 的。

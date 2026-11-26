@@ -13,6 +13,33 @@ with the range 0 to 100 and the value, and the indicator's width: `value` percen
 app's: a `Progress` has no colors, sizes, radii, motion or label of its own. It is made of a track with an indicator
 inside it, then its children (a label, the value as text), and the app styles each part.
 
+```tsx tabs
+import { mount, signal, Text } from "nsh";
+import { Progress } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const sent = signal(40);
+  return (
+    <Progress
+      value={sent()}
+      accessibilityLabel="Uploading photos"
+      class="gap-2"
+      trackClass="h-2 overflow-hidden rounded-full bg-muted"
+      indicatorClass="h-full rounded-full bg-primary"
+    >
+      <Text class="text-sm text-muted-foreground">{`${sent()}%`}</Text>
+    </Progress>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_base::{progress, theme};
 use nsh_core::prelude::*;
@@ -30,28 +57,6 @@ fn upload(sent: Signal<f32>) -> impl IntoElement {
                 .text_color(move || theme().muted_foreground),
         )
 }
-```
-
-```tsx tabs
-import { mount, signal, Text } from "nsh";
-import { Progress } from "nsh/base";
-
-function App() {
-  const sent = signal(40);
-  return (
-    <Progress
-      value={sent()}
-      accessibilityLabel="Uploading photos"
-      class="gap-2"
-      trackClass="h-2 overflow-hidden rounded-full bg-muted"
-      indicatorClass="h-full rounded-full bg-primary"
-    >
-      <Text class="text-sm text-muted-foreground">{`${sent()}%`}</Text>
-    </Progress>
-  );
-}
-
-mount(App);
 ```
 
 `Progress` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. The value is the app's: the

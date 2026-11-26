@@ -49,6 +49,7 @@ fn bundles_errors_and_logs_round_trip() {
             capabilities: Some("{\"statusBar\":true}".into()),
             id: Some("com.example.roundtrip".into()),
             window: Some("{\"title\":\"Roundtrip\"}".into()),
+            application: Some("{\"quitMode\":\"explicit\"}".into()),
         },
         None,
         vec!["app/native".into()],
@@ -72,10 +73,12 @@ fn bundles_errors_and_logs_round_trip() {
             capabilities,
             app_id,
             window,
+            application,
             limits,
         } => {
             assert_ne!(session, 0, "the server names its run");
             assert_eq!(window.as_deref(), Some("{\"title\":\"Roundtrip\"}"));
+            assert_eq!(application.as_deref(), Some("{\"quitMode\":\"explicit\"}"));
             assert_eq!(limits.as_deref(), Some("memory=64MB,call=500ms"));
             assert_eq!(app_id.as_deref(), Some("com.example.roundtrip"));
             assert_eq!(bytes, [1, 2, 3]);
@@ -582,6 +585,91 @@ fn the_websocket_refuses_other_web_pages() {
     }
 }
 
+/// A page whose own name DNS rebinds to this machine sends its requests
+/// same-origin, without an `Origin`, under that name as its `Host`: it reads
+/// none of the server's files, while the hosts on devices and the web host's
+/// pages, which name the server by its address or `localhost`, read them as
+/// before.
+#[test]
+fn a_name_rebound_to_this_machine_reads_nothing() {
+    let dir = std::env::temp_dir().join(format!("nsh-dev-rebound-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("logo.png"), b"png").unwrap();
+    let server = DevServer::start(
+        "127.0.0.1:0".parse().unwrap(),
+        "bc-1",
+        Some(dir.clone()),
+        |_| {},
+    )
+    .unwrap();
+    server.publish(
+        vec![1, 2, 3],
+        "the app's source".into(),
+        None,
+        AppInfo::default(),
+        None,
+        Vec::new(),
+    );
+    server.serve_web("<p>page</p>".into(), [("nsh.js".into(), b"js".to_vec())]);
+    let addr = server.local_addr();
+    let port = addr.port();
+    let paths = ["/bundle.js", "/assets/logo.png", "/", "/nsh.js"];
+    for host in [
+        format!("evil.example:{port}"),
+        format!("rebind.127.0.0.1.nip.io:{port}"),
+        format!("my-mac.local:{port}"),
+    ] {
+        for path in paths {
+            let (line, body) = request(addr, path, &host, "");
+            assert!(line.contains("403"), "{path} at {host}: {line}");
+            assert!(!body.contains("source"), "{path} at {host}");
+        }
+    }
+    for host in [addr.to_string(), format!("localhost:{port}")] {
+        for path in paths {
+            let (line, _) = request(addr, path, &host, "");
+            assert!(line.contains("200"), "{path} at {host}: {line}");
+        }
+    }
+    // `/ws` is left to its `Origin` check: a native host's handshake under
+    // any name still opens.
+    let handshake = "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: \
+                     13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n";
+    let (line, _) = request(addr, WS_PATH, &format!("dev.example:{port}"), handshake);
+    assert!(line.contains("101"), "{line}");
+    drop(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The status line and body of `GET path` with `Host: host` and the
+/// `headers` (lines ending with `\r\n`), over a plain HTTP/1.1 connection.
+fn request(addr: std::net::SocketAddr, path: &str, host: &str, headers: &str) -> (String, String) {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let close = if headers.is_empty() {
+        "Connection: close\r\n"
+    } else {
+        ""
+    };
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\n{close}{headers}\r\n"
+    )
+    .unwrap();
+    let mut response = Vec::new();
+    // A WebSocket stays open: what arrived before the timeout is enough.
+    let _ = stream.read_to_end(&mut response);
+    let response = String::from_utf8_lossy(&response);
+    let line = response.lines().next().unwrap_or_default().to_owned();
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.to_owned())
+        .unwrap_or_default();
+    (line, body)
+}
+
 /// The status line and body of `GET path` with `accept`, over a plain
 /// HTTP/1.1 connection.
 fn get(addr: std::net::SocketAddr, path: &str, accept: &str) -> (String, String) {
@@ -669,4 +757,334 @@ fn a_site_deployed_under_a_path_is_served_there() {
     assert!(get(addr, "/nsh.0123456789.js", "*/*").0.contains("404"));
     drop(server);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A TCP relay in front of the server whose connection can be cut, as a
+/// phone's when it goes to the background or changes networks.
+struct Relay {
+    addr: std::net::SocketAddr,
+    up: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    open: std::sync::Arc<std::sync::Mutex<Vec<std::net::TcpStream>>>,
+}
+
+impl Relay {
+    fn start(server: std::net::SocketAddr) -> Relay {
+        use std::sync::{Arc, Mutex, atomic::AtomicBool};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let up = Arc::new(AtomicBool::new(true));
+        let open: Arc<Mutex<Vec<std::net::TcpStream>>> = Arc::default();
+        let (relay_up, relay_open) = (up.clone(), open.clone());
+        std::thread::spawn(move || {
+            for device in listener.incoming().flatten() {
+                if !relay_up.load(std::sync::atomic::Ordering::SeqCst) {
+                    continue;
+                }
+                let Ok(upstream) = std::net::TcpStream::connect(server) else {
+                    continue;
+                };
+                let mut open = relay_open.lock().unwrap();
+                open.push(device.try_clone().unwrap());
+                open.push(upstream.try_clone().unwrap());
+                for (mut from, mut to) in [
+                    (device.try_clone().unwrap(), upstream.try_clone().unwrap()),
+                    (upstream, device),
+                ] {
+                    std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut from, &mut to);
+                        let _ = to.shutdown(std::net::Shutdown::Both);
+                    });
+                }
+            }
+        });
+        Relay { addr, up, open }
+    }
+
+    fn cut(&self) {
+        self.up.store(false, std::sync::atomic::Ordering::SeqCst);
+        for stream in self.open.lock().unwrap().drain(..) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
+
+    fn restore(&self) {
+        self.up.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn publish(server: &DevServer, build: u8, patch: Option<&str>) {
+    server.publish(
+        vec![build],
+        format!("source v{build}"),
+        None,
+        AppInfo::default(),
+        patch.map(|code| (code.to_owned(), None)),
+        Vec::new(),
+    );
+}
+
+/// Waits for the client to lose its connection, then for the server to
+/// count it gone.
+fn wait_disconnected(rx: &mpsc::Receiver<DevEvent>, server: &DevServer) {
+    loop {
+        if let DevEvent::Disconnected = rx.recv_timeout(TIMEOUT).expect("disconnect") {
+            break;
+        }
+    }
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    while server.clients() > 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "server still counts it"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A host that reconnects after missing builds catches up through their
+/// hot updates, in order, then gets the bundle it already runs: the app
+/// keeps its state. When a missed build had no hot update, it gets only
+/// the bundle and reloads, as before.
+#[test]
+fn a_host_that_reconnects_after_missed_builds_gets_their_hot_updates() {
+    let server = DevServer::start("127.0.0.1:0".parse().unwrap(), "bc-1", None, |_| {}).unwrap();
+    publish(&server, 1, None);
+    let relay = Relay::start(server.local_addr());
+    let url = format!("ws://{}{WS_PATH}", relay.addr);
+    let (tx, rx) = mpsc::channel();
+    let _client = DevClient::start(url, host("phone", "bc-1"), move |e| {
+        let _ = tx.send(e);
+    })
+    .unwrap();
+    assert!(matches!(
+        next_non_status(&rx),
+        DevEvent::Bundle { version: 1, .. }
+    ));
+
+    // Away while two builds land.
+    relay.cut();
+    wait_disconnected(&rx, &server);
+    publish(&server, 2, Some("patch v2"));
+    publish(&server, 3, Some("patch v3"));
+    relay.restore();
+    for (version, base, code) in [(2, 1, "patch v2"), (3, 2, "patch v3")] {
+        match next_non_status(&rx) {
+            DevEvent::Patch {
+                version: v,
+                base: b,
+                code: c,
+                ..
+            } => assert_eq!((v, b, c.as_str()), (version, base, code)),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(matches!(
+        next_non_status(&rx),
+        DevEvent::Bundle { version: 3, .. }
+    ));
+
+    // A reconnect on the same build: the bundle only, which it runs.
+    relay.cut();
+    wait_disconnected(&rx, &server);
+    relay.restore();
+    assert!(matches!(
+        next_non_status(&rx),
+        DevEvent::Bundle { version: 3, .. }
+    ));
+
+    // A missed build that reloads (no hot update) breaks the chain.
+    relay.cut();
+    wait_disconnected(&rx, &server);
+    publish(&server, 4, None);
+    publish(&server, 5, Some("patch v5"));
+    relay.restore();
+    assert!(matches!(
+        next_non_status(&rx),
+        DevEvent::Bundle { version: 5, .. }
+    ));
+}
+
+/// A test host on `server` that answers each step with `answer`'s outcome,
+/// once the server counts it as the test's host.
+fn tester(
+    server: &DevServer,
+    answer: impl Fn(nsh_dev::protocol::TestStep) -> nsh_dev::protocol::StepOutcome + Send + 'static,
+) -> std::sync::Arc<std::sync::OnceLock<DevClient>> {
+    let url = format!("ws://{}{WS_PATH}", server.local_addr());
+    let client = std::sync::Arc::new(std::sync::OnceLock::<DevClient>::new());
+    let answering = client.clone();
+    let started = DevClient::start(
+        url,
+        HostInfo {
+            tests: true,
+            ..host("tester", "bc-1")
+        },
+        move |event| {
+            if let DevEvent::Step { id, step } = event {
+                answering.get().expect("client").step_done(id, answer(step));
+            }
+        },
+    )
+    .unwrap();
+    let _ = client.set(started);
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    while !server.has_tester() {
+        assert!(std::time::Instant::now() < deadline, "the host never came");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    client
+}
+
+/// A paste of `files` into `#field`.
+fn paste(files: Vec<nsh_dev::protocol::TestFile>) -> nsh_dev::protocol::TestStep {
+    nsh_dev::protocol::TestStep::Paste {
+        selector: "#field".into(),
+        text: String::new(),
+        html: String::new(),
+        files,
+        uris: Vec::new(),
+    }
+}
+
+#[test]
+fn a_test_pastes_a_large_file_into_its_host() {
+    use nsh_dev::protocol::{StepOutcome, TestFile, TestStep};
+
+    let server = DevServer::start("127.0.0.1:0".parse().unwrap(), "bc-1", None, |_| {}).unwrap();
+    server.test_session();
+    // The host answers with what arrived: each file's size and whether
+    // every byte is the one sent.
+    let _client = tester(&server, |step| match step {
+        TestStep::Paste { files, .. } => StepOutcome::Done {
+            value: files
+                .iter()
+                .map(|f| {
+                    serde_json::json!([f.name, f.data.len(), f.data.iter().all(|&b| b == b'a')])
+                })
+                .collect(),
+        },
+        other => StepOutcome::Failed {
+            message: format!("cannot {other:?}"),
+        },
+    });
+    // 20 MB of text: more than a WebSocket frame takes by default.
+    let size = 20 << 20;
+    assert_eq!(
+        server.step(
+            paste(vec![TestFile::new(
+                "big.txt",
+                "text/plain",
+                vec![b'a'; size]
+            )]),
+            Duration::from_secs(30),
+        ),
+        Ok(serde_json::json!([["big.txt", size, true]]))
+    );
+    // The connection stays up for the next step.
+    assert_eq!(
+        server.step(TestStep::Back, TIMEOUT),
+        Err("cannot Back".into())
+    );
+}
+
+#[test]
+fn a_paste_beyond_the_message_limit_fails_with_its_size() {
+    use nsh_dev::protocol::{StepOutcome, TestFile, TestStep};
+
+    let server = DevServer::start("127.0.0.1:0".parse().unwrap(), "bc-1", None, |_| {}).unwrap();
+    server.test_session();
+    let _client = tester(&server, |step| match step {
+        TestStep::Back => StepOutcome::Done {
+            value: serde_json::Value::Null,
+        },
+        other => StepOutcome::Failed {
+            message: format!("cannot {other:?}"),
+        },
+    });
+    let err = server
+        .step(
+            paste(vec![TestFile::new(
+                "huge.bin",
+                "application/octet-stream",
+                vec![0; 60 << 20],
+            )]),
+            Duration::from_secs(30),
+        )
+        .unwrap_err();
+    assert!(err.contains("64 MiB"), "{err}");
+    // The host never saw it and is still there.
+    assert_eq!(
+        server.step(TestStep::Back, TIMEOUT),
+        Ok(serde_json::Value::Null)
+    );
+}
+
+#[test]
+fn a_host_that_takes_smaller_frames_leaving_on_a_paste_is_told_apart() {
+    use nsh_dev::protocol::{PROTOCOL_VERSION, TestFile};
+
+    let server = DevServer::start("127.0.0.1:0".parse().unwrap(), "bc-1", None, |_| {}).unwrap();
+    server.test_session();
+    // A host on tungstenite's defaults (16 MiB frames), as hosts were
+    // before they took the protocol's whole message size.
+    let url = format!("ws://{}{WS_PATH}", server.local_addr());
+    let (mut socket, _) = tungstenite::connect(url).unwrap();
+    socket
+        .send(tungstenite::Message::Text(
+            serde_json::json!({
+                "type": "hello",
+                "protocol": PROTOCOL_VERSION,
+                "bytecode_version": "bc-1",
+                "device": "older",
+                "tests": true,
+            })
+            .to_string()
+            .into(),
+        ))
+        .unwrap();
+    let host = std::thread::spawn(move || while socket.read().is_ok() {});
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    while !server.has_tester() {
+        assert!(std::time::Instant::now() < deadline, "the host never came");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let err = server
+        .step(
+            paste(vec![TestFile::new(
+                "big.txt",
+                "text/plain",
+                vec![b'a'; 20 << 20],
+            )]),
+            Duration::from_secs(30),
+        )
+        .unwrap_err();
+    assert!(err.contains("older nsh"), "{err}");
+    host.join().unwrap();
+}
+
+#[test]
+fn a_server_that_drops_each_session_at_once_is_retried_with_backoff() {
+    // A server that ends every session right after the handshake, as one
+    // sending a frame over the host's limit does.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = accepted.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(mut socket) = tungstenite::accept(stream) {
+                let _ = socket.close(None);
+                let _ = socket.flush();
+            }
+        }
+    });
+    let url = format!("ws://{addr}{WS_PATH}");
+    let client = DevClient::start(url, host("phone", "bc-1"), |_| {}).unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    drop(client);
+    let sessions = accepted.load(std::sync::atomic::Ordering::Relaxed);
+    // 100 ms apart that would be ~30; backing off it is a handful.
+    assert!((1..=8).contains(&sessions), "{sessions} sessions in 3 s");
 }
