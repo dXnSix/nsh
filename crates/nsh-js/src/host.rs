@@ -141,7 +141,10 @@ pub(crate) struct Shared {
     /// sockets), handed to their calls' `System`.
     pub(crate) system_quotas: nsh_core::element::Quotas,
     /// The VM's scheduler, for native transports that start its I/O runtime.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(
+        not(all(not(target_arch = "wasm32"), feature = "websocket")),
+        allow(dead_code)
+    )]
     pub(crate) scheduler: std::rc::Weak<Scheduler>,
     /// The VM's state of the runtime's Rust modules (`process`'s
     /// children), closed when the VM goes.
@@ -2935,7 +2938,11 @@ const report = (v) => text(String(v));
             report(new Date(Date.UTC(2026, 6, 4, 16, 0)).toLocaleTimeString("en-US", {{ timeZone: "America/New_York" }}));
             report(new Intl.DateTimeFormat("en-US", {{ timeZone: "America/New_York", timeStyle: "long" }}).format(Date.UTC(2026, 6, 4, 16, 0)));
             report(new Intl.DateTimeFormat("de", {{ timeZone: "America/New_York", timeStyle: "long" }}).format(Date.UTC(2026, 0, 1)));
-            try {{ new Intl.DateTimeFormat("en", {{ timeZone: "Europe/Berlin" }}); }} catch (e) {{ report(e.name); }}
+            // A zone the app doesn't ship is a RangeError, unless it is the
+            // machine's own: local time is always there to name.
+            const local = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+            const unshipped = ["Pacific/Chatham", "America/Sao_Paulo"].find((zone) => zone !== local);
+            try {{ new Intl.DateTimeFormat("en", {{ timeZone: unshipped }}); }} catch (e) {{ report(e.name); }}
             "#
         ))
         .unwrap();

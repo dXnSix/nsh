@@ -1164,7 +1164,7 @@ See [Device and environment](../docs/device-and-environment.md) for the guide.
 const windowSize: Accessor<Size>;
 ```
 
-The size of the surface in points: the window, or the embedded `NshAppView` / `NshView`. Reactive. Rust: `window() -> Size<Points>`.
+The size of the surface in points: the window, or the embedded `NshAppView` / `NshView`. On macOS, Windows and Linux it is the content size of the app's primary window, the first of its own windows still open; a window's own size is its [`state()`](./nsh-desktop.md#the-windows-state-and-the-displays)`?.contentBounds`. Reactive. Rust: `window() -> Size<Points>`.
 
 ```tsx tabs
 const wide = () => windowSize().width >= 600;
@@ -1446,10 +1446,11 @@ interface PerfStats {
   readonly fps: number;
   readonly refreshRate: number | null;
   readonly dropped: number;
+  readonly memory: number | null;
 }
 ```
 
-What the monitor measured over the last second, read once a second while it measures (`fpsEnabled()`), and `null` while it does not and until its first second, so an app can show it its own way. `fps` is the frames shown per second: an idle app reads low, which is not slowness (only display refreshes in which the app changed count). `refreshRate` is the rate the display refreshes at (Hz), `null` until the monitor saw it refresh; `dropped` is the share of recent frames that took longer than one refresh, from 0 to 1 (`0.05` is 5%; in Rust a `Percentage`, the same fraction). Headless test runs measure too and draw no frames: they read 0 fps. Rust: `perf_stats() -> Option<PerfStats>`.
+What the monitor measured over the last second, read once a second while it measures (`fpsEnabled()`), and `null` while it does not and until its first second, so an app can show it its own way. `fps` is the frames shown per second: an idle app reads low, which is not slowness (only display refreshes in which the app changed count). `refreshRate` is the rate the display refreshes at (Hz), `null` until the monitor saw it refresh; `dropped` is the share of recent frames that took longer than one refresh, from 0 to 1 (`0.05` is 5%; in Rust a `Percentage`, the same fraction). `memory` is the memory the process owns, in bytes, as the panel shows it: the physical footprint on Apple platforms (Activity Monitor's Memory column), the resident set elsewhere; `null` where the platform does not say, and in headless test runs. Headless test runs measure too and draw no frames: they read 0 fps. Rust: `perf_stats() -> Option<PerfStats>`.
 
 ```tsx
 <If when={perfStats()}>
@@ -3449,14 +3450,14 @@ interface KeyBindingOptions {
   repeat?: boolean;
   passThrough?: boolean;
   forFocus?: boolean;
-  overFocused?: boolean;
+  overFocused?: boolean | "pointer";
 }
 ```
 
 | TS | Rust |
 |---|---|
 | `keymap.bind(keystroke, handler)` | `on_key(keystroke, handler)` |
-| `keymap.bind(keystroke, handler, { scope, when, repeat, passThrough, forFocus, overFocused })` | `on_key_with(keystroke, KeyOptions { scope, when, repeat, pass_through, for_focus, over_focused }, handler)`; `scope` is `KeyScope::Window` (default) or `KeyScope::App`; `when` is `nsh_core::keymap::When` (`Auto`, `Always`, `NotEditing`) |
+| `keymap.bind(keystroke, handler, { scope, when, repeat, passThrough, forFocus, overFocused })` | `on_key_with(keystroke, KeyOptions { scope, when, repeat, pass_through, for_focus, over_focused }, handler)`; `scope` is `KeyScope::Window` (default) or `KeyScope::App`; `when` is `nsh_core::keymap::When` (`Auto`, `Always`, `NotEditing`); `over_focused` is `nsh_core::keymap::OverFocused` (`Never`, default; `Always`, which `true` gives; `Pointer`) |
 | `keymap.bind({ … })` | one `on_key` per keystroke |
 | `keymap.label(keystroke)` | `key_label(keystroke)` |
 
@@ -3673,9 +3674,20 @@ With the keyboard focus on a view that takes presses (`onPress`), a plain Return
 on_key_with("space", KeyOptions { for_focus: true, ..KeyOptions::default() }, move |_| flip());
 ```
 
+Single-key shortcuts such as a media player's Space take the key from a control the pointer focused with `overFocused: "pointer"`. On Windows a click focuses the button it lands on, as native buttons do, and except on macOS and iOS a `Select`, `Menu`, `Popover` or `DatePicker` that a click opened gives the focus back to its trigger as it closes. (On macOS and iOS a click leaves the focus where it was, so the option rarely has anything to take.) Without the option, Space presses that control again: after a click on Mute, Space mutes again; after choosing a quality, Space opens the list again. With it, the binding fires instead. A control the keyboard focused (Tab, the arrows) still takes Return and Space, so keyboard users press what they moved to, and text inputs keep their keys as `when` says:
+
+```tsx tabs
+keymap.bind("space", togglePlayback, { when: "notEditing", overFocused: "pointer" });
+```
+
+```rust tabs
+let options = KeyOptions { when: When::NotEditing, over_focused: OverFocused::Pointer, ..KeyOptions::default() };
+on_key_with("space", options, move |_| toggle_playback());
+```
+
 The keys belong to the newest dialog: when the focus stays on a view a dialog covers (a menu gives it back to its trigger as its item opens a dialog), Return and Space go to the dialog's bindings, and that view's `forFocus` bindings and its press wait until the dialog closes.
 
-A focused component's own bindings come before the app's: while an `Editor` has the focus, its Mod+Enter inserts a line below, whatever the app bound to that key. A binding with `overFocused: true` comes before them instead, so the app takes a key a focused component binds, as a query editor running its text with Mod+Enter does. Bind it while that view has the focus and let it go as the focus leaves, so the component keeps the key elsewhere (Rust: `KeyOptions { over_focused: true, .. }`). Without the option the order is as before, and a popup's Escape still closes the popup first.
+A focused component's own bindings come before the app's: while an `Editor` has the focus, its Mod+Enter inserts a line below, whatever the app bound to that key. A binding with `overFocused: true` comes before them instead, so the app takes a key a focused component binds, as a query editor running its text with Mod+Enter does. Bind it while that view has the focus and let it go as the focus leaves, so the component keeps the key elsewhere (Rust: `KeyOptions { over_focused: OverFocused::Always, .. }`). Without the option the order is as before, and a popup's Escape still closes the popup first.
 
 ```tsx
 const focused = signal(false);

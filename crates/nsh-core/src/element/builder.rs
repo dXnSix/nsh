@@ -240,6 +240,9 @@ pub(crate) struct RareAttrs {
     pub(crate) scope_tokens: Option<Arc<super::Tokens>>,
     /// The text continues the one before it ([`Element::continues_text`]).
     pub(crate) continues_text: bool,
+    /// Its children take its position among its siblings
+    /// (`Element::__pass_position`).
+    pub(crate) pass_position: bool,
     /// The states it shows as its control's part
     /// ([`Interactive::project_checked`]).
     pub(crate) projected_states: u16,
@@ -277,6 +280,7 @@ impl RareAttrs {
             && self.appearance == crate::platform::Appearance::System
             && self.scope_tokens.is_none()
             && !self.continues_text
+            && !self.pass_position
             && self.projected_states == 0
             && self.projected_data.is_empty()
             && self.projected_active.is_none()
@@ -454,6 +458,9 @@ impl Attrs {
             }
             if sr.continues_text != or.continues_text {
                 out.push(Prop::ContinuesText(sr.continues_text));
+            }
+            if sr.pass_position != or.pass_position {
+                out.push(Prop::PassPosition(sr.pass_position));
             }
             if sr.projected_states != or.projected_states {
                 out.push(Prop::ProjectedStates(sr.projected_states));
@@ -637,6 +644,7 @@ pub struct ListConfig {
     pub(crate) scrollbar_visible: Option<bool>,
     pub(crate) content: Option<ListContentStyle>,
     pub(crate) follow_end: Option<f32>,
+    pub(crate) follow_end_animated: Option<bool>,
     pub(crate) alignment: Option<crate::ListAlignment>,
     pub(crate) viewport: Option<crate::ListViewport>,
 }
@@ -666,8 +674,12 @@ impl ListConfig {
         if self.content != old.content {
             out.push(Prop::ListContent(self.content.unwrap_or_default()));
         }
-        if self.follow_end != old.follow_end {
-            out.push(Prop::FollowEnd(self.follow_end.map(Points)));
+        if self.follow_end != old.follow_end || self.follow_end_animated != old.follow_end_animated
+        {
+            out.push(Prop::FollowEnd(
+                self.follow_end.map(Points),
+                self.follow_end_animated.unwrap_or(false),
+            ));
         }
         if self.alignment != old.alignment {
             out.push(Prop::ListAlignment(self.alignment.unwrap_or_default()));
@@ -1167,6 +1179,23 @@ pub trait Element: IntoElement + Sized {
         self
     }
 
+    /// Hands the view's position among its siblings to its children: their
+    /// `first:`, `last:`, `odd:`, `even:` and `only:` classes read the
+    /// view's place, not theirs among its children. For a view that only
+    /// wraps its content, as the root an [`each`](super::each) row needs
+    /// around a [`dynamic`](super::dynamic): the content then styles as
+    /// though it were the row. Off by default. Internal: only the base
+    /// components (`TextView`) use it; not part of the public API.
+    #[doc(hidden)]
+    fn __pass_position(mut self, pass: impl IntoReactive<bool>) -> Self {
+        self.node().bind_attr(pass, |a, pass| {
+            if pass || a.rare.is_some() {
+                a.rare_mut().pass_position = pass;
+            }
+        });
+        self
+    }
+
     /// What a copy of the text around the view gives in its place, when
     /// the view is inside a text (`copyText`): an inline formula's source
     /// (`$x^2$`), an emoji image's character. Selecting across the view
@@ -1296,6 +1325,15 @@ impl Style {
     /// Its declarations, in order (not its typed styles').
     pub fn decls(&self) -> &[crate::StyleDecl] {
         self.0.as_deref().map_or(&[], crate::StylePatch::decls)
+    }
+
+    /// Whether it has typed styles (Rust's [`StyleRefinement`], static or
+    /// bound): a style JS gives has none. A component that applies a style
+    /// it is given after its own bound styles reads it to bind only the
+    /// styles that need it ([`Element::inline_style`] of a closure binds
+    /// the typed styles after the element's own).
+    pub fn is_typed(&self) -> bool {
+        !self.1.is_empty()
     }
 
     /// Applies it to `node` in `variant`: the declarations with `attr`, the
@@ -3630,5 +3668,39 @@ mod file_listener_tests {
             listener.1.call(&payload);
         }
         assert_eq!(calls.get(), 4);
+    }
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+    use crate::{PropertyValue, StyleKey, prelude::*};
+
+    fn red() -> PropertyValue {
+        PropertyValue::Color(Some(rgb(0xff0000).into()))
+    }
+
+    #[test]
+    fn a_style_is_typed_only_with_typed_styles() {
+        let declared = Style::default().with(StyleKey::Color, red());
+        let typed = Style::from(StyleRefinement::default().text_color(rgb(0xff0000)));
+        let bound = Style::from(StyleRefinement::default().text_color(move || rgb(0xff0000)));
+        assert!(!Style::default().is_typed());
+        assert!(!Style::from(StyleRefinement::default()).is_typed());
+        assert!(!Style::from_decls([]).is_typed());
+        assert!(!declared.is_typed());
+        assert!(typed.is_typed());
+        // Bound values alone, no static ones.
+        assert!(bound.is_typed());
+        // Kept by `with` and by `then` on either side.
+        assert!(
+            typed
+                .clone()
+                .with(StyleKey::Opacity, PropertyValue::Number(0.5.into()))
+                .is_typed()
+        );
+        assert!(declared.then(&typed).is_typed());
+        assert!(typed.then(&declared).is_typed());
+        assert!(!declared.then(&declared).is_typed());
     }
 }

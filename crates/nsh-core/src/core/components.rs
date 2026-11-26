@@ -813,7 +813,7 @@ pub(super) struct Components {
     styles: FxHashMap<StyleRefinement, std::rc::Rc<ClassList>>,
     /// The styles a component on another's host gets from each above it,
     /// merged (by the lists', which the entry keeps).
-    merges: FxHashMap<(usize, usize), [std::rc::Rc<ClassList>; 3]>,
+    pub(super) merges: FxHashMap<(usize, usize), [std::rc::Rc<ClassList>; 3]>,
     /// While a view's slot content is matched: the nested component's host
     /// and the slot (its regions are the slot's).
     pub(super) filling: Option<(NodeId, &'static str)>,
@@ -4060,12 +4060,7 @@ impl<M: TextEngine> Core<M> {
             Some(self.components.lowered(style))
         };
         if !same(&own, &old.0) || !same(&user, &old.1) {
-            let list = match (&own, &user) {
-                (Some(a), Some(b)) => Some(std::rc::Rc::new(a.merged(b))),
-                (Some(a), None) => Some(a.clone()),
-                (None, Some(b)) => Some(b.clone()),
-                (None, None) => None,
-            };
+            let list = self.merge_user(own.clone(), user.clone());
             if let Ok(key) = self.key(id) {
                 self.set_class_list(key, list);
             }
@@ -8704,15 +8699,15 @@ impl<M: TextEngine> Core<M> {
         drop(keys);
         // JS's first, then the views', where the newest that may fire wins:
         // a focused component's keys win over the app's. Bindings
-        // `over_focused` come after both, so they win over the components';
+        // `OverFocused::Always` come after both, so they win over the components';
         // the overlay's Escape (a popup closing) stays last.
         let js = self.components.js_keymap.bindings();
         let bindings = js
             .iter()
-            .filter(|b| !b.over_focused)
-            .chain(views.iter().filter(|b| !b.over_focused))
-            .chain(js.iter().filter(|b| b.over_focused))
-            .chain(views.iter().filter(|b| b.over_focused))
+            .filter(|b| !b.comes_after_views())
+            .chain(views.iter().filter(|b| !b.comes_after_views()))
+            .chain(js.iter().filter(|b| b.comes_after_views()))
+            .chain(views.iter().filter(|b| b.comes_after_views()))
             .copied()
             .chain(overlay)
             .collect();
