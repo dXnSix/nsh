@@ -12,6 +12,8 @@ mod bundle;
 #[cfg(feature = "bundle")]
 mod classes;
 mod compile;
+#[cfg(feature = "bundle")]
+mod glob;
 mod hot;
 mod jsx;
 #[cfg(feature = "bundle")]

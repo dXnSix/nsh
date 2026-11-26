@@ -280,6 +280,22 @@ const open = async () => {
 
 Apps on devices ship one bundle, so the module is already there and the promise resolves at once. A web app published split (`nsh build --split`) gets the module, and what only it uses, as a separate file that is downloaded the first time `import()` asks for it ([Web](./web.md#split-bundles)). The specifier must be a literal relative path: the bundler has to see which module is meant.
 
+To import every module whose path matches a pattern, use `import.meta.glob`, as in Vite. It returns an object keyed by each file's path, as the pattern names it, whose values import the file:
+
+```tsx
+const pages = import.meta.glob("./pages/*.tsx");
+// { "./pages/About.tsx": () => import("./pages/About.tsx"), "./pages/Home.tsx": … }
+const { Home } = await pages["./pages/Home.tsx"]();
+
+const previews = import.meta.glob("/**/*.preview.tsx"); // from the app's directory
+const icons = import.meta.glob("./icons/*.ts", { eager: true, import: "default" });
+```
+
+- A pattern starting with `./` or `../` is relative to the module, one starting with `/` to the app's directory. It can have `*` (any part of a name), `**` (any number of directories), `?` (one character) and `{a,b}` (either); an array of patterns may leave files out with `!` (`["./pages/*.tsx", "!./pages/Draft.tsx"]`).
+- `{ eager: true }` imports the modules up front, so the values are the modules themselves; `import: "name"` takes that export instead of the whole module.
+- `node_modules`, `target` and directories whose name starts with `.` are searched only when a pattern names them. Keys are sorted.
+- The patterns and options must be literals, since the bundler reads them. A file added or removed while the app runs in development changes the object in place, as an edit does.
+
 ### NSH's modules
 
 Imports of `nsh` and `nsh/...` are not bundled: the runtime provides them natively.
