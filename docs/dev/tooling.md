@@ -964,7 +964,8 @@ window too; a window without a surface is drawn into the bitmap instead. A step 
 that moves: a signature of every shown view's place, offset, scroll position and opacity, compared between looks. The
 system's appearance is the device's night mode, which the CLI switches (`cmd uimode night`) and restores. All of them
 use `nsh_testing::agent::Tester`, which turns the dev client's
-test events into an agent's steps on a `Worker` thread.
+test events into an agent's steps on a `Worker` thread. Events come on the client's thread from the moment it starts,
+so answers wait until the host hands its client to the `Tester` (`Tester::set_client`).
 These hosts are also how a change to a platform is checked by hand: `nsh test <entry> --target <platform>` with steps
 on standard input (`app.screenshot("a.png")`, `app.press(…)`) opens the app in the platform's window, takes them and
 closes it.
@@ -1248,14 +1249,17 @@ for the release runner in both. The test runner links QuickJS, so the first `nsh
 
 `crates/nsh-cli/src/nshm/` resolves, installs and locks; `crates/nsh-bundler/src/nshm.rs` reads the lock for TSX.
 
-- `dep.rs`: `"dependencies"` entries by package name (`"^1.2"`, `{ github|git, tag|rev, version, features }`,
+- `dep.rs`: `"dependencies"` entries by package name (`"^1.2"`, `{ github|git, tag|rev, version, features, targets }`,
   `{ path }`) and `nsh add` arguments (`crate[@req]`, `github:owner/repo[@req]`, Git URLs, `--path`). The
   pre-release keys `"modules"` and `"extensions"` are rejected.
 - `manifest.rs`: an nshm's own description. A Rust nshm's name and version are its `Cargo.toml`'s and it needs a
   `#[native_module]` at its root; an `nsh.json` beside it (or alone, for a TSX nshm) adds `"exports"` (specifier →
   TSX entry inside the nshm, the specifier being the package name or `name/...`), `"dependencies"`, `"nsh"` (a
   requirement on this CLI's version, as is the crate's `nsh-core` requirement) and `"platform"` (Rust only). An
-  `nsh.json` counts as a manifest only with `"exports"` or `"platform"`, or without a `Cargo.toml`.
+  `nsh.json` counts as a manifest only with `"exports"` or `"platform"`, or without a `Cargo.toml`. A version or an
+  `nsh-core` requirement inherited from the workspace (`version.workspace = true`, `nsh-core.workspace = true`) is read
+  from `workspace_manifest`, the nearest manifest from the crate's directory up with a `[workspace]`, so a root package
+  reads its own.
 - `fetch.rs`: versions and installation in `~/.nsh/nshms` (`nsh_bundler::nshm::installed_dir`, `NSH_HOME`). crates.io
   through its sparse index and `static.crates.io` downloads, checked against the index's sha256; Git through one bare
   clone per repository (`.git/<host>/<path>`), versions from semver tags, installed with `git archive`. Each version
@@ -1277,6 +1281,14 @@ for the release runner in both. The test runner links QuickJS, so the first `nsh
   nothing into the shared installation), as a workspace of its own (`own_workspace`: a Rust app's `Cargo.toml` is a
   workspace root above the copy, and a published crate's manifest has no `[workspace]`); `platforms::dispatch` tries
   it before `PATH`.
+- `"targets"` (an app's entries only; `manifest.rs` refuses them in an nshm's, `check_targets` on a TSX nshm) lists
+  the `platform.os` names a Rust nshm is linked for. Resolution and `nsh.lock` ignore it. `main.rs` passes the
+  command's target (`run::Target::os`, `PackageTarget::asset_target`, this machine's for a headless `nsh test`,
+  `None` for commands that serve every target) to `rust_app::of`, and `linked_for` keeps the entries for it with
+  what they depend on, by the lock's dependency names. A command that leaves one out does not rewrite `.nsh/types`
+  (`left_out`). The bundler reads the lock's `module`s (`nsh_bundler::nshm::modules`): one the build's UI sets lack
+  and no `resolve.alias` replaces is refused in a static import and kept external in an `import()`
+  (`NshPlugin::left_out`); the plugin resolves before the alias, so where the nshm is linked its module wins.
 - `rust_app::cargo_nshm`: the Rust nshm the app's own crates (`"rust"`) reach through Cargo alone are linked as well,
   after the listed crates, by package name: packages of the crates' graph (normal dependencies) that depend on
   `nsh-core` and have a `#[native_module]` at their root (`specifier_of`, the test `manifest.rs` applies). The
@@ -1330,10 +1342,13 @@ built for this machine from a copy in `.nsh/hosts/<profile>/` that changes only 
 (`runtime::stable_copy`): cargo links the binary into `target/<profile>` again on every build, even one with nothing
 to do, and macOS checks an executable whose file changed again the first time it runs, a second or more for a debug
 host on every `nsh run`. `nsh package --target macos --arch` builds the release runner (the checkout's or a Rust app's)
-for each processor it names, with `--target <triple>` for one other than this Mac's (`runtime::file_for`,
-`RustApp::runtime`; programs the CLI runs itself, such as `describe`, stay this Mac's), and `lipo` makes one universal
+for each processor it names, with `--target <triple>` for one other than the Rust toolchain's host, which is the one a
+build with no `--target` is for and the default `--arch` (`runtime::build_target`, used by `runtime::locate` and
+`RustApp::runtime`); the CLI's own architecture does not decide it, since an Intel `nsh` can run under Rosetta with an
+Apple silicon toolchain. Programs the CLI runs itself, such as `describe`, stay the host's, and `lipo` makes one universal
 executable of `universal`'s two; an installed distribution's runner is its own processor's, so the package checks what
-the runner holds (`package::macos_runners`). The web runtimes (`runtime/web/nsh.wasm`
+the runner holds and says whether Cargo built it (`package::macos_runners`). Update archives are named after what the
+packaged executable holds. The web runtimes (`runtime/web/nsh.wasm`
 for published apps, `nsh-dev.wasm` for the development host, and `nsh.js`: `docs/dev/web.md`) are always built with
 the `web` profile, into `target/wasm32-unknown-unknown/web/`. Every CLI wasm build, including an app's generated Rust runtime outside the checkout, selects `getrandom_backend="custom"` for the browser entropy bridge. `runtime::web_build_flags` appends it to explicit Rust flags or merges a Cargo target-config array, preserving the existing stack and user flags; generated web packages also retain their 8 MiB stack link argument.
 
@@ -1433,7 +1448,11 @@ How users get it (`website/docs/installation.md`):
 
 Some checks run on the organization's self-hosted runners, which keep their builds between jobs; each job's
 `runs-on` says where it runs. On a self-hosted runner a job installs its toolchain without making it the machine's
-default (`RUSTUP_TOOLCHAIN` picks it) and skips the dependency caches. Pull requests from forks and the scheduled runs
+default (`RUSTUP_TOOLCHAIN` picks it) and skips the dependency caches. The Linux ones (`public`, `Linux`, `X64`) take
+one job each and run a job more slowly than GitHub's runners, but a pull request's job waits less for them: they take
+the Linux runs of Core, Compat, Examples, TUI, Rust application's `check` and GPUI. Linux's `check` and
+`gpui-gallery` stay on GitHub's runners: the examples' tests in windows run in real time, and on the slower machines
+they time out waiting for what they press. So do the jobs that drive a browser (Rust application's `web`, Website). Pull requests from forks and the scheduled runs
 on `main` run every check on GitHub's runners. The release (its builds, `Plan`, `Release` and `Nightly`), the crates'
 publication, the Homebrew formula's update and the website's deployment run only on GitHub's runners: the jobs that
 hold write tokens or decide and build what users download run on fresh machines.

@@ -16,6 +16,9 @@ mod access;
 mod app_directory;
 mod cache;
 mod error;
+// Where shader frames go: read back, or on surfaces the backend shows.
+#[cfg(feature = "shader")]
+mod frames;
 mod host_channel;
 mod local_storage;
 #[cfg(not(target_arch = "wasm32"))]
@@ -991,7 +994,19 @@ impl nsh_core::runtime::UpdaterHost for UpdaterOverNetwork {
             let mut total: Option<u64> = None;
 
             let outcome = loop {
-                match rx.recv() {
+                // Platform stacks only time out connecting and waiting for
+                // headers; a body that stops arriving would hang forever.
+                let event = match rx.recv_timeout(UPDATER_STALL_TIMEOUT) {
+                    Ok(event) => Ok(event),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        break Err(format!(
+                            "download stalled (no data for {}s)",
+                            UPDATER_STALL_TIMEOUT.as_secs()
+                        ));
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(()),
+                };
+                match event {
                     Ok(FetchEvent::Head(head)) => {
                         if matches!(head.status, 301 | 302 | 303 | 307 | 308)
                             && let Some(location) = updater_header(&head.headers, "location")
@@ -1074,6 +1089,14 @@ impl nsh_core::runtime::UpdaterHost for UpdaterOverNetwork {
         Err("too many redirects".to_owned())
     }
 }
+
+/// How long an update download may go without any network event before
+/// it fails as stalled (and is retried from the bytes already on disk).
+const UPDATER_STALL_TIMEOUT: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_millis(200)
+} else {
+    std::time::Duration::from_secs(60)
+};
 
 /// First value of header `target` (ASCII case-insensitive).
 fn updater_header<'a>(headers: &'a [(String, String)], target: &str) -> Option<&'a str> {
@@ -2542,16 +2565,19 @@ impl<M: TextEngine + 'static> Driver<M> {
         let mut core = Core::new(text_engine.clone(), config.viewport);
         #[cfg(any(feature = "js-core", all(feature = "browser", target_arch = "wasm32")))]
         let rust_runtime = core.runtime_handle();
-        // nsh.json's `application.quitMode`, else the default
-        // `"platform"`: Windows and Linux quit when the last window
-        // closes; macOS stays in the Dock. The app can change it at run
-        // time with `Application.setQuitMode`.
-        let mode = config
+        // Explicit `<Window>` scenes default to `"platform"` (Windows and
+        // Linux quit when the last window closes; macOS stays in the Dock),
+        // while a plain root's implicit main window quits on close unless the
+        // app explicitly sets `application.quitMode` or calls
+        // `Application.setQuitMode`.
+        core.__set_default_quit_mode(nsh_core::desktop::QuitMode::Platform);
+        if let Some(mode) = config
             .app
             .application()
-            .map(|options| options.quit_mode)
-            .unwrap_or_default();
-        core.set_quit_mode(mode);
+            .and_then(|options| options.__explicit_quit_mode())
+        {
+            core.set_quit_mode(mode);
+        }
         core.set_content_culling(config.content_culling);
         core.set_tree_order_tracking(sink.needs_tree_order());
         core.set_projected_state_mounting(sink.needs_projected_states());
@@ -4236,6 +4262,7 @@ fn ui_environment(env: &Environment, window: Size<Points>) -> nsh_core::element:
         horizontal_size_class: env.horizontal_size_class,
         vertical_size_class: env.vertical_size_class,
         safe_area: insets(env),
+        reserved_regions: env.reserved_regions,
         title_bar: env.title_bar,
         window_state: env.window_state,
         keyboard_height: env.keyboard_height,
@@ -5287,6 +5314,39 @@ mod updater_range_tests {
             events.push("unsatisfiable".into());
         }
         Ok((events, body))
+    }
+
+    #[test]
+    fn updater_over_network_fails_a_stalled_body() {
+        /// Sends headers and a first piece, then keeps the stream open silently.
+        struct Silent(Mutex<Vec<FetchEvents>>);
+        impl Network for Silent {
+            fn fetch(&self, _: HttpRequest, mut events: FetchEvents) -> Box<dyn FetchTask> {
+                events(FetchEvent::Head(HttpHead {
+                    status: 200,
+                    headers: vec![("Content-Length".into(), "10".into())],
+                    ..Default::default()
+                }));
+                events(FetchEvent::Data(b"0123".to_vec()));
+                self.0.lock().unwrap().push(events);
+                Box::new(NoopTask)
+            }
+        }
+        let host = UpdaterOverNetwork {
+            network: Arc::new(Silent(Mutex::new(Vec::new()))),
+            assets: None,
+            config: None,
+            running: None,
+        };
+        let mut body = Vec::new();
+        let err = host
+            .get("https://x.dev/a.tar.gz", 0, &mut |_, bytes, _| {
+                body.extend_from_slice(bytes);
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(err.starts_with("download stalled"), "{err}");
+        assert_eq!(body, b"0123");
     }
 
     #[test]

@@ -593,9 +593,10 @@ pub(crate) fn released(surface: &Surface) {
 /// How often a drag past a scroll view's edge scrolls it (ms).
 const AUTOSCROLL_INTERVAL: u64 = 16;
 
-/// The scroll view around the dragging mouse's area that it is near or
-/// past an edge of, and by how much to scroll it (wheel deltas,
-/// [`autoscroll_step`]).
+/// The innermost scroll view around the selection's focus (one inside the
+/// dragging mouse's area, a wide table's horizontal scroll, #2996, then
+/// those around it) that the mouse is near or past an edge of, and by how
+/// much to scroll it (wheel deltas, [`autoscroll_step`]).
 fn autoscroll_target(surface: &Surface) -> Option<(NshView, f32, f32)> {
     let (id, last) = surface
         .selection
@@ -604,7 +605,7 @@ fn autoscroll_target(surface: &Surface) -> Option<(NshView, f32, f32)> {
         .as_ref()
         .filter(|d| d.selecting)
         .map(|d| (d.area, d.last))?;
-    let mut current = view_of(surface, id);
+    let mut current = focus_view(surface, id).or_else(|| view_of(surface, id));
     while let Some(view) = current {
         current = view.parent_view();
         let (horizontal, w, h) = {
@@ -630,6 +631,17 @@ fn autoscroll_target(surface: &Surface) -> Option<(NshView, f32, f32)> {
         }
     }
     None
+}
+
+/// The text the focus of area `id`'s selection is in.
+fn focus_view(surface: &Surface, id: NodeId) -> Option<NshView> {
+    let area = view_of(surface, id)?;
+    let focus = surface.selection.areas.borrow().get(&id)?.model.focus()?;
+    collect(&area)
+        .items
+        .into_iter()
+        .nth(focus.text)
+        .map(|i| i.view)
 }
 
 /// Starts scrolling the scroll view the dragging mouse is past the edge
@@ -902,4 +914,90 @@ pub(crate) fn cursor_above(view: &NshView) -> bool {
         current = v.parent_view();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use nsh_base::text_view;
+    use nsh_core::prelude::*;
+
+    use super::*;
+    use crate::gtk_test::{run, show, surface, wait_until};
+
+    /// Ordered items with nested bullets: every marker is generated chrome.
+    const DOC: &str = "\
+1. **one**
+   - alpha
+   - beta
+2. **two**
+   - gamma
+   - delta
+3. **three**
+   - eps
+4. **four** tail
+";
+
+    #[component]
+    fn Doc() -> impl IntoElement {
+        view()
+            .w(px(600.0))
+            .p(px(20.0))
+            .child(text_view().selectable(true).markdown(DOC))
+    }
+
+    /// A drag from the second item into the fourth highlights the items'
+    /// texts only: no list marker, nested or not, before or inside the
+    /// range, draws a highlight.
+    #[test]
+    fn a_drag_across_list_items_never_highlights_their_markers() {
+        run(|| {
+            let surface = surface();
+            surface.start(nsh_engine::EngineConfig::new(nsh_engine::Root::of::<Doc>()));
+            let window = show(&surface);
+            window.set_default_size(700, 400);
+            let views =
+                || -> Vec<NshView> { surface.mounter.borrow().views.values().cloned().collect() };
+            let text_of = |v: &NshView| v.state().text.as_ref().map(|t| t.text.text.to_string());
+            let find = |s: &str| {
+                views()
+                    .into_iter()
+                    .find(|v| text_of(v).as_deref() == Some(s) && v.is_mapped())
+            };
+            assert!(wait_until(
+                || find("two").is_some() && find("four tail").is_some()
+            ));
+            // Laid out at the window's size.
+            wait_until(|| false);
+            let (two, four) = (find("two").unwrap(), find("four tail").unwrap());
+            let area = area_of(&two).expect("the TextView is a selectable view");
+            let at = |v: &NshView, dx: f32| {
+                let c = v.state().text.as_ref().unwrap().content;
+                let p = v
+                    .compute_point(
+                        &surface.root,
+                        &graphene::Point::new(c.origin.x.0 + dx, c.origin.y.0 + 5.0),
+                    )
+                    .unwrap();
+                (p.x(), p.y())
+            };
+            let (from, to) = (at(&two, 1.0), at(&four, 20.0));
+            begin(
+                &surface,
+                &area,
+                from,
+                0.0,
+                gdk::ModifierType::empty(),
+                false,
+            );
+            assert!(dragged(&surface, to.0, to.1));
+            released(&surface);
+            let mut lit: Vec<String> = views()
+                .iter()
+                .filter(|v| v.state().area_selection.is_some())
+                .filter_map(text_of)
+                .collect();
+            lit.sort();
+            assert_eq!(lit, ["delta", "eps", "four tail", "gamma", "three", "two"]);
+        });
+    }
 }

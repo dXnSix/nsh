@@ -95,7 +95,7 @@ Features:
 | `js` (default) | JS apps; without it the crate only runs Rust apps and links no QuickJS | yes |
 | `webview` (default) | web views with wry (`native/web.rs`; GTK 3 and WebKitGTK on Linux); without it, and on Tizen, a web view is a placeholder that reports `onError` | yes |
 | `video` | videos with GStreamer (`native/video.rs`); without it a video is a placeholder that reports `onError`. On Tizen videos play through the TV's player whatever the features ("Tizen" below) | Linux |
-| `dev` | the dev server client, log forwarding, the error overlay (`dev.rs`) | yes |
+| `dev` | the dev server client, log forwarding, the error overlay, the test agent (`dev.rs`, `agent.rs`); the optional parts stay as the build has them, so an embedding app's development build runs apps with its release's parts (`nsh-gpui-host` lists every part itself) | yes |
 | `shot` | screenshots on macOS and Windows (`nsh test --target gpui`'s) through GPUI's `test-support` (`Window::render_to_image`); the tests in windows of GPUI's test platform (`tests.rs`) | macOS, Windows |
 | `runtime-shaders` | GPUI's Metal shaders compiled when the app starts, not by the build (`gpui_platform/runtime_shaders`, with `platform`): builds on a Mac without the Metal Toolchain; nothing elsewhere | the CLI's, where `xcrun metal` fails; never the distribution's |
 

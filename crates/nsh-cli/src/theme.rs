@@ -273,7 +273,7 @@ fn app_sets(app: &Path) -> anyhow::Result<(PathBuf, Arc<[SetDescription]>)> {
         .parent()
         .context("the app's entry has no directory")?
         .to_path_buf();
-    if let Some(rust) = crate::rust_app::of(&entry, false)? {
+    if let Some(rust) = crate::rust_app::of(&entry, false, None)? {
         crate::rust_app::set_current(rust.clone());
         crate::set_app_sets(rust.describe()?);
     }

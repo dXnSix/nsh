@@ -32,6 +32,8 @@
 // by default `nsh-<name>.bin` next to this file), `prepareChunk(id)` (a
 // promise for what chunk `id` needs once it
 // runs, such as fonts for `readAsset`; awaited with the chunk's download),
+// `prefetched(url)` (a response promise the page already requested for a
+// side module's `url`, taken instead of fetching it again, or undefined),
 // `dark`, `idiom` ("phone", "pad", "desktop" or "tv" instead of the one the
 // pointer and the viewport suggest; a page on a TV, a `.wgt`, passes "tv":
 // `platform.tv`, `tv={{…}}` props, mobile behavior), `dialogs` ("viewport": `Dialog`,
@@ -602,14 +604,37 @@ function localOffset(ms) {
 
 /**
  * Whether the page can show the browser's share sheet: it has
- * `navigator.share` and the page's permissions policy allows `web-share`
- * (a frame of another origin needs `allow="web-share"`).
+ * `navigator.share` and the document is allowed to use `web-share` (a frame
+ * of another origin needs `allow="web-share"`, and `Permissions-Policy:
+ * web-share=()` turns it off).
+ *
+ * Web Share (W3C REC) makes `navigator.canShare(data)` return `false` when the
+ * document is not allowed to use "web-share", so that is the probe. It never
+ * touches the policy by name, so it does not log "Unrecognized feature" in
+ * browsers whose Permissions Policy has no `web-share` entry. The data only
+ * has to be valid share data; nothing is shared.
+ *
+ * `canShare` is newer than `share` (some browsers ship only `share`). Those
+ * fall back to the Permissions Policy API, asking `features()` before
+ * `allowsFeature()`: `allowsFeature` logs for a name the browser does not
+ * list, and such a browser does not gate sharing on that policy.
  */
-function webShareAllowed() {
-  if (typeof navigator === "undefined" || typeof navigator.share !== "function") return false;
-  const doc = typeof document === "undefined" ? undefined : document;
+function webShareAllowed(
+  nav = typeof navigator === "undefined" ? undefined : navigator,
+  doc = typeof document === "undefined" ? undefined : document,
+) {
+  if (typeof nav?.share !== "function") return false;
+  if (typeof nav.canShare === "function") {
+    try {
+      return nav.canShare({ text: "share" });
+    } catch {
+      return false;
+    }
+  }
   const policy = doc?.permissionsPolicy ?? doc?.featurePolicy;
-  return typeof policy?.allowsFeature === "function" ? policy.allowsFeature("web-share") : true;
+  if (typeof policy?.allowsFeature !== "function") return true;
+  if (typeof policy.features === "function" && !policy.features().includes("web-share")) return true;
+  return policy.allowsFeature("web-share");
 }
 
 /** The kinds `network()` names for `navigator.connection.type`'s. */
@@ -761,6 +786,15 @@ const RUNTIME_SHEET = Symbol.for("nsh.runtimeSheet");
 /** Adds (or, for a view's own rule, replaces) class `name` with `text`.
  * The class is doubled: it wins over the runtime's rules of a class and a
  * pseudo-class (`.nsh-v:focus`), as inline styles did. */
+/** The CSS font of run style class `name` (its `font` and the longhands a
+ * `font` shorthand cannot say, as `font-variant-numeric`, leave its
+ * `font` empty); null for none. */
+function runFont(name) {
+  const style = name && CLASSES.rules.get(name)?.style;
+  if (!style?.fontFamily) return null;
+  return style.font || `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+}
+
 function defineClass(name, text, replace, weight = 2) {
   const rule = CLASSES.rules.get(name);
   if (rule) {
@@ -940,7 +974,11 @@ function runOffset(run, container, offset) {
   return range.toString().length;
 }
 
-let players = 0;
+/** How many players the page made, kept on the document: every copy of the
+ * runtime on the page counts with it, so the views' own style rules
+ * (`classPrefix`) and DOM ids of two copies' players do not collide, as
+ * the rules all apply to the whole document. */
+const PLAYERS = Symbol.for("nsh.players");
 
 /** How many players imported each wasm-bindgen glue, by URL. */
 const glueImports = new Map();
@@ -1259,7 +1297,8 @@ class Player {
     // Shader views (`op_sh`), drawn on one WebGL 2 context (`shaderGl`).
     this.shaderViews = new Set();
     // Of the views' own style rules (`op_css`).
-    this.classPrefix = `nsh-p${++players}-`;
+    document[PLAYERS] = (document[PLAYERS] ?? 0) + 1;
+    this.classPrefix = `nsh-p${document[PLAYERS]}-`;
     this.timer = 0;
     // The engine trapped: it takes no more calls (`call`).
     this.trapped = false;
@@ -1601,8 +1640,10 @@ class Player {
   }
 
   async compileSide(url, init) {
+    // A request the page made ahead (`prefetched`): an entry's side module.
+    const ahead = this.options.prefetched?.(url);
     try {
-      return await WebAssembly.compileStreaming(fetch(url, init));
+      return await WebAssembly.compileStreaming(ahead ?? fetch(url, init));
     } catch (err) {
       // Served without `application/wasm`: compiled from its bytes.
       if (!(err instanceof TypeError)) throw err;
@@ -1919,6 +1960,51 @@ class Player {
   }
 
   /**
+   * How far below its top a run in `font` with `line-height` `height`
+   * (points) has its baseline, as the DOM lays it out (half-leading around
+   * the font's own ascent and descent, snapped as the browser snaps it);
+   * null without a document to measure in. Kept per font and height:
+   * texts have few of either.
+   */
+  lineBaseline(font, height) {
+    const key = `${height}|${font}`;
+    const cache = (this.lineBaselines ??= new Map());
+    if (cache.has(key)) return cache.get(key);
+    let baseline = null;
+    if (this.domMetrics(font)) {
+      const { run, mark } = this.metricsProbe;
+      run.style.lineHeight = `${height}px`;
+      baseline = mark.getBoundingClientRect().top - run.getBoundingClientRect().top;
+      run.style.lineHeight = "";
+    }
+    cache.set(key, baseline);
+    return baseline;
+  }
+
+  /**
+   * Places `span`, a run whose glyphs' top is at `top` (`[x, y]` of its
+   * line's layout): a run in a line taller or shorter than its font
+   * (`height`, a line height the text sets) gets a line box that tall
+   * around the same baseline, so a selection highlights the whole line as
+   * on a browser's own text, not the font's height.
+   */
+  placeRun(span, name, left, top, height) {
+    let lead = 0;
+    const font = height ? runFont(name) : null;
+    const baseline = font ? this.lineBaseline(font, height) : null;
+    if (baseline != null) lead = baseline - this.metrics(font)[0];
+    else height = null;
+    const line = height ? `${height}px` : "";
+    const y = `${top - lead}px`, x = `${left}px`;
+    if (span.style.left !== x) span.style.left = x;
+    if (span.style.top !== y) span.style.top = y;
+    if (span.style.lineHeight !== line) span.style.lineHeight = line;
+    // Where its glyphs' top is in its box (a snapshot draws them there).
+    if (lead) span._lead = lead;
+    else delete span._lead;
+  }
+
+  /**
    * A face registered from data loads asynchronously: text is measured
    * again once it can be drawn. Faces registered while the app starts hide
    * it until they load, so its first frame shows the right fonts.
@@ -1945,6 +2031,7 @@ class Player {
         }
         this.fontsPending = [];
         this.metricsCache.clear();
+        this.lineBaselines?.clear();
         this.call((w) => w.nsh_fonts_loaded());
         clearTimeout(this.fontTimer);
         this.root.classList.remove("nsh-hidden");
@@ -3181,14 +3268,12 @@ class Player {
       el.insertBefore(span, before ?? null);
       spans.push(span);
     }
-    runs.forEach(([x, y, text, style, start, , after], i) => {
+    runs.forEach(([x, y, text, style, start, , after, height], i) => {
       const span = spans[i];
       const name = this.styleClass(styles[style]);
       const className = name ? `nsh-run ${name}` : "nsh-run";
       if (span.className !== className) span.className = className;
-      const left = `${cx + x}px`, top = `${cy + y}px`;
-      if (span.style.left !== left) span.style.left = left;
-      if (span.style.top !== top) span.style.top = top;
+      this.placeRun(span, name, cx + x, cy + y, height);
       if (span.firstChild.data !== text) span.firstChild.data = text;
       span._start = start;
       span._run = i;
@@ -3238,11 +3323,11 @@ class Player {
       events: new Set(events),
       address: this.textLinkAddress(href),
     }));
-    runs.forEach(([x, y, text, style, start, parts, after], i) => {
+    runs.forEach(([x, y, text, style, start, parts, after, height], i) => {
       const span = document.createElement("span");
       const name = this.styleClass(styles[style]);
       span.className = name ? `nsh-run ${name}` : "nsh-run";
-      span.style.cssText = `left:${cx + x}px;top:${cy + y}px`;
+      this.placeRun(span, name, cx + x, cy + y, height);
       fillRun(span, text, parts, spans);
       // Where its characters are in the text (UTF-16, as JS strings).
       span._start = start;
@@ -4398,7 +4483,8 @@ class Player {
         cx.textBaseline = "alphabetic";
         const text = child.textContent;
         const m = cx.measureText(text);
-        cx.fillText(text, x, y + (m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent));
+        // Its glyphs sit `_lead` below its top in a line box of its line's height.
+        cx.fillText(text, x, y + (child._lead ?? 0) + (m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent));
       }
       // A view that clips its content (a scroll view among them) clips it here too.
       if (cs.clips) {

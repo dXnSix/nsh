@@ -659,8 +659,11 @@ frame id:avoid-padding-inner 0 0 390 30
 frame id:avoid-off 0 185 390 30
 tap text:Dismiss the keyboard
 expect Dismiss: called
+# No region reserved headless.
+expect Reserved regions: 0
 covers [nsh] safeArea
 covers [nsh] safeAreaInsets
+covers [nsh] reservedRegions
 covers [nsh] keyboardFrame
 covers [nsh] Keyboard
 # base-text-view
@@ -4439,12 +4442,18 @@ frame id:grow 0 0 300 40
 tap id:grow-more
 wait 100
 frame id:grow 0 0 300 60
+# A replacing decoration shows its label in place of its range's text
+# while no caret touches it (the editor is not focused): `a` as `alpha`.
+expect alpha
 # The app's fold ranges (the outer one shorter than the indentation's):
 # level 2 folds the inner block alone.
 # The gutter's strip of decorations' marks is `gutterDecorationsWidth`
 # wide, before the line numbers and the fold markers: the gutter is
 # 12 + 4 + 15 + 20 + 4 wide.
 frame below:parent:parent:parent:parent:span:c(); 0 0 55 200
+# Its vertical scroll view (below the layer drawn over it) keeps its bar
+# within `scrollbarInset`.
+prop below:parent:parent:parent:parent:parent:parent:span:c(); scrollbarInset top=6 right=2 bottom=6
 tap id:fold-level
 expect Folded: 1-2
 # Folding the outer block recursively keeps the inner one folded, so
@@ -4523,6 +4532,12 @@ expect Defined: 3 key 7 5-11
 # Code actions at the selection, start first, with the caret's box.
 tap id:code-actions
 expect Acted: 5-11 5 placed
+# The seventh editor reports where its text is scrolled once laid out:
+# 30 rows of 20 points with no room past the last, wrapped (as wide as
+# its 390 × 100 viewport), at the top. The ref scrolls it, reported.
+expect Scroll: 0 0 390x600 390x100
+tap id:scroll-to
+expect Scroll: 0 470 390x600 390x100
 covers [nsh/base] Editor
 covers [events] Editor.onHover
 covers [events] Editor.onHoverEnd
@@ -4542,8 +4557,19 @@ covers [events] Editor.onInlineCompletionRequest
 covers [props] Editor.diagnostics
 covers [props] Editor.styles
 covers [props] Editor.gutterDecorationsWidth
+covers [props] scrollbarInset
 covers [events] Editor.onDefinitionRequest
 covers [events] Editor.onCodeActionRequest
+covers [events] onScroll
+
+# base-editor-fonts
+tap id:case-base-editor-fonts
+# A decoration's 26 point heading takes a row twice the editor's 20,
+# the caret there is as tall, and the code's row below keeps its 20.
+expect end
+tap id:measure
+expect Rows: 40 20 40
+covers [props] Editor.decorations
 
 # base-diff
 tap id:case-base-diff
@@ -4753,7 +4779,7 @@ expect Attr: true
 expect Split: true 3
 expect Content: Plain line **b**
 expect Html: <h2>T</h2><p>a <em>b</em></p>
-expect Insert: xyb
+expect Insert: xyb aXb aZb
 expect Dispatch: all xy
 expect Node: true node
 expect Items: true true

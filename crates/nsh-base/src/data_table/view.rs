@@ -35,7 +35,7 @@ use super::{
     controller::{CustomCell, Dt, Geo, MOVE_SLOP, PressRegion, SORT_WIDTH},
     selection::Selection,
 };
-use crate::HandleEdge;
+use crate::{HandleEdge, text_view::merge_styles};
 
 /// The thickness of the desktops' horizontal scroll bar's band.
 const STRIP: f32 = 12.0;
@@ -91,12 +91,7 @@ fn parts_with<E: Element>(
             if s.is_empty() {
                 return Style::default();
             }
-            Style::from_decls(
-                styles()
-                    .iter()
-                    .filter_map(|p| s.get(*p))
-                    .flat_map(|s| s.decls().iter().cloned()),
-            )
+            merge_styles(styles().iter().filter_map(|p| s.get(*p)))
         })
     })
 }
@@ -184,12 +179,7 @@ fn column_parts<E: Element>(
             if s.is_empty() {
                 return Style::default();
             }
-            Style::from_decls(
-                styles()
-                    .iter()
-                    .filter_map(|p| s.get(*p))
-                    .flat_map(|s| s.decls().iter().cloned()),
-            )
+            merge_styles(styles().iter().filter_map(|p| s.get(*p)))
         })
     })
 }
@@ -229,7 +219,13 @@ pub(crate) fn render(dt: Dt) -> impl IntoElement {
         view()
             .absolute()
             .inset_0()
-            .on_layout(move |b: &Bounds<Points>| layout.viewport.set(b.size))
+            // Under `display: none` it has no area, which is no viewport to
+            // empty the rows by: they stay until it shows again.
+            .on_layout(move |b: &Bounds<Points>| {
+                if has_area(b) {
+                    layout.viewport.set(b.size);
+                }
+            })
             .child(
                 when(
                     move || custom_cell.get(),
@@ -313,7 +309,7 @@ fn hit_layer(dt: Dt, lead: Lead) -> impl IntoElement {
                 .on_layout({
                     let dt = dt.clone();
                     move |b: &Bounds<Points>| {
-                        if dt.rows_width.get_untracked() != Some(b.size.width) {
+                        if has_area(b) && dt.rows_width.get_untracked() != Some(b.size.width) {
                             dt.rows_width.set(Some(b.size.width));
                         }
                     }
@@ -1979,4 +1975,10 @@ fn overlays(dt: Dt) -> impl IntoElement {
 fn on_pixel(points: f64) -> Length {
     let ratio = f64::from(nsh_core::element::pixel_ratio().max(f32::MIN_POSITIVE));
     Length::from(px(((points * ratio).round() / ratio) as f32))
+}
+
+/// Whether a view's layout has room for anything: `display: none` around
+/// it leaves it none.
+fn has_area(b: &Bounds<Points>) -> bool {
+    b.size.width > Points::ZERO && b.size.height > Points::ZERO
 }
