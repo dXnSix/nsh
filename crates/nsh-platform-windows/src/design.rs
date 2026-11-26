@@ -363,16 +363,20 @@ pub(crate) fn report_now() {
     tick();
 }
 
+/// A window [`tick`] reports: what it shows, its extra handles, and the
+/// live viewport it presents.
+type Shown = (
+    DesignWindow,
+    Vec<(&'static str, u64)>,
+    Option<core::DesignViewport>,
+);
+
 /// Tells the tool what the app's windows show: those visible, with their
 /// handles (including their shared DirectComposition surface handle and
 /// owning process id once their swap chain exists), content sizes, and any
 /// cropped/scaled live viewport currently presented.
 fn tick() {
-    let mut shown: Vec<(
-        DesignWindow,
-        Vec<(&'static str, u64)>,
-        Option<core::DesignViewport>,
-    )> = Vec::new();
+    let mut shown: Vec<Shown> = Vec::new();
     let named: Vec<(String, NodeId)> =
         NAMED.with_borrow(|named| named.iter().map(|(k, v)| (k.clone(), *v)).collect());
     let pid = u64::from(std::process::id());
@@ -422,11 +426,7 @@ fn tick() {
         // SAFETY: a plain query; a handle that is no window answers false.
         kept.retain(|&h| unsafe { IsWindow(Some(HWND(h as *mut _))) }.as_bool())
     });
-    let entries: Vec<(
-        &DesignWindow,
-        &[(&'static str, u64)],
-        Option<core::DesignViewport>,
-    )> = shown
+    let entries: Vec<core::ReportedWindow<'_>> = shown
         .iter()
         .map(|(w, extra, vp)| (w, extra.as_slice(), *vp))
         .collect();

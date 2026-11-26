@@ -735,17 +735,17 @@ fn paint(surface: &Rc<Surface>, window: &AppWindow) {
     // otherwise composite the newly resized buffers with the design tool's old
     // transform for 1-2 frames before the TCP surface message arrives.
     #[cfg(feature = "dev")]
-    if crate::design::active() && wanted_viewport != window.presented_viewport.get() {
-        if let Ok(mut swap) = window.swap.try_borrow_mut()
-            && swap.as_ref().is_some_and(|s| s.shared_handle().is_some())
-            && let Some(old) = swap.take()
-            && let Ok(mut retired) = window.retired_swaps.try_borrow_mut()
-        {
-            while retired.len() >= MAX_RETIRED_SWAPS {
-                retired.pop_front();
-            }
-            retired.push_back((old, std::time::Instant::now()));
+    if crate::design::active()
+        && wanted_viewport != window.presented_viewport.get()
+        && let Ok(mut swap) = window.swap.try_borrow_mut()
+        && swap.as_ref().is_some_and(|s| s.shared_handle().is_some())
+        && let Some(old) = swap.take()
+        && let Ok(mut retired) = window.retired_swaps.try_borrow_mut()
+    {
+        while retired.len() >= MAX_RETIRED_SWAPS {
+            retired.pop_front();
         }
+        retired.push_back((old, std::time::Instant::now()));
     }
     #[cfg(feature = "dev")]
     let prev_shared = window
