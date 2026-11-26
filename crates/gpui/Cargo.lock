@@ -5685,7 +5685,7 @@ version = "0.7.2"
 dependencies = [
  "nsh-core",
  "serde_json",
- "wgpu 29.0.4",
+ "wgpu",
 ]
 
 [[package]]
@@ -5796,7 +5796,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-platform-tizen"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "dxn_gpui_tizen",
  "dxn_gpui_tizen_sys",
@@ -5831,7 +5831,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-theme"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "serde",
  "serde_json",
