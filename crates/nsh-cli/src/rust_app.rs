@@ -91,6 +91,118 @@ pub(crate) fn set_release_hosts() {
     RELEASE_HOSTS.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// The profile the generated workspace defines for a design tool's
+/// optimized runs ([`DESIGN_HOST`], [`DESIGN_PROFILE_TOML`]).
+const DESIGN_PROFILE: &str = "design";
+
+/// The generated workspace's [`DESIGN_PROFILE`]: release's optimizations,
+/// built again on every change to the app's Rust code, so without LTO and
+/// incremental, in its own `target/design`, apart from the `release` builds
+/// that packages ship.
+const DESIGN_PROFILE_TOML: &str = "
+# A design tool's optimized runs (`nsh run --release` with NSH_DESIGN_SOCKET):
+# the development host and the describing program, built together, and again
+# on every change to the app's Rust code, so incremental and without LTO.
+# Packages keep `release`.
+[profile.design]
+inherits = \"release\"
+lto = \"off\"
+codegen-units = 16
+incremental = true
+";
+
+/// The desktop a design tool starts the app on optimized: `nsh run
+/// --release` or `nsh dev --release` with `NSH_DESIGN_SOCKET` set
+/// ([`is_design_release_run`]). Its development host and the describing
+/// program then build together, in one `cargo build` with [`DESIGN_PROFILE`],
+/// instead of a debug program and a release host each on its own: Cargo
+/// unifies features within one invocation only, so what the two share
+/// builds once, and an edit to the app's crates rebuilds incrementally
+/// ([`RustApp::describe`], [`host_profile`]).
+static DESIGN_HOST: std::sync::Mutex<Option<Platform>> = std::sync::Mutex::new(None);
+
+/// Builds this command's describing program with the development host for
+/// `platform`, both with [`DESIGN_PROFILE`] ([`DESIGN_HOST`]).
+pub(crate) fn set_design_host(platform: Platform) {
+    *DESIGN_HOST.lock().unwrap_or_else(|e| e.into_inner()) = Some(platform);
+}
+
+/// [`DESIGN_HOST`].
+fn design_host() -> Option<Platform> {
+    *DESIGN_HOST.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The member of the main workspace that is the development host of
+/// `platform`, for the platforms with a design mode: the desktops. GPUI's
+/// and the terminal's hosts are workspaces of their own, which define no
+/// [`DESIGN_PROFILE`].
+fn design_mode_host(platform: Platform) -> Option<&'static str> {
+    match platform {
+        Platform::MacOs => Some("macos-host"),
+        Platform::Linux => Some("linux-host"),
+        Platform::Windows => Some("windows-host"),
+        Platform::IphoneOs
+        | Platform::IphoneSimulator
+        | Platform::MacCatalyst
+        | Platform::Gpui
+        | Platform::Tui => None,
+    }
+}
+
+/// Whether a command is a design tool's optimized run ([`DESIGN_HOST`]):
+/// `release` (`--release`) on `platform`, one with a design mode
+/// ([`design_mode_host`]), with `socket` (`NSH_DESIGN_SOCKET`) set and not
+/// empty.
+pub(crate) fn is_design_release_run(
+    release: bool,
+    platform: Platform,
+    socket: Option<&std::ffi::OsStr>,
+) -> bool {
+    release
+        && design_mode_host(platform).is_some()
+        && socket.is_some_and(|socket| !socket.is_empty())
+}
+
+/// The Cargo profile a build of a generated workspace uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Profile {
+    /// Cargo's `dev`.
+    Dev,
+    /// Cargo's `release`.
+    Release,
+    /// The generated workspace's [`DESIGN_PROFILE`].
+    Design,
+}
+
+impl Profile {
+    /// The name `cargo build --profile` takes, for a profile other than
+    /// `dev` and `release` (which [`Build::release`] chooses).
+    fn custom(self) -> Option<&'static str> {
+        match self {
+            Profile::Design => Some(DESIGN_PROFILE),
+            Profile::Dev | Profile::Release => None,
+        }
+    }
+}
+
+/// The profile the development host (`runner` false) or release runner of
+/// `platform` builds with. A release runner, which packages ship, is always
+/// `release`. A development host is `dev`, or optimized with `nsh run
+/// --release` (`release_hosts`, [`RELEASE_HOSTS`]): [`DESIGN_PROFILE`] in a
+/// design tool's run (`design`, [`DESIGN_HOST`]) on a platform with a design
+/// mode ([`design_mode_host`]), else `release`.
+fn host_profile(platform: Platform, runner: bool, release_hosts: bool, design: bool) -> Profile {
+    if runner {
+        Profile::Release
+    } else if design && design_mode_host(platform).is_some() {
+        Profile::Design
+    } else if release_hosts || design {
+        Profile::Release
+    } else {
+        Profile::Dev
+    }
+}
+
 /// What `nsh package` names and versions the app (`--id`, `--name`,
 /// `--version`, `--build`), so a Rust app's root reports the package's
 /// identity (`nsh_core::element::app_info`), as a TSX app's `appInfo()`
@@ -2621,16 +2733,29 @@ impl RustApp {
     /// describe program says (built first: Cargo builds it again when the
     /// app's Rust code changed). Its output is kept in
     /// `.nsh/rust/description.json`, with the program's size and time, until
-    /// the program changes.
+    /// the program changes. In a design tool's optimized run it builds with
+    /// the development host, in one `cargo build` with [`DESIGN_PROFILE`]
+    /// ([`DESIGN_HOST`]).
     pub(crate) fn describe(&self) -> anyhow::Result<Vec<SetDescription>> {
         let what = self.crates_what();
+        let design = design_host().and_then(|platform| {
+            design_mode_host(platform).map(|host| (platform.host(false), self.bin(host)))
+        });
+        let (profile, extra, building) = match &design {
+            Some((host_what, host)) => (
+                Profile::Design,
+                vec!["-p", host.as_str()],
+                format!("{what} with {host_what} (design build)"),
+            ),
+            None => (Profile::Dev, Vec::new(), what.clone()),
+        };
         let program = self.build(
             &self.workspace,
             &self.bin("describe"),
             None,
-            false,
-            &[],
-            &what,
+            profile,
+            &extra,
+            &building,
         )?;
         let cache = self.workspace.join("description.json");
         let stamp = stamp(&program)?;
@@ -2669,7 +2794,7 @@ impl RustApp {
             &self.workspace,
             &self.bin("test"),
             None,
-            false,
+            Profile::Dev,
             &[],
             &format!("the headless runner of {}", self.packages()),
         )
@@ -2714,7 +2839,7 @@ lto = \"fat\"
 codegen-units = 1
 strip = true
 panic = \"abort\"
-{web_dev}"),
+{web_dev}{DESIGN_PROFILE_TOML}"),
             false,
         )?;
         // What earlier versions of nsh wrote: the app's own command line,
@@ -3784,15 +3909,15 @@ opt-level = \"s\"
     }
 
     /// `cargo build`s package `package` of the workspace `workspace` (for
-    /// `triple`, else the host), the step "building <what>", and returns its
-    /// binary (named as the package, with the executable suffix of this
-    /// machine when built for it).
+    /// `triple`, else the host) with `profile`, the step "building <what>",
+    /// and returns its binary (named as the package, with the executable
+    /// suffix of this machine when built for it).
     fn build(
         &self,
         workspace: &Path,
         package: &str,
         triple: Option<&str>,
-        release: bool,
+        profile: Profile,
         extra: &[&str],
         what: &str,
     ) -> anyhow::Result<PathBuf> {
@@ -3801,8 +3926,8 @@ opt-level = \"s\"
             workspace,
             package,
             triple,
-            release,
-            profile: None,
+            release: profile == Profile::Release,
+            profile: profile.custom(),
             extra,
             artifact: &artifact,
             what,
@@ -3972,14 +4097,27 @@ opt-level = \"s\"
         let asked = RELEASE_HOSTS.load(std::sync::atomic::Ordering::Relaxed);
         // A shared workspace's development host is optimized as a release
         // one already (`write_workspace_manifest`): one build serves both.
-        let release = runner || asked && !self.shared;
-        let what = if asked && !runner {
-            format!("{what} (release build)")
-        } else {
-            what
+        let profile = host_profile(
+            platform,
+            runner,
+            asked && !self.shared,
+            design_host().is_some(),
+        );
+        let what = match profile {
+            Profile::Design => format!("{what} (design build)"),
+            _ if asked && !runner => format!("{what} (release build)"),
+            Profile::Release | Profile::Dev => what,
         };
         let what = format!("{what}{}", crate::runtime::other_triple(platform, triple));
-        self.build(&workspace, &package, triple, release, features, &what)
+        // With the describing program, as it was built ([`Self::describe`]):
+        // the same packages resolve the same features, so nothing they share
+        // builds again.
+        let describe = self.bin("describe");
+        let mut extra = features.to_vec();
+        if profile == Profile::Design {
+            extra.extend(["-p", describe.as_str()]);
+        }
+        self.build(&workspace, &package, triple, profile, &extra, &what)
     }
 
     /// A Rust app's runner for `platform` (`rust-<platform>`): a release
@@ -4019,7 +4157,11 @@ opt-level = \"s\"
             &self.workspace,
             &self.bin(dir),
             triple,
-            release,
+            if release {
+                Profile::Release
+            } else {
+                Profile::Dev
+            },
             &web_view,
             &what,
         )
@@ -6707,6 +6849,112 @@ panic = \"abort\"
         assert!(manifest.contains(web), "{manifest}");
         assert_eq!(manifest.matches("[profile.web.").count(), 0, "{manifest}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    mod design_builds {
+        use std::ffi::OsStr;
+
+        use super::super::{Profile, design_mode_host, host_profile, is_design_release_run};
+        use crate::runtime::Platform;
+
+        const DESKTOPS: [Platform; 3] = [Platform::MacOs, Platform::Linux, Platform::Windows];
+        const OTHERS: [Platform; 5] = [
+            Platform::IphoneOs,
+            Platform::IphoneSimulator,
+            Platform::MacCatalyst,
+            Platform::Gpui,
+            Platform::Tui,
+        ];
+
+        #[test]
+        fn only_a_release_run_on_a_desktop_with_a_design_socket_is_one() {
+            let socket = Some(OsStr::new("tcp:127.0.0.1:9"));
+            for platform in DESKTOPS {
+                assert!(is_design_release_run(true, platform, socket));
+                assert!(!is_design_release_run(false, platform, socket));
+                assert!(!is_design_release_run(true, platform, None));
+                assert!(!is_design_release_run(true, platform, Some(OsStr::new(""))));
+            }
+            for platform in OTHERS {
+                assert!(
+                    !is_design_release_run(true, platform, socket),
+                    "{platform:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn the_desktops_hosts_build_with_the_design_profile() {
+            for platform in DESKTOPS {
+                assert!(design_mode_host(platform).is_some_and(|h| h.ends_with("-host")));
+                assert_eq!(
+                    host_profile(platform, false, true, true),
+                    Profile::Design,
+                    "{platform:?}"
+                );
+            }
+            assert_eq!(design_mode_host(Platform::MacOs), Some("macos-host"));
+            assert_eq!(Profile::Design.custom(), Some("design"));
+        }
+
+        #[test]
+        fn release_runners_keep_release() {
+            for platform in DESKTOPS.into_iter().chain([Platform::IphoneOs]) {
+                for design in [false, true] {
+                    assert_eq!(
+                        host_profile(platform, true, true, design),
+                        Profile::Release,
+                        "{platform:?}"
+                    );
+                }
+            }
+            assert_eq!(
+                host_profile(Platform::Linux, true, false, false),
+                Profile::Release
+            );
+        }
+
+        #[test]
+        fn other_runs_build_as_before() {
+            for platform in DESKTOPS {
+                assert_eq!(host_profile(platform, false, true, false), Profile::Release);
+                assert_eq!(host_profile(platform, false, false, false), Profile::Dev);
+            }
+            // GPUI's and the terminal's workspaces have no design mode and
+            // define no `design` profile: an optimized host stays `release`.
+            for platform in OTHERS {
+                assert_eq!(design_mode_host(platform), None, "{platform:?}");
+                assert_eq!(host_profile(platform, false, true, true), Profile::Release);
+            }
+        }
+
+        #[test]
+        fn the_workspace_defines_the_design_profile_once_and_leaves_release_alone() {
+            let dir = std::env::temp_dir().join(format!("nsh-rust-design-{}", std::process::id()));
+            let app = super::app(&dir, &[("app-native", dir.join("native"))], None);
+            app.write_workspace().unwrap();
+            let manifest = std::fs::read_to_string(app.workspace.join("Cargo.toml")).unwrap();
+            let design: Vec<&str> = manifest
+                .lines()
+                .skip_while(|l| *l != "[profile.design]")
+                .skip(1)
+                .take_while(|l| !l.is_empty() && !l.starts_with('['))
+                .collect();
+            assert_eq!(
+                design,
+                [
+                    "inherits = \"release\"",
+                    "lto = \"off\"",
+                    "codegen-units = 16",
+                    "incremental = true",
+                ],
+                "{manifest}"
+            );
+            assert_eq!(manifest.matches("[profile.design").count(), 1, "{manifest}");
+            // What packages build with is Cargo's `release`, as before.
+            assert!(!manifest.contains("[profile.release]"), "{manifest}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     #[test]

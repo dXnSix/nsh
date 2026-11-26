@@ -1004,7 +1004,19 @@ program that describes them, builds the hosts and runners with them, and does ev
   `quickjs-jit-sys`, `taffy`, `objc2` and `objc2-encode` at level 3 in debug builds, matching NSH's own workspace, so
   hot reload hosts keep interpreter, layout and Objective-C bridge performance while application Rust code retains debug
   settings. Objective-C signature checks stay enabled: their encoding parser needs optimization too, since every native
-  message checks its signature in debug builds.
+  message checks its signature in debug builds. A design tool's optimized run (`nsh run --release` or `nsh dev
+  --release` on macOS, Linux or Windows with `NSH_DESIGN_SOCKET` set; `rust_app::set_design_host`, before anything is
+  built) builds `describe` together with the development host, in one `cargo build -p <describe> -p <host>` with the
+  workspace's generated `design` profile (`DESIGN_PROFILE_TOML`: `release` with `lto = "off"`, 16 codegen units and
+  `incremental = true`), instead of a debug `describe` and a `release` host each built on its own. Cargo unifies
+  features only within one invocation, so built apart the two compile every crate they share whose features differ
+  (`nsh-core` and everything above it) twice; together they compile it once, `describe` with the host's features (the
+  hack, when it can, gives it the whole workspace's), and the host's own build names both packages again so that it
+  finds them built. An edit to the app's crates rebuilds them incrementally. The artifacts are in `target/design`,
+  apart from the `release` ones; release runners (`nsh package`, `nsh publish`) always build with `release`, and so
+  does `nsh run --release` without a design tool (`rust_app::host_profile`). The `cli` test binary's `design_builds`
+  module runs `nsh run` and `nsh dev` through a stand-in cargo and checks what each build names and its profile;
+  `rust_app::tests::design_builds` checks the choice per platform and the manifest's table.
 - Before a command on the app (`build`, `test`, `dev`, `run`, `package`, `publish`, `check`) `nsh` builds `describe`
   ("building the Rust crate …": Cargo decides whether the app's Rust code changed) and runs it when the program is
   new, keeping its output in `.nsh/rust/description.json` with the program's size and time (`RustApp::describe`). The
