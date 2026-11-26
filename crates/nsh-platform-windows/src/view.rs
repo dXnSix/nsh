@@ -99,6 +99,14 @@ pub(crate) trait Hosted {
         false
     }
 
+    /// True when the item's Direct2D drawing stays within its hosted rectangle
+    /// (or it paints nothing in Direct2D, like a composed item), so partial
+    /// frames can bound its damage to its view instead of redrawing the whole
+    /// window.
+    fn bounded(&self) -> bool {
+        self.composed()
+    }
+
     /// The visual of a [`Hosted::composed`] item, stacked between the
     /// layers.
     fn visual(&self) -> Option<windows::Win32::Graphics::DirectComposition::IDCompositionVisual2> {
@@ -376,6 +384,10 @@ struct Node {
     /// It or a view in its subtree may hold a `painted` record: false
     /// only when none does, so walks for the records stop here.
     painted_below: Cell<bool>,
+    /// It or a view in its subtree may host a composed item (a web view or
+    /// composed native component): partial frames in a composed window keep
+    /// traversing this branch so composed items are never culled.
+    composed_below: Cell<bool>,
     /// The newest change in it or what it holds ([`NshView::changes`]).
     changes: Cell<u64>,
 }
@@ -459,6 +471,7 @@ impl NshView {
             queued: Cell::new(false),
             painted: Cell::new(None),
             painted_below: Cell::new(false),
+            composed_below: Cell::new(false),
             changes: Cell::new(0),
         }))
     }
@@ -597,6 +610,23 @@ impl NshView {
         }
     }
 
+    /// It and the views it is in may host a composed item.
+    pub(crate) fn mark_composed_below(&self) {
+        let mut node = self.0.clone();
+        while !node.composed_below.replace(true) {
+            let parent = node.parent.borrow().upgrade();
+            match parent {
+                Some(p) => node = p,
+                None => break,
+            }
+        }
+    }
+
+    /// True when it or a descendant may host a composed item.
+    pub(crate) fn composed_below(&self) -> bool {
+        self.0.composed_below.get()
+    }
+
     /// Forgets where it and its subtree were painted: a frame left them
     /// out (hidden, out of sight), so no record of theirs stands for what
     /// is on screen any more. Their old area was drawn again by the change
@@ -707,6 +737,9 @@ impl NshView {
         if self.0.painted_below.get() {
             parent.mark_painted_below();
         }
+        if self.0.composed_below.get() {
+            parent.mark_composed_below();
+        }
         // Where it draws now (its parent draws nothing new of its own).
         self.changed();
     }
@@ -739,6 +772,9 @@ impl NshView {
                     rect,
                 }),
             }
+        }
+        if item.composed() {
+            self.mark_composed_below();
         }
         self.changed();
     }

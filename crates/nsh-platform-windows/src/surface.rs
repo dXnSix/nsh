@@ -199,18 +199,11 @@ pub(crate) struct Surface {
     /// once it is done (the request made inside `WM_PAINT` does not come
     /// back as another `WM_PAINT`).
     repaint: Cell<bool>,
-    /// The next frame draws the whole window ([`Surface::invalidate`]).
-    full_damage: Cell<bool>,
+    /// What changed since the last frame (views, partial rects, or whole).
+    pub(crate) damage: Damage,
     /// The change stamp of the last request to draw the whole window
     /// ([`Surface::whole_change`]).
     whole_change: Cell<u64>,
-    /// Views that changed since the last frame
-    /// ([`Surface::invalidate_view`]).
-    dirty: RefCell<Vec<NshView>>,
-    /// Parts of views that changed since the last frame, in the view's own
-    /// coordinates ([`Surface::invalidate_view_rect`]): a canvas's animated
-    /// values, drawn again only there.
-    partial: RefCell<Vec<(NshView, Bounds<Points>)>>,
     /// The environment the engine was last told about.
     pub(crate) environment: Cell<Environment>,
     /// The app's appearance (`nsh.json`, `setColorScheme`): the color
@@ -337,10 +330,8 @@ impl Surface {
             painting: Cell::new(false),
             repaint: Cell::new(false),
             // The first frame draws everything.
-            full_damage: Cell::new(true),
+            damage: Damage::new(),
             whole_change: Cell::new(0),
-            dirty: RefCell::default(),
-            partial: RefCell::default(),
             environment: Cell::new(environment),
             appearance: Cell::default(),
             host_environment: Cell::default(),
@@ -759,7 +750,7 @@ impl Surface {
     /// Asks for the whole window to be drawn again (once, however often
     /// asked before it is).
     pub(crate) fn invalidate(&self) {
-        self.full_damage.set(true);
+        self.damage.invalidate();
         self.whole_change.set(crate::view::next_change_stamp());
         self.request_paint();
         crate::app_window::invalidate_all(self);
@@ -777,20 +768,14 @@ impl Surface {
     /// Asks for `view` and its subtree to be drawn again: where it was
     /// drawn and where it draws now ([`Surface::take_damage`]).
     pub(crate) fn invalidate_view(&self, view: &NshView) {
-        if !self.full_damage.get() {
-            view.set_queued(true);
-            self.dirty.borrow_mut().push(view.clone());
-        }
+        self.damage.invalidate_view(view);
         self.request_paint();
     }
 
     /// Asks for `rect` of `view` (in its own coordinates) to be drawn again:
-    /// a canvas whose animated values changed paints only there.
+    /// a canvas's animated values changed paints only there.
     pub(crate) fn invalidate_view_rect(&self, view: &NshView, rect: Bounds<Points>) {
-        // A whole redraw of the view already on its way covers it.
-        if !self.full_damage.get() && !view.is_queued() {
-            self.partial.borrow_mut().push((view.clone(), rect));
-        }
+        self.damage.invalidate_view_rect(view, rect);
         self.request_paint();
     }
 
@@ -816,51 +801,7 @@ impl Surface {
     /// changed views were painted and where they draw now. `None`: the
     /// whole window (asked for, or a change whose area is not known).
     pub(crate) fn take_damage(&self) -> Option<Vec<crate::view::WindowRect>> {
-        let dirty = std::mem::take(&mut *self.dirty.borrow_mut());
-        let partial = std::mem::take(&mut *self.partial.borrow_mut());
-        for view in &dirty {
-            view.set_queued(false);
-        }
-        if self.full_damage.replace(false) {
-            return None;
-        }
-        let mut rects = Vec::with_capacity(dirty.len() * 2 + partial.len());
-        for view in &dirty {
-            if let Some(old) = view.painted_subtree() {
-                rects.push(old);
-            }
-            let Some(world) = view.to_root() else {
-                // Out of the tree: only where it was.
-                continue;
-            };
-            if !world.is_affine() {
-                return None;
-            }
-            // Hosted items may draw outside their rectangles.
-            rects.push(
-                crate::render::drawn_area(view)
-                    .map(|area| crate::compose::map_bounds(&world.to_3x2(), &area))?,
-            );
-        }
-        // What changed in part of a view: where that part is now (a view
-        // that moved is in `dirty` whole, which covers it).
-        for (view, rect) in &partial {
-            let Some(world) = view.to_root() else {
-                continue;
-            };
-            if !world.is_affine() {
-                return None;
-            }
-            let area = crate::render::rect_f(
-                rect.origin.x.0,
-                rect.origin.y.0,
-                rect.size.width.0,
-                rect.size.height.0,
-            );
-            rects.push(crate::compose::map_bounds(&world.to_3x2(), &area));
-        }
-        // Asked to draw with nothing changed (the system's `WM_PAINT`).
-        (!rects.is_empty()).then_some(rects)
+        self.damage.take()
     }
 
     /// Draws the window (`WM_PAINT`).
@@ -945,16 +886,24 @@ impl Surface {
         Ok(c)
     }
 
-    /// The composed items the frame just shown drew, where they go, and
-    /// the layers it drew (how many items are below each): tells them, and
-    /// the ones no longer drawn, stacks them, presents the layers, and commits.
-    pub(crate) fn composed_placed(
+    /// True when `composed` holds the exact same composed items in the same
+    /// order as the last frame.
+    pub(crate) fn composed_same(&self, composed: &[crate::render::Composed]) -> bool {
+        composed_same(&self.composed, composed)
+    }
+
+    /// Applies placements to the composed items the frame drew (and hides the
+    /// ones no longer drawn) and arranges their visuals in `composition`,
+    /// without presenting layers or committing DirectComposition yet. Returns
+    /// true when `composition` should present its layers and commit alongside
+    /// the base swap chain.
+    pub(crate) fn prepare_composed_placed(
         &self,
         composition: Option<&crate::compose::Composition>,
         composed: Vec<crate::render::Composed>,
         layers: &[usize],
-    ) -> windows::core::Result<()> {
-        composed_placed(&self.composed, composition, composed, layers)
+    ) -> bool {
+        prepare_composed_placed(&self.composed, composition, composed, layers)
     }
 
     /// Applies what the engine sent (`WM_NSH_WAKE`).
@@ -1346,22 +1295,141 @@ pub(crate) fn items_placed(
     drop(prev);
 }
 
+/// Damage queued for one window's next frame (shared by [`Surface`] and
+/// [`crate::app_window::AppWindow`]).
+pub(crate) struct Damage {
+    /// The next frame draws the whole window.
+    full: Cell<bool>,
+    /// Views that changed since the last frame.
+    dirty: RefCell<Vec<NshView>>,
+    /// Parts of views that changed since the last frame, in the view's own
+    /// coordinates.
+    partial: RefCell<Vec<(NshView, Bounds<Points>)>>,
+}
+
+impl Damage {
+    /// Starts dirty whole so the window's first frame draws everything.
+    pub(crate) fn new() -> Self {
+        Damage {
+            full: Cell::new(true),
+            dirty: RefCell::default(),
+            partial: RefCell::default(),
+        }
+    }
+
+    /// Asks for the whole window to be drawn again.
+    pub(crate) fn invalidate(&self) {
+        self.full.set(true);
+    }
+
+    /// Queues `view` and its subtree to be drawn again.
+    pub(crate) fn invalidate_view(&self, view: &NshView) {
+        if !self.full.get() {
+            view.set_queued(true);
+            self.dirty.borrow_mut().push(view.clone());
+        }
+    }
+
+    /// Queues `rect` of `view` (in its own coordinates) to be drawn again.
+    pub(crate) fn invalidate_view_rect(&self, view: &NshView, rect: Bounds<Points>) {
+        // A whole redraw of the view already on its way covers it.
+        if !self.full.get() && !view.is_queued() {
+            self.partial.borrow_mut().push((view.clone(), rect));
+        }
+    }
+
+    /// Releases any queued views (when a window is torn down).
+    pub(crate) fn clear(&self) {
+        for view in std::mem::take(&mut *self.dirty.borrow_mut()) {
+            view.set_queued(false);
+        }
+        self.partial.borrow_mut().clear();
+        self.full.set(true);
+    }
+
+    /// What changed since the last frame, in the window's DIPs: where the
+    /// changed views were painted and where they draw now. `None`: the whole
+    /// window (asked for, or a change whose area is not known).
+    pub(crate) fn take(&self) -> Option<Vec<crate::view::WindowRect>> {
+        let dirty = std::mem::take(&mut *self.dirty.borrow_mut());
+        let partial = std::mem::take(&mut *self.partial.borrow_mut());
+        for view in &dirty {
+            view.set_queued(false);
+        }
+        if self.full.replace(false) {
+            return None;
+        }
+        let mut rects = Vec::with_capacity(dirty.len() * 2 + partial.len());
+        for view in &dirty {
+            if let Some(old) = view.painted_subtree() {
+                rects.push(old);
+            }
+            let Some(world) = view.to_root() else {
+                // Out of the tree: only where it was.
+                continue;
+            };
+            if !world.is_affine() {
+                return None;
+            }
+            // Hosted items may draw outside their rectangles.
+            rects.push(
+                crate::render::drawn_area(view)
+                    .map(|area| crate::compose::map_bounds(&world.to_3x2(), &area))?,
+            );
+        }
+        // What changed in part of a view: where that part is now (a view
+        // that moved is in `dirty` whole, which covers it).
+        for (view, rect) in &partial {
+            let Some(world) = view.to_root() else {
+                continue;
+            };
+            if !world.is_affine() {
+                return None;
+            }
+            let area = crate::render::rect_f(
+                rect.origin.x.0,
+                rect.origin.y.0,
+                rect.size.width.0,
+                rect.size.height.0,
+            );
+            rects.push(crate::compose::map_bounds(&world.to_3x2(), &area));
+        }
+        // Asked to draw with nothing changed (the system's `WM_PAINT`).
+        (!rects.is_empty()).then_some(rects)
+    }
+}
+
+/// True when `composed` holds the exact same composed items in the same order
+/// as `last`.
+pub(crate) fn composed_same(
+    last: &RefCell<Vec<Rc<dyn Hosted>>>,
+    composed: &[crate::render::Composed],
+) -> bool {
+    let old = last.borrow();
+    old.len() == composed.len()
+        && old
+            .iter()
+            .zip(composed)
+            .all(|(a, b)| Rc::ptr_eq(a, &b.item))
+}
+
 /// The composed items a window's frame drew (`last`: what its last frame
 /// drew), where they go, and its layers: tells them, and the ones no
-/// longer drawn, stacks them in `composition`, presents the overlay layers,
-/// and commits ([`Surface::composed_placed`]).
-pub(crate) fn composed_placed(
+/// longer drawn, and stacks them in `composition`, without presenting layers
+/// or committing DirectComposition yet so the caller can present all swap
+/// chains and commit atomically ([`Surface::prepare_composed_placed`]).
+pub(crate) fn prepare_composed_placed(
     last: &RefCell<Vec<Rc<dyn Hosted>>>,
     composition: Option<&crate::compose::Composition>,
     composed: Vec<crate::render::Composed>,
     layers: &[usize],
-) -> windows::core::Result<()> {
+) -> bool {
     let old = std::mem::replace(
         &mut *last.borrow_mut(),
         composed.iter().map(|c| c.item.clone()).collect(),
     );
     if old.is_empty() && composed.is_empty() && layers.is_empty() {
-        return Ok(());
+        return false;
     }
     for item in &old {
         if !composed.iter().any(|c| Rc::ptr_eq(&c.item, item)) {
@@ -1376,9 +1444,10 @@ pub(crate) fn composed_placed(
         }
     }
     if let Some(composition) = composition {
-        composition.present_and_arrange(&visuals, layers)?;
+        composition.arrange(&visuals, layers);
+        return true;
     }
-    Ok(())
+    false
 }
 
 #[cfg(test)]

@@ -673,8 +673,14 @@ impl SwapChain {
     /// Queues the frame drawn for the next vertical blank; `changed`:
     /// the rectangles that differ from the last frame (`None`: all).
     pub(crate) fn present(&mut self, changed: Option<Vec<RECT>>) -> Result<()> {
+        // DXGI requires the first present after CreateSwapChain or
+        // ResizeBuffers on a FLIP_SEQUENTIAL swap chain to be full-frame
+        // (DirtyRectsCount == 0). Also keep `self.last = None` after that
+        // first present so the second back buffer is drawn whole before
+        // partial dirty-rect updates begin.
+        let was_shown = self.shown;
         let result = match &changed {
-            Some(rects) if !rects.is_empty() => {
+            Some(rects) if was_shown && !rects.is_empty() => {
                 let mut rects = rects.clone();
                 let params = DXGI_PRESENT_PARAMETERS {
                     DirtyRectsCount: rects.len() as u32,
@@ -692,7 +698,11 @@ impl SwapChain {
         // The token went with the frame.
         self.latency.wake.holding.store(false, Ordering::Release);
         self.shown = result.is_ok();
-        self.last = if result.is_ok() { changed } else { None };
+        self.last = if result.is_ok() && was_shown {
+            changed
+        } else {
+            None
+        };
         result
     }
 }

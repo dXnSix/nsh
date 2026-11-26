@@ -214,6 +214,10 @@ pub(crate) struct Split<'a> {
     size: (u32, u32),
     /// For each layer started, how many composed items are below it.
     pub(crate) layers: Vec<usize>,
+    /// On a partial frame, the layer split-points from the last frame so
+    /// layers whose views all lie outside the dirty rectangles are still
+    /// realized (keeping their slot and clearing their dirty rectangles).
+    expected_layers: Vec<usize>,
     /// A composed item was reached: the next drawing starts a layer.
     pending: bool,
     /// Ending the draw into a target failed.
@@ -353,6 +357,12 @@ impl<'a> DrawCx<'a> {
         let Some(at) = self.placement_within(m, size, radii, clips) else {
             return;
         };
+        // On a partial frame, an overlay layer between an earlier composed item
+        // and this one may have had all its views culled by `damage`: realize
+        // it now so its dirty areas clear and later layers keep their slot.
+        if self.damage.is_some() {
+            self.realize_expected_up_to(self.composed.len());
+        }
         self.composed.push(Composed {
             item: item.clone(),
             at,
@@ -424,6 +434,20 @@ impl<'a> DrawCx<'a> {
         })
     }
 
+    /// On a partial frame, realizes any expected overlay layer whose split
+    /// point falls at or before `composed_count` composed items.
+    fn realize_expected_up_to(&mut self, composed_count: usize) {
+        let should_realize = self.split.as_ref().is_some_and(|s| {
+            s.pending
+                && s.expected_layers
+                    .get(s.layers.len())
+                    .is_some_and(|&below| below <= composed_count)
+        });
+        if should_realize {
+            self.realize();
+        }
+    }
+
     /// Something is about to be drawn: after a composed item, the pass
     /// goes on in the next layer (made as needed), with its clips and
     /// layers pushed again there.
@@ -437,7 +461,7 @@ impl<'a> DrawCx<'a> {
         let target = split
             .composition
             .layer_target(self.gfx, index, split.size, self.scale);
-        let target = match target {
+        let (target, shown) = match target {
             Ok(t) => t,
             Err(err) => {
                 // Drawn on below the web view instead.
@@ -458,6 +482,10 @@ impl<'a> DrawCx<'a> {
                 self.translucent_layers += 1;
             }
         }
+        // On a partial frame with an already-shown layer whose flip-sequential
+        // back buffer matches the base swap chain, clear only the damaged areas
+        // so untouched overlay pixels survive; otherwise clear the whole layer.
+        let partial_areas = shown.then(|| self.damage.clone()).flatten();
         let ended = self.flatten(|dc| {
             // SAFETY: COM calls on the live context between its pushes:
             // the draw into the previous target ends, one into the layer
@@ -467,7 +495,11 @@ impl<'a> DrawCx<'a> {
                 dc.SetTarget(&target);
                 dc.BeginDraw();
                 dc.SetTransform(&Matrix3x2::identity());
-                dc.Clear(Some(&color_f(Color::TRANSPARENT)));
+                if let Some(areas) = partial_areas.as_deref() {
+                    clear_areas(dc, areas, &color_f(Color::TRANSPARENT));
+                } else {
+                    dc.Clear(Some(&color_f(Color::TRANSPARENT)));
+                }
                 ended
             }
         });
@@ -479,7 +511,7 @@ impl<'a> DrawCx<'a> {
     /// Runs `f`, which draws a picture rather than the window (a shader's
     /// content): the composed items (web views) it reaches are left out.
     /// Their pages are not in the picture, so they are not placed (hidden,
-    /// [`crate::surface::Surface::composed_placed`]) and what follows
+    /// [`crate::surface::Surface::prepare_composed_placed`]) and what follows
     /// starts no layer above them.
     pub(crate) fn uncomposed<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         let len = self.composed.len();
@@ -497,6 +529,9 @@ impl<'a> DrawCx<'a> {
     pub(crate) fn adopt_composed(&mut self, mut composed: Vec<Composed>) {
         if composed.is_empty() {
             return;
+        }
+        if self.damage.is_some() {
+            self.realize_expected_up_to(self.composed.len());
         }
         self.composed.append(&mut composed);
         if let Some(split) = &mut self.split {
@@ -894,10 +929,12 @@ pub(crate) fn draw_view(cx: &mut DrawCx<'_>, view: &NshView, parent: Mat4, place
         }
     }
     // Outside a partial frame's area: a view whose subtree stays inside
-    // it (it clips, or has no children) draws nothing there.
+    // it (it clips, or has no children) draws nothing there, unless a composed
+    // window needs to traverse it to keep a composed descendant placed.
     if let Some(damage) = &cx.damage
         && !damage.iter().any(|d| intersects(&own, d))
         && state.natives.is_empty()
+        && !(cx.split.is_some() && view.composed_below())
         && (state.clips() || view.with_children(<[NshView]>::is_empty))
     {
         return;
@@ -1084,8 +1121,15 @@ pub(crate) fn drawn_area(view: &NshView) -> Option<D2D_RECT_F> {
     if state.clips() {
         return Some(area);
     }
-    if !state.natives.is_empty() {
-        return None;
+    for native in &state.natives {
+        if !native.item.bounded() {
+            return None;
+        }
+        let r = native.rect;
+        area = crate::view::union(
+            &area,
+            &rect_f(r.origin.x.0, r.origin.y.0, r.size.width.0, r.size.height.0),
+        );
     }
     view.with_children(|children| {
         for child in children {
@@ -1178,6 +1222,7 @@ pub(crate) fn draw_content(cx: &mut DrawCx<'_>, view: &NshView, world: Mat4, pai
             .translate(r.origin.x.0, r.origin.y.0)
             .then(&world);
         if native.item.composed() {
+            view.mark_composed_below();
             let (radii, clips) = {
                 let s = view.state();
                 if s.clips() {
@@ -1608,46 +1653,42 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
     // without one the frame is the one swap chain, drawn and presented as
     // always.
     let composition = surface.composition();
-    // What changed, in pixels (`None`: everything). A window with a
-    // composition draws its layers whole.
+    // What changed, in pixels (`None`: everything). A window showing system
+    // backdrops draws whole, as a frame finds where they go by drawing their
+    // views. A window with a composition draws partial frames once every
+    // active overlay layer already has a shown swap chain at this size and
+    // scale (`Composition::can_partial`).
     let damage = surface.take_damage();
-    // So does one that shows backdrops: a frame finds where they go by
-    // drawing their views.
     let backdrops = surface
         .base
         .borrow()
         .as_ref()
         .is_some_and(|b| b.has_backdrops());
-    let changed = damage
-        .filter(|_| composition.is_none() && !backdrops)
-        .map(|rects| merged(pixel_rects(&rects, scale, size)));
+    let expected_layers = match composition.as_deref() {
+        Some(c) => c.can_partial(chain.size, scale),
+        None => Some(Vec::new()),
+    };
+    let mut changed = damage
+        .filter(|_| !backdrops && expected_layers.is_some())
+        .map(|rects| merged(pixel_rects(&rects, scale, chain.size)));
     // All of it outside the window (an animation scrolled away): the window
     // already shows this frame, and drawing it whole would cost every frame.
     if changed.as_ref().is_some_and(Vec::is_empty) && chain.shows_a_frame() {
         return false;
     }
-    let changed = changed.filter(|rects| !rects.is_empty());
+    changed = changed.filter(|rects| !rects.is_empty());
     // What the back buffer, two presents old, needs drawn again, with
     // the whole area of each shader reading what is behind it that this
     // meets: what it reads is then all this frame's.
-    let redraw = chain.to_draw(changed.as_deref()).map(|rects| {
+    let mut redraw = chain.to_draw(changed.as_deref()).map(|rects| {
         let readers = crate::shader::backdrop_areas(surface);
-        with_backdrops(merged(rects), &pixel_rects(&readers, scale, size))
+        with_backdrops(merged(rects), &pixel_rects(&readers, scale, chain.size))
     });
-    let areas: Option<Vec<D2D_RECT_F>> = redraw.as_ref().map(|rects| {
-        rects
-            .iter()
-            .map(|r| D2D_RECT_F {
-                left: r.left as f32 / scale,
-                top: r.top as f32 / scale,
-                right: r.right as f32 / scale,
-                bottom: r.bottom as f32 / scale,
-            })
-            .collect()
-    });
+    let areas: Option<Vec<D2D_RECT_F>> = redraw.as_ref().map(|rects| dip_rects(rects, scale));
+    let expected_slice = expected_layers.as_deref().unwrap_or(&[]);
     let fps = surface.fps();
     let started = fps.as_ref().map(|_| std::time::Instant::now());
-    let drawn = draw_into(
+    let mut drawn = draw_into_at(
         surface,
         &gfx,
         &target,
@@ -1655,30 +1696,75 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
         false,
         composition.as_deref(),
         areas.as_deref(),
+        expected_slice,
         None,
+        (0.0, 0.0),
+        true,
     );
+    // If a composed item was added, removed, or reordered, or the overlay
+    // layer split points changed, fall back to a full frame before presenting
+    // so no layer keeps stale pixels or shifts slots mid-frame.
+    if let Ok(ref d) = drawn
+        && composition.is_some()
+        && (changed.is_some() || areas.is_some())
+        && (expected_layers.as_deref() != Some(d.layers.as_slice())
+            || !surface.composed_same(&d.composed))
+    {
+        changed = None;
+        if areas.is_some() {
+            redraw = None;
+            drawn = draw_into_at(
+                surface,
+                &gfx,
+                &target,
+                scale,
+                false,
+                composition.as_deref(),
+                None,
+                &[],
+                None,
+                (0.0, 0.0),
+                true,
+            );
+        }
+    }
     let painted = started.map(|s| s.elapsed());
     match drawn {
         Ok(drawn) => {
+            // Update composed visuals (clips, transforms, surfaces, tree order)
+            // BEFORE presenting any swap chain, then present overlay layers,
+            // present the base swap chain, and commit DirectComposition
+            // back-to-back so DWM latches base D2D chrome, composed visuals,
+            // and overlays in the same composition frame.
+            let needs_commit = surface.prepare_composed_placed(
+                composition.as_deref(),
+                drawn.composed,
+                &drawn.layers,
+            );
             let shown = std::time::Instant::now();
+            if needs_commit
+                && let Some(c) = composition.as_deref()
+                && let Err(err) = c.present(drawn.layers.len(), changed.as_deref(), &drawn.layers)
+            {
+                log::warn!("present failed: {err}");
+                drop(swap);
+                device_lost(surface);
+                return false;
+            }
             if let Err(err) = chain.present(changed) {
                 log::warn!("present failed: {err}");
                 drop(swap);
                 device_lost(surface);
                 return false;
             }
+            if needs_commit && let Some(c) = composition.as_deref() {
+                c.commit();
+            }
             if let (Some(fps), Some(painted)) = (&fps, painted) {
                 fps.painted(painted, shown.elapsed());
             }
             drop(swap);
             surface.items_placed(drawn.items, redraw.as_deref());
-            if let Err(err) =
-                surface.composed_placed(composition.as_deref(), drawn.composed, &drawn.layers)
-            {
-                log::warn!("present failed: {err}");
-                device_lost(surface);
-                return false;
-            }
             if let Some(base) = surface.base.borrow().as_deref() {
                 base.backdrops_placed(&drawn.backdrops);
             }
@@ -1758,6 +1844,19 @@ fn pixel_rects(rects: &[D2D_RECT_F], scale: f32, size: (u32, u32)) -> Vec<RECT> 
             bottom: ((r.bottom * scale).ceil() as i32).clamp(0, h),
         })
         .filter(|r| r.right > r.left && r.bottom > r.top)
+        .collect()
+}
+
+/// Pixel rectangles converted back to window DIPs at `scale`.
+fn dip_rects(rects: &[RECT], scale: f32) -> Vec<D2D_RECT_F> {
+    rects
+        .iter()
+        .map(|r| D2D_RECT_F {
+            left: r.left as f32 / scale,
+            top: r.top as f32 / scale,
+            right: r.right as f32 / scale,
+            bottom: r.bottom as f32 / scale,
+        })
         .collect()
 }
 
@@ -1911,14 +2010,16 @@ pub(crate) struct WindowFrame<'a> {
     /// Top-left of the rendered slice in content points (`(0.0, 0.0)` for a
     /// full window).
     pub(crate) origin: (f32, f32),
+    /// Damage queued for this window's next frame.
+    pub(crate) damage: &'a crate::surface::Damage,
     /// The hosted items and the composed items its last frame drew.
     pub(crate) placed: &'a RefCell<Vec<(Rc<dyn Hosted>, RECT)>>,
     pub(crate) composed: &'a RefCell<Vec<Rc<dyn Hosted>>>,
 }
 
-/// Draws a window of the app's own whole, then presents it: its web
-/// views between the layers of its composition, its hosted items' own
-/// windows placed where their views were drawn.
+/// Draws a window of the app's own, then presents it: its web views and
+/// composed components between the layers of its composition, its hosted
+/// items' own windows placed where their views were drawn.
 pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> WindowFrameOutcome {
     let WindowFrame {
         root,
@@ -1930,6 +2031,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         size,
         scale,
         origin,
+        damage,
         placed,
         composed,
     } = frame;
@@ -1992,50 +2094,116 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         }
     };
     let presented_size = chain.size;
+    #[cfg(feature = "dev")]
+    let design = crate::design::active();
+    #[cfg(not(feature = "dev"))]
+    let design = false;
+    let cropped = origin.0 != 0.0 || origin.1 != 0.0;
+    let records = !design && !cropped;
+    let backdrops = base.is_some_and(|b| b.has_backdrops());
+    let expected_layers = match composition {
+        Some(c) => c.can_partial(presented_size, scale),
+        None => Some(Vec::new()),
+    };
+    let raw_damage = damage.take();
+    let mut changed = raw_damage
+        .filter(|_| records && !backdrops && expected_layers.is_some())
+        .map(|rects| merged(pixel_rects(&rects, scale, presented_size)));
+    if changed.as_ref().is_some_and(Vec::is_empty) && chain.shows_a_frame() {
+        return WindowFrameOutcome::Presented(presented_size);
+    }
+    changed = changed.filter(|rects| !rects.is_empty());
+    let mut redraw = chain.to_draw(changed.as_deref()).map(|rects| {
+        let readers = crate::shader::backdrop_areas(surface);
+        with_backdrops(merged(rects), &pixel_rects(&readers, scale, presented_size))
+    });
+    let areas: Option<Vec<D2D_RECT_F>> = redraw.as_ref().map(|rects| dip_rects(rects, scale));
+    let expected_slice = expected_layers.as_deref().unwrap_or(&[]);
     let window = Some((root, presented_size));
-    match draw_into_at(
+    let mut drawn = draw_into_at(
         surface,
         &gfx,
         &target,
         scale,
         false,
         composition,
-        None,
+        areas.as_deref(),
+        expected_slice,
         window,
         origin,
-    ) {
+        records,
+    );
+    if let Ok(ref d) = drawn
+        && composition.is_some()
+        && (changed.is_some() || areas.is_some())
+        && (expected_layers.as_deref() != Some(d.layers.as_slice())
+            || !crate::surface::composed_same(composed, &d.composed))
+    {
+        changed = None;
+        if areas.is_some() {
+            redraw = None;
+            drawn = draw_into_at(
+                surface,
+                &gfx,
+                &target,
+                scale,
+                false,
+                composition,
+                None,
+                &[],
+                window,
+                origin,
+                records,
+            );
+        }
+    }
+    match drawn {
         Ok(drawn) => {
-            if let Err(err) = chain.present(None) {
-                log::warn!("present failed: {err}");
-                *swap = None;
-                drop(swap);
-                device_lost(surface);
-                return WindowFrameOutcome::Failed;
-            }
-            drop(swap);
-            crate::surface::items_placed(placed, drawn.items, None);
             // In design mode, the tool reads only the single shared base swap
             // chain (`shared_surface_of`); do not bind or arrange composed
             // visuals on the hidden design window.
-            #[cfg(feature = "dev")]
-            let design = crate::design::active();
-            #[cfg(not(feature = "dev"))]
-            let design = false;
-            if !design
-                && let Err(err) = crate::surface::composed_placed(
+            let needs_commit = if !design {
+                crate::surface::prepare_composed_placed(
                     composed,
                     composition,
                     drawn.composed,
                     &drawn.layers,
                 )
+            } else {
+                false
+            };
+            if needs_commit
+                && let Some(c) = composition
+                && let Err(err) = c.present(drawn.layers.len(), changed.as_deref(), &drawn.layers)
             {
                 log::warn!("present failed: {err}");
-                if let Ok(mut swap) = swap_slot.try_borrow_mut() {
-                    *swap = None;
+                *swap = None;
+                drop(swap);
+                c.device_lost();
+                if let Some(b) = base {
+                    b.device_lost();
                 }
                 device_lost(surface);
                 return WindowFrameOutcome::Failed;
             }
+            if let Err(err) = chain.present(changed) {
+                log::warn!("present failed: {err}");
+                *swap = None;
+                drop(swap);
+                if let Some(c) = composition {
+                    c.device_lost();
+                }
+                if let Some(b) = base {
+                    b.device_lost();
+                }
+                device_lost(surface);
+                return WindowFrameOutcome::Failed;
+            }
+            if needs_commit && let Some(c) = composition {
+                c.commit();
+            }
+            drop(swap);
+            crate::surface::items_placed(placed, drawn.items, redraw.as_deref());
             if let Some(base) = base {
                 base.backdrops_placed(&drawn.backdrops);
             }
@@ -2044,11 +2212,19 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         Err(err) if err.code() == D2DERR_RECREATE_TARGET => {
             *swap = None;
             drop(swap);
+            if let Some(c) = composition {
+                c.device_lost();
+            }
+            if let Some(b) = base {
+                b.device_lost();
+            }
             device_lost(surface);
             WindowFrameOutcome::Failed
         }
         Err(err) => {
             log::error!("drawing a window failed: {err}");
+            // The back buffer holds what is not known: draw whole next.
+            damage.invalidate();
             WindowFrameOutcome::Failed
         }
     }
@@ -2075,8 +2251,10 @@ fn draw_into(
         offscreen,
         composition,
         areas,
+        &[],
         window,
         (0.0, 0.0),
+        !offscreen && window.is_none(),
     )
 }
 
@@ -2091,8 +2269,10 @@ fn draw_into_at(
     offscreen: bool,
     composition: Option<&Composition>,
     areas: Option<&[D2D_RECT_F]>,
+    expected_layers: &[usize],
     window: Option<(&NshView, (u32, u32))>,
     origin: (f32, f32),
+    records: bool,
 ) -> windows::core::Result<Drawn> {
     // The decoration bitmaps this pass draws with are the last evicted if
     // the cache overflows mid-frame ([`crate::decor::begin_frame`]).
@@ -2134,9 +2314,7 @@ fn draw_into_at(
     };
     cx.offscreen = offscreen;
     cx.opaque_target = opaque_target;
-    // A window of the app's own draws its root alone; where its views were
-    // painted is not the main window's.
-    cx.records = !offscreen && window.is_none();
+    cx.records = records;
     // A see-through window (it clears to transparent) shows the system's
     // blur under its backdrop views.
     if !offscreen && background.a <= 0.0 && crate::backdrop::supported() {
@@ -2158,6 +2336,7 @@ fn draw_into_at(
         composition,
         size: pixels,
         layers: Vec::new(),
+        expected_layers: expected_layers.to_vec(),
         pending: false,
         error: None,
     });
@@ -2176,8 +2355,6 @@ fn draw_into_at(
                 crate::chrome::draw(surface, hwnd, dc, scale, w);
             }
         }
-        // A partial frame: each area cleared and drawn again, the rest of
-        // the back buffer kept.
         // A partial frame: the areas cleared and the tree drawn once into
         // them (a clip of their rectangles), the rest of the back buffer
         // kept.
@@ -2208,6 +2385,12 @@ fn draw_into_at(
             unsafe { dc.Clear(Some(&background)) };
             cx.damage = Some(areas.to_vec());
             draw_view(&mut cx, &root, Mat4::new(), Mat4::new());
+            // Keep any expected overlay layer active (and clear its dirty
+            // areas) even when every view in it was culled outside `areas`,
+            // so its swap chain stays in sync and caption buttons draw on the
+            // same layer as on a full frame.
+            let composed_len = cx.composed.len();
+            cx.realize_expected_up_to(composed_len);
             crate::chrome::draw(surface, hwnd, dc, scale, w);
             cx.damage = None;
             cx.clip_skip = 0;
@@ -4333,5 +4516,216 @@ mod tests {
             (40, 80, 220),
             "view after composed item vanished from unsplit target"
         );
+    }
+
+    /// A partial frame on a composed window:
+    /// - keeps composed items inside clipping containers outside the dirty
+    ///   region placed (not culled),
+    /// - preserves untouched pixels on BOTH the base target and overlay layer,
+    /// - updates dirty regions on whichever layer changed, and
+    /// - keeps the overlay layer active even when all overlay views are outside
+    ///   the dirty region.
+    #[test]
+    fn partial_frame_with_composition_preserves_base_overlay_and_composed_items() {
+        struct ComposedStub;
+        impl Hosted for ComposedStub {
+            fn draw(&self, _: &mut DrawCx<'_>, _: (f32, f32)) {}
+            fn composed(&self) -> bool {
+                true
+            }
+        }
+        let Ok(gfx) = gfx::get() else {
+            return;
+        };
+        let app = crate::app::AppView::new(
+            None,
+            crate::app::AppOptions {
+                size: (120, 80),
+                skip_taskbar: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let size = (120, 80);
+        let surface = app.surface().clone();
+        surface.resized(size, 1.0);
+        let composition = Composition::new(app.hwnd()).unwrap();
+
+        // Painted before the composed item -> base target.
+        let left = view(
+            Some(&surface.root),
+            2,
+            ViewKind::View,
+            rect(0.0, 0.0, 40.0, 40.0),
+        );
+        left.state_mut().style.background_color = Color::rgba(220, 40, 40, 255);
+
+        let bottom_base = view(
+            Some(&surface.root),
+            3,
+            ViewKind::View,
+            rect(0.0, 40.0, 40.0, 40.0),
+        );
+        bottom_base.state_mut().style.background_color = Color::rgba(30, 180, 60, 255);
+
+        // Clipping container holding the composed item (like a dock center pane).
+        let center = view(
+            Some(&surface.root),
+            4,
+            ViewKind::View,
+            rect(40.0, 0.0, 40.0, 80.0),
+        );
+        center.state_mut().style.overflow_hidden = true;
+        let canvas = view(Some(&center), 5, ViewKind::View, rect(0.0, 0.0, 40.0, 80.0));
+        let stub: Rc<dyn Hosted> = Rc::new(ComposedStub);
+        canvas.set_native(&stub, rect(0.0, 0.0, 40.0, 80.0));
+
+        // Painted after the composed item -> overlay Layer 0.
+        let right_overlay = view(
+            Some(&surface.root),
+            6,
+            ViewKind::View,
+            rect(80.0, 0.0, 40.0, 40.0),
+        );
+        right_overlay.state_mut().style.background_color = Color::rgba(40, 80, 220, 255);
+
+        let lower_overlay = view(
+            Some(&surface.root),
+            7,
+            ViewKind::View,
+            rect(80.0, 40.0, 40.0, 40.0),
+        );
+        lower_overlay.state_mut().style.background_color = Color::rgba(200, 160, 20, 255);
+
+        assert!(
+            composition.can_partial(size, 1.0).is_none(),
+            "no partial frames before the first full present"
+        );
+
+        // Draw & present two full frames so both flip-sequential buffers of
+        // Layer 0 hold the complete initial scene.
+        let base = opaque_target(&gfx, size);
+        let _ = surface.take_damage();
+        for _ in 0..2 {
+            let drawn = draw_into_at(
+                &surface,
+                &gfx,
+                &base,
+                1.0,
+                false,
+                Some(&composition),
+                None,
+                &[],
+                None,
+                (0.0, 0.0),
+                true,
+            )
+            .unwrap();
+            assert_eq!(drawn.composed.len(), 1);
+            assert_eq!(drawn.layers, vec![1]);
+            composition
+                .present(drawn.layers.len(), None, &drawn.layers)
+                .unwrap();
+        }
+        assert_eq!(composition.can_partial(size, 1.0), Some(vec![1]));
+
+        // Mutate ONLY `left` (disjoint from `center`, `right_overlay`, `lower_overlay`).
+        left.state_mut().style.background_color = Color::rgba(230, 220, 30, 255);
+        left.changed();
+        let damage = surface.take_damage().expect("dirty rect for left");
+        let dirty_px = merged(pixel_rects(&damage, 1.0, size));
+        let areas = dip_rects(&dirty_px, 1.0);
+        let drawn = draw_into_at(
+            &surface,
+            &gfx,
+            &base,
+            1.0,
+            false,
+            Some(&composition),
+            Some(&areas),
+            &[1],
+            None,
+            (0.0, 0.0),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            drawn.composed.len(),
+            1,
+            "composed item inside clipping container outside damage must not be culled"
+        );
+        assert_eq!(
+            drawn.layers,
+            vec![1],
+            "overlay layer must stay active when all overlay views are outside damage"
+        );
+
+        let base_px = read_opaque(&gfx, &base, size);
+        let px_at = |buf: &[u8], x: usize, y: usize| {
+            let i = (y * size.0 as usize + x) * 4;
+            (buf[i + 2], buf[i + 1], buf[i], buf[i + 3])
+        };
+        // `left` updated to yellow, `bottom_base` untouched green.
+        let (r, g, b, _) = px_at(&base_px, 20, 20);
+        assert_eq!((r, g, b), (230, 220, 30));
+        let (r, g, b, _) = px_at(&base_px, 20, 60);
+        assert_eq!((r, g, b), (30, 180, 60));
+
+        // Untouched overlay layer pixels survived (were not wiped to transparent).
+        let (layer_bmp, shown) = composition.layer_target(&gfx, 0, size, 1.0).unwrap();
+        assert!(shown);
+        let layer_px = read(&gfx, &layer_bmp, size);
+        assert_eq!(px_at(&layer_px, 100, 20), (40, 80, 220, 255));
+        assert_eq!(px_at(&layer_px, 100, 60), (200, 160, 20, 255));
+
+        // Present1 with dirty rects on the overlay layer succeeds.
+        composition
+            .present(drawn.layers.len(), Some(&dirty_px), &drawn.layers)
+            .unwrap();
+
+        // Size change or device loss resets `can_partial` to force a full frame.
+        assert!(composition.can_partial((140, 80), 1.0).is_none());
+        composition.device_lost();
+        assert!(composition.can_partial(size, 1.0).is_none());
+    }
+
+    /// `SwapChain::present` keeps `last = None` after the very first present
+    /// (so both back buffers of a new/resized flip-sequential swap chain are
+    /// drawn whole before partial updates begin) and guards `Present1` until
+    /// a full-frame present has occurred.
+    #[test]
+    fn swap_chain_waits_for_two_full_frames_before_partial_redraw() {
+        let Ok(gfx) = gfx::get() else {
+            return;
+        };
+        let app = crate::app::AppView::new(
+            None,
+            crate::app::AppOptions {
+                size: (80, 60),
+                skip_taskbar: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // Drop any swap chain created during initial WM_SIZE before making a
+        // fresh one on this window (DXGI allows one HWND swap chain at a time).
+        *app.surface().swap.borrow_mut() = None;
+        let mut chain = gfx::SwapChain::new(&gfx, app.hwnd(), (80, 60), None).unwrap();
+        let dirty = vec![RECT {
+            left: 0,
+            top: 0,
+            right: 20,
+            bottom: 20,
+        }];
+        assert!(chain.to_draw(Some(&dirty)).is_none());
+        // First present even with `Some(dirty)` must fall back to full `Present`
+        // (no `DXGI_ERROR_INVALID_CALL`) and leave `to_draw` as `None` so the
+        // second back buffer is also drawn whole.
+        chain.present(Some(dirty.clone())).unwrap();
+        assert!(chain.shows_a_frame());
+        assert!(chain.to_draw(Some(&dirty)).is_none());
+        // Second present records `last` so the third frame can draw partially.
+        chain.present(Some(dirty.clone())).unwrap();
+        assert!(chain.to_draw(Some(&dirty)).is_some());
     }
 }

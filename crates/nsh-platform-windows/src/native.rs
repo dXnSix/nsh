@@ -367,9 +367,14 @@ impl ComponentContext {
     /// thread).
     pub fn redraw(&self) {
         let key = self.surface;
+        let id = self.id;
         self.ui.invoke(move || {
             if let Some(surface) = Surface::by_key(key) {
-                surface.invalidate();
+                if let Some(view) = surface.view(id) {
+                    view.changed();
+                } else {
+                    surface.invalidate();
+                }
             }
         });
     }
@@ -620,7 +625,11 @@ pub(crate) fn component(surface: &Rc<Surface>, view: &NshView, name: &Arc<str>) 
         item.window.set(Some(hwnd));
         item.parent.set(Some(parent));
     }
-    item.composes.set(made.composed());
+    let composed = made.composed();
+    item.composes.set(composed);
+    if composed {
+        view.mark_composed_below();
+    }
     *item.component.borrow_mut() = Some(made);
     view.changed();
 }
@@ -916,6 +925,10 @@ impl Hosted for ComponentItem {
 
     fn composed(&self) -> bool {
         self.composes.get()
+    }
+
+    fn bounded(&self) -> bool {
+        true
     }
 
     fn visual(&self) -> Option<IDCompositionVisual2> {

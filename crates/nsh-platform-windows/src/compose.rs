@@ -50,7 +50,7 @@ use std::{
 
 use windows::{
     Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, RECT},
         Graphics::{
             Direct2D::{Common::D2D_RECT_F, ID2D1Bitmap1},
             DirectComposition::{
@@ -63,8 +63,9 @@ use windows::{
                     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_UNKNOWN,
                     DXGI_SAMPLE_DESC,
                 },
-                CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT, DXGI_SCALING_STRETCH,
-                DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                CreateDXGIFactory2, DXGI_CREATE_FACTORY_FLAGS, DXGI_PRESENT,
+                DXGI_PRESENT_PARAMETERS, DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1,
+                DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISurface, IDXGISwapChain1,
             },
         },
@@ -124,6 +125,10 @@ pub(crate) struct Composition {
     /// The layers made so far: layer `i` holds what is drawn after the
     /// `i`-th web view that something is drawn after.
     layers: RefCell<Vec<Layer>>,
+    /// The `layers` split-points (`layers[i]` = composed items below layer `i`)
+    /// from the last presented frame; `None` until a full frame has been
+    /// presented or after device loss.
+    last_layers: RefCell<Option<Vec<usize>>>,
     /// The root's visuals as last arranged, bottom to top.
     order: RefCell<Vec<IDCompositionVisual2>>,
     /// A transparent window's swap chain, below everything else
@@ -147,6 +152,10 @@ struct Layer {
     size: (u32, u32),
     /// The device generation `swap` was made in.
     generation: u64,
+    /// A full frame was presented into the current buffers (DXGI requires the
+    /// first present after create or resize to be full-frame, and an unused
+    /// layer falls out of flip-sequential parity with the base swap chain).
+    shown: bool,
 }
 
 impl Composition {
@@ -168,6 +177,7 @@ impl Composition {
                 topmost: Cell::new(false),
                 root,
                 layers: RefCell::default(),
+                last_layers: RefCell::default(),
                 order: RefCell::default(),
                 base: RefCell::default(),
                 backdrops: RefCell::default(),
@@ -177,14 +187,16 @@ impl Composition {
     }
 
     /// The bitmap layer `index` is drawn into this frame (made, resized or
-    /// made again as needed), at `size` pixels and `scale`.
+    /// made again as needed), at `size` pixels and `scale`, together with
+    /// whether the layer already has a shown frame in its current buffers
+    /// (so a partial frame may clear only its dirty rectangles).
     pub(crate) fn layer_target(
         &self,
         gfx: &Gfx,
         index: usize,
         size: (u32, u32),
         scale: f32,
-    ) -> Result<ID2D1Bitmap1> {
+    ) -> Result<(ID2D1Bitmap1, bool)> {
         let mut layers = self.layers.borrow_mut();
         while layers.len() <= index {
             // SAFETY: a plain call on the live device.
@@ -196,6 +208,7 @@ impl Composition {
                 scale: 0.0,
                 size: (0, 0),
                 generation: 0,
+                shown: false,
             });
         }
         let layer = &mut layers[index];
@@ -203,6 +216,7 @@ impl Composition {
         if layer.generation != gfx::generation() {
             layer.target = None;
             layer.swap = None;
+            layer.shown = false;
         }
         if layer.swap.is_none() {
             let swap = composition_swap_chain(gfx, size, DXGI_SWAP_CHAIN_FLAG(0))?;
@@ -211,6 +225,7 @@ impl Composition {
             layer.swap = Some(swap);
             layer.size = size;
             layer.generation = gfx::generation();
+            layer.shown = false;
         }
         let Some(swap) = layer.swap.clone() else {
             unreachable!("made above")
@@ -230,13 +245,16 @@ impl Composition {
                 )?
             };
             layer.size = size;
+            layer.shown = false;
         }
         if (layer.scale - scale).abs() > f32::EPSILON {
             layer.target = None;
             layer.scale = scale;
+            layer.shown = false;
         }
+        let shown = layer.shown;
         if let Some(t) = &layer.target {
-            return Ok(t.clone());
+            return Ok((t.clone(), shown));
         }
         // SAFETY: COM calls on live objects; buffer 0 exists.
         let bitmap = unsafe {
@@ -245,7 +263,30 @@ impl Composition {
                 .CreateBitmapFromDxgiSurface(&surface, Some(&gfx::target_properties(scale, true)))?
         };
         layer.target = Some(bitmap.clone());
-        Ok(bitmap)
+        Ok((bitmap, shown))
+    }
+
+    /// The layer split-points of the last presented frame when every active
+    /// overlay layer already has a shown swap chain at `size` and `scale` on
+    /// the current device, so a partial frame can update only the damaged
+    /// rectangles in both the base swap chain and the overlay layers.
+    pub(crate) fn can_partial(&self, size: (u32, u32), scale: f32) -> Option<Vec<usize>> {
+        let expected = self.last_layers.borrow().clone()?;
+        let size = (size.0.max(1), size.1.max(1));
+        let generation = gfx::generation();
+        let layers = self.layers.borrow();
+        for i in 0..expected.len() {
+            let layer = layers.get(i)?;
+            if layer.swap.is_none()
+                || layer.generation != generation
+                || layer.size != size
+                || (layer.scale - scale).abs() > f32::EPSILON
+                || !layer.shown
+            {
+                return None;
+            }
+        }
+        Some(expected)
     }
 
     /// Its device, on which composed components make their visuals.
@@ -253,28 +294,61 @@ impl Composition {
         &self.device
     }
 
-    /// Shows what was drawn into the first `used` layers.
-    pub(crate) fn present(&self, used: usize) -> Result<()> {
-        for layer in self.layers.borrow().iter().take(used) {
+    /// Shows what was drawn into the first `used` layers (`changed`: the
+    /// rectangles that differ from the last frame, `None`: all), and records
+    /// `layers_split` for the next partial frame.
+    pub(crate) fn present(
+        &self,
+        used: usize,
+        changed: Option<&[RECT]>,
+        layers_split: &[usize],
+    ) -> Result<()> {
+        let mut layers = self.layers.borrow_mut();
+        for (i, layer) in layers.iter_mut().enumerate() {
+            if i >= used {
+                // Skipped layers fall out of flip-sequential parity with the
+                // base swap chain: require a full frame if reused later.
+                layer.shown = false;
+                continue;
+            }
             if let Some(swap) = &layer.swap {
                 // Not synchronized: the window's own swap chain paces the
-                // frames of all of them (`gfx::SwapChain::ready`).
-                // SAFETY: a COM call on a live swap chain.
-                unsafe { swap.Present(0, DXGI_PRESENT(0)).ok()? };
+                // frames of all of them (`gfx::SwapChain::ready`). DXGI
+                // requires the first present after create or resize to be
+                // full-frame (`layer.shown` guards `Present1`).
+                let res = match changed {
+                    Some(rects) if layer.shown && !rects.is_empty() => {
+                        let mut rects = rects.to_vec();
+                        let params = DXGI_PRESENT_PARAMETERS {
+                            DirtyRectsCount: rects.len() as u32,
+                            pDirtyRects: rects.as_mut_ptr(),
+                            pScrollRect: std::ptr::null_mut(),
+                            pScrollOffset: std::ptr::null_mut(),
+                        };
+                        // SAFETY: a COM call on a live swap chain; the
+                        // rectangles outlive it and lie in the buffer.
+                        unsafe { swap.Present1(0, DXGI_PRESENT(0), &params).ok() }
+                    }
+                    // SAFETY: a COM call on a live swap chain.
+                    _ => unsafe { swap.Present(0, DXGI_PRESENT(0)).ok() },
+                };
+                if let Err(err) = res {
+                    layer.shown = false;
+                    *self.last_layers.borrow_mut() = None;
+                    return Err(err);
+                }
+                layer.shown = true;
             }
         }
+        *self.last_layers.borrow_mut() = Some(layers_split.to_vec());
         Ok(())
     }
 
     /// Stacks the web views' visuals (bottom to top) with the layers drawn
     /// this frame (`layers[i]` is how many web views are below layer `i`),
-    /// presents the drawn composition layers, and commits the device's
-    /// changes (visual placements and layer presentation together).
-    pub(crate) fn present_and_arrange(
-        &self,
-        portals: &[IDCompositionVisual2],
-        layers: &[usize],
-    ) -> Result<()> {
+    /// without presenting or committing yet so the caller can present all
+    /// swap chains and call [`Composition::commit`] atomically.
+    pub(crate) fn arrange(&self, portals: &[IDCompositionVisual2], layers: &[usize]) {
         let order: Vec<IDCompositionVisual2> = {
             let made = self.layers.borrow();
             let mut out = Vec::with_capacity(portals.len() + layers.len());
@@ -325,17 +399,17 @@ impl Composition {
                 *self.order.borrow_mut() = order;
             }
         }
-        // Present overlay layers right before `Commit()` so visual transforms
-        // applied by `compose_at` and the overlay swap chains latch together
-        // without an intervening `chain.present` or Win32 `SetWindowPos`.
-        self.present(layers.len())?;
+    }
+
+    /// Commits pending DirectComposition visual updates (placements, clips,
+    /// transforms, surface draws, and visual ordering) to DWM.
+    pub(crate) fn commit(&self) {
         // SAFETY: plain call on the live device, on its thread.
         unsafe {
             if let Err(err) = self.device.Commit() {
                 log::warn!("compose: commit failed: {err}");
             }
         }
-        Ok(())
     }
 
     /// Shows `swap` (a transparent window's own swap chain, made again
@@ -486,9 +560,11 @@ impl Composition {
 
     /// Drops what lives on the lost device (the layers' swap chains).
     pub(crate) fn device_lost(&self) {
+        *self.last_layers.borrow_mut() = None;
         for layer in self.layers.borrow_mut().iter_mut() {
             layer.target = None;
             layer.swap = None;
+            layer.shown = false;
             // SAFETY: a plain call on a live visual.
             let _ = unsafe { layer.visual.SetContent(None) };
         }

@@ -112,6 +112,8 @@ pub(crate) struct AppWindow {
     retired_swaps: RefCell<std::collections::VecDeque<(crate::gfx::SwapChain, std::time::Instant)>>,
     /// A `WM_PAINT` is asked for.
     invalid: Cell<bool>,
+    /// What changed since the last frame (views, partial rects, or whole).
+    damage: crate::surface::Damage,
     /// It was sized and placed as the app opened it ([`place`]): until
     /// then its size is the system's default, which is reported to nobody.
     positioned: Cell<bool>,
@@ -189,7 +191,7 @@ pub(crate) fn set_design_viewport(
         return;
     };
     if window.viewport.replace(viewport) != viewport {
-        invalidate(&window);
+        invalidate_full(&window);
     }
 }
 
@@ -312,7 +314,7 @@ pub(crate) fn compose(
     }
     let c = Composition::new(window.hwnd)?;
     *window.web.borrow_mut() = Rc::downgrade(&c);
-    invalidate(&window);
+    invalidate_full(&window);
     Ok((window.hwnd, c))
 }
 
@@ -460,6 +462,7 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         #[cfg(feature = "dev")]
         retired_swaps: RefCell::new(std::collections::VecDeque::new()),
         invalid: Cell::new(false),
+        damage: crate::surface::Damage::new(),
         positioned: Cell::new(false),
         reported: Cell::new(None),
         opened: Cell::new(false),
@@ -468,8 +471,12 @@ fn open(surface: &Rc<Surface>, view: &NshView, open: &OpenWindow) {
         state: Cell::new(None),
     });
     let weak = Rc::downgrade(&window);
-    view.set_invalidate(Rc::new(move |_, _| {
+    view.set_invalidate(Rc::new(move |view, rect| {
         if let Some(window) = weak.upgrade() {
+            match rect {
+                Some(rect) => window.damage.invalidate_view_rect(view, rect),
+                None => window.damage.invalidate_view(view),
+            }
             invalidate(&window);
         }
     }));
@@ -595,6 +602,12 @@ fn invalidate(window: &AppWindow) {
     }
 }
 
+/// Asks for the whole `window` to be drawn again.
+fn invalidate_full(window: &AppWindow) {
+    window.damage.invalidate();
+    invalidate(window);
+}
+
 /// Asks for every window of the app's own to be drawn again (the theme
 /// changed, the device was lost, ...).
 pub(crate) fn invalidate_all(surface: &Surface) {
@@ -602,7 +615,7 @@ pub(crate) fn invalidate_all(surface: &Surface) {
         return;
     };
     for window in windows.iter() {
-        invalidate(window);
+        invalidate_full(window);
     }
 }
 
@@ -617,7 +630,7 @@ pub(crate) fn appearance_changed(surface: &Surface) {
             window.hwnd,
             nsh_core::platform::Appearance::System,
         );
-        invalidate(window);
+        invalidate_full(window);
     }
 }
 
@@ -688,7 +701,7 @@ fn resized(surface: &Surface, window: &AppWindow) {
     }
     // The primary window's size and scale are the app's `windowSize()`.
     surface.window_environment();
-    invalidate(window);
+    invalidate_full(window);
 }
 
 /// Draws `window` (`WM_PAINT`, and at once when resized).
@@ -767,6 +780,7 @@ fn paint(surface: &Rc<Surface>, window: &AppWindow) {
             size,
             scale,
             origin,
+            damage: &window.damage,
             placed: &window.placed,
             composed: &window.composed,
         },
@@ -1155,6 +1169,7 @@ fn destroy(surface: &Surface, window: &AppWindow) {
     // What it hosts does not go with its native window: web views close,
     // components' windows go back to the main window, hidden.
     crate::native::window_closing(surface, window.hwnd);
+    window.damage.clear();
     window.placed.borrow_mut().clear();
     window.composed.borrow_mut().clear();
     window.swap.borrow_mut().take();
@@ -1221,6 +1236,7 @@ mod tests {
             #[cfg(feature = "dev")]
             retired_swaps: RefCell::new(std::collections::VecDeque::new()),
             invalid: Cell::new(false),
+            damage: crate::surface::Damage::new(),
             positioned: Cell::new(true),
             reported: Cell::new(None),
             opened: Cell::new(false),
@@ -1308,6 +1324,7 @@ mod tests {
                 pixels: Cell::new((0, 0)),
                 scale: Cell::new(1.0),
                 invalid: Cell::new(false),
+                damage: crate::surface::Damage::new(),
                 positioned: Cell::new(true),
                 reported: Cell::new(None),
                 opened: Cell::new(false),
