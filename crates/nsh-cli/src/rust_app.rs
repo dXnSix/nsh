@@ -2294,6 +2294,7 @@ fn tizen_patches() -> String {
 const NSH_CRATES: &[&str] = &[
     "nsh-macros",
     "nsh-core",
+    "nsh-theme",
     "nsh-base",
     "nsh-package",
     "nsh-js",
