@@ -250,6 +250,20 @@ pub(crate) struct InputState {
     /// What RichEdit drew last (in the content box's points), shown again
     /// when it cannot draw.
     drawn: RefCell<Option<ID2D1CommandList>>,
+    /// The parameters `drawn` was recorded for (`None` when RichEdit content,
+    /// format, focus, or layout changed and must be re-recorded).
+    recorded: Cell<Option<RecordedKey>>,
+    #[cfg(test)]
+    record_count: Cell<u32>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RecordedKey {
+    bounds: (i32, i32, i32, i32),
+    origin: (i32, i32),
+    scale_bits: u32,
+    use_gdi: bool,
+    generation: u64,
 }
 
 /// Creates and configures a windowless RichEdit control with `bits`.
@@ -262,7 +276,11 @@ fn make_editor(
 ) -> Option<Editor> {
     let redraw = {
         let view = view.clone();
+        let weak = weak.clone();
         move || {
+            if let Some(input) = weak.upgrade() {
+                input.invalidate_drawn();
+            }
             if let Some(view) = view.upgrade() {
                 view.changed();
             }
@@ -358,8 +376,15 @@ impl InputState {
                 font_generation: Cell::new(crate::text::font_generation()),
                 placeholder: RefCell::new(None),
                 drawn: RefCell::new(None),
+                recorded: Cell::new(None),
+                #[cfg(test)]
+                record_count: Cell::new(0),
             }
         })
+    }
+
+    fn invalidate_drawn(&self) {
+        self.recorded.set(None);
     }
 
     fn multiline(&self) -> bool {
@@ -373,6 +398,9 @@ impl InputState {
 
     /// Sends RichEdit a message (nothing without a control).
     fn send(&self, msg: u32, wparam: usize, lparam: isize) -> (LRESULT, bool) {
+        if !matches!(msg, EM_GETSCROLLPOS | EM_CANUNDO | EM_CANREDO | WM_COPY) {
+            self.invalidate_drawn();
+        }
         self.with_editor(|e| e.send(msg, wparam, lparam))
             .unwrap_or((LRESULT(0), false))
     }
@@ -731,11 +759,13 @@ impl InputState {
         let client = self.client();
         if e.props().client != client {
             e.update(|p| p.client = client, TXTBIT_CLIENTRECTCHANGE);
+            self.invalidate_drawn();
         }
         let bits = self.bits();
         if e.props().bits != bits {
             e.update(|p| p.bits = bits, 0);
             self.keep_left_on(e);
+            self.invalidate_drawn();
         }
     }
 
@@ -783,6 +813,7 @@ impl InputState {
         new_editor.show_in(shown_in);
         self.use_gdi.set(use_gdi);
         self.composing.set(None);
+        self.invalidate_drawn();
         // Drop the previous editor before activating the replacement so its
         // timers and host state are cleaned up first.
         *self.editor.borrow_mut() = Some(new_editor);
@@ -897,6 +928,7 @@ impl InputState {
                 | TXTBIT_SCROLLBARCHANGE,
         );
         self.font_generation.set(generation);
+        self.invalidate_drawn();
         // Spelling (and the touch keyboard's suggestions) where the app
         // wants corrections: never in a password, shown or not.
         let spell =
@@ -997,15 +1029,17 @@ impl InputState {
     /// composition) RichEdit draws nothing: the last drawing stays, or the
     /// field would flash empty for a frame. Recorded with a context of
     /// its own, then drawn in the window's pass.
-    fn record(&self, cx: &DrawCx<'_>, e: &Editor) {
+    fn record(&self, cx: &DrawCx<'_>, e: &Editor) -> bool {
         let (ox, oy) = self.origin.get();
         let s = cx.scale.max(0.01);
         let bounds = self.client();
+        #[cfg(test)]
+        self.record_count.set(self.record_count.get() + 1);
         if self.use_gdi.get() {
             let bw = (bounds.right - bounds.left).max(0) as u32;
             let bh = (bounds.bottom - bounds.top).max(0) as u32;
             let Some(bgra) = e.draw_gdi_bgra(bounds) else {
-                return;
+                return false;
             };
             let list = crate::decor::layer::with_context(cx.gfx, |dc| {
                 // SAFETY: COM calls on a context nobody else draws with;
@@ -1059,8 +1093,9 @@ impl InputState {
             .flatten();
             if let Some(list) = list {
                 self.drawn.replace(Some(list));
+                return true;
             }
-            return;
+            return false;
         }
         let list = crate::decor::layer::with_context(cx.gfx, |dc| {
             // SAFETY: COM calls on a context nobody else draws with;
@@ -1095,7 +1130,9 @@ impl InputState {
         .flatten();
         if let Some(list) = list {
             self.drawn.replace(Some(list));
+            return true;
         }
+        false
     }
 }
 
@@ -1126,7 +1163,18 @@ impl Hosted for InputState {
             self.apply_formats_to(e, &resolved, generation);
         }
         self.update_client_on(e);
-        self.record(cx, e);
+        let bounds = self.client();
+        let key = RecordedKey {
+            bounds: (bounds.left, bounds.top, bounds.right, bounds.bottom),
+            origin: self.origin.get(),
+            scale_bits: cx.scale.to_bits(),
+            use_gdi: self.use_gdi.get(),
+            generation: crate::gfx::generation(),
+        };
+        if (self.drawn.borrow().is_none() || self.recorded.get() != Some(key)) && self.record(cx, e)
+        {
+            self.recorded.set(Some(key));
+        }
         let (w, h) = size;
         let multiline = self.multiline();
         if multiline {
@@ -1487,6 +1535,7 @@ pub(crate) fn removed(surface: &Surface, view: &NshView) {
 fn drop_quietly(surface: &Surface, field: &NshView) {
     if let Some(input) = input_of(field) {
         input.focused.set(false);
+        input.invalidate_drawn();
         input.with_editor(|e| e.set_focus(false));
     }
     FOCUS.with(|f| {
@@ -1548,6 +1597,7 @@ fn set_focus(surface: &Rc<Surface>, view: Option<&NshView>) {
             input.focused.set(false);
             input.dragging.set(false);
             input.select_on_up.set(false);
+            input.invalidate_drawn();
             input.with_editor(|e| e.set_focus(false));
             process(surface, old, &input);
         }
@@ -1565,6 +1615,7 @@ fn set_focus(surface: &Rc<Surface>, view: Option<&NshView>) {
         input.follow(view);
         update_ime(surface);
         if input.active.get() {
+            input.invalidate_drawn();
             input.with_editor(|e| e.set_focus(true));
         }
         input.wake_caret();
@@ -1995,6 +2046,7 @@ fn set_value(view: &NshView, input: &InputState, text: &str, count: u32) {
     input.programmatic.set(true);
     // The app's value is never cut to `maxLength`, as on every platform.
     uncut(input, || {
+        input.invalidate_drawn();
         input.with_editor(|e| e.set_text(text));
     });
     input.send(EM_SETSEL, usize::MAX >> 1, -1);
@@ -2155,6 +2207,7 @@ pub(crate) fn window_focus(surface: &Rc<Surface>, focused_window: bool) {
         input.dragging.set(false);
         input.select_on_up.set(false);
         input.caret_on.set(true);
+        input.invalidate_drawn();
         input.with_editor(|e| e.set_focus(focused_window));
         process(surface, &view, &input);
         view.changed();
@@ -3848,6 +3901,127 @@ mod tests {
         assert_eq!(mouse_lparam(3, 4), 0x0004_0003);
         // Negative coordinates are signed words.
         assert_eq!(mouse_lparam(-1, 0) & 0xffff, 0xffff);
+    }
+
+    #[test]
+    fn unchanged_repaints_reuse_recorded_richedit_and_changes_re_record() {
+        use windows::Win32::Graphics::{
+            Direct2D::{
+                Common::{
+                    D2D_POINT_2U, D2D_RECT_U, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED,
+                    D2D1_PIXEL_FORMAT,
+                },
+                D2D1_BITMAP_OPTIONS, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_CPU_READ,
+                D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_MAP_OPTIONS_READ,
+            },
+            Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+        };
+        let Ok(gfx) = crate::gfx::get() else {
+            return;
+        };
+        let surface = Surface::new(Default::default());
+        let (view, input, mut cfg) = make_input_with_family(&surface, 301, "Consolas", "Hello");
+        assert_eq!(input.record_count.get(), 0);
+
+        let draw_hosted = |size: (f32, f32)| -> Vec<u8> {
+            let (w, h) = (360u32, 120u32);
+            let props = |options: D2D1_BITMAP_OPTIONS| D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: options,
+                colorContext: std::mem::ManuallyDrop::new(None),
+            };
+            let bmp_size = D2D_SIZE_U {
+                width: w,
+                height: h,
+            };
+            // SAFETY: COM calls on live offscreen bitmaps; unmapped before return.
+            unsafe {
+                let dc = &gfx.dc;
+                let target = dc
+                    .CreateBitmap(bmp_size, None, 0, &props(D2D1_BITMAP_OPTIONS_TARGET))
+                    .expect("target bitmap");
+                dc.SetTarget(&target);
+                dc.SetDpi(96.0, 96.0);
+                dc.BeginDraw();
+                dc.Clear(None);
+                let mut cx = DrawCx::new(&gfx, 1.0, false, 0.0).expect("DrawCx");
+                Hosted::draw(&*input, &mut cx, size);
+                drop(cx);
+                dc.EndDraw(None, None).expect("EndDraw");
+                dc.SetTarget(None);
+                let stage = dc
+                    .CreateBitmap(
+                        bmp_size,
+                        None,
+                        0,
+                        &props(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW),
+                    )
+                    .expect("stage bitmap");
+                stage
+                    .CopyFromBitmap(
+                        Some(&D2D_POINT_2U { x: 0, y: 0 }),
+                        &target,
+                        Some(&D2D_RECT_U {
+                            left: 0,
+                            top: 0,
+                            right: w,
+                            bottom: h,
+                        }),
+                    )
+                    .expect("copy");
+                let mapped = stage.Map(D2D1_MAP_OPTIONS_READ).expect("map");
+                let mut out = vec![0u8; (w * h * 4) as usize];
+                for y in 0..h as usize {
+                    let src = std::slice::from_raw_parts(
+                        mapped.bits.add(y * mapped.pitch as usize),
+                        (w * 4) as usize,
+                    );
+                    out[y * (w * 4) as usize..(y + 1) * (w * 4) as usize].copy_from_slice(src);
+                }
+                stage.Unmap().expect("unmap");
+                out
+            }
+        };
+
+        let px1 = draw_hosted((360.0, 120.0));
+        assert!(
+            px1.iter().any(|&b| b != 0),
+            "first Hosted::draw drew no ink"
+        );
+        assert_eq!(input.record_count.get(), 1);
+
+        // Repeated full-window repaints with no input change reuse the cached
+        // command list instead of re-running RichEdit TxDraw every frame.
+        let px2 = draw_hosted((360.0, 120.0));
+        assert_eq!(input.record_count.get(), 1);
+        assert_eq!(px1, px2);
+
+        // Text mutation invalidates and re-records.
+        set_value(&view, &input, "World", 1);
+        let px3 = draw_hosted((360.0, 120.0));
+        assert_eq!(input.record_count.get(), 2);
+        assert_ne!(px3, px1);
+
+        // Stable repaint after edit reuses the new recording.
+        let px4 = draw_hosted((360.0, 120.0));
+        assert_eq!(input.record_count.get(), 2);
+        assert_eq!(px3, px4);
+
+        // Format/color change invalidates and re-records.
+        cfg.style.color = Color::rgba(255, 0, 0, 255);
+        config(&surface, &view, &cfg);
+        let px5 = draw_hosted((360.0, 120.0));
+        assert_eq!(input.record_count.get(), 3);
+        assert_ne!(px5, px3);
+
+        // Size change invalidates and re-records.
+        let _ = draw_hosted((300.0, 120.0));
+        assert_eq!(input.record_count.get(), 4);
     }
 
     #[test]

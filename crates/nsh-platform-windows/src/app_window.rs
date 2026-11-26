@@ -694,6 +694,19 @@ fn resized(surface: &Surface, window: &AppWindow) {
 /// Draws `window` (`WM_PAINT`, and at once when resized).
 fn paint(surface: &Rc<Surface>, window: &AppWindow) {
     window.invalid.set(false);
+    // In design mode, the tool displays only this window's single shared base
+    // swap chain (`shared_surface_of`). Splitting views after a composed item
+    // (a WebView or composed NativeComponent) into separate unshared
+    // DirectComposition layers makes everything painted after that item vanish
+    // from the shared live surface. Draw the whole tree into the shared base
+    // swap chain without layer splitting (matching `picture.rs`).
+    #[cfg(feature = "dev")]
+    let web = if crate::design::active() {
+        None
+    } else {
+        window.web.borrow().upgrade()
+    };
+    #[cfg(not(feature = "dev"))]
     let web = window.web.borrow().upgrade();
     #[cfg(feature = "dev")]
     let (size, scale, origin, wanted_viewport) = match window.viewport.get() {

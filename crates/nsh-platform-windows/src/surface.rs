@@ -947,14 +947,14 @@ impl Surface {
 
     /// The composed items the frame just shown drew, where they go, and
     /// the layers it drew (how many items are below each): tells them, and
-    /// the ones no longer drawn, and stacks them.
+    /// the ones no longer drawn, stacks them, presents the layers, and commits.
     pub(crate) fn composed_placed(
         &self,
         composition: Option<&crate::compose::Composition>,
         composed: Vec<crate::render::Composed>,
         layers: &[usize],
-    ) {
-        composed_placed(&self.composed, composition, composed, layers);
+    ) -> windows::core::Result<()> {
+        composed_placed(&self.composed, composition, composed, layers)
     }
 
     /// Applies what the engine sent (`WM_NSH_WAKE`).
@@ -1348,20 +1348,20 @@ pub(crate) fn items_placed(
 
 /// The composed items a window's frame drew (`last`: what its last frame
 /// drew), where they go, and its layers: tells them, and the ones no
-/// longer drawn, and stacks them in `composition`
-/// ([`Surface::composed_placed`]).
+/// longer drawn, stacks them in `composition`, presents the overlay layers,
+/// and commits ([`Surface::composed_placed`]).
 pub(crate) fn composed_placed(
     last: &RefCell<Vec<Rc<dyn Hosted>>>,
     composition: Option<&crate::compose::Composition>,
     composed: Vec<crate::render::Composed>,
     layers: &[usize],
-) {
+) -> windows::core::Result<()> {
     let old = std::mem::replace(
         &mut *last.borrow_mut(),
         composed.iter().map(|c| c.item.clone()).collect(),
     );
-    if old.is_empty() && composed.is_empty() {
-        return;
+    if old.is_empty() && composed.is_empty() && layers.is_empty() {
+        return Ok(());
     }
     for item in &old {
         if !composed.iter().any(|c| Rc::ptr_eq(&c.item, item)) {
@@ -1376,8 +1376,9 @@ pub(crate) fn composed_placed(
         }
     }
     if let Some(composition) = composition {
-        composition.arrange(&visuals, layers);
+        composition.present_and_arrange(&visuals, layers)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]

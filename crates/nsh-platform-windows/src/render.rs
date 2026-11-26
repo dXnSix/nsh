@@ -1660,14 +1660,6 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
     let painted = started.map(|s| s.elapsed());
     match drawn {
         Ok(drawn) => {
-            if let Some(c) = &composition
-                && let Err(err) = c.present(drawn.layers.len())
-            {
-                log::warn!("present failed: {err}");
-                drop(swap);
-                device_lost(surface);
-                return false;
-            }
             let shown = std::time::Instant::now();
             if let Err(err) = chain.present(changed) {
                 log::warn!("present failed: {err}");
@@ -1680,7 +1672,13 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
             }
             drop(swap);
             surface.items_placed(drawn.items, redraw.as_deref());
-            surface.composed_placed(composition.as_deref(), drawn.composed, &drawn.layers);
+            if let Err(err) =
+                surface.composed_placed(composition.as_deref(), drawn.composed, &drawn.layers)
+            {
+                log::warn!("present failed: {err}");
+                device_lost(surface);
+                return false;
+            }
             if let Some(base) = surface.base.borrow().as_deref() {
                 base.backdrops_placed(&drawn.backdrops);
             }
@@ -1946,7 +1944,8 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
     // a swap chain that large cannot be made. What lies beyond is not
     // shown; a design tool's pictures are drawn apart ([`picture`]).
     let size = gfx::presentable(&gfx, size);
-    let Ok(mut swap) = swap.try_borrow_mut() else {
+    let swap_slot = swap;
+    let Ok(mut swap) = swap_slot.try_borrow_mut() else {
         // Reentrant paint (for example COM STA pumping while releasing a
         // hosted control): schedule another paint once the outer frame ends.
         return WindowFrameOutcome::Deferred;
@@ -2006,15 +2005,6 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         origin,
     ) {
         Ok(drawn) => {
-            if let Some(c) = composition
-                && let Err(err) = c.present(drawn.layers.len())
-            {
-                log::warn!("present failed: {err}");
-                *swap = None;
-                drop(swap);
-                device_lost(surface);
-                return WindowFrameOutcome::Failed;
-            }
             if let Err(err) = chain.present(None) {
                 log::warn!("present failed: {err}");
                 *swap = None;
@@ -2024,7 +2014,28 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
             }
             drop(swap);
             crate::surface::items_placed(placed, drawn.items, None);
-            crate::surface::composed_placed(composed, composition, drawn.composed, &drawn.layers);
+            // In design mode, the tool reads only the single shared base swap
+            // chain (`shared_surface_of`); do not bind or arrange composed
+            // visuals on the hidden design window.
+            #[cfg(feature = "dev")]
+            let design = crate::design::active();
+            #[cfg(not(feature = "dev"))]
+            let design = false;
+            if !design
+                && let Err(err) = crate::surface::composed_placed(
+                    composed,
+                    composition,
+                    drawn.composed,
+                    &drawn.layers,
+                )
+            {
+                log::warn!("present failed: {err}");
+                if let Ok(mut swap) = swap_slot.try_borrow_mut() {
+                    *swap = None;
+                }
+                device_lost(surface);
+                return WindowFrameOutcome::Failed;
+            }
             if let Some(base) = base {
                 base.backdrops_placed(&drawn.backdrops);
             }
@@ -4254,6 +4265,73 @@ mod tests {
         assert_eq!(
             read_opaque(&gfx, &whole, size),
             read_opaque(&gfx, &partial, size)
+        );
+    }
+
+    /// When a window draws into a single target without layer splitting
+    /// (`composition: None`, as in design mode's single shared swap chain),
+    /// views painted after a `composed() == true` hosted item still paint into
+    /// that target instead of being dropped or diverted to an unshared layer.
+    #[test]
+    fn unsplit_frame_draws_views_after_composed_item_into_single_target() {
+        struct ComposedStub;
+        impl Hosted for ComposedStub {
+            fn draw(&self, _: &mut DrawCx<'_>, _: (f32, f32)) {}
+            fn composed(&self) -> bool {
+                true
+            }
+        }
+        let Ok(gfx) = gfx::get() else {
+            return;
+        };
+        let size = (120, 40);
+        let surface = Surface::new(Default::default());
+        surface.resized(size, 1.0);
+
+        let before = view(
+            Some(&surface.root),
+            2,
+            ViewKind::View,
+            rect(0.0, 0.0, 40.0, 40.0),
+        );
+        before.state_mut().style.background_color = Color::rgba(220, 40, 40, 255);
+
+        let middle = view(
+            Some(&surface.root),
+            3,
+            ViewKind::View,
+            rect(40.0, 0.0, 40.0, 40.0),
+        );
+        let stub: Rc<dyn Hosted> = Rc::new(ComposedStub);
+        middle.set_native(&stub, rect(0.0, 0.0, 40.0, 40.0));
+
+        let after = view(
+            Some(&surface.root),
+            4,
+            ViewKind::View,
+            rect(80.0, 0.0, 40.0, 40.0),
+        );
+        after.state_mut().style.background_color = Color::rgba(40, 80, 220, 255);
+
+        let target = opaque_target(&gfx, size);
+        let drawn = draw_into(&surface, &gfx, &target, 1.0, false, None, None, None).unwrap();
+        assert_eq!(drawn.composed.len(), 1);
+        assert!(drawn.layers.is_empty());
+
+        let pixels = read_opaque(&gfx, &target, size);
+        let px = |x: usize, y: usize| {
+            let i = (y * size.0 as usize + x) * 4;
+            (pixels[i + 2], pixels[i + 1], pixels[i])
+        };
+        assert_eq!(
+            px(20, 20),
+            (220, 40, 40),
+            "view before composed item missing"
+        );
+        assert_eq!(
+            px(100, 20),
+            (40, 80, 220),
+            "view after composed item vanished from unsplit target"
         );
     }
 }
