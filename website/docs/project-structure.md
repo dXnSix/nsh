@@ -294,7 +294,7 @@ const icons = import.meta.glob("./icons/*.ts", { eager: true, import: "default" 
 - A pattern starting with `./` or `../` is relative to the module, one starting with `/` to the app's directory. It can have `*` (any part of a name), `**` (any number of directories), `?` (one character) and `{a,b}` (either); an array of patterns may leave files out with `!` (`["./pages/*.tsx", "!./pages/Draft.tsx"]`).
 - `{ eager: true }` imports the modules up front, so the values are the modules themselves; `import: "name"` takes that export instead of the whole module.
 - `node_modules`, `target` and directories whose name starts with `.` are searched only when a pattern names them. Keys are sorted.
-- The patterns and options must be literals, since the bundler reads them. A file added or removed while the app runs in development changes the object in place, as an edit does.
+- The patterns and options must be literals, since the bundler reads them. A file added or removed while the app runs in development changes the object in place, as an edit does, also in a directory outside the app that a pattern reaches (`"/../lib/**/*.preview.tsx"`) and in a directory new there.
 
 ### NSH's modules
 

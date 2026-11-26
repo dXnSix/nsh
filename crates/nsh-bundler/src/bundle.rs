@@ -147,6 +147,10 @@ pub struct Bundle {
     /// Source and configuration files read by the build, as absolute paths.
     /// Development servers watch these even outside the entry directory.
     pub watch_files: Vec<PathBuf>,
+    /// The directories outside the app that its `import.meta.glob`
+    /// patterns search, sorted: development servers watch them recursively,
+    /// so that a file added there, in a new directory too, is built.
+    pub glob_dirs: Vec<crate::GlobDir>,
     /// The native modules the app imports (`nsh`, `nsh/mobile`,
     /// `nsh/base`, an app's own UI set), sorted: what a host must
     /// serve to run it.
@@ -695,6 +699,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
     let natives = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
+    let globs = Arc::new(Mutex::new(Vec::new()));
     let mut bundler_options = BundlerOptions {
         input: Some(vec![InputItem {
             import: entry.to_string_lossy().into_owned(),
@@ -737,6 +742,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
             preloads: None,
             left_out: Arc::new(resolve.left_out(&modules)),
             modules,
+            globs: globs.clone(),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;
@@ -806,6 +812,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         assets,
         asset_root,
         watch_files: watch_files(&bundler, &watch_root),
+        glob_dirs: glob_dirs(&globs),
         natives: natives.into_iter().collect(),
         native_use,
         entry_native_use,
@@ -857,6 +864,15 @@ fn watch_files(bundler: &rolldown::Bundler, dir: &std::path::Path) -> Vec<PathBu
     files.sort();
     files.dedup();
     files
+}
+
+/// The directories outside the app the build's `import.meta.glob` patterns
+/// searched ([`Bundle::glob_dirs`]), each with its pattern once, sorted.
+fn glob_dirs(globs: &Mutex<Vec<crate::GlobDir>>) -> Vec<crate::GlobDir> {
+    let mut dirs = std::mem::take(&mut *globs.lock().expect("globs lock"));
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 /// The warning for an app that calls the host's functions (`host.call` /
@@ -933,6 +949,8 @@ pub struct HotBundle {
     pub asset_root: PathBuf,
     /// Source and configuration files read by the build, as absolute paths.
     pub watch_files: Vec<PathBuf>,
+    /// As in [`Bundle::glob_dirs`].
+    pub glob_dirs: Vec<crate::GlobDir>,
     /// As in [`Bundle::capabilities`].
     pub capabilities: Option<nsh_core::access::Capabilities>,
     /// As in [`Bundle::links`].
@@ -1099,6 +1117,7 @@ pub async fn bundle_hot_async(
     let preloads = Arc::new(Mutex::new(std::collections::BTreeSet::new()));
     let plugin_error = Arc::new(Mutex::new(None));
     let assets = Arc::new(Mutex::new(Vec::new()));
+    let globs = Arc::new(Mutex::new(Vec::new()));
     let app = app_dir(&cwd);
     let tailwind = tailwind_setup(&app, true, &AppInfo::default())?;
     let capabilities = capabilities(&app)?;
@@ -1140,6 +1159,7 @@ pub async fn bundle_hot_async(
             left_out: Arc::new(resolve.left_out(&modules)),
             modules,
             split: false,
+            globs: globs.clone(),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;
@@ -1193,6 +1213,7 @@ pub async fn bundle_hot_async(
         entry: entry_id.ok_or_else(|| BundleError::other("bundle produced no entry chunk"))?,
         assets,
         watch_files: watch_files(&bundler, &app),
+        glob_dirs: glob_dirs(&globs),
         asset_root: app,
         capabilities,
         links,

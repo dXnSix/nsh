@@ -142,6 +142,12 @@ to that file. `C-h e` opens its log/error panel; closing it gives every row back
 - Imported source directories and theme files outside the entry directory are watched too, using the last
   successful bundle's dependencies. The gallery and website demos share `examples/nsh-gallery-ui`; saving one of
   its components or its theme rebuilds the app as saving a file inside the app does.
+- The directories outside the app an `import.meta.glob` pattern searches (`nsh_bundler::Bundle::glob_dirs`: its
+  leading part without a wildcard, with the pattern below it) are watched recursively by a watcher of their own
+  (`dev::glob_watcher`), so a file the pattern matches added there, in a new directory too, rebuilds; it passes on
+  only the events of such files (`GlobDir::matches`: not in `node_modules`, `.nsh`, `target` or a dot directory
+  unless the pattern names it), so a library's own build in its `target/` rebuilds nothing. A directory that cannot
+  be watched is warned of and tried again after the next build.
 - Bytecode version negotiation: the client reports `BYTECODE_VERSION` in its handshake; on a mismatch the server sends JS source instead
   (an empty version, the web host's, asks for source without a warning).
 - Limits: hosts run the app on its own, without limits, unless `--limits` asks for an embedding app's

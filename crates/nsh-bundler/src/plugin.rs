@@ -53,6 +53,9 @@ pub(crate) struct NshPlugin {
     /// A split bundle: dynamic imports of chunks call the runtime's chunk
     /// loader (`split.rs`).
     pub(crate) split: bool,
+    /// The directories outside the app the `import.meta.glob` patterns
+    /// search ([`crate::GlobDir`]).
+    pub(crate) globs: Arc<Mutex<Vec<crate::GlobDir>>>,
 }
 
 /// The `"tailwind"`, `"theme"`, `"appearance"` and `"statusBar"` of the
@@ -743,8 +746,16 @@ impl Plugin for NshPlugin {
         }
         let prologue = if entry { self.prologue() } else { None };
         // `import.meta.glob` calls become literal imports first.
-        let globbed = crate::glob::expand(args.code, source_type, path, &self.asset_root)
-            .map_err(|detail| self.fail(path, &detail))?;
+        let mut searched = Vec::new();
+        let globbed = crate::glob::expand(
+            args.code,
+            source_type,
+            path,
+            &self.asset_root,
+            &mut searched,
+        )
+        .map_err(|detail| self.fail(path, &detail))?;
+        self.globs.lock().expect("globs lock").extend(searched);
         let compiled = compile_native(
             path,
             source_type,

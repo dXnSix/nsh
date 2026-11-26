@@ -34,6 +34,8 @@ mod types;
 #[cfg(feature = "bundle")]
 pub use bundle::*;
 #[cfg(feature = "bundle")]
+pub use glob::GlobDir;
+#[cfg(feature = "bundle")]
 pub use link::rewrite_imports;
 #[cfg(feature = "bundle")]
 pub use minify::minify_module;
