@@ -56,6 +56,7 @@ fn main() {}
 const APP: &str = r##"import { Animated, createAnimatedValue, mount, nativeComponent, signal, Text, View, type KeyEvent, type NativeComponentRef, type ViewRef } from "nsh";
 import { Input } from "nsh/base";
 import { Window } from "nsh/desktop";
+import { reduceMotion } from "nsh/accessibility";
 import { design } from "nsh/design";
 
 const WINDOW = { frame: "none", taskbar: false, activate: false, shadow: false, transparent: true, sizeToContent: true } as const;
@@ -220,7 +221,7 @@ const steps: Record<string, (m: any) => Promise<unknown>> = {
   settleTransition: async () => {
     await wait(200);
     faded.set(faded() === 1 ? 0.2 : 1);
-    return timed(design.settled("transit"));
+    return { ...(await timed(design.settled("transit"))), reduced: reduceMotion() };
   },
   settleBusy: async () => {
     const busy = setInterval(() => tick.set(tick() + 1), 10);
@@ -958,12 +959,22 @@ mod tool {
             (300.0..1000.0).contains(&ms(&animation)),
             "settled during the animation: {animation}"
         );
+        // A machine whose client-area animations are off (Windows' "reduce
+        // motion", as some runners have it) skips the transition, and the
+        // window settles as a quiet one does.
         let transition = app.ask("settleTransition", json!({}));
         assert_eq!(transition["timedOut"], false, "{transition}");
-        assert!(
-            (300.0..1000.0).contains(&ms(&transition)),
-            "settled during the style transition: {transition}"
-        );
+        if transition["reduced"] == true {
+            assert!(
+                (45.0..300.0).contains(&ms(&transition)),
+                "a skipped transition settles as a quiet window: {transition}"
+            );
+        } else {
+            assert!(
+                (300.0..1000.0).contains(&ms(&transition)),
+                "settled during the style transition: {transition}"
+            );
+        }
         let busy = app.ask("settleBusy", json!({}));
         assert_eq!(busy["timedOut"], true, "{busy}");
         assert!((990.0..1600.0).contains(&ms(&busy)), "{busy}");
