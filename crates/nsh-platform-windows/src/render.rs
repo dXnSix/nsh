@@ -2015,20 +2015,19 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
             drop(swap);
             crate::surface::items_placed(placed, drawn.items, None);
             // In design mode, the tool reads only the single shared base swap
-            // chain (`shared_surface_of`); do not bind or arrange composed
-            // visuals on the hidden design window.
+            // chain (`shared_surface_of`): composed items are still told where
+            // they are, but their visuals are not stacked in the hidden design
+            // window's composition.
             #[cfg(feature = "dev")]
             let design = crate::design::active();
             #[cfg(not(feature = "dev"))]
             let design = false;
-            if !design
-                && let Err(err) = crate::surface::composed_placed(
-                    composed,
-                    composition,
-                    drawn.composed,
-                    &drawn.layers,
-                )
-            {
+            if let Err(err) = crate::surface::composed_placed(
+                composed,
+                composition.filter(|_| !design),
+                drawn.composed,
+                &drawn.layers,
+            ) {
                 log::warn!("present failed: {err}");
                 if let Ok(mut swap) = swap_slot.try_borrow_mut() {
                     *swap = None;
