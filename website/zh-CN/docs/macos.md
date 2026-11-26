@@ -1,6 +1,6 @@
 ---
 title: macOS
-description: 在 macOS 上用 AppKit 窗口运行 Rust 和 TSX 编写的 NSH 应用、打包为 .app、用 AppView 嵌入 Mac 应用，以及 macOS 上的差异。
+description: 在 macOS 上用 AppKit 窗口运行 TSX 和 Rust 编写的 NSH 应用、打包为 .app、用 AppView 嵌入 Mac 应用，以及 macOS 上的差异。
 order: 13
 group: platforms
 ---
@@ -88,13 +88,14 @@ nsh package App.tsx --target macos [--run]   # TSX 应用
 .nsh/out/<Name>.app/Contents/
   Info.plist
   MacOS/<Name>               可执行文件：Rust 应用是用它的 crate 构建的自有 runner；TSX 应用是 nsh 的发布版运行器
+  PlugIns/<Ext>.appex        nsh.json `macos.extensions` 列出的预构建应用扩展（设置了该键时）
   Resources/nsh/bundle.nshc  编译后的 TSX 应用
   Resources/nsh/assets/…     应用导入的资源（也包括 Rust crate 的 `assets!()`）
   Resources/nsh/app.json     窗口标题、应用的外观、激活策略和 nsh.json 中的窗口设置
   Resources/AppIcon.icns     图标（nsh.json 指定了图标时，用 sips 转换）
 ```
 
-`.app` 使用 ad hoc 签名，因此可以在构建它的 Mac 上运行。要分发它，请用 Developer ID 签名并进行公证。`--run` 会在打包后打开应用。
+不传 `--sign` 时，`.app` 使用 ad hoc 签名，因此可以在构建它的 Mac 上运行。传入 `--sign <identity>`（例如 `"Developer ID Application: …"`）会开启 Hardened Runtime 和安全时间戳（`codesign --options runtime --timestamp`），由内向外签名嵌套扩展和应用，以便公证和分发；NSH 随后用 `codesign --verify --deep --strict` 校验签名。`--run` 会在打包后打开应用。见[打包：macOS](./packaging.md#macos)。
 
 应用把它的警告、错误以及 `console.log` 和 `console.info` 日志写入统一日志，以它的 id 为子系统：“控制台”应用会显示它们，
 `log stream --predicate 'subsystem == "com.example.notes"'` 也会。从终端启动时（`.nsh/out/<Name>.app/Contents/MacOS/<Name>`），
@@ -236,6 +237,12 @@ view.load(Bundle::source(code).into());
 `AppOptions { transparent: true, ..Default::default() }` 为自定义 Rust 宿主的 `run_app` 窗口提供透明的初始默认值，让未绘制的区域显示窗口后面的内容。显式主窗口属性及后续窗口更新优先于这个默认值。标准宿主保持此选项为 `false`，但可以通过窗口配置请求透明；视图的 `behindWindow` 材质本身不会让窗口透明。
 嵌入的 `AppView` 不会改动它所在的窗口：需要同样效果时，请把自己的 `NSWindow` 设为 nonopaque，并给它透明的 `backgroundColor`。
 
+## 来自其他代码的通知
+
+远程通知以及其他原生代码安排的通知不会触发 `Notifications` 的 `press`，而是交给 Rust 代码用
+`nsh_platform_apple::notifications::set_foreign_handler` 设置的处理者，用法与 [iOS](./ios.md#来自其他代码的通知) 相同。处理者决定这些通知在应用位于前台时怎样显示，
+并接收它们的点击。被嵌入的应用只有在嵌入方把通知交给它（`AppOptions::notifications`）、且嵌入方没有自己的通知中心 delegate 时才会收到。
+
 ## macOS 上的差异
 
 运行环境是桌面环境：安全区和键盘高度为 0，`idiom()` 是桌面（`platform.idiom` 为 `"desktop"`），`os_version()`（`platform.version`）为 macOS 的版本号，
@@ -268,6 +275,7 @@ VoiceOver 和 UI 自动化工具将 `Table` 和 `Grid` 读取为 `AXTable`，将
 | Option+Left、Cmd+[、鼠标后退键 | 返回（输入框有焦点时不会：此时 Option+Left 移动光标） |
 | Option / Cmd + 方向键（可加 Shift）；Option+Delete、Cmd+Delete；Ctrl+A / E / K | 在输入框中按词和按行移动、选择和删除，与所有 Mac 应用一致 |
 | Cmd+Z、Shift+Cmd+Z、Cmd+X / C / V / A | 撤销、重做、剪切、复制、粘贴、全选（`masked` 输入框拒绝剪切和复制）；Cmd+A / Cmd+C 选择并复制 可选择的文本 |
+| Shift + 方向键（可加 Option 或 Cmd）；Shift+Home / End | 扩展最后按下的可选择视图的选区：按字符或按行，按词或按段落（Option），到行或视图的开头 / 结尾（Cmd、Home / End）；外围的滚动视图随之滚动 |
 | 方向键；Page Up / Down、Space、Shift+Space、Option+Up / Down；Home / End、Cmd+Up / Down | 滚动有焦点的视图所在或鼠标下方的滚动视图：一行、一页、到开头 / 结尾（输入框有焦点时不滚动） |
 | Cmd+W、Cmd+M、Ctrl+Cmd+F、Cmd+H、Option+Cmd+H、Cmd+Q | 关闭、最小化、全屏、隐藏、隐藏其他、退出（`nsh package` 和 `nsh run` 应用的菜单） |
 | Cmd+R | 重新加载最新的构建（`nsh run`） |
@@ -299,6 +307,7 @@ Return 不会提交。`onKeyPress` 报告的内容与 React Native 一致：输�
 
 ## 另见
 
+- [签名、公证与分发](./packaging.md#sign-notarize-and-distribute)
 - [CLI](./cli.md)：`nsh run --target macos`、`nsh package --target macos`
 - [打包](./packaging.md)
 - [平台特定代码](./platform-specific.md)

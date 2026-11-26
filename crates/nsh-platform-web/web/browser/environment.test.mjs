@@ -34,10 +34,11 @@ const settings = (changes = {}) => ({
 /** What the engine sends (`set_environment` in `src/browser/engine.rs`). */
 const engine = (changes = {}) => ({
   horizontalSizeClass: "compact", verticalSizeClass: "regular",
-  window: { width: 390, height: 844 }, safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+  window: { width: 390, height: 844 }, safeArea: { top: 0, right: 0, bottom: 0, left: 0 }, reservedRegions: [],
   titleBar: { height: 0, left: 0, right: 0 }, keyboard: { height: 0, duration: 250 },
   colorScheme: "light", fontScale: 1, rtl: false, reduceMotion: false, pixelRatio: 2, screenReader: false,
   locale: "de-AT", host: false, lifecycle: "active", shaders: true, wakeCount: 0, localeSettings: settings(),
+  network: { online: true, kind: "wifi", expensive: false, constrained: false, cellularData: "unknown" },
   platform: { name: "web", os: "web", version: "0.0", idiom: "desktop", desktop: true, appleKeyboard: false },
   ...changes,
 });
@@ -103,6 +104,39 @@ test("the lifecycle is the engine's", () => {
   assert.equal(env.api.lifecycle(), "background");
   env.update(engine({ lifecycle: "inactive" }));
   assert.equal(env.api.lifecycle(), "inactive");
+});
+
+test("the network is the engine's", () => {
+  const { env, writes } = environment();
+  // Before the engine reports, the native environment's default: unknown,
+  // which counts as online.
+  assert.deepEqual(env.api.network(), {
+    online: true, kind: "unknown", expensive: false, constrained: false, cellularData: "unknown",
+  });
+  env.update(engine());
+  assert.equal(env.modules["nsh/device"].network().kind, "wifi");
+  const offline = { online: false, kind: "none", expensive: false, constrained: false, cellularData: "unknown" };
+  env.update(engine({ network: offline }));
+  assert.deepEqual(env.api.network(), offline);
+  // The same route again writes nothing.
+  const before = writes.length;
+  env.update(engine({ network: { ...offline } }));
+  assert.equal(writes.length, before);
+});
+
+test("the reserved regions are the engine's", () => {
+  const { env, writes } = environment();
+  // None before the engine reports, as natively.
+  assert.deepEqual(env.api.reservedRegions(), []);
+  const fold = () => [{ kind: "division", bounds: { origin: { x: 460, y: 0 }, size: { width: 31, height: 669 } } }];
+  env.update(engine({ reservedRegions: fold() }));
+  assert.deepEqual(env.modules["nsh/device"].reservedRegions(), fold());
+  // The same regions again write nothing, down to their bounds' origins.
+  const before = writes.length;
+  env.update(engine({ reservedRegions: fold() }));
+  assert.equal(writes.length, before);
+  env.update(engine());
+  assert.deepEqual(env.api.reservedRegions(), []);
 });
 
 test("whether shaders draw is the engine's", () => {

@@ -162,6 +162,9 @@ impl Host for Runtime {
                         Value::string(prop)?,
                         Value::string(&key)?,
                         Value(value.render_js(&*self.bindings)?.into_raw().0[0] as u32),
+                        // Whether the value (an array) is the function's
+                        // arguments: an `InContext`'s.
+                        Value(if value.spread() { 3 } else { 2 }),
                     ];
                     // The function the component holds itself, else none
                     // (JS calls the prop's).
@@ -221,12 +224,20 @@ impl Host for Runtime {
         let data = serde_json::json!({
             "window":{"width":e.window.width.0,"height":e.window.height.0},
             "safeArea":{"top":e.safe_area.top.0,"right":e.safe_area.right.0,"bottom":e.safe_area.bottom.0,"left":e.safe_area.left.0},
+            "reservedRegions":e.reserved_regions.iter().map(|r| serde_json::json!({
+                "kind":r.kind.name(),
+                "bounds":{"origin":{"x":r.bounds.origin.x.0,"y":r.bounds.origin.y.0},"size":{"width":r.bounds.size.width.0,"height":r.bounds.size.height.0}}
+            })).collect::<Vec<_>>(),
             "titleBar":{"height":e.title_bar.top.0,"left":e.title_bar.left.0,"right":e.title_bar.right.0},
             "keyboard":{"height":e.keyboard_height.0,"duration":e.keyboard_duration},
             "colorScheme":if e.color_scheme==nsh_engine::ColorScheme::Dark {"dark"}else{"light"},
             "fontScale":e.font_scale,"rtl":e.rtl,"reduceMotion":e.reduce_motion,"pixelRatio":e.pixel_ratio,
             "screenReader":e.screen_reader,"locale":e.locale.as_str(),"host":e.host,"lifecycle":e.lifecycle.name(),
             "shaders":e.shaders,"wakeCount":e.wake_count,
+            "network":{
+                "online":e.network.online(),"kind":e.network.kind.name(),"expensive":e.network.expensive,
+                "constrained":e.network.constrained,"cellularData":e.network.cellular_data.name()
+            },
             "horizontalSizeClass":e.horizontal_size_class().name(),
             "verticalSizeClass":e.vertical_size_class().name(),
             "localeSettings":{

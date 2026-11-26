@@ -1,6 +1,6 @@
 ---
 title: SplitView
-description: "SplitView: two or three columns of navigation stacks side by side (a sidebar, an optional content column and the detail) that show one at a time where the room is compact. UISplitViewController on iOS and Mac Catalyst, columns of fixed widths elsewhere; which columns show is the app's value."
+description: "SplitView: two or three columns of navigation stacks side by side (a sidebar, an optional content column and the detail) that show one at a time where the room is compact. UISplitViewController on iOS and Mac Catalyst, columns the user resizes elsewhere; which columns show is the app's value."
 group: base
 demo: el-split-view
 ---
@@ -12,53 +12,8 @@ A split view shows the app's navigation in columns: a sidebar (the sections or t
 each keeps its pages and pushes and pops on its own. On iOS, iPadOS and Mac Catalyst the columns are a
 `UISplitViewController`'s: the sidebar floats over the content on iPadOS 26, comes in with a swipe from the edge and
 with the system's sidebar button, and the system arranges the columns as the window turns and is resized. Elsewhere
-the columns stand side by side at fixed widths. Where the room is compact (a phone, a narrow window) one column shows
+the columns stand side by side, resized by dragging their edges. Where the room is compact (a phone, a narrow window) one column shows
 at a time. Which columns show is `columnVisibility`, a value the app owns.
-
-```rust tabs
-use nsh_base::{ColumnVisibility, button, nav_page, nav_stack, split_view, theme};
-use nsh_core::prelude::*;
-
-const MESSAGES: [&str; 2] = ["Welcome", "Release notes"];
-
-/// A message of the inbox: a press shows it in the detail.
-fn row(
-    title: &'static str,
-    selected: Signal<&'static str>,
-    visibility: Signal<ColumnVisibility>,
-) -> impl IntoElement {
-    button()
-        .on_press(move || {
-            selected.set(title);
-            // Where one column shows, the message comes in front.
-            if horizontal_size_class() == SizeClass::Compact {
-                visibility.set(ColumnVisibility::DetailOnly);
-            }
-        })
-        .px_4()
-        .py_3()
-        .child(text(title).text_color(move || theme().foreground()))
-}
-
-fn mail() -> impl IntoElement {
-    let visibility = signal(ColumnVisibility::Automatic);
-    let selected = signal(MESSAGES[0]);
-    split_view()
-        .flex_1()
-        .column_visibility(move || Some(visibility.get()))
-        .on_column_visibility_change(move |next: &ColumnVisibility| visibility.set(*next))
-        .sidebar(nav_stack().child(nav_page().title("Inbox").child(
-            view()
-                .flex_1()
-                .children(MESSAGES.map(|title| row(title, selected, visibility))),
-        )))
-        .detail(nav_stack().child(
-            nav_page()
-                .title(move || SharedString::from(selected.get()))
-                .child(text(move || format!("{} …", selected.get())).p_4()),
-        ))
-}
-```
 
 ```tsx tabs
 import { horizontalSizeClass, mount, signal, Text, View } from "nsh";
@@ -117,6 +72,51 @@ mount(() => (
 ));
 ```
 
+```rust tabs
+use nsh_base::{ColumnVisibility, button, nav_page, nav_stack, split_view, theme};
+use nsh_core::prelude::*;
+
+const MESSAGES: [&str; 2] = ["Welcome", "Release notes"];
+
+/// A message of the inbox: a press shows it in the detail.
+fn row(
+    title: &'static str,
+    selected: Signal<&'static str>,
+    visibility: Signal<ColumnVisibility>,
+) -> impl IntoElement {
+    button()
+        .on_press(move || {
+            selected.set(title);
+            // Where one column shows, the message comes in front.
+            if horizontal_size_class() == SizeClass::Compact {
+                visibility.set(ColumnVisibility::DetailOnly);
+            }
+        })
+        .px_4()
+        .py_3()
+        .child(text(title).text_color(move || theme().foreground()))
+}
+
+fn mail() -> impl IntoElement {
+    let visibility = signal(ColumnVisibility::Automatic);
+    let selected = signal(MESSAGES[0]);
+    split_view()
+        .flex_1()
+        .column_visibility(move || Some(visibility.get()))
+        .on_column_visibility_change(move |next: &ColumnVisibility| visibility.set(*next))
+        .sidebar(nav_stack().child(nav_page().title("Inbox").child(
+            view()
+                .flex_1()
+                .children(MESSAGES.map(|title| row(title, selected, visibility))),
+        )))
+        .detail(nav_stack().child(
+            nav_page()
+                .title(move || SharedString::from(selected.get()))
+                .child(text(move || format!("{} …", selected.get())).p_4()),
+        ))
+}
+```
+
 `SplitView` comes from [`nsh/base`](../modules/nsh-base.md), `nsh_base::split_view()` in Rust, with
 `ColumnVisibility`. In Rust each column is a setter that takes its stack (`.sidebar(..)`, `.content(..)`,
 `.detail(..)`); in TSX each is a prop that takes a `<NavStack>`.
@@ -131,7 +131,7 @@ mount(() => (
 Each column is a `NavStack`: its pages, its header, its back button and its state are the stack's, and pushing and
 popping one column leaves the others as they are. The columns' widths are the platform's: on iOS UIKit's, which
 follow the window; elsewhere iPadOS's defaults, the sidebar and the content column 320 points wide and the detail the
-rest. The look is the app's: the pages draw the columns' content and backgrounds, the borders between them included.
+rest to start, which the user resizes by dragging. The look is the app's: the pages draw the columns' content and backgrounds, the borders between them included.
 
 ## Which columns show
 
@@ -198,5 +198,6 @@ See [Accessibility](../docs/accessibility.md) for labels, roles and announcement
 - **iOS, iPadOS and Mac Catalyst**: `UISplitViewController` with two or three columns, each the
   `UINavigationController` of its `NavStack`. iPadOS 26 floats the sidebar over the content in Liquid Glass. The
   swipe from the edge and the sidebar button are the system's.
-- **Android, the desktops and the web**: the columns stand side by side at fixed widths. A [`DockArea`](./dock.md) is
-  the workspace whose columns the user resizes and rearranges.
+- **Android, the desktops and the web**: the columns stand side by side; the user drags the sidebar's edge and the
+  boundary between the columns to resize them. A [`DockArea`](./dock.md) is the workspace whose columns the user also
+  rearranges.

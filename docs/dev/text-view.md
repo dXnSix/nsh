@@ -37,7 +37,10 @@ colored with the theme's tokens; the app restyles each part over it.
   position, same kind) and only that row is made again. A block that changes kind mid-stream (a paragraph becoming a
   table once its delimiter row arrives) gets a new row. A row's item (`Row`) is its block (shared), its position,
   what comes before it (a heading's room above it) and whether it is the last (the caret's), so a row hears of a
-  change through its own item alone and an update runs no memo per row. Footnotes follow the blocks in one region of
+  change through its own item alone and an update runs no memo per row. A row's root is a view only because an `Each`
+  keeps rows by their root's key; it passes its position on (`Element::__pass_position`), as do the views `block` wraps
+  a block in (the caret's line, a terminal's blank row), so a part's `first:` / `last:` read the block's place among
+  the blocks, as they do inside a quote. Footnotes follow the blocks in one region of
   their own.
 - **Built on `Text`** (`text.md`): every paragraph, heading, table cell and code block is one native text
   block, so wrapping, font scale, selection, span backgrounds (inline code), pressable
@@ -46,9 +49,14 @@ colored with the theme's tokens; the app restyles each part over it.
 - **Each block is made with primitives** (`Cx::block`): a paragraph or heading is one `text` whose children are spans
   (`Inline` → nested texts, inline images, slots), lists are rows of a marker text and a column, code blocks a column
   with floating actions and a horizontal `scroll`, tables one grid in a horizontal `scroll` (below), disclosures a
-  pressable summary and an `If`. With `selectable`, every text carries `userSelect: "text"` (`.select_text()`) and the root is a selectable view
-  (`Element::selectable`), so one selection runs across the blocks, and inside a selectable view on into the
-  texts around the view ("Selectable views" in `text.md`).
+  pressable summary and an `If`. With `selectable`, every content text carries `userSelect: "text"` (`.select_text()`)
+  and the root is a selectable view (`Element::selectable`), so one selection runs across the blocks, and inside a
+  selectable view on into the texts around the view ("Selectable views" in `text.md`). Generated document chrome — list
+  markers (`listMarker`, also `pointerEvents: "none"` on non-terminal targets so drags across the indent start on the
+  item), task boxes (`taskMarker`), alert icons (`alertIcon`), disclosure triangles (`summaryMarker`), footnote numbers
+  (`footnoteLabel`), code block and table action bars (`codeBlockHeader`, `renderTableActions`), and terminal borders /
+  rules — carries `userSelect: "none"` (`Cx::chrome`, applied before part styles so apps can still override it), keeping
+  selections, copies and `selectedText` aligned with `Document::plain_text()`.
 - **Tables** (`Cx::table`) lay out as gpui-kit's: columns fit their content when there is room, shrink (their cells
   wrapping) down to a floor per column when the view is narrower, and below the floors the table scrolls horizontally
   (`tableScroll`; `tableScrollbar` hides its indicator, as `codeBlockScrollbar` a code block's). The cells are one CSS grid, so columns line up across rows: each column is a `minmax(<floor>,
@@ -103,7 +111,9 @@ above them after a block (1.1 / 1.6 / 1.4 em, 0.6 em after a heading, none first
 from `Before`, which the top level's rows keep as a memo); strong text semibold; links underlined 1 pt at 40 % of
 their color, at the platform's automatic underline position (or an offset an ancestor sets, which links inherit;
 the `Link` part's own wins); `<mark>` on a rounded yellow (a marker's,
-`HIGHLIGHT`); code, keys and TeX at 13 in the theme's `font-mono` (else the system's `monospace`) on a faint rounded
+`HIGHLIGHT`); text styles (`textStyle`) in the document's color, as given in both appearances, which the app's
+`textStyle` part overrides (its own colors in dark appearance, say);
+code, keys and TeX at 13 in the theme's `font-mono` (else the system's `monospace`) on a faint rounded
 background (spans have no padding); lists indented 1.4 em, their markers (`•`, `◦`, `▪` by depth, or numbers) right-aligned against the content in
 the indent (so `10.` reaches further left and the items stay in line), items 0.25 em apart, tasks a
 15 pt box drawn as a view (filled with a `✓` when done, the item's text then muted and struck); quotes a 2 pt line at
@@ -220,26 +230,29 @@ build without syntect. Without the feature, code blocks the app does not highlig
   `:::`, as `remark-directive`).
 - **Rust plugins** (`MarkdownPlugin`) read mdast nodes themselves: `configure` turns on markdown-rs constructs,
   `block` / `inline` read a node (the first plugin returning `Some` wins; `ParseContext` reads children as the parser
-  does), `render` shows a custom node in Rust. A view provides them to every `TextView` below it with
+  does; `ParseContext::conversion_id` is the same in every callback of one conversion, a `Parser::markdown` call or a
+  text a view reads, and new for each), `render` shows a custom node in Rust. A view provides them to every `TextView` below it with
   `provide_context(MarkdownPlugins::new().with(..))`. A plugin's `render` comes before `renderCustom`, which comes
   before the node's content.
-- **`MarkdownOptions`**: `math`, `html`, `alerts` (default on), `frontmatter`, `mdx`, `streaming` (default off).
+- **`MarkdownOptions`**: `math`, `html`, `alerts`, `links`, `images` (default on), `frontmatter`, `mdx`, `streaming` (default off).
   With `mdx`, JSX elements are custom nodes named by their tag and `{expressions}` custom nodes `expression`; raw HTML
   is then text.
 
 ## Streaming
 
 With `options.streaming`, `markdown/streaming.rs` repairs the last block of the text before parsing (the blocks before
-it are complete; a text ending inside a fenced code or `$$` block needs nothing): emphasis, strong, strikethrough
-(`**`, `*`, `__`, `_`, `~~`), inline code and formulas left open are closed in the reverse order they opened, a marker
-with nothing after it yet is removed (so is half a formula closer, `\[1\` reads as `\[1\]`, which escaped brackets
-around a reference number keep as text); `[text` and `[text](partial` show as their text, `![alt` and `![alt](partial`
-are removed; an HTML tag being typed (`<di`, `<a href="x`) is removed; a table's header followed by the start of its
-delimiter row is completed to a table (and a lone `-` under it is no heading). A last line not yet ended whose meaning the next
-characters decide is held back: a list marker alone, digits that may become one, a line of `-` or `=` (an underline
-now, a rule, an item or text later), a fence's opening line and the start of its closer; a lone `*` inside a word
-(`a*b`) is never closed. So a reply never flashes literal `**`
-or `[` while the next chunk is on its way. The repair is a `Cow`: text with nothing open is parsed as it is.
+it are complete; a text ending inside a fenced code or `$$` block needs nothing): emphasis, strong, strikethrough (`**`,
+`*`, `__`, `_`, `~~`), inline code and formulas left open are closed in the reverse order they opened, a marker with
+nothing after it yet is removed (so is half a formula closer, `\[1\` reads as `\[1\]`, which escaped brackets around a
+reference number keep as text), and a closer typed in part (`**bold*`, `~~del~`, `` ``a`b` ``) is completed rather than
+followed by a whole one; `[text`, `[text]` at the end and `[text](partial` show as their text, `![alt`, `![alt]` and
+`![alt](partial` are removed (a footnote reference and an alert marker stay); an HTML tag being typed
+(`<di`, `<a href="x`) is removed; a table's header followed by the start of its delimiter row is completed to a table
+(and a lone `-` under it is no heading). A last line not yet ended whose meaning the next characters decide is held
+back: a list marker alone, digits that may become one, an item's task box alone (`- [x]`), a line of `-` or `=` (an
+underline now, a rule, an item or text later), a fence's opening line and the start of its closer; a lone `*` inside a
+word (`a*b`) is never closed. So a reply never flashes literal `**` or `[` while the next chunk is on its way. The
+repair is a `Cow`: text with nothing open is parsed as it is.
 
 ### Reading only what can change
 
@@ -318,12 +331,21 @@ metadata, scripts, styles, form controls, embedded media; elements `hidden`, `ar
 checkboxes, `<math>` with a TeX annotation, `language-*` classes of code). Depth is bounded (256) and `colspan` too
 (64): the input is untrusted.
 
+Text colors are read where rich text editors write them (Tiptap's `textStyle`, which `RichEditor` writes too): a
+`<span>` whose style has a `color`, or a `<font>` with a `color` style or attribute (the style first, as a browser
+ranks them), is a `TextStyle` holding its content, the color as written (`html/mod.rs` `text_color`). A value that is
+no CSS color (`inherit`, `currentColor`) or that would hide the text (fully transparent) is not read, and the element
+is its content, as a span without a color is. Colors elsewhere (a `<p style="color: …">`, a span around blocks) are
+not read. In Markdown a colored `<span>` or `<font>` pairs as the formatting tags do, its content Markdown
+(`formatting_element`). A selection copied as Markdown or HTML writes a text style back as `<span style="color: …">`,
+only when its color is a CSS color (`selection.rs` `style_color`): a document of the app's may carry any string.
+
 ## In a terminal
 
 On the terminal backend (`is_terminal()`) the document takes the forms of a terminal reader, in `text_view/view.rs`
 next to the screen forms; the full list is `TextView`'s row in `docs/dev/components.md` "In a terminal". In short:
 blocks are one blank row apart and nothing trails the last (`shown_before` skips the blocks that show nothing: a
-rule, a paragraph of images without alt text); headings drop their `#` marks and take their level's color in bold,
+rule); headings drop their `#` marks and take their level's color in bold,
 with a `─` rule under h1 only (`terminal_heading`); a quote is `▎` in the accent before muted text; code blocks and
 formulas are bands as wide as their longest line plus a Cell each side (`terminal_band`), a code block under its
 language label; an alert is one band across the body text's width, its icon and text a Cell in, and keeps a `│` in its

@@ -150,14 +150,23 @@ their marks' parts (`classes.marks`), split at inline decorations (their `class`
 attachments with their spec's `class`. A node view (`node_view.rs`: `NodeView`, registered in `NodeViews` or a
 plugin's `node_views` as an `Arc<dyn NodeView>`) renders a node type's blocks: `create` makes the element, which
 follows `cx.node()` while `update` returns true; `editable_content_slot` puts the editor's rendering of the content
-(`cx.take_content()`) inside it, measured in the content box; otherwise the node is an atom selected and moved over
-as a unit. The only looks of the view's own are the caret (2 points, the theme's `foreground`), the selection (the
+(`cx.take_content()`) inside it, measured in the block's box (a block moved by an edit before it carries it along)
+and again when its frame in its parent or the block's size changes; otherwise the node is an atom selected and moved
+over as a unit. The only looks of the view's own are the caret (2 points, the theme's `foreground`), the selection (the
 theme's selection color), the placeholder (`muted-foreground`) and the composition (underlined), each a part the app
 restyles.
 
-Geometry (`geometry.rs`): maps document positions to the laid-out text's lines and back from the blocks' and texts'
-layouts, so the caret and hit tests follow the app's fonts (classes included). A position at a wrap shows at the
-upper line's end with `Affinity::Upstream`.
+Long documents (`render.rs`, `doc_blocks`): past 300 top-level blocks the view mounts only the top-level blocks within
+1.5 viewports of the visible part, in steps of 16, plus the ones the selection is in when they are near, between two
+spacers whose heights come from the blocks' last measured frames (the measured average where a block was never
+mounted). Shorter documents mount every block as before. Positions in unmounted blocks have no geometry until scrolling
+(or scrolling to the caret, which edits do) mounts them.
+
+Geometry (`geometry.rs`): maps document positions to laid-out coordinates and back by querying each textblock's
+`TextGeometry` (`Text::on_text_layout`, which translates UTF-16 offsets across synthetic span-padding spacers
+internally), so the caret, selection boxes, inline leaves, and hit tests follow the app's real fonts, mixed styles,
+attachments, and padding without re-shaping. A position at a wrap shows at the upper line's end with
+`Affinity::Upstream`.
 The view reports `contentSizeChange({ contentSize })` (as `Input`'s `onContentSizeChange`) when the laid-out
 document's size changes, at most once per engine frame. `contentSize` is the full flow extent in points, including
 offscreen blocks and independent of the viewport's minimum height; it excludes the `content` part's padding.
@@ -166,27 +175,49 @@ Rust uses `RichEditor::on_content_size_change`, whose listener receives
 `RichEditorEvent::ContentSizeChange { content_size }`.
 
 Input (`controller.rs`): as the code `Editor`, an invisible native input at the caret (the sink) takes typed text
-and input methods. A node selection of a block atom has no caret: the sink is at the node's box, where a platform
+and input methods. The sink is the editor's one stop of Tab; the content box takes the pointer only
+(`focusable(false)`), and a press in it focuses the sink. The keyboard is the sink's, so the editor's
+`input_accessory` (`inputAccessoryViewID`) is set on the sink, as an `Input`'s. A node selection of a block atom has no caret: the sink is at the node's box, where a platform
 that scrolls a field into view as it focuses it (a browser) finds it, and scrolling the selection into view
-(`scroll_into_view`) brings the node in whole, as ProseMirror scrolls a node selection's DOM node. Typed text goes to plugins' `handle_text_input` (input rules), else is inserted with the stored
+(`scroll_into_view`) brings the node in whole, as ProseMirror scrolls a node selection's DOM node. The sink's changes are replayed at the caret as the code `Editor`'s are (`sink_text.rs`), and a caret the
+platform moves in the sink without a key (an input method that puts its caret between the brackets it typed) moves
+the editor's by as much, within the textblock and over text the document shows the same way. The sink is emptied
+when the caret moves and once it holds 256 bytes; on iOS it is set to the text of the caret's textblock before it
+instead (`sink_context`, 128 bytes at most), as UIKit's keyboard repeats a held Delete (and speeds up to words) only
+over text it sees before the input's caret; on macOS to the last 8 bytes of it (whole characters), what input methods
+that put a space between Chinese and Latin text read before the caret, and no more: the sink is a point wide, so each
+character it holds is a line of it, and the candidates open where its text ends. The platform's text stays while it still ends with that text: setting it
+again would stop the held Delete. Typed text goes to plugins' `handle_text_input` (input rules), else is inserted with the stored
 marks (origin `Input`). While an input method composes, its text shows in the line at the caret with the block's
-typography, and the document waits; the commit is one transaction tagged with the composition's id (`composition`
+typography, and the document waits; the caret is drawn after it, as a native text view draws it after its marked
+text, while the sink (where the candidates open) stays at its start. The commit is one transaction tagged with the composition's id (`composition`
 meta, which the history groups). `RichEditorEvent::CompositionChange(bool)` (Rust
 `.on_composition_change`, JS `onCompositionChange({ composing })`) reports each view's start/end transitions,
 including cancellation, after its session flag, held input and composition signal are updated. Updates within an
 active composition keep the same state and emit no further transition. Starting and canceling composition leave
 the document and transaction revision unchanged; a text commit remains a normal transaction. Observers can retain
-the view while composing and release it on the end notification. Keys: the view binds, while focused, every keystroke a keymap could use (`keys.rs`)
+the view while composing and release it on the end notification. While the editor cannot be edited (`editable` false,
+the session's `editable` / `setEditable(false)`, or a plugin's `editable`), the sink still takes text and the document keeps it out: each sink change that inserts
+text reports `RichEditorEvent::ReadonlyInput` (Rust
+`.on_readonly_input`, JS `onReadonlyInput()`), with no payload,, so an app can offer editing to a soft keyboard's
+typing, which arrives as no key. It is sent from `sink_edited`, once per change of the sink (a composition's commit
+once, before the end's `CompositionChange(false)`), not from `text_input`, which the ref's
+`insertText` also calls. A change that only deletes (a soft keyboard's Backspace) and pastes report nothing: the
+event is for typed text, a hardware keyboard's Backspace and Mod+V arrive as keys an app can bind, and the touch
+menu of a read-only editor offers no Paste. A hardware Return is a bound key too, so only a software keyboard's return
+reports. A change that replaces sink text (autocorrect, a picked suggestion) reports again. Keys: the view binds, while focused, every keystroke a keymap could use (`keys.rs`)
 and offers each as a `KeyEvent` to the selected node's view, the plugins' `handle_key_down`, the base keymap, then
 copy / cut / select all and the caret movement (graphemes, words, line ends, lines and pages by geometry, keeping the
-goal x, the document's ends). An Escape none of them takes collapses a selection to its head; with nothing selected,
-in a terminal, it blurs the editor, so the focus can leave it (Escape stays bound for the plugins' own, a
-suggestion's).
+goal x, the document's ends). Left or Right onto a selectable inline atom a node view draws selects it as a node
+first and the next press moves past it (`inline_node_beside`, prosemirror-view's `selectHorizontally`): the node view
+shows it as `selected`, the caret being hidden. An atom drawn without a node view (a built-in image), or whose spec
+turns `selectable` off (a mention, a hard break), is stepped over as one character. An Escape none of them takes collapses
+a selection to its head; with nothing selected, in a terminal, it blurs the editor, so the focus can leave it (Escape
+stays bound for the plugins' own, a suggestion's).
 Presses: a node view's `handle_event`, the plugins' click hooks (`handle_click_on` per ancestor, then
 `handle_click`, double and triple likewise), then a caret (Shift extends), a word, the textblock or a node selection (a press inside an inline node view's box
 selects its node without Shift or Mod: `inline_view_at`, after prosemirror-view's `selectClickedLeaf`; an inline
-view's box is the frame the text engine placed it at, `TextGeo::widths`, which fixes the positions around it, the
-text between two fixed points scaled to the room it has);
+view's box is the range box the text engine placed its attachment at);
 a drag extends through `create_selection_between`, and past the viewport's top or bottom it scrolls the view on a timer (the code `Editor`'s `AutoScroll` and `edge_speed`) and extends again at each step. Paste: HTML through `transform_pasted_html` and the
 `clipboard_parser` (else the schema's), read by `DomParser::parse_from_clipboard`: HTML an editor copied carries
 `data-pm-slice` and comes back as the copied slice (its open depths, its whitespace, wrapped in its context again),
@@ -243,9 +274,10 @@ children do. The app places them in the content box's points, which `nodeRect(po
 
 Tables (`view/table.rs`): the tree walk flattens a table (a node whose spec's `extra.tableRole` is `"table"`): its
 cells, row after row, are the table's children; rows have no view. The table's block is a grid (`grid()`): a column
-per column of its `TableMap`, as wide as the cells' `colwidth` (at least `cellMinWidth`), else `minmax(cellMinWidth,
-1fr)`; a row per row, at least its `height`, else `auto`; a table whose columns all have widths is as wide as they are
-(`self-start`), wider than the editor it overflows. Each cell is placed at its map slots (`col-start` / `col-end` /
+per column of its `TableMap`. The grid measures the rendered cells, including inline node views, with
+`fit-content(20rem)` for each automatic track. A saved `colwidth` or live resize sets a track to that width, at least
+`cellMinWidth`. Each row fits its content and is at least its saved `height`. The horizontal scroll view gives the
+grid room to measure its contents and scrolls when it is wider than the editor. Each cell is placed at its map slots (`col-start` / `col-end` /
 `row-start` / `row-end`, so spans and rowspans need no row views) and takes its node part as other blocks do. The
 default look is the theme's: the table's top and left borders and each cell's right and bottom ones (`border`, 1
 point), cells padded 8 × 4, header cells on `muted`. A cell selection paints no text boxes: each selected cell holds a
@@ -259,11 +291,26 @@ cell, the keymaps' `arrow` leaves the table); Tab and Shift-Tab are the `table` 
 right border and each row's bottom border (`resizable`; the last column's when `lastColumnResizable`), the column- or
 row-resize cursor, its line (`tableResizeHandle`, the theme's `primary`) on hover and while dragged; a drag previews
 the new size in the grid's tracks and commits `setColumnWidth` / `setRowHeight` once on release (at least
-`cellMinWidth`, rows 16 points). The table the selection is in has grips (a bar of the `tableGrip` part, the theme's
-`muted-foreground`) centered on its top border over each column and on its left border beside each row: a press
-selects the column or row (a cell selection), a drag on desktops shows the drop line (`tableDropIndicator`, `primary`)
-and moves it with `moveTableColumn` / `moveTableRow` on release. Table gestures come before the content box's
-selecting (`Rv::table_target` at the press).
+`cellMinWidth`, rows 16 points). The current cell gets a column grip on the table's top border and a row grip
+on its left border (bars of the `tableGrip` part, the theme's `muted-foreground`). The hovered cell takes precedence
+over the selection. In a scrolling table the viewport clips the column grip and its left edge anchors the row grip. A press selects the column or row (a cell selection). A drag on desktops shows the drop line
+(`tableDropIndicator`, `primary`) and moves the column or row with `moveTableColumn` / `moveTableRow` on release.
+A grip let go before the pointer moved `DRAG_SLOP` (4 points, in any direction) is a press, reported after its
+selection as `RichEditorEvent::TableMenu` (`onTableMenu`, `RichEditorTableMenu`: the table's position, the `row`
+or the `column`, and the grip's box in the root view as `bounds`, where an app's menu is placed);
+a drag, a gesture the platform takes away (`cancel_table_press` on the responder's termination) and a grip the
+document lost before the release (its table or line gone) report none.
+On touch screens a tap on a grip reports at once (a finger never drags a grip). As in common web editors, the
+row or column ends up selected either way: NSH selects it at the press, so a drag shows what it carries.
+Table gestures come before the content box's selecting (`Rv::table_target` at the press).
+
+Each table's handles and grips are a region of their own (`table_controls`), placed from that table's layout alone
+(`Rv::table_layout`). Every block reports its frame in an event of its own, so a region over all the tables, run again
+on `layout_rev`, laid every table out again for each block: the first commit of a long document with tables grew with
+its square. A table's region follows its own revision (`Rv::watch_table`), which `Rv::table_moved` moves when the
+table's frame, a cell's frame, or the frame or inset of a box around it changes (`Tree::table_holders` lists the tables
+in each box, the document's included), and the selection's table (a memo of its block) wakes only the two tables a
+change of it concerns. The drop line is a region of its own too (`drop_line`).
 
 ## The JS API (`rich_editor/js/`)
 
@@ -286,6 +333,12 @@ editor.dispatchTransaction = (tr) => editor.applyTransaction(tr);
   `toggleMark(..)`, `history(..)`, `markRule(..)`, ...), resolved against the editor's schema when they run or the
   editor is made (`commands.rs`, `plugins.rs`). `chain` runs commands on the states each leaves and dispatches their
   steps as one transaction; `first` is ProseMirror's `chainCommands`.
+- `insertContent(content, format?)` (the command object and the session method) is not the registry's
+  `insertContentAt`: plain text is read by `slice_from_text`, Markdown and JSON become a `Slice::max_open`, and all
+  of them go through `Selection::replace`, so a paragraph produced by a document format splices into the text around
+  the caret while structure that cannot fit stays in blocks. An HTML string is the exception: it is parsed by
+  `DomParser::parse_insert_fragment` and inserted with Tiptap's `insertContent` algorithm, since HTML can represent
+  bare inline content and Tiptap's string input is HTML. `pasteHTML` / `pasteText` remain the paste algorithms.
 - `RichEditorPlugin` (`#[class]`) is a plugin whose behavior is the app's. Its callbacks live in a thread-local table
   of the engine thread (`HookRef`), since the kernel's plugins and the session are `Send + Sync`. Captured keys are a
   native keymap consumed while `capturing` is set, reported to JS with `post`; decorations are data a transaction

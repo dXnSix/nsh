@@ -272,6 +272,12 @@ impl Loader {
 
     /// Whether `image` shows a picture: it loaded, and the terminal draws
     /// pictures. Until then a control holding it shows its label.
+    /// Whether `image` has a picture this terminal has no way to draw
+    /// (16 colors or fewer, no kitty graphics).
+    pub(crate) fn hides(&self, image: &ImageView) -> bool {
+        image.shown.is_some() && !self.shows(image)
+    }
+
     pub(crate) fn shows(&self, image: &ImageView) -> bool {
         image.shown.is_some()
             && (self.graphics == Graphics::KittyPlaceholders
@@ -676,6 +682,22 @@ pub(crate) fn deliver(
             }
             events.push((ROOT_ID, EventKind::ImageInfo, EventPayload::Map(fields)));
         }
+    }
+}
+
+/// Starts the load of image view `id`, not drawn (transparent), for its
+/// box `content`, as [`draw`] does for one drawn.
+pub(crate) fn prepare(
+    image: &mut ImageView,
+    loader: &mut Loader,
+    id: NodeId,
+    content: CellBounds,
+    cells: CellSize,
+) {
+    let cols = content.right - content.left;
+    let rows = content.bottom - content.top;
+    if cols > 0 && rows > 0 {
+        image.request(id, cols, rows, cells, loader);
     }
 }
 

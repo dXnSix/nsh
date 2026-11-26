@@ -81,6 +81,9 @@ fn touch(phase: TouchPhase, path: &[u32], x: f32, y: f32, t: f64) -> EventPayloa
             pressure: 0.5,
             tilt_x: 0.0,
             tilt_y: 0.0,
+            coalesced: Vec::new(),
+            eraser: false,
+            barrel: false,
         }],
     }))
 }
@@ -149,7 +152,6 @@ fn a_rust_element_claims_touches_in_a_scroll_view() {
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,

@@ -8,9 +8,9 @@
 //! chosen item comes back as the component's `select` event with the
 //! app's id. On a desktop OS the content is a button whose press shows the
 //! same items as the platform's context menu ([`popup_menu`]). On Android
-//! the same native component is the system's popup menu
-//! (`android.widget.PopupMenu`) anchored to the content. On the web it is
-//! that button with nothing to show: the app uses `Menu` there.
+//! the same native component is a system popup window anchored to the
+//! content, laid out as Material 3's menus on every vendor's theme. On the
+//! web it is that button with nothing to show: the app uses `Menu` there.
 
 use nsh_core::{
     JsonValue,
@@ -42,8 +42,8 @@ pub struct MenuButtonItem {
     pub icon: Option<SharedString>,
     /// Its icon as an SVG document, on Android, which has no symbol set of
     /// its own: drawn as a template (only its alpha counts) in the item's
-    /// text color, before the label, on Android 10 and later. iOS draws
-    /// `icon` and ignores it; the desktops show neither.
+    /// text color, before the label. iOS draws `icon` and ignores it; the
+    /// desktops show neither.
     #[prop(skip_none)]
     pub svg: Option<SharedString>,
     /// A check mark: `Some` makes it a checkable item, checked or not; the
@@ -168,6 +168,9 @@ pub struct MenuButtonProps {
     /// What screen readers say for the button: on iOS the content is
     /// covered by the system's button, which only this names.
     pub accessibility_label: Prop<Option<SharedString>>,
+    /// What activating the button does, for screen readers, as a view's
+    /// `accessibilityHint`.
+    pub accessibility_hint: Prop<Option<SharedString>>,
     /// The content: what the button shows, laid out by its `class` and
     /// `style` as a view's children.
     pub children: Prop<Children>,
@@ -222,6 +225,12 @@ pub fn MenuButton(props: MenuButtonProps, cx: Scope<MenuButtonEvent>) -> impl In
                             .get()
                             .map_or(JsonValue::Null, |t| JsonValue::from(t.as_ref()))
                     })
+                    .prop("accessibilityHint", move || {
+                        props
+                            .accessibility_hint
+                            .get()
+                            .map_or(JsonValue::Null, |t| JsonValue::from(t.as_ref()))
+                    })
                     .on_native_event(move |event: &NativeEvent| {
                         if &*event.name == "select"
                             && let Some(id) = event.data.as_str()
@@ -235,6 +244,7 @@ pub fn MenuButton(props: MenuButtonProps, cx: Scope<MenuButtonEvent>) -> impl In
     view.disabled(disabled)
         .role(AccessibilityRole::Button)
         .optional_label(props.accessibility_label)
+        .optional_hint(props.accessibility_hint)
         .on_press(move |_: &()| {
             if os().is_desktop() {
                 let select = move |id: SharedString| cx.emit(MenuButtonEvent::Select(id));

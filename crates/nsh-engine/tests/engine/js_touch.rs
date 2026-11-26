@@ -111,7 +111,6 @@ fn start_app(name: &str, app: &str) -> (Engine, Receiver<MountBatch>) {
         clipboard: None,
         host: Default::default(),
         picker: None,
-        speech: None,
         audio: None,
         windows: None,
         login_item: None,
@@ -151,6 +150,9 @@ fn touch(
             pressure: 0.5,
             tilt_x: 0.0,
             tilt_y: 0.0,
+            coalesced: Vec::new(),
+            eraser: false,
+            barrel: false,
         }],
     }))
 }
@@ -281,7 +283,8 @@ fn a_pan_handler_set_to_undefined_turns_the_pan_off() {
             .unwrap_or_else(|| panic!("{wanted} is mounted"))
     };
     let (zoom, viewer) = (id("zoom"), id("viewer"));
-    let pans = |events: EventMask| Candidate::pan(&GestureValues::default(), events).is_some();
+    let pans =
+        |events: EventMask| Candidate::pan(&GestureValues::default(), events, None).is_some();
     let events = first
         .items
         .iter()

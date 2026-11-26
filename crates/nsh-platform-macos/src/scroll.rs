@@ -31,7 +31,10 @@
 //! as on iOS. Snapping and paging use [`ScrollBehavior::snap_target`].
 //!
 //! Trackpads follow the system: a gesture (`phase`) rubber-bands past the
-//! edges when `bounces` and springs back when the fingers lift, and the
+//! edges when `bounces`, as AppKit's `.automatic` elasticity does (a
+//! horizontal view only while its content overflows, a vertical one whose
+//! content fits only when no outer vertical view takes the stretch; see
+//! [`bounce_target`]), and springs back when the fingers lift, and the
 //! momentum after it is the system's (`momentumPhase` events), not a glide
 //! of ours; snapping views snap from the release instead. Mouse wheels (no
 //! phases) stop at the edges and settle when the notches stop. Mouse drags
@@ -50,7 +53,7 @@ use nsh_core::{
     geometry::point,
     scroll::{
         dragged, ease_out, indicator_alpha, indicator_span_within, projected, rate,
-        reveal_focus_delta, snap_duration, sticky_shift, thumb_scroll,
+        reveal_focus_delta, snap_duration, sticky_shift, thumb_scroll, wheel_glide::Glide,
     },
 };
 use objc2::{MainThreadOnly, define_class, msg_send, rc::Retained};
@@ -89,13 +92,13 @@ const THUMB_SLOP: f32 = 4.0;
 /// A scroll offset, a change of one or a point in a viewport (points).
 /// Scroll views move along their main axis, zoomable ones along both.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-struct Offset {
-    x: f32,
-    y: f32,
+pub(crate) struct Offset {
+    pub(crate) x: f32,
+    pub(crate) y: f32,
 }
 
 impl Offset {
-    const fn new(x: f32, y: f32) -> Self {
+    pub(crate) const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
 
@@ -112,13 +115,33 @@ impl Offset {
         }
     }
 
-    fn lerp(self, to: Self, k: f32) -> Self {
+    pub(crate) fn lerp(self, to: Self, k: f32) -> Self {
         Self::new(self.x + (to.x - self.x) * k, self.y + (to.y - self.y) * k)
     }
 
     /// The larger distance along an axis to `to`.
     fn distance(self, to: Self) -> f32 {
         (to.x - self.x).abs().max((to.y - self.y).abs())
+    }
+}
+
+impl From<Offset> for nsh_core::Point<Points> {
+    fn from(o: Offset) -> Self {
+        point(Points(o.x), Points(o.y))
+    }
+}
+
+impl From<nsh_core::Point<Points>> for Offset {
+    fn from(p: nsh_core::Point<Points>) -> Self {
+        Self::new(p.x.0, p.y.0)
+    }
+}
+
+impl std::ops::Sub for Offset {
+    type Output = Self;
+
+    fn sub(self, o: Self) -> Self {
+        Self::new(self.x - o.x, self.y - o.y)
     }
 }
 
@@ -142,12 +165,14 @@ enum Phase {
     /// Wheel or trackpad input: the last at `last` (ms), `total` points
     /// so far; `gesture` for trackpads (began / ended), not mouse wheels;
     /// `raw` is where the gesture's deltas put the offset before the
-    /// rubber band.
+    /// rubber band, or a mouse wheel's target, which it glides to
+    /// (`glide`, [`nsh_core::scroll::wheel_glide`]).
     Wheel {
         last: f64,
         total: f32,
         gesture: bool,
         raw: Offset,
+        glide: Glide,
     },
     /// A trackpad gesture ended at `since` (ms); the system's momentum may
     /// follow.
@@ -221,6 +246,9 @@ pub(crate) struct Live {
     pinch_from: f32,
     /// The zoom last reported to the engine.
     reported_zoom: f32,
+    /// The core deleted the view ([`deleted`]): its refresh spinner no
+    /// longer turns.
+    deleted: bool,
 }
 
 /// Where trackpad events (gestures and their momentum) put the offset, by
@@ -348,6 +376,13 @@ fn clamp(p: Offset, (min, max): (Offset, Offset)) -> Offset {
         p.x.clamp(min.x, max.x.max(min.x)),
         p.y.clamp(min.y, max.y.max(min.y)),
     )
+}
+
+/// Where an offset `p` at rest goes back to: within `limits`, or `None`
+/// when it is already there (to half a point).
+fn rest_at(p: Offset, (min, max): (Offset, Offset)) -> Option<Offset> {
+    let to = clamp(p, (min, max));
+    ((to.x - p.x).abs() > 0.5 || (to.y - p.y).abs() > 0.5).then_some(to)
 }
 
 /// `p` moved by `d`, stopping at the limits; past them (the refresh space)
@@ -500,17 +535,100 @@ fn movable_in(s: &ScrollState, viewport: (f32, f32)) -> bool {
     s.behavior.enabled && (max.x > min.x || max.y > min.y)
 }
 
-/// Whether a trackpad gesture by `(dx, dy)` may stretch `view` past its
-/// edge: it is enabled, bounces and scrolls along the gesture's axis (a
-/// zoomable view along both). Input gives it gestures no scroll view can
-/// follow ([`can_scroll`]).
-pub(crate) fn can_bounce(view: &NshView, dx: f32, dy: f32) -> bool {
-    let state = view.state();
-    state.scroll.as_ref().is_some_and(|s| {
-        s.behavior.enabled
-            && s.behavior.bounces
-            && (s.behavior.zooms() || s.horizontal == (dx.abs() > dy.abs()))
-    })
+/// Which scroll view in `chain` (innermost first) a trackpad gesture by
+/// `(dx, dy)` stretches past its edge, when [`can_scroll`] found none that can
+/// move:
+///
+/// 1. The innermost bouncing scroll view along the gesture's axis whose
+///    content overflows, that zooms, or (vertically) that pulls to refresh.
+/// 2. Otherwise, for a vertical gesture only, the outermost enabled vertical
+///    scroll view in `chain`, if it bounces: on macOS, AppKit's `.automatic`
+///    elasticity still stretches a standalone short vertical scroll view while
+///    horizontal elasticity requires overflow, and a fitting inner vertical
+///    scroll view (an editor as tall as its document inside a list) hands the
+///    stretch to the list around it.
+pub(crate) fn bounce_target(chain: &[NshView], dx: f32, dy: f32) -> Option<NshView> {
+    let horizontal = dx.abs() > dy.abs();
+    let kind = |i: usize| {
+        let state = chain[i].state();
+        let refreshes = state.events.contains(EventKind::Refresh);
+        state.scroll.as_ref().map(|s| {
+            bounce_kind(
+                s,
+                (state.frame.size.width.0, state.frame.size.height.0),
+                horizontal,
+                refreshes,
+            )
+        })
+    };
+    let idx = bounce_index(chain.len(), kind, horizontal)?;
+    Some(chain[idx].clone())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bounce {
+    /// Does not participate along this gesture's axis.
+    None,
+    /// Stretches at its edge: zooms, overflows along the gesture's axis, or
+    /// pulls to refresh vertically.
+    Primary,
+    /// Enabled vertical scroll view whose content fits with `bounces: true`:
+    /// stretches only when it is the outermost enabled vertical scroll view.
+    VerticalFit,
+    /// Enabled vertical scroll view with `bounces: false`: never stretches,
+    /// and claims the outer vertical slot so a fitting inner view stays still.
+    VerticalRigid,
+}
+
+fn bounce_kind(s: &ScrollState, viewport: (f32, f32), horizontal: bool, refreshes: bool) -> Bounce {
+    if !s.behavior.enabled {
+        return Bounce::None;
+    }
+    if s.behavior.zooms() {
+        return if s.behavior.bounces {
+            Bounce::Primary
+        } else {
+            Bounce::None
+        };
+    }
+    if s.horizontal != horizontal {
+        return Bounce::None;
+    }
+    let (min, max) = range(s, viewport);
+    if horizontal {
+        return if s.behavior.bounces && max.x > min.x {
+            Bounce::Primary
+        } else {
+            Bounce::None
+        };
+    }
+    if !s.behavior.bounces {
+        return Bounce::VerticalRigid;
+    }
+    if max.y > min.y || refreshes {
+        Bounce::Primary
+    } else {
+        Bounce::VerticalFit
+    }
+}
+
+/// The index [`bounce_target`] picks among `len` views (innermost first)
+/// whose [`Bounce`] classification is `kind(i)`, without collecting them.
+fn bounce_index(
+    len: usize,
+    kind: impl Fn(usize) -> Option<Bounce>,
+    horizontal: bool,
+) -> Option<usize> {
+    if let Some(i) = (0..len).find(|&i| kind(i) == Some(Bounce::Primary)) {
+        return Some(i);
+    }
+    if horizontal {
+        return None;
+    }
+    let outermost = (0..len)
+        .rev()
+        .find(|&i| matches!(kind(i), Some(Bounce::VerticalFit | Bounce::VerticalRigid)))?;
+    (kind(outermost) == Some(Bounce::VerticalFit)).then_some(outermost)
 }
 
 /// Sends `kind` with the offset if JS listens to it.
@@ -987,6 +1105,17 @@ fn ensure_ticking(surface: &Rc<Surface>, view: &NshView) {
     });
 }
 
+/// The core deleted `view` (it alone or with its parent): its refresh
+/// spinner stops turning. The core never ends a deleted view's refresh, so
+/// a spinner turning on would keep its frame callback, which holds the
+/// view, running every frame for good: the view never freed and the display
+/// link never at rest. Its other motion ends by itself, as before.
+pub(crate) fn deleted(view: &NshView) {
+    if let Some(s) = view.state_mut().scroll.as_mut() {
+        s.live.deleted = true;
+    }
+}
+
 /// When `view`'s motion next comes to something (ms, the frames' clock):
 /// an eased move's end, a mouse wheel's or a touchpad's rest; what runs
 /// its frame while no frames are drawn ([`Next::At`]). `None` while only
@@ -1004,8 +1133,9 @@ fn deadline(view: &NshView) -> Option<f64> {
         Phase::Wheel {
             last,
             gesture: false,
+            glide,
             ..
-        } => last + WHEEL_IDLE,
+        } => (last + WHEEL_IDLE).max(glide.end()),
         Phase::AwaitMomentum { since } => since + MOMENTUM_WAIT,
         _ => return None,
     };
@@ -1061,7 +1191,6 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
         };
         (s.live.phase, pos(s), limits(&state))
     };
-    let hi = Offset::new(max.x.max(min.x), max.y.max(min.y));
     match phase {
         Phase::Animate {
             from,
@@ -1108,12 +1237,22 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
         }
         Phase::Wheel {
             last,
+            gesture: false,
+            raw,
+            glide,
+            ..
+        } if now - last <= WHEEL_IDLE || now < glide.end() => {
+            moved_to(surface, view, glide.value(raw.into(), now).into());
+        }
+        Phase::Wheel {
             total,
             gesture: false,
+            raw,
             ..
-        } if now - last > WHEEL_IDLE => {
+        } => {
             // A mouse wheel came to rest: snapping views move on to the
             // next snap point in the wheel's direction.
+            moved_to(surface, view, raw);
             set_phase(view, Phase::Idle);
             let snaps = view
                 .state()
@@ -1135,8 +1274,11 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
             set_phase(view, Phase::Idle);
             emit(surface, view, EventKind::ScrollEnd);
         }
-        Phase::Idle if p.x > hi.x + 0.5 || p.y > hi.y + 0.5 => {
-            moved_to(surface, view, Offset::new(p.x.min(hi.x), p.y.min(hi.y)));
+        // Nothing moves it: an offset past either end goes back.
+        Phase::Idle => {
+            if let Some(to) = rest_at(p, (min, max)) {
+                moved_to(surface, view, to);
+            }
         }
         _ => {}
     }
@@ -1160,9 +1302,11 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
             }
             fading = alpha > 0.0;
         }
+        // A deleted view's spinner stops ([`deleted`]).
         let spinning = !s.horizontal
             && main(s) < 0.0
             && s.live.refreshing
+            && !s.live.deleted
             && s.behavior.refresh_indicator.is_none();
         if spinning {
             s.live.spin = ((now / 1000.0) as f32 * 2.0 * PI) % (2.0 * PI);
@@ -1326,8 +1470,9 @@ fn thumb(s: &ScrollState, w: f32, h: f32) -> Option<(CGRect, f32)> {
     Some((frame, dim - before - after - 2.0 * INDICATOR_MARGIN - len))
 }
 
-/// Updates the indicator and the refresh spinner of `view` to its offset.
-fn update_overlays(view: &NshView) {
+/// Updates the indicator and the refresh spinner of `view` to its offset
+/// and its frame.
+pub(crate) fn update_overlays(view: &NshView) {
     let mut state = view.state_mut();
     let (w, h) = (state.frame.size.width.0, state.frame.size.height.0);
     let refresh_listened = state.events.contains(EventKind::Refresh);
@@ -1624,7 +1769,11 @@ pub(crate) fn content(surface: &Rc<Surface>, view: &NshView, size: Size<Points>)
 }
 
 /// `ScrollBy`: the core keeps the visible content in place (items above
-/// the viewport changed size); not clamped, the core knows its content.
+/// the viewport changed size); not clamped, the core knows its content
+/// (a `ScrollContent` later in the batch may make room for it). At rest,
+/// an offset it leaves past either end goes back on the next frame
+/// ([`tick`]): the offset reported is within the content, so the core
+/// would never correct a view resting before its start (#3235).
 pub(crate) fn scroll_by(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32) {
     let (p, d) = {
         let mut state = view.state_mut();
@@ -1649,11 +1798,13 @@ pub(crate) fn scroll_by(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32)
                 total,
                 gesture,
                 raw,
+                glide,
             } => Phase::Wheel {
                 last,
                 total,
                 gesture,
                 raw: raw + d,
+                glide: glide.shifted(d.into()),
             },
             Phase::Animate {
                 from,
@@ -1682,6 +1833,17 @@ pub(crate) fn scroll_by(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32)
     };
     if d != Offset::default() {
         moved_to(surface, view, p + d);
+        let outside = {
+            let state = view.state();
+            state
+                .scroll
+                .as_ref()
+                .is_some_and(|s| s.live.phase == Phase::Idle)
+                && rest_at(p + d, limits(&state)).is_some()
+        };
+        if outside {
+            ensure_ticking(surface, view);
+        }
     }
     report(surface, view);
 }
@@ -2223,6 +2385,7 @@ pub(crate) fn wheel_begin(surface: &Rc<Surface>, view: &NshView) {
             total: 0.0,
             gesture: true,
             raw,
+            glide: Glide::default(),
         },
     );
     emit(surface, view, EventKind::ScrollDragStart);
@@ -2230,32 +2393,58 @@ pub(crate) fn wheel_begin(surface: &Rc<Surface>, view: &NshView) {
 
 /// A wheel or trackpad scroll by `(dx, dy)` points (positive: the content
 /// moves up / left). Without [`wheel_begin`] it is a mouse wheel, which
-/// settles by itself once it stops.
-pub(crate) fn wheel(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32, time: f64) {
+/// settles by itself once it stops; a `notched` one on a `smoothWheel`
+/// view glides there as Chromium's does ([`nsh_core::scroll::wheel_glide`]), others
+/// land at once as AppKit's.
+pub(crate) fn wheel(
+    surface: &Rc<Surface>,
+    view: &NshView,
+    dx: f32,
+    dy: f32,
+    notched: bool,
+    time: f64,
+) {
     if !enabled(view) {
         return;
     }
-    let (gesture, total, raw) = match phase(view) {
+    let (gesture, total, prev, glide) = match phase(view) {
         Phase::Wheel {
             gesture,
             total,
             raw,
+            glide,
             ..
-        } => (gesture, total, raw),
+        } => (gesture, total, raw, Some(glide)),
         _ => {
             interrupt(surface, view);
-            (false, 0.0, current(view))
+            (false, 0.0, current(view), None)
         }
     };
-    let (pos, total, raw) = {
+    let at = now();
+    let (pos, total, raw, smooth) = {
         let state = view.state();
         let Some(s) = &state.scroll else { return };
         let (min, max) = limits(&state);
-        let d = wheel_delta(s, dx, dy);
+        let b = &s.behavior;
+        let smooth = notched
+            && !gesture
+            && b.smooth_wheel
+            && !b.zooms()
+            && !b.snaps()
+            && !b.paging
+            && !surface.environment.get().reduce_motion;
+        // A notch's lines are the view's own (`wheelLineHeight`), not
+        // AppKit's 10 points.
+        let k = if notched && b.wheel_line_height.0 > 0.0 {
+            b.wheel_line_height.0 / crate::input::WHEEL_LINE
+        } else {
+            1.0
+        };
+        let d = wheel_delta(s, dx * k, dy * k);
         let total = total + d.along(s.horizontal);
         if gesture {
             // Trackpads stretch past the edges, as macOS does.
-            let raw = raw + d;
+            let raw = prev + d;
             let stretch = |raw: f32, min: f32, max: f32, horizontal: bool| {
                 let dim = Points(viewport(&state, horizontal));
                 dragged(
@@ -2271,25 +2460,36 @@ pub(crate) fn wheel(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32, tim
                 stretch(raw.x, min.x, max.x, true),
                 stretch(raw.y, min.y, max.y, false),
             );
-            (to, total, raw)
+            (to, total, raw, false)
         } else {
-            // Past an edge (the refresh space) wheels only move back.
-            let to = stop_at_edges(pos(s), d, (min, max));
-            (to, total, to)
+            // A smooth wheel's steps add up from where the last one
+            // pointed, not from where its glide has got to. Past an edge
+            // (the refresh space) wheels only move back.
+            let from = if smooth { prev } else { pos(s) };
+            let to = stop_at_edges(from, d, (min, max));
+            (to, total, to, smooth)
         }
+    };
+    // A smooth wheel glides there, in the frames ([`tick`]): on from the
+    // glide in flight, or anew from where it is.
+    let glide = match glide {
+        _ if !smooth => Glide::default(),
+        Some(g) if at < g.end() => g.retargeted(prev.into(), raw.into(), at),
+        _ => Glide::new(current(view).into(), raw.into(), at),
     };
     set_phase(
         view,
         Phase::Wheel {
-            last: now(),
+            last: at,
             total,
             gesture,
             raw,
+            glide,
         },
     );
     if gesture {
         feed(surface, view, pos, time);
-    } else {
+    } else if !smooth {
         moved_to(surface, view, pos);
     }
     ensure_ticking(surface, view);
@@ -2529,6 +2729,50 @@ fn key_scroll_view(view: &NshView, horizontal: bool, dx: f32, dy: f32) -> Option
 pub(crate) fn reveal(surface: &Rc<Surface>, target: &NshView) {
     // The rectangles are AppKit's, which the bounds place.
     commit_ancestors(target);
+    reveal_with(surface, target, |view| {
+        // In the scroll view's coordinates: zoomed, as AppKit converts.
+        target
+            .ns()
+            .convertRect_toView(target.ns().bounds(), Some(view.ns()))
+    });
+}
+
+/// Scrolls the scroll views around `target` (animated) so that `rect` (in
+/// `target`'s coordinates) shows: the caret a key moved a selection's
+/// focus to. A text view draws in its parent's layer, with no superview
+/// AppKit could convert through: `rect` goes up the views' tree instead
+/// ([`rect_in`]).
+pub(crate) fn reveal_rect(surface: &Rc<Surface>, target: &NshView, rect: CGRect) {
+    reveal_with(surface, target, |view| rect_in(target, rect, view));
+}
+
+/// `rect` of `target` in the viewport of `scroll`, a view around it: moved
+/// by the frames of the views between, and by the offset and zoom of each
+/// scroll view on the way, as [`crate::selectable_view`] places its texts.
+fn rect_in(target: &NshView, rect: CGRect, scroll: &NshView) -> CGRect {
+    let (mut x, mut y, mut scale) = (rect.origin.x, rect.origin.y, 1.0);
+    let mut current = target.clone();
+    while let Some(parent) = current.parent_view() {
+        let frame = current.ns().frame();
+        let (ox, oy) = bounds_origin(&parent);
+        let z = f64::from(zoom(&parent));
+        x = (frame.origin.x + x - f64::from(ox)) * z;
+        y = (frame.origin.y + y - f64::from(oy)) * z;
+        scale *= z;
+        if &parent == scroll {
+            break;
+        }
+        current = parent;
+    }
+    CGRect::new(
+        CGPoint::new(x, y),
+        CGSize::new(rect.size.width * scale, rect.size.height * scale),
+    )
+}
+
+/// Scrolls the scroll views around `target` (animated) so that the
+/// rectangle `rect_in` gives in each one's viewport shows.
+fn reveal_with(surface: &Rc<Surface>, target: &NshView, rect_in: impl Fn(&NshView) -> CGRect) {
     // Content moved by the scroll views inside, which rectangles measured
     // now do not show yet.
     let (mut moved_x, mut moved_y) = (0.0, 0.0);
@@ -2538,10 +2782,7 @@ pub(crate) fn reveal(surface: &Rc<Surface>, target: &NshView) {
         if view.kind() != ViewKind::Scroll || !mapped(&view) {
             continue;
         }
-        // In the scroll view's coordinates: zoomed, as AppKit converts.
-        let bounds = target
-            .ns()
-            .convertRect_toView(target.ns().bounds(), Some(view.ns()));
+        let bounds = rect_in(&view);
         let (base, p, lims, dims) = {
             let state = view.state();
             let Some(s) = &state.scroll else { continue };
@@ -2582,6 +2823,34 @@ pub(crate) fn reveal(surface: &Rc<Surface>, target: &NshView) {
 mod tests {
     use super::*;
 
+    /// A view at rest goes back within its limits from past either end:
+    /// a `ScrollBy` that left a list 144 pt before its start comes back
+    /// to it, as one past its end does (#3235); within them (to half a
+    /// point, and the refresh space above the top while it refreshes) it
+    /// stays.
+    #[test]
+    fn a_view_at_rest_goes_back_from_past_either_end() {
+        let limits = (Offset::new(0.0, 0.0), Offset::new(0.0, 600.0));
+        assert_eq!(
+            rest_at(Offset::new(0.0, -144.0), limits),
+            Some(Offset::new(0.0, 0.0))
+        );
+        assert_eq!(
+            rest_at(Offset::new(0.0, 700.0), limits),
+            Some(Offset::new(0.0, 600.0))
+        );
+        assert_eq!(rest_at(Offset::new(0.0, 200.0), limits), None);
+        assert_eq!(rest_at(Offset::new(0.0, -0.4), limits), None);
+        let refreshing = (Offset::new(0.0, -60.0), Offset::new(0.0, 600.0));
+        assert_eq!(rest_at(Offset::new(0.0, -60.0), refreshing), None);
+        // Content shorter than the viewport rests at its start.
+        let short = (Offset::new(0.0, 0.0), Offset::new(0.0, -100.0));
+        assert_eq!(
+            rest_at(Offset::new(0.0, -50.0), short),
+            Some(Offset::new(0.0, 0.0))
+        );
+    }
+
     /// A scroll view of `content` points in a 300 x 200 viewport.
     fn movable_with(content: (f32, f32), horizontal: bool, enabled: bool) -> bool {
         let s = ScrollState {
@@ -2620,6 +2889,83 @@ mod tests {
     fn an_overflowing_scroll_view_moves() {
         assert!(movable_with((300.0, 800.0), false, true));
         assert!(movable_with((900.0, 200.0), true, true));
+    }
+
+    /// A scroll view's [`Bounce`] classification for `content` points in a
+    /// 300 x 200 viewport along `horizontal`.
+    /// [`bounce_index`] over already classified views.
+    fn bounce_in(kinds: &[Option<Bounce>], horizontal: bool) -> Option<usize> {
+        bounce_index(kinds.len(), |i| kinds[i], horizontal)
+    }
+
+    fn bounce_kind_with(
+        content: (f32, f32),
+        view_horizontal: bool,
+        horizontal: bool,
+        refreshes: bool,
+        bounces: bool,
+    ) -> Bounce {
+        let s = ScrollState {
+            content,
+            horizontal: view_horizontal,
+            behavior: nsh_core::ScrollBehavior {
+                enabled: true,
+                bounces,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        bounce_kind(&s, (300.0, 200.0), horizontal, refreshes)
+    }
+
+    /// A standalone short vertical scroll view still stretches (AppKit's
+    /// `.automatic` vertical elasticity), while a horizontal scroll view whose
+    /// content fits does not.
+    #[test]
+    fn standalone_bounce_matches_appkit_axes() {
+        let short_v = bounce_kind_with((300.0, 120.0), false, false, false, true);
+        let short_h = bounce_kind_with((300.0, 200.0), true, true, false, true);
+        assert_eq!(bounce_in(&[Some(short_v)], false), Some(0));
+        assert_eq!(bounce_in(&[Some(short_h)], true), None);
+    }
+
+    /// An inner vertical scroll view whose content fits (an editor as tall as
+    /// its document inside a list) hands the stretch to the outer list,
+    /// whether the outer list overflows or also fits; if the outer list
+    /// disables bounce, neither stretches.
+    #[test]
+    fn nested_fitting_vertical_scroll_view_hands_bounce_to_outer() {
+        let fit = bounce_kind_with((300.0, 120.0), false, false, false, true);
+        let overflow = bounce_kind_with((300.0, 800.0), false, false, false, true);
+        let no_bounce = bounce_kind_with((300.0, 800.0), false, false, false, false);
+        assert_eq!(bounce_in(&[Some(fit), Some(overflow)], false), Some(1));
+        assert_eq!(bounce_in(&[Some(fit), Some(fit)], false), Some(1));
+        assert_eq!(bounce_in(&[Some(fit), Some(no_bounce)], false), None);
+        // When the inner view itself overflows, it keeps its edge stretch.
+        assert_eq!(bounce_in(&[Some(overflow), Some(overflow)], false), Some(0));
+    }
+
+    #[test]
+    fn an_overflowing_scroll_view_bounces_along_its_axis() {
+        let tall_v = bounce_kind_with((300.0, 800.0), false, false, false, true);
+        let wide_h = bounce_kind_with((900.0, 200.0), true, true, false, true);
+        let wrong_axis = bounce_kind_with((300.0, 800.0), false, true, false, true);
+        assert_eq!(bounce_in(&[Some(tall_v)], false), Some(0));
+        assert_eq!(bounce_in(&[Some(wide_h)], true), Some(0));
+        assert_eq!(bounce_in(&[Some(wrong_axis)], true), None);
+    }
+
+    /// Pulling to refresh needs the stretch, however short the content, even
+    /// when nested inside another vertical scroll view.
+    #[test]
+    fn a_scroll_view_that_refreshes_bounces_when_its_content_fits() {
+        let refreshes = bounce_kind_with((300.0, 120.0), false, false, true, true);
+        let outer_fit = bounce_kind_with((300.0, 120.0), false, false, false, true);
+        assert_eq!(bounce_in(&[Some(refreshes)], false), Some(0));
+        assert_eq!(
+            bounce_in(&[Some(refreshes), Some(outer_fit)], false),
+            Some(0)
+        );
     }
 
     #[test]

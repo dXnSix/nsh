@@ -65,9 +65,9 @@ use nsh_core::{
     desktop::{ResizeEdge, WindowControl},
     geometry::{Points, point},
     input::{
-        self, Candidate, Gate, Grab, GrabOptions, HitArea, Link, PAN_SLOP, PRESS_SLOP, Pinch,
-        SCROLL_PRESS_DELAY, VelocityTracker, WheelLatch, WheelStep, ZOOM_IDLE, has_press, laid_out,
-        latch_holds, transforms,
+        self, Candidate, ContextMenuTarget, Gate, Grab, GrabOptions, HitArea, Link, PAN_SLOP,
+        PRESS_SLOP, Pinch, SCROLL_PRESS_DELAY, VelocityTracker, WheelLatch, WheelStep, ZOOM_IDLE,
+        has_press, laid_out, latch_holds, transforms,
     },
     tailwind::state::{HOVERED, PRESSED},
 };
@@ -550,7 +550,7 @@ fn set_cursor(view: &NshView, over_link: bool) {
 /// handled happened in.
 /// Simulated input goes to the window whose root view is `root` (`None`:
 /// the surface's), as a real event in it would.
-#[cfg(feature = "dev")]
+#[cfg(any(test, feature = "dev"))]
 pub(crate) fn set_event_root(surface: &Surface, root: Option<NshView>) {
     *surface.input.window_root.borrow_mut() = root;
 }
@@ -827,42 +827,51 @@ fn dispatch(surface: &Rc<Surface>, event: &gdk::Event) -> glib::Propagation {
 
 /// A secondary click at `(x, y)` (root coordinates): the nearest view
 /// around the one under it that listens to `onContextMenu` hears it (true:
-/// the click is taken). Text fields are GTK's widgets, which show their
-/// own menu.
+/// the click is taken), unless selectable text is nearer: that shows its
+/// edit menu, but where its selectable view, or a view between them,
+/// listens ([`nsh_core::input::context_menu_target`], as on macOS and
+/// Windows). Text fields are GTK's widgets, which show their own menu.
 fn context_menu(surface: &Rc<Surface>, x: f32, y: f32, state: gdk::ModifierType) -> bool {
     let Some(hit) = pick(&event_root(surface), x, y) else {
         return false;
     };
-    for v in chain(&hit.view) {
-        let (id, listens, input) = {
-            let s = v.state();
-            (
-                s.id,
-                s.events.contains(EventKind::ContextMenu),
-                s.kind == ViewKind::Input,
-            )
-        };
-        if listens {
-            let (location_x, location_y) = local(surface, &v, x, y);
+    let views = chain(&hit.view);
+    let hops: Vec<_> = views.iter().map(|v| context_menu_hop(&v.state())).collect();
+    match input::context_menu_target(&hops) {
+        Some(ContextMenuTarget::Listener(i)) => {
+            let v = &views[i];
+            let (location_x, location_y) = local(surface, v, x, y);
             let event = nsh_core::ContextMenuEvent::new(
                 point(Points(location_x), Points(location_y)),
                 point(Points(x), Points(y)),
                 modifiers(state),
                 Some(nsh_core::PointerType::Mouse),
             );
-            surface.event(id, EventKind::ContextMenu, EventPayload::ContextMenu(event));
-            return true;
+            surface.event(
+                v.state().id,
+                EventKind::ContextMenu,
+                EventPayload::ContextMenu(event),
+            );
+            true
         }
-        if input {
-            return false;
-        }
-        if crate::text::selectable(&v.state()) || v.state().props.selectable_view {
+        Some(ContextMenuTarget::EditMenu(i)) => {
             // Text in a selectable view has the area's menu.
-            let target = crate::selectable_view::area_of(&v).unwrap_or(v);
-            return edit_menu(surface, &target, x, y);
+            let v = &views[i];
+            let target = crate::selectable_view::area_of(v).unwrap_or_else(|| v.clone());
+            edit_menu(surface, &target, x, y)
         }
+        Some(ContextMenuTarget::Field(_)) | None => false,
     }
-    false
+}
+
+/// What `state`'s view is to a secondary click's menu.
+fn context_menu_hop(state: &crate::view::ViewState) -> input::ContextMenuHop {
+    input::ContextMenuHop {
+        listens: state.events.contains(EventKind::ContextMenu),
+        field: state.kind == ViewKind::Input,
+        selectable_text: crate::text::selectable(state),
+        selectable_view: state.props.selectable_view,
+    }
 }
 
 /// A wheel by `(dx, dy)` (`lines`: notches, else points) at `(x, y)` (root
@@ -1436,16 +1445,18 @@ fn pick_in(view: &NshView, p: graphene::Point) -> Option<Hit> {
                 s.kind,
                 ViewKind::Scroll | ViewKind::Image | ViewKind::Stack | ViewKind::Input
             );
+        let at = point(Points(p.x()), Points(p.y()));
         let HitArea {
             in_slop, children, ..
         } = input::hit_area(
-            point(Points(p.x()), Points(p.y())),
+            at,
             s.frame.size,
             s.props.hit_slop,
             s.overflow,
             clip,
             laid_out(s.kind, s.id),
-        );
+        )
+        .clipped(s.style.clip_path(), at, s.frame.size);
         (s.props.pointer_events, in_slop, children)
     };
     let own = || (pe != PointerEvents::BoxNone && in_slop).then(|| hit(view, None));
@@ -1651,7 +1662,10 @@ fn down(surface: &Rc<Surface>, key: Key, x: f32, y: f32, time: f64, modifiers: g
         area.is_some() || (!touch && !native && crate::text::selectable(&hit.view.state()));
     // The gate follows the first pointer only, as on the other platforms.
     let first = input.pointers.borrow().is_empty();
-    let options = GrabOptions::new(touch, native, selects, first);
+    // Where the pointer is from the edges of the root it is measured in.
+    let root_size = event_root(surface).state().frame.size;
+    let options = GrabOptions::new(touch, native, selects, first)
+        .start(point(Points(x), Points(y)), root_size);
     let mut grab = Grab::default();
     for v in &views {
         let s = v.state();
@@ -1789,8 +1803,8 @@ fn motion(surface: &Rc<Surface>, key: Key, x: f32, y: f32, time: f64) {
     let (tx, ty) = (x - p.start.0, y - p.start.1);
     let activated = Gate::step(&mut p.gate, &mut p.candidates, Points(tx), Points(ty));
     // The view's JS responder takes the drag over: nothing native starts
-    // meanwhile.
-    if activated.is_some() && p.mode == Mode::Idle {
+    // meanwhile, but the view's own pan.
+    if p.mode == Mode::Idle && input::activation_frees(activated, &p.candidates) {
         p.mode = Mode::Free;
     }
     if p.reporting {
@@ -1806,9 +1820,10 @@ fn motion(surface: &Rc<Surface>, key: Key, x: f32, y: f32, time: f64) {
     // take the gesture (and block native drags) before one starts.
     let js_pending = p.reporting && !moved;
     if p.mode == Mode::Idle && distance > PAN_SLOP.0 && !js_pending {
-        // While the gate decides, the candidates around it wait (the
-        // pointer stays idle and they are asked again on the next move).
-        if p.gate.is_none() {
+        // While the gate decides, or a pan's `panActivation`, the candidates
+        // around wait (the pointer stays idle and they are asked again on
+        // the next move).
+        if !input::waits(&p.candidates, p.gate.as_ref(), Points(tx), Points(ty)) {
             p.mode = Mode::Free;
         }
         let started = if surface.input.js_block.get() {
@@ -1917,12 +1932,15 @@ fn cancel_all(surface: &Rc<Surface>) {
     }
 }
 
-/// A pen's state at the latest pointer event: pressure (0 to 1) and tilt
-/// in degrees, `None` for a mouse.
+/// A pen's state at the latest pointer event: pressure (0 to 1), tilt
+/// in degrees, whether its eraser end is used and its barrel button held;
+/// `None` for a mouse.
 #[derive(Clone, Copy)]
 struct Pen {
     pressure: f32,
     tilt: (f32, f32),
+    eraser: bool,
+    barrel: bool,
 }
 
 thread_local! {
@@ -1950,9 +1968,14 @@ fn pen_sample(event: &gdk::Event) {
                     | gdk::DeviceToolType::Brush
             )
         })
-        .map(|_| {
+        .map(|tool| {
             let axis = |a| event.axis(a).unwrap_or(0.0) as f32;
             Pen {
+                eraser: tool.tool_type() == gdk::DeviceToolType::Eraser,
+                // A stylus reports its side buttons as buttons 2 and 3.
+                barrel: event
+                    .modifier_state()
+                    .intersects(gdk::ModifierType::BUTTON2_MASK | gdk::ModifierType::BUTTON3_MASK),
                 pressure: event
                     .axis(gdk::AxisUse::Pressure)
                     .map_or(0.5, |v| v.clamp(0.0, 1.0) as f32),
@@ -2025,6 +2048,13 @@ fn report(surface: &Surface, phase: TouchPhase, changed: &Pointer, activated: Op
                     tilt_y: pen
                         .filter(|_| p.key == Key::Mouse)
                         .map_or(0.0, |pen| pen.tilt.1),
+                    coalesced: Vec::new(),
+                    eraser: pen
+                        .filter(|_| p.key == Key::Mouse)
+                        .is_some_and(|pen| pen.eraser),
+                    barrel: pen
+                        .filter(|_| p.key == Key::Mouse)
+                        .is_some_and(|pen| pen.barrel),
                 }
             })
             .collect()
@@ -2166,6 +2196,7 @@ pub(crate) fn modifiers(state: gdk::ModifierType) -> nsh_core::keymap::Modifiers
         alt: state.contains(gdk::ModifierType::ALT_MASK),
         shift: state.contains(gdk::ModifierType::SHIFT_MASK),
         cmd: state.contains(gdk::ModifierType::SUPER_MASK),
+        alt_graph: false,
     }
 }
 
@@ -2206,9 +2237,11 @@ fn released_inside(surface: &Surface, view: &NshView, x: f32, y: f32) -> bool {
 
 // --- Pans ---------------------------------------------------------------------------
 
-fn pan_payload(surface: &Surface, id: NodeId, t: (f32, f32), v: (f32, f32)) -> EventPayload {
+fn pan_payload(surface: &Surface, id: NodeId, p: &Pointer, t: (f32, f32)) -> EventPayload {
     let (value_x, value_y) = surface.anim.borrow().pan_values(id);
+    let v = p.velocity.velocity();
     EventPayload::Pan {
+        origin: point(Points(p.start.0), Points(p.start.1)),
         translation: point(Points(t.0), Points(t.1)),
         velocity_x: v.0,
         velocity_y: v.1,
@@ -2224,7 +2257,7 @@ fn pan_start(surface: &Rc<Surface>, view: &NshView, p: &Pointer) {
     };
     surface.anim.borrow_mut().pan_began(id);
     if events.contains(EventKind::PanStart) {
-        let payload = pan_payload(surface, id, (0.0, 0.0), p.velocity.velocity());
+        let payload = pan_payload(surface, id, p, (0.0, 0.0));
         surface.event(id, EventKind::PanStart, payload);
     }
 }
@@ -2248,7 +2281,7 @@ fn pan_end(surface: &Rc<Surface>, view: &NshView, p: &Pointer, write: bool) {
     }
     if events.contains(EventKind::PanEnd) {
         let t = (p.x - p.start.0, p.y - p.start.1);
-        let payload = pan_payload(surface, id, t, p.velocity.velocity());
+        let payload = pan_payload(surface, id, p, t);
         surface.event(id, EventKind::PanEnd, payload);
     }
 }
@@ -2897,11 +2930,21 @@ fn wheel_input(
             };
             *input.latch.borrow_mut() = Some((view.clone(), horizontal, time));
             let (dx, dy) = if notches {
-                let s = view.state();
-                (
-                    dx * notch(s.frame.size.width.0),
-                    dy * notch(s.frame.size.height.0),
-                )
+                // A notch is a line, GtkScrolledWindow's length for the
+                // view; a `smoothWheel` view glides it, and
+                // `wheelLineHeight` sets its own.
+                let line = {
+                    let s = view.state();
+                    point(
+                        Points(notch(s.frame.size.width.0)),
+                        Points(notch(s.frame.size.height.0)),
+                    )
+                };
+                match crate::scroll::wheel_notch(surface, &view, dx * line.x.0, dy * line.y.0, line)
+                {
+                    Some(d) => d,
+                    None => return true,
+                }
             } else {
                 (dx, dy)
             };
@@ -3022,14 +3065,14 @@ fn touchpad_hold(surface: &Rc<Surface>, phase: gdk::TouchpadGesturePhase, x: f32
     true
 }
 
-/// The closest file-drop listener under the pointer, within its modal root.
-pub(crate) fn file_drop_target(surface: &Surface, x: f32, y: f32) -> Option<NshView> {
-    let mut view = pick(&event_root(surface), x, y)?.view;
+/// The closest file-drop listener under `x`, `y` in `root`, within its modal root.
+pub(crate) fn file_drop_target_in(root: &NshView, x: f32, y: f32) -> Option<NshView> {
+    let mut view = pick(root, x, y)?.view;
     loop {
         if view.state().events.contains(EventKind::FileDrop) {
             return Some(view);
         }
-        if view.kind() == ViewKind::Modal || view.id() == ROOT_ID {
+        if view.kind() == ViewKind::Modal || view.id() == root.id() || view.id() == ROOT_ID {
             return None;
         }
         view = view.parent_view()?;

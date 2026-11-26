@@ -47,7 +47,18 @@ final class TouchTracker {
         float x, y;
         /** Pressure (0 to 1), pen tilt in degrees (the DOM's tiltX / tiltY), pointer kind (0 touch, 1 pen, 2 mouse). */
         float pressure = 0.5f, tiltX, tiltY, kind;
+        /** A pen's eraser end; its primary (barrel) button held. */
+        boolean eraser, barrel;
+        /**
+         * The samples the last move merged before its own, oldest first, {@link #SAMPLE} doubles each: x, y (px in
+         * the root), pressure, tiltX, tiltY and time (uptime ms); empty once reported.
+         */
+        double[] history = NO_HISTORY;
     }
+
+    /** Doubles per merged sample in {@link Tracked#history}. */
+    private static final int SAMPLE = 6;
+    private static final double[] NO_HISTORY = new double[0];
 
     TouchTracker(Mounter mounter, View root) {
         this.mounter = mounter;
@@ -77,12 +88,14 @@ final class TouchTracker {
                 t.pointer = e.getPointerId(i);
                 t.id = nextId++;
                 tracked.add(t);
-                if (action == MotionEvent.ACTION_DOWN) findGate(t, e.getX(i), e.getY(i));
+                if (action == MotionEvent.ACTION_DOWN) findGate(t, e.getX(i), e.getY(i), e.getRawX(), e.getRawY());
                 update(e);
                 report(0, new int[] {t.id}, true, -1);
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
+                mounter.touchMoved(e.getRawX(), e.getRawY(),
+                        android.view.ViewConfiguration.get(root.getContext()).getScaledTouchSlop());
                 if (tracked.isEmpty()) return false;
                 if (!update(e)) return false;
                 int[] all = new int[tracked.size()];
@@ -94,6 +107,7 @@ final class TouchTracker {
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_POINTER_UP: {
+                if (action == MotionEvent.ACTION_UP) mounter.touchUp(true);
                 int pointer = e.getPointerId(e.getActionIndex());
                 for (int i = 0; i < tracked.size(); i++) {
                     Tracked t = tracked.get(i);
@@ -107,6 +121,7 @@ final class TouchTracker {
                 return false;
             }
             case MotionEvent.ACTION_CANCEL:
+                mounter.touchUp(false);
                 cancelAll();
                 return false;
             default:
@@ -220,13 +235,14 @@ final class TouchTracker {
         endGate();
     }
 
-    /** The view with a `panActivation` around the first finger's target, if any. */
-    private void findGate(Tracked t, float x, float y) {
+    /** The view with a `panActivation` around the first finger's target, if any, that a finger going down at the
+     * screen point ({@code rawX}, {@code rawY}) may start. */
+    private void findGate(Tracked t, float x, float y, float rawX, float rawY) {
         endGate();
         for (View v = t.view; v != null; ) {
             if (v instanceof Node) {
                 float[] offsets = mounter.panActivation(((Node) v).nodeId());
-                if (offsets != null) {
+                if (offsets != null && startsAt(offsets, v, rawX, rawY, mounter.density)) {
                     gate = v;
                     gateId = ((Node) v).nodeId();
                     gateOffsets = offsets;
@@ -252,20 +268,75 @@ final class TouchTracker {
         int i = e.findPointerIndex(gatePointer);
         if (i < 0) return -1;
         float d = mounter.density;
-        float dx = Math.abs(e.getX(i) - gateX) / d, dy = Math.abs(e.getY(i) - gateY) / d;
-        float[] o = gateOffsets;
-        if (dx > o[2] || dy > o[3]) {
-            // NaN offsets never compare greater: no limit.
+        Boolean decision = decideActivation(gateOffsets, (e.getX(i) - gateX) / d, (e.getY(i) - gateY) / d);
+        if (decision == null) return -1;
+        if (!decision) {
             gateState = 2;
             return -1;
         }
-        boolean active = Float.isNaN(o[0]) && Float.isNaN(o[1])
-                ? Math.hypot(dx, dy) > MIN_PAN_DISTANCE
-                : dx > o[0] || dy > o[1];
-        if (!active) return -1;
         gateState = 1;
         mounter.gateBlock(gate);
         return gateId;
+    }
+
+    /**
+     * `PanActivation::decide` on a drag by ({@code dx}, {@code dy}) points, for a `panActivation` as
+     * {@link Mounter#panActivation} gives it: true activates, false fails, null waits.
+     */
+    static Boolean decideActivation(float[] a, float dx, float dy) {
+        // NaN offsets never compare greater: no limit.
+        if (Math.abs(dx) > a[2] || Math.abs(dy) > a[3]) return Boolean.FALSE;
+        int way = (int) a[4];
+        if (way >= 0) {
+            boolean horizontal = way <= 1;
+            float along = (way == 1 || way == 3 ? 1 : -1) * (horizontal ? dx : dy);
+            float across = Math.abs(horizontal ? dy : dx);
+            float active = horizontal ? a[0] : a[1];
+            float limit = Float.isNaN(active) ? MIN_PAN_DISTANCE : active;
+            if (along > limit && along >= across) return Boolean.TRUE;
+            boolean acrossFails = Float.isNaN(horizontal ? a[3] : a[2]) && across > limit && across > along;
+            return -along > limit || acrossFails ? Boolean.FALSE : null;
+        }
+        boolean active = Float.isNaN(a[0]) && Float.isNaN(a[1])
+                ? Math.hypot(dx, dy) > MIN_PAN_DISTANCE
+                : Math.abs(dx) > a[0] || Math.abs(dy) > a[1];
+        return active ? Boolean.TRUE : null;
+    }
+
+    /**
+     * Whether a pan with `panActivation` {@code a} could still activate for a drag by ({@code dx}, {@code dy})
+     * points: it activated, or it waits and the drag heads its way (any way without one).
+     */
+    static boolean mayActivate(float[] a, float dx, float dy) {
+        Boolean decision = decideActivation(a, dx, dy);
+        if (decision != null) return decision;
+        int way = (int) a[4];
+        if (way < 0) return true;
+        boolean horizontal = way <= 1;
+        float along = (way == 1 || way == 3 ? 1 : -1) * (horizontal ? dx : dy);
+        return along > 0 && along >= Math.abs(horizontal ? dy : dx);
+    }
+
+    /**
+     * `PanActivation::starts_at`: whether a finger going down at the screen point ({@code rawX}, {@code rawY}) px
+     * may start the pans of {@code view}, whose `panActivation` is {@code a}: anywhere without an edge, else within
+     * `PanActivation::EDGE_WIDTH` of that edge of its window. The system's back gesture keeps the left and right
+     * edges under gesture navigation: it takes the swipes it recognizes there, and the pan ends cancelled.
+     */
+    static boolean startsAt(float[] a, View view, float rawX, float rawY, float density) {
+        int edge = (int) a[5];
+        if (edge < 0) return true;
+        View window = view.getRootView();
+        int[] at = new int[2];
+        window.getLocationOnScreen(at);
+        float x = (rawX - at[0]) / density, y = (rawY - at[1]) / density;
+        float w = window.getWidth() / density, h = window.getHeight() / density;
+        switch (edge) {
+            case 0: return x <= EDGE_WIDTH;
+            case 1: return x >= w - EDGE_WIDTH;
+            case 2: return y <= EDGE_WIDTH;
+            default: return y >= h - EDGE_WIDTH;
+        }
     }
 
     private void endGate() {
@@ -278,22 +349,49 @@ final class TouchTracker {
     /** `PanActivation::MIN_DISTANCE`: how far a pan without active offsets moves before it activates (points). */
     private static final float MIN_PAN_DISTANCE = 10;
 
-    /** The pressure, tilt and kind of pointer {@code i} of {@code e}. */
+    /** `PanActivation::EDGE_WIDTH`: how far from its edge a finger goes down to start an edge pan (points). */
+    private static final float EDGE_WIDTH = 20;
+
+    /** The pressure, tilt, kind and pen buttons of pointer {@code i} of {@code e}. */
     private static void pointer(Tracked t, MotionEvent e, int i) {
         int tool = e.getToolType(i);
         boolean pen = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER;
         t.kind = pen ? 1 : tool == MotionEvent.TOOL_TYPE_MOUSE ? 2 : 0;
+        t.eraser = tool == MotionEvent.TOOL_TYPE_ERASER;
+        t.barrel = pen && (e.getButtonState() & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0;
         t.pressure = Math.max(0f, Math.min(1f, e.getPressure(i)));
-        if (pen) {
-            // AXIS_TILT: radians from the perpendicular; AXIS_ORIENTATION: radians clockwise from up.
-            double tan = Math.tan(e.getAxisValue(MotionEvent.AXIS_TILT, i));
-            double o = e.getAxisValue(MotionEvent.AXIS_ORIENTATION, i);
-            t.tiltX = (float) Math.toDegrees(Math.atan(Math.sin(o) * tan));
-            t.tiltY = (float) Math.toDegrees(Math.atan(-Math.cos(o) * tan));
-        } else {
-            t.tiltX = 0;
-            t.tiltY = 0;
+        t.tiltX = pen ? tilt(e, i, -1, false) : 0;
+        t.tiltY = pen ? tilt(e, i, -1, true) : 0;
+    }
+
+    /**
+     * The DOM's tiltX ({@code y} false) or tiltY of pen pointer {@code i} of {@code e} at its historical sample
+     * {@code h}, or now when {@code h} is negative (degrees).
+     */
+    private static float tilt(MotionEvent e, int i, int h, boolean y) {
+        // AXIS_TILT: radians from the perpendicular; AXIS_ORIENTATION: radians clockwise from up.
+        double tan = Math.tan(h < 0 ? e.getAxisValue(MotionEvent.AXIS_TILT, i)
+                : e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, i, h));
+        double o = h < 0 ? e.getAxisValue(MotionEvent.AXIS_ORIENTATION, i)
+                : e.getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, i, h);
+        return (float) Math.toDegrees(Math.atan(y ? -Math.cos(o) * tan : Math.sin(o) * tan));
+    }
+
+    /** The samples a move of {@code e} merged before its own for pointer {@code i}, as {@link Tracked#history}. */
+    private static double[] history(Tracked t, MotionEvent e, int i) {
+        int n = e.getHistorySize();
+        if (n == 0) return NO_HISTORY;
+        boolean pen = t.kind == 1;
+        double[] h = new double[n * SAMPLE];
+        for (int k = 0; k < n; k++) {
+            h[k * SAMPLE] = e.getHistoricalX(i, k);
+            h[k * SAMPLE + 1] = e.getHistoricalY(i, k);
+            h[k * SAMPLE + 2] = Math.max(0f, Math.min(1f, e.getHistoricalPressure(i, k)));
+            h[k * SAMPLE + 3] = pen ? tilt(e, i, k, false) : 0;
+            h[k * SAMPLE + 4] = pen ? tilt(e, i, k, true) : 0;
+            h[k * SAMPLE + 5] = e.getHistoricalEventTime(k);
         }
+        return h;
     }
 
     /** Positions of the tracked fingers; false if none moved. */
@@ -303,10 +401,13 @@ final class TouchTracker {
             int i = e.findPointerIndex(t.pointer);
             if (i < 0) continue;
             float x = e.getX(i), y = e.getY(i);
-            moved |= x != t.x || y != t.y;
+            boolean own = x != t.x || y != t.y;
+            moved |= own;
             t.x = x;
             t.y = y;
             pointer(t, e, i);
+            // Only a finger that moved sends the samples merged into its move.
+            t.history = own && e.getActionMasked() == MotionEvent.ACTION_MOVE ? history(t, e, i) : NO_HISTORY;
         }
         return moved;
     }
@@ -319,8 +420,8 @@ final class TouchTracker {
         int n = tracked.size();
         int[] ids = new int[n], targets = new int[n], pathLengths = new int[n];
         boolean[] isChanged = new boolean[n];
-        float[] coords = new float[n * 8];
-        int pathTotal = 0;
+        float[] coords = new float[n * 10];
+        int pathTotal = 0, sampleTotal = 0;
         float d = mounter.density;
         int[] rootAt = new int[2], at = new int[2];
         root.getLocationInWindow(rootAt);
@@ -334,14 +435,35 @@ final class TouchTracker {
                 pathTotal += t.path.length;
             }
             t.view.getLocationInWindow(at);
-            coords[i * 8] = t.x / d;
-            coords[i * 8 + 1] = t.y / d;
-            coords[i * 8 + 2] = (t.x + rootAt[0] - at[0]) / d;
-            coords[i * 8 + 3] = (t.y + rootAt[1] - at[1]) / d;
-            coords[i * 8 + 4] = t.pressure;
-            coords[i * 8 + 5] = t.tiltX;
-            coords[i * 8 + 6] = t.tiltY;
-            coords[i * 8 + 7] = t.kind;
+            coords[i * 10] = t.x / d;
+            coords[i * 10 + 1] = t.y / d;
+            coords[i * 10 + 2] = (t.x + rootAt[0] - at[0]) / d;
+            coords[i * 10 + 3] = (t.y + rootAt[1] - at[1]) / d;
+            coords[i * 10 + 4] = t.pressure;
+            coords[i * 10 + 5] = t.tiltX;
+            coords[i * 10 + 6] = t.tiltY;
+            coords[i * 10 + 7] = t.kind;
+            coords[i * 10 + 8] = t.eraser ? 1 : 0;
+            coords[i * 10 + 9] = t.barrel ? 1 : 0;
+            if (isChanged[i]) sampleTotal += t.history.length / SAMPLE;
+        }
+        // Each changed finger's merged samples, oldest first: its index, pageX, pageY (dp), pressure, tiltX, tiltY
+        // and time (uptime ms, as doubles: floats lose the milliseconds).
+        double[] samples = new double[sampleTotal * 7];
+        for (int i = 0, k = 0; i < n; i++) {
+            Tracked t = tracked.get(i);
+            if (isChanged[i]) {
+                for (int s = 0; s < t.history.length; s += SAMPLE, k += 7) {
+                    samples[k] = i;
+                    samples[k + 1] = t.history[s] / d;
+                    samples[k + 2] = t.history[s + 1] / d;
+                    samples[k + 3] = t.history[s + 2];
+                    samples[k + 4] = t.history[s + 3];
+                    samples[k + 5] = t.history[s + 4];
+                    samples[k + 6] = t.history[s + 5];
+                }
+            }
+            t.history = NO_HISTORY;
         }
         int[] flat = new int[pathTotal];
         for (int i = 0, k = 0; i < n; i++) {
@@ -349,7 +471,7 @@ final class TouchTracker {
             System.arraycopy(tracked.get(i).path, 0, flat, k, pathLengths[i]);
             k += pathLengths[i];
         }
-        mounter.touches(phase, ids, targets, pathLengths, flat, coords, isChanged, android.os.SystemClock.uptimeMillis(), activated);
+        mounter.touches(phase, ids, targets, pathLengths, flat, coords, samples, isChanged, android.os.SystemClock.uptimeMillis(), activated);
     }
 
     /** The node view under ({@code x}, {@code y}) of the root and the nodes around it listening to touches. */
@@ -378,7 +500,7 @@ final class TouchTracker {
     }
 
     /** The innermost node view that can take a touch at ({@code x}, {@code y}) of {@code v}. */
-    private static View deepest(View v, float x, float y) {
+    static View deepest(View v, float x, float y) {
         int pointerEvents = v instanceof Box ? ((Box) v).pointerEvents
                 : v instanceof InputBox ? ((InputBox) v).pointerEvents : 0;
         if (pointerEvents == 1 || v.getVisibility() != View.VISIBLE) return null;

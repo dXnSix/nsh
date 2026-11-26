@@ -5,10 +5,16 @@
 //! belongs to the first app a process makes, and the macOS platform that
 //! gives the text system is made on the main thread.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
+use futures_util::future::{Either, select};
 use gpui::{AppContext as _, HeadlessAppContext, px, size};
-use nsh_platform_gpui::{App, AppOptions, AppView, Bundle};
+use nsh_platform_gpui::{App, AppOptions, AppView, Bundle, Root};
 
 /// A PNG of `w` × `h` pixels, its left half red and its right half green,
 /// as a data URI.
@@ -51,7 +57,6 @@ fn app() -> String {
     format!(
         r##"
 import {{ mount, Image, View }} from "nsh";
-import {{ Window }} from "nsh/desktop";
 
 const PHOTO = "{photo}";
 const ICON = "{icon}";
@@ -71,12 +76,131 @@ function App() {{
     </View>
   );
 }}
-mount(() => <Window id="main">{{App}}</Window>);
+mount(App);
 "##,
         photo = halves(40, 20),
         icon = half_icon("#000000"),
         red_icon = half_icon("#ff0000"),
     )
+}
+
+/// Squares 40 × 40 turned by 0°, 30° and 180° (a row each), each with a
+/// "T": a text view, one underlined, one with a text shadow, and a canvas's
+/// `fillText` (longbridge/nsh#3255: the glyphs stayed upright, and at 180°
+/// a text view's were not drawn).
+fn turned_text_app() -> String {
+    r##"
+import { mount, Canvas, Text, View } from "nsh";
+
+function Box(p: { left: number; top: number; angle: number; text?: object; canvas?: boolean }) {
+  return (
+    <View
+      style={{ position: "absolute", left: p.left, top: p.top, width: 40, height: 40, alignItems: "center", justifyContent: "center", backgroundColor: "#38bdf8", transform: `rotate(${p.angle}deg)` }}
+    >
+      {p.canvas ? (
+        <Canvas
+          style={{ width: 40, height: 40 }}
+          draw={(cx) => {
+            cx.fillStyle = "#000000";
+            cx.font = "bold 28px sans-serif";
+            cx.textAlign = "center";
+            cx.textBaseline = "middle";
+            cx.fillText("T", 20, 20);
+          }}
+        />
+      ) : (
+        <Text style={{ color: "#000000", fontSize: 28, fontWeight: "bold", ...p.text }}>T</Text>
+      )}
+    </View>
+  );
+}
+
+function App() {
+  return (
+    <View style={{ flex: 1, backgroundColor: "#ffffff" }}>
+      {[0, 30, 180].flatMap((angle, row) => [
+        <Box left={10} top={10 + row * 60} angle={angle} />,
+        <Box left={65} top={10 + row * 60} angle={angle} text={{ textDecorationLine: "underline" }} />,
+        <Box left={120} top={10 + row * 60} angle={angle} text={{ textShadow: "3px 3px rgb(255,255,255)" }} />,
+        <Box left={175} top={10 + row * 60} angle={angle} canvas />,
+      ])}
+    </View>
+  );
+}
+mount(App);
+"##
+    .into()
+}
+
+/// Dark pixels in the top and bottom halves of the 40 × 40 square at
+/// `(x, y)` (window points).
+fn ink(shot: &image::RgbaImage, scale: f32, (x, y): (f32, f32)) -> (u32, u32) {
+    let (x0, y0, side) = (
+        (x * scale) as u32,
+        (y * scale) as u32,
+        (40.0 * scale) as u32,
+    );
+    let (mut top, mut bottom) = (0, 0);
+    for py in y0..y0 + side {
+        for px in x0..x0 + side {
+            let p = shot.get_pixel(px, py).0;
+            if u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]) < 150 {
+                if py < y0 + side / 2 {
+                    top += 1;
+                } else {
+                    bottom += 1;
+                }
+            }
+        }
+    }
+    (top, bottom)
+}
+
+/// Text turns with its view: a "T" upright has its ink at the top, turned
+/// by 180° at the bottom, in text views and canvases alike.
+fn turned_text(cx: &mut HeadlessAppContext, output: Option<&Path>) {
+    let window = open(cx, &turned_text_app());
+    // (left, top, upright, what).
+    let squares = [
+        ((10.0, 10.0), true, "an upright text view"),
+        ((175.0, 10.0), true, "an upright canvas"),
+        // (Not the underlined one: its underline, turned, is at the top.)
+        ((10.0, 130.0), false, "a text view turned by 180°"),
+        ((175.0, 130.0), false, "a canvas turned by 180°"),
+    ];
+    let start = Instant::now();
+    loop {
+        draw(cx, window);
+        let shot = cx.capture_screenshot(window.into()).unwrap();
+        let scale = shot.width() as f32 / 240.0;
+        let min = (20.0 * scale * scale) as u32;
+        let wrong: Vec<String> = squares
+            .iter()
+            .filter_map(|&(at, upright, what)| {
+                let (top, bottom) = ink(&shot, scale, at);
+                let (head, foot) = if upright {
+                    (top, bottom)
+                } else {
+                    (bottom, top)
+                };
+                // The bar of a "T" has more ink than its stem.
+                (head < min || 2 * head < 3 * foot).then(|| {
+                    format!("{what}: {top} dark pixels in the top half, {bottom} in the bottom")
+                })
+            })
+            .collect();
+        // The system's fonts (the glyphs' outlines) are found by a worker.
+        if wrong.is_empty() || start.elapsed() > Duration::from_secs(15) {
+            if let Some(output) = output {
+                let path = output.join("turned-text.png");
+                shot.save(&path).unwrap();
+                println!("render: turned text screenshot: {}", path.display());
+            }
+            assert!(wrong.is_empty(), "{}", wrong.join("; "));
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// The pixel at window point `(x, y)` of a screenshot `scale` pixels a
@@ -161,7 +285,6 @@ setInterval(() => {
     format!(
         r##"
 import {{ mount, Image, Scroll, type ScrollRef, Text, View }} from "nsh";
-import {{ Window }} from "nsh/desktop";
 
 const PHOTO = "{photo}";
 const LINES = Array.from({{ length: 60 }}, (_, i) => i);
@@ -179,7 +302,7 @@ function App() {{
     </View>
   );
 }}
-mount(() => <Window id="main">{{App}}</Window>);
+mount(App);
 {steps}
 "##,
         photo = halves(100, 80),
@@ -205,13 +328,8 @@ const ZOOMED: &[((f32, f32), [u8; 3], &str)] = &[
 ];
 
 fn main() {
-    // The GPUI host is not migrated to window model v2 (docs/dev/gpui.md):
-    // an app renders in the window it declares, and this offscreen capture
-    // of the embedding window has no app content of its own to show. The
-    // checks run again once the host is migrated (`NSH_GPUI_WINDOW_MODEL_V2=1`
-    // runs them against one).
-    if std::env::var_os("NSH_GPUI_WINDOW_MODEL_V2").is_none() {
-        eprintln!("GPUI's host is not migrated to window model v2: see docs/dev/gpui.md");
+    if !cfg!(feature = "js") {
+        eprintln!("no JS engine here: skipped");
         return;
     }
     let probe = gpui_platform::current_headless_renderer();
@@ -228,20 +346,151 @@ fn main() {
     );
     // The engine and the image decoders run on threads of their own.
     cx.allow_parking();
-    shows(&mut cx, &app(), EXPECTED, "turned-images");
-    println!("render: turned images and icons turn with their views: ok");
-    shows(&mut cx, &zoom_app(false, false), ZOOMED, "zoomed-scroll");
+    let output = std::env::var_os("NSH_RENDER_OUTPUT_DIR").map(PathBuf::from);
+    if let Some(output) = &output {
+        std::fs::create_dir_all(output).unwrap();
+    }
+    if cfg!(feature = "svg") {
+        shows(
+            &mut cx,
+            &app(),
+            EXPECTED,
+            "turned-images",
+            output.as_deref(),
+        );
+        println!("render: turned images and icons turn with their views: ok");
+    }
+    turned_text(&mut cx, output.as_deref());
+    println!("render: text turns with its view: ok");
+    shows(
+        &mut cx,
+        &zoom_app(false, false),
+        ZOOMED,
+        "zoomed-scroll",
+        output.as_deref(),
+    );
     println!("render: zoomed scroll views draw their content scaled: ok");
+    if let Some(output) = &output {
+        embedding_screenshots(&mut cx, output);
+    }
     if std::env::var_os("NSH_RENDER_BENCH").is_some() {
         zoom_frames(&mut cx);
     }
 }
 
+/// Render fixtures neither read nor write the host's persisted state.
+struct RenderStorage;
+
+impl nsh_engine::StorageBackend for RenderStorage {
+    fn load(&self) -> Result<BTreeMap<String, String>, String> {
+        Ok(BTreeMap::new())
+    }
+
+    fn write(&self, _: nsh_engine::StorageChange) -> Result<(), String> {
+        Err("render fixtures do not persist storage".into())
+    }
+}
+
+fn render_options() -> AppOptions {
+    AppOptions {
+        cache: nsh_engine::CacheOptions::off(),
+        storage: Some(Arc::new(RenderStorage)),
+        data_dir: Some(std::env::temp_dir().join(format!("nsh-render-{}", std::process::id()))),
+        ..Default::default()
+    }
+}
+
+struct LaidOut(Mutex<Option<futures_channel::oneshot::Sender<()>>>);
+
+/// Ordinary NSH text inherits the host's foreground; the last line opts out.
+#[nsh_core::element::component]
+fn EmbeddedTheme() -> impl nsh_core::element::IntoElement {
+    use nsh_core::prelude::*;
+
+    let ready = nsh_core::element::engine_context::<LaidOut>().unwrap();
+    view()
+        .size_full()
+        .p(Points(20.0))
+        .gap(Points(12.0))
+        .child(
+            text("Embedded section")
+                .text_size(Points(20.0))
+                .font_weight(FontWeight::SEMIBOLD),
+        )
+        .child(text("Text follows the host theme."))
+        .child(
+            text("An explicit muted color stays muted.")
+                .text_sm()
+                .text_color(rgb(0x778899)),
+        )
+        .on_layout(move |_: &Bounds<Points>| {
+            if let Some(ready) = ready.0.lock().unwrap().take() {
+                // This acknowledgement follows the commit on GPUI's own queue.
+                drop(nsh_core::element::run_on_main_thread(move || {
+                    let _ = ready.send(());
+                }));
+            }
+        })
+}
+
+/// Save actual NSH embeddings in both host appearances.
+fn embedding_screenshots(cx: &mut HeadlessAppContext, output: &Path) {
+    use nsh_core::platform::Appearance;
+
+    let theme = r##"{ "cssVars": {
+        "light": { "background": "#f8fafc", "foreground": "#172033" },
+        "dark": { "background": "#141821", "foreground": "#edf2f7" }
+    } }"##;
+    for (name, appearance) in [("light", Appearance::Light), ("dark", Appearance::Dark)] {
+        let (tx, rx) = futures_channel::oneshot::channel();
+        let options = AppOptions {
+            context: nsh_engine::EngineContext::default().with(LaidOut(Mutex::new(Some(tx)))),
+            ..render_options()
+        };
+        let window = cx
+            .open_window(size(px(360.0), px(180.0)), |window, cx| {
+                cx.new(|cx| AppView::new(options, window, cx))
+            })
+            .unwrap();
+        // Give the engine the host's viewport before loading the content.
+        draw(cx, window);
+        cx.update(|cx| {
+            window
+                .update(cx, |view, _, cx| {
+                    view.set_theme_json(theme, cx).unwrap();
+                    view.set_appearance(appearance, cx);
+                    view.load(App::Rust(Root::of::<EmbeddedTheme>()));
+                })
+                .unwrap();
+        });
+        // Readiness comes only from layout; this timer just guards against a hang.
+        let deadline = cx.background_executor().timer(Duration::from_secs(10));
+        cx.foreground_executor().block_test(async {
+            match select(rx, deadline).await {
+                Either::Left((ready, _)) => ready.expect("layout acknowledgement dropped"),
+                Either::Right(_) => panic!("timed out waiting for {name} embedding layout"),
+            }
+        });
+        draw(cx, window);
+        let path = output.join(format!("embedding-{name}.png"));
+        cx.capture_screenshot(window.into())
+            .unwrap()
+            .save(&path)
+            .unwrap();
+        println!("render: embedding screenshot: {}", path.display());
+        cx.update(|cx| window.update(cx, |view, _, _| view.stop()).unwrap());
+    }
+}
+
 /// Opens a 240 × 180 window running `code`.
 fn open(cx: &mut HeadlessAppContext, code: &str) -> gpui::WindowHandle<AppView> {
+    let options = AppOptions {
+        inline_root: true,
+        ..render_options()
+    };
     let window = cx
         .open_window(size(px(240.0), px(180.0)), |window, cx| {
-            cx.new(|cx| AppView::new(AppOptions::default(), window, cx))
+            cx.new(|cx| AppView::new(options, window, cx))
         })
         .unwrap();
     let code = nsh_bundler::compile_module("App.tsx", code, &[]).unwrap();
@@ -265,13 +514,14 @@ fn draw(cx: &mut HeadlessAppContext, window: gpui::WindowHandle<AppView>) -> Dur
     .unwrap()
 }
 
-/// Runs `code` until a frame shows what `expected` says (the screenshot is
-/// saved as `nsh-<name>.png` in the temporary directory when none does).
+/// Runs `code` until a frame shows what `expected` says. Saves the last
+/// screenshot on failure only when an output directory was requested.
 fn shows(
     cx: &mut HeadlessAppContext,
     code: &str,
     expected: &[((f32, f32), [u8; 3], &str)],
     name: &str,
+    output: Option<&Path>,
 ) {
     let window = open(cx, code);
     let start = Instant::now();
@@ -290,9 +540,12 @@ fn shows(
             return;
         }
         if start.elapsed() > Duration::from_secs(15) {
-            let path = std::env::temp_dir().join(format!("nsh-{name}.png"));
-            shot.save(&path).unwrap();
-            panic!("{} (screenshot: {})", wrong.join("; "), path.display());
+            if let Some(output) = output {
+                let path = output.join(format!("nsh-{name}.png"));
+                shot.save(&path).unwrap();
+                panic!("{} (screenshot: {})", wrong.join("; "), path.display());
+            }
+            panic!("{}", wrong.join("; "));
         }
         std::thread::sleep(Duration::from_millis(20));
     }

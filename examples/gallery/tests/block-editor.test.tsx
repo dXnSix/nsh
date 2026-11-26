@@ -8,7 +8,7 @@ const REVIEW = "Review the pricing page copy";
 
 /** The demo on a phone, or on a desktop (`desktop`), whose pointer shows the handles. */
 async function openDemo(desktop = false) {
-  const app = await open("../App.tsx", desktop ? { platform: "macos", width: 1200, height: 900 } : undefined);
+  const app = await open("../App.tsx", desktop ? { platform: "macos", width: 1200, height: 900, storage: { lastDemo: "Block editor" } } : undefined);
   await app.press("role:button[Block editor]");
   await app.waitFor(ITEM);
   return app;
@@ -175,9 +175,11 @@ test("a list item's menu turns it into another block and + adds an item of the s
   // The new line is an item of the list: its checkbox shows with the others.
   expect(app.count("role:checkbox")).toBe(5);
   await app.keyboard.press("escape");
-  await app.type("label:Document", "Ship it");
+  // Longer than the last 8 bytes the editor's input holds before the caret
+  // on macOS, so the line is the only view with this text.
+  await app.type("label:Document", "Ship it today");
   await app.wait(300);
-  await app.hover("text:/Ship it");
+  await app.hover("text:/Ship it today");
   await app.waitFor(handle);
   await app.press(handle);
   await app.press("role:menuitem[Delete]");
@@ -249,7 +251,7 @@ test("a pointer resting where the menu opens does not take the highlight, and ea
 });
 
 test("the handle follows the pointer's block as the document scrolls, and goes with Select All", async () => {
-  const app = await open("../App.tsx", { platform: "macos", width: 1200, height: 520 });
+  const app = await open("../App.tsx", { platform: "macos", width: 1200, height: 520, storage: { lastDemo: "Block editor" } });
   await app.press("role:button[Block editor]");
   await app.waitFor("Q4 launch plan");
   const handle = "role:button[Drag to move, press for the menu]";

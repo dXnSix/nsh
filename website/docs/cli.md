@@ -7,7 +7,7 @@ group: start
 
 # CLI
 
-`nsh` is the tool an NSH app is built with, in Rust or TSX. Every subcommand that builds an app takes `[ENTRY]`: the app's directory (default: the current one, so `cd my-app && nsh run` works), which runs a Rust app's root component (`nsh.json` `"root"`) or a TSX app's `App.tsx`, or a TSX entry module. It reads `nsh.json` in the app's root and refreshes the type declarations in `.nsh/types`.
+`nsh` is the tool an NSH app is built with, in TSX or Rust. Every subcommand that builds an app takes `[ENTRY]`: the app's directory (default: the current one, so `cd my-app && nsh run` works), which runs a Rust app's root component (`nsh.json` `"root"`) or a TSX app's `App.tsx`, or a TSX entry module. It reads `nsh.json` in the app's root and refreshes the type declarations in `.nsh/types`.
 
 ```text
 nsh <COMMAND>
@@ -63,7 +63,7 @@ Creates an app in `DIR` (default: the current directory, created if missing) fro
 |---|---|
 | `rust` | An app written in Rust: a Cargo project (`Cargo.toml`, `src/lib.rs` with the root component, `src/main.rs` for `cargo run`), `nsh.json` with `"rust": "."` and `"root": "App"`, the root's test `App.test.tsx` with `tsconfig.json` and `.nsh/types`, `.gitignore` and a README, which also says how to add a TSX entry later. `nsh run` and `nsh package` mount the root with no QuickJS on every target (`nsh test` opens it for TypeScript tests), the browser included ([Building with Rust](./rust.md)); `cargo run` starts it on macOS, Windows or Linux directly. |
 | `ts` | A TSX app: `App.tsx`, its test `App.test.tsx` (`nsh test`), `nsh.json`, `tsconfig.json`, `.gitignore` and `.nsh/types`. Files that exist are kept; it fails only if all of them exist already. |
-| `mixed` | A TSX app with a Rust crate of its own at its root: `App.tsx`, its test `App.test.tsx`, `tsconfig.json`, `nsh.json` with `"rust": "."`, `.gitignore`, `.nsh/types`, a README, and the crate beside `App.tsx` (`Cargo.toml`, `src/lib.rs`), whose `#[native_module("<name>/native")]` exports a component, a module and a class that `App.tsx` uses. With no `"root"`, `App.tsx` is the entry. |
+| `mixed` | A TSX app extended with Rust in `ext/`: `App.tsx`, its test `App.test.tsx`, `tsconfig.json`, `.gitignore`, `.nsh/types`, a README, and an nshm crate of the app's own in `ext/<name>-native/` (`Cargo.toml`, `src/lib.rs`), which `nsh.json` lists in `"dependencies"` by path and whose `#[native_module("<name>-native")]` exports a component, a module and a class that `App.tsx` uses ([An app's own Rust: ext/](./nshm.md#an-apps-own-rust-ext)). |
 
 | Flag | Description |
 |---|---|
@@ -78,7 +78,7 @@ Apps whose Rust crates depend on NSH through Git use the checkout Cargo resolves
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>]
+nsh run [ENTRY] [--app <DIR>] [--target macos|linux|windows|ios|android|gpui|tui|web|catalyst] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--background]
 ```
 
 ```sh
@@ -93,8 +93,8 @@ On the native window and mobile targets, a Rust app (`nsh.json` `"root"`, [Build
 
 | Flag | Default | Description |
 |---|---|---|
-| `--target <TARGET>` | `macos` on macOS, `linux` on Linux, `windows` on Windows | `catalyst`: the Mac Catalyst host, an iPhone-sized window (390×844). `ios`: the host in an iOS simulator. `android`: the host on an Android device or emulator. `macos`: the AppKit host, a 1200×800 window ([macOS](./macos.md)). `linux`: the GTK host, a 390×844 window ([Linux](./linux.md)). `windows`: the Win32 host, a 1200×800 window ([Windows](./windows.md)). `gpui`: the GPUI host, a 1200×800 window, on macOS, Windows or Linux, showing a TSX app as GPUI apps that embed it show it ([GPUI](./gpui.md)). `tui`: the host in the current terminal ([TUI](./tui.md)). `web`: the dev server's page, at the address it prints ([Web](./web.md#develop-in-the-browser)). Any other name runs the platform of that name built outside NSH ([External targets](#external-targets)). |
-| `--device <DEVICE>` | | iOS simulator to use, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. |
+| `--target <TARGET>` | `macos` on macOS, `linux` on Linux, `windows` on Windows | `ios`: the host in an iOS simulator. `android`: the host on an Android device or emulator. `macos`: the AppKit host, a 1200×800 window ([macOS](./macos.md)). `linux`: the GTK host, a 390×844 window ([Linux](./linux.md)). `windows`: the Win32 host, a 1200×800 window ([Windows](./windows.md)). `gpui`: the GPUI host, a 1200×800 window, on macOS, Windows or Linux, showing a TSX app as GPUI apps that embed it show it ([GPUI](./gpui.md)). `tui`: the host in the current terminal ([TUI](./tui.md)). `web`: the dev server's page, at the address it prints ([Web](./web.md#develop-in-the-browser)). Development tool `catalyst`: the Mac Catalyst host, an iPhone-sized window (390×844), used only when needed: to check behavior specific to Catalyst, or an app that embeds NSH in a Mac Catalyst app. For the Mac app, use the default `macos`; to see an app as a phone shows it, use `--target ios`. Any other name runs the platform of that name built outside NSH ([External targets](#external-targets)). |
+| `--device <DEVICE>` | | iOS simulator to use, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. With `--target android`: the device or emulator, by its serial (`emulator-5554`, as `adb devices` lists it). Default: the one `ANDROID_SERIAL` names, else the first one. |
 | `--app <DIR>` | The entry's directory | The app's directory, for an entry kept outside it, such as a design tool's: `nsh run ~/tool/Stage.tsx --app my-app`. The app's `nsh.json`, crates, assets, translations and `.nsh/` are this directory's, its modules keep the names its own entry gives them, and the session watches it as well as the entry. Without `ENTRY`, the directory's own entry. TSX entries. |
 | `--port <PORT>` | The app's last port, else the first free one from `8790` | Dev server port. Replaces the previous NSH development session on this port after its cleanup completes. |
 | `--release` | | Minify and strip debug info. Release bundles have no hot module replacement: every save reloads the app. An app with a Rust crate also gets an optimized (`--release`) development host, with its crates and NSH's built as in a package. |
@@ -105,8 +105,9 @@ On the native window and mobile targets, a Rust app (`nsh.json` `"root"`, [Build
 | `--points-per-cell <WIDTHxHEIGHT>` | `nsh.json` `tui.pointsPerCell`, otherwise `8x16` | Terminal Cell width and height in points (`--target tui`). |
 | `--window-size <WIDTHxHEIGHT>` | Host default | Initial window size in points, such as `800x600` (`--target macos`, `linux`, `windows` and `gpui`, TSX entries). |
 | `--display <N>` | The main display | The display the window opens on, centered: `1` is the primary display (the one with the menu bar), `2` the next, and so on; a number with no display opens it on the main one (`--target macos`, TSX entries). |
+| `--background` | | The app never becomes the active app, as `nsh test` runs its apps: its window shows, the keyboard stays with the app you type in, and input sent to its windows (an agent driving it, a UI test) still reaches it. On macOS it has no Dock icon or menu bar while it runs. For a run you do not watch, such as an agent checking a change while you work (`--target macos`, `linux`, `windows` and `gpui`, TSX entries). |
 
-With `--target android`, the first device `adb devices` lists is used; the dev server's port is forwarded to it with `adb reverse`. See [Getting started](./getting-started.md#run-it) and [Dev server and debugging](./dev-server-and-debugging.md).
+With `--target android`, the device `--device` or `ANDROID_SERIAL` names is used, else the first one `adb devices` lists (`nsh` names it when several are connected); the dev server's port is forwarded to it with `adb reverse`. See [Getting started](./getting-started.md#run-it) and [Dev server and debugging](./dev-server-and-debugging.md).
 
 A replacement waits up to ten seconds for the previous session to finish cleanup. Several apps run side by side on ports of their own, and running an app again replaces its previous session. A `--port` occupied by another program, or an older NSH CLI, produces an error naming the port; `--port 0` asks the OS for a free port. `nsh run` serves this machine only, and with `--target ios`, `android` or `web` also the network.
 With `--target tui`, the app runs in the current terminal with hot updates on save. CLI and host diagnostics go to the app's `.nsh/tui.log`. Press `C-h e` for logs and errors, Escape or `C-g` to close the panel, and `r` to reload. App errors open the panel automatically; an update restores the app display. Each Cell defaults to 8×16 points. `--points-per-cell 10x20` takes precedence over `"tui": { "pointsPerCell": "10x20" }` in `nsh.json`; both dimensions must be finite and positive, and apply when the run starts. Rust apps run their root in a generated terminal development host and rebuild/restart when Rust code changes.
@@ -116,10 +117,10 @@ On Unix, the terminal host exits on SIGHUP, SIGTERM, SIGINT or terminal disconne
 ## nsh dev
 
 ```sh
-nsh dev [ENTRY] [--app <DIR>] [--target catalyst|ios|android|macos|linux|windows|gpui|tui|web] [--device <DEVICE>] [--server-only] [--port <PORT>] [--release] [--limits [<LIMITS>]]
+nsh dev [ENTRY] [--app <DIR>] [--target macos|linux|windows|ios|android|gpui|tui|web|catalyst] [--device <DEVICE>] [--server-only] [--port <PORT>] [--host <HOST>] [--release] [--limits [<LIMITS>]]
 ```
 
-Starts the dev server and opens this system’s native host: AppKit on macOS, GTK on Linux, Win32 on Windows. Choose `--target ios` or `--target android` explicitly for mobile development. `--server-only` serves hosts you start yourself. The server builds the app, watches the entry’s directory (and `--app`'s), and pushes every rebuild to connected hosts. With `--server-only`, it prints the URL for hosts on this machine and one per LAN address for devices, and, when the web runtime is there, the page browsers open to run the app ([Web](./web.md#develop-in-the-browser)):
+Starts the dev server and opens this system’s native host: AppKit on macOS, GTK on Linux, Win32 on Windows. Choose `--target ios` or `--target android` explicitly for mobile development. `--server-only` serves hosts you start yourself. The server builds the app, watches the entry’s directory (and `--app`'s) and the app’s `nsh.json`, theme and translations, and pushes every rebuild to connected hosts. With `--server-only`, it prints the URL for hosts on this machine and, unless bound to loopback, one per LAN address for devices, and, when the web runtime is there, the page browsers open to run the app ([Web](./web.md#develop-in-the-browser)):
 
 ```text
 ✓ built App.tsx (3.2 KB js, 9.8 KB bytecode, 21ms)
@@ -129,12 +130,12 @@ Starts the dev server and opens this system’s native host: AppKit on macOS, GT
   browsers on this network: http://192.168.1.20:8790/
 ```
 
-Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--app`, `--target`, `--device`, `--port`, `--release` and `--limits` work as for `nsh run`; `--server-only` selects a server without a launched host.
+Use `nsh dev --server-only` with an app that embeds the development SDK (`NativeShellDev.xcframework`, `nsh-dev.aar`). `--app`, `--target`, `--device`, `--port`, `--release` and `--limits` work as for `nsh run`; `--server-only` selects a server without a launched host. `--host <HOST>` binds the dev server to a specific IPv4 address instead of the default (`0.0.0.0` for `--server-only` and `--target ios`, `android`, or `web`; `127.0.0.1` for local targets), for example `nsh dev App.tsx --server-only --host 127.0.0.1` to listen on loopback only. With `--target android`, `--host` must be `127.0.0.1` or `0.0.0.0` because `adb reverse` forwards the device's `127.0.0.1` to this machine's `127.0.0.1`.
 
 ## nsh test
 
 ```sh
-nsh test [PATH] [--filter <NAME>] [--trace] [--fps] [--junit <FILE>] [--target <TARGET>] [--browser <PATH>] [--web-host <JS>] [--device <DEVICE>] [--display <N>] [--foreground]
+nsh test [PATH] [--filter <NAME>] [--release] [--trace] [--fps] [--junit <FILE>] [--jobs <N>] [--target <TARGET>] [--browser <PATH>] [--web-host <JS>] [--device <DEVICE>] [--display <N>] [--foreground]
 ```
 
 Runs the app's tests headless ([Testing](./testing-and-trace.md)): the test files (`*.test.tsx`, `*.test.ts`, importing `nsh/test`) in `PATH`, a directory (default: the current one; hidden directories, `node_modules` and `target` are skipped), or the test file `PATH`. Given a directory of an app with Rust crates of its own (`nsh.json` `"rust"`: a Rust app or a TSX app with a crate), it first runs `cargo test` for each crate in the directory, in the crate's own directory, and shows and counts each Rust test with the TypeScript tests, under the file of its test target (`src/lib.rs › tests::adds`); a Rust app with only Rust tests is tested this way too. Each test file runs on an engine of its own and each app its tests open on another, fresh one. It prints a line per test, and for a failure what was thrown, where in the test file and the texts on screen; any failure makes it exit with a non-zero code. Given the app's entry (`nsh test App.tsx`; a Rust app's: `nsh test nsh.json`), it opens the app on the network, lets it run for 1.2 s and takes the steps standard input gives (`await app.press("Add")`, with `app` the app). A TSX app runs in the CLI's own process; an app with Rust crates of its own runs in a headless runner built with them, which the CLI builds the entries for. Headless runs behave as iOS unless a test opens the app as Android (`open`'s `platform`): `platform.os` is `"ios"`, and `ios:` classes and `ios={{…}}` props apply.
@@ -147,12 +148,14 @@ Runs the app's tests headless ([Testing](./testing-and-trace.md)): the test file
 | Flag | Description |
 |---|---|
 | `--filter <NAME>` | Runs only the tests whose name (after the names of the `describe` blocks it is in) contains `NAME`; for the crates, `cargo test <NAME>`. |
+| `--release` | Minifies and strips debug info from the app bundles under test. For an app with Rust crates (`nsh.json` `"rust"` or a Rust nshm), also runs `cargo test --release` on its crates and builds its headless runner and development hosts optimized (`--release`), as in a package. |
 | `--trace` | Prints every mount batch of the apps the tests open, under the step it came in (`── press(Add): 7 items`), and the time of every commit: what the first frame, a step or a frame of scrolling costs. With `--target`, the host's batches and timings. |
 | `--fps` | With `--target linux`, `macos`, `windows` or `ios`: the host logs its performance monitor's readings once a second (frame rate, frame phases, commits, CPU, memory), shown with `-v`. |
 | `--junit <FILE>` | Also writes the results to `FILE` as a JUnit XML report, the format CI services show test results from: a `testsuite` per test file, a `testcase` per test. |
+| `-j, --jobs <N>` | How many test files run at once, each on its own engine (default: the number of cores). Results still show file by file, in order. Headless runs only: with `--target` or `--trace` files run one at a time. |
 | `--target <TARGET>` | Runs the apps the tests open on this platform's development host instead of headless (`macos`, `linux`, `windows`, `gpui`, `tui`, `web`, `ios` and `android`; `tui` runs them in an in-memory terminal, `web` in a headless Chrome, Edge or Chromium): the steps act with the platform's own input ([Testing](./testing-and-trace.md#on-a-real-platform)), and `open` checks its options against the platform, rejecting one it cannot honor (`ERR_NSH_TEST_UNSUPPORTED`: `width` and `height` on iOS and Android, a `platform` of another kind of device). The crates' Rust tests run on this machine, in runs without `--target`. |
 | `--browser <PATH>` | The Chrome, Edge or Chromium executable `--target web` runs the apps in (default: the one installed on this machine). |
-| `--device <DEVICE>` | With `--target ios`: the simulator the apps run in, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. |
+| `--device <DEVICE>` | With `--target ios`: the simulator the apps run in, by name (`"iPhone 16 Pro"`) or UDID. Default: a booted one, else the newest iPhone, which is booted. With `--target android`: the device or emulator, by its serial (as `adb devices` lists it). Default: the one `ANDROID_SERIAL` names, else the first one. |
 | `--display <N>` | With `--target macos` or `gpui`: the display the apps' windows open on, centered: `1` is the primary display (on macOS the one with the menu bar), `2` the next, and so on; a number with no display opens them on the main one. By default they open on a secondary display (the first besides the primary one, not a mirror of it), so a test run keeps to a screen of its own, and on the primary one when it is the only one. The tests run the same on every display. |
 | `--foreground` | With `--target macos`, `windows`, `gpui` or `linux`: the apps become the active app, as they do for a user. By default they run in the background: their windows show, the keyboard stays with the app you type in, and the tests' clicks, keys and shortcuts go to the windows directly. On a Linux desktop the background keys are typed into the widgets, as on Wayland; a test of Tab, the arrow keys or an input method runs with `--foreground` there. On a display nobody types on (Xvfb), Linux apps run as in the foreground either way. A test that depends on the app being active (`lifecycle()` follows whether the app is active) or a measurement such as `examples/gallery/tools/perf.py` (which passes it) should run with it. |
 | `--web-host <JS>` | The web page's host module the apps opened headless get (default: `nsh.json` `web.host`; it exports `createHost(player)`): it answers their [`host`](../modules/nsh.md#host) calls and its `player.hostEvent` reaches `host.on` ([Testing](./testing-and-trace.md#the-pages-host)). Headless runs only; `--target web` runs `nsh.json`'s `web.host`. |
@@ -206,26 +209,27 @@ It writes:
 nsh package [ENTRY] --target ios|ios-simulator|android|macos|linux|windows|web [-o <OUT>] [flags]
 ```
 
-Builds an installable app in release mode. A Rust app (`nsh.json` `"root"`) is packaged with its own runner, built with Cargo from your crates and NSH's, its root mounted with no QuickJS ([Building with Rust](./rust.md)); a TSX app with the prebuilt runtime. No Xcode project or Gradle build is involved: NSH assembles the app bundle itself and uses Xcode's `actool` and `codesign` (iOS) or the SDK's `aapt2`, `zipalign` and `apksigner` (Android); for macOS it assembles an ad hoc signed `.app` with `codesign` (and `sips` for the icon); for Linux it copies the runner and writes a `.tar.gz` with `tar`; for Windows it copies the runner, embeds the icon and writes a `.zip`, with no tools; for the web it writes a static site, with no tools. Metadata comes from `nsh.json`, overridden by the flags.
+Builds an installable app in release mode. A Rust app (`nsh.json` `"root"`) is packaged with its own runner, built with Cargo from your crates and NSH's, its root mounted with no QuickJS ([Building with Rust](./rust.md)); a TSX app with the prebuilt runtime. No Xcode project or Gradle build is involved: NSH assembles the app bundle itself and uses Xcode's `actool` and `codesign` (iOS) or the SDK's `aapt2`, `zipalign` and `apksigner` (Android); for macOS it assembles a `.app` signed ad hoc or with `--sign` via `codesign` (and `sips` for the icon); for Linux it copies the runner and writes a `.tar.gz` with `tar`; for Windows it copies the runner, embeds the icon and writes a `.zip`, with no tools; for the web it writes a static site, with no tools. Metadata comes from `nsh.json`, overridden by the flags.
 
 | Flag | Description |
 |---|---|
-| `--target <TARGET>` | Required. `ios`: iOS devices, a signed `.ipa` (or an unsigned `.app` without `--sign`). `ios-simulator`: an ad hoc signed `.app`. `android`: a signed `.apk`. `macos`: an ad hoc signed `.app` ([macOS](./macos.md#packaging)). `linux`: a directory `<Name>/` (the executable, `nsh/`, a `.desktop` file) and `<Name>.tar.gz` ([Linux](./linux.md#packaging)). `windows`: a directory `<Name>\` (`<Name>.exe`, `nsh\`), `<Name>.zip`, an Inno Setup script `<Name>.iss` and, with Inno Setup installed, the installer `<Name>-setup.exe` ([Windows](./windows.md#packaging)). `web`: a directory `<Name>/`, a static site (`index.html` and files named by their content) ([Web](./web.md#publish-an-app)). Any other name packages for the platform of that name built outside NSH ([External targets](#external-targets)). |
+| `--target <TARGET>` | Required. `ios`: iOS devices, a signed `.ipa` (or an unsigned `.app` without `--sign`). `ios-simulator`: an ad hoc signed `.app`. `android`: a signed `.apk`. `macos`: a signed `.app` (ad hoc without `--sign`) ([macOS](./macos.md#packaging)). `linux`: a directory `<Name>/` (the executable, `nsh/`, a `.desktop` file) and `<Name>.tar.gz` ([Linux](./linux.md#packaging)). `windows`: a directory `<Name>\` (`<Name>.exe`, `nsh\`), `<Name>.zip`, an Inno Setup script `<Name>.iss` and, with Inno Setup installed, the installer `<Name>-setup.exe` ([Windows](./windows.md#packaging)). `web`: a directory `<Name>/`, a static site (`index.html` and files named by their content) ([Web](./web.md#publish-an-app)). Any other name packages for the platform of that name built outside NSH ([External targets](#external-targets)). |
 | `-o, --out <OUT>` | Output directory (default `.nsh/out`). |
 | `--name <NAME>` | Display name. |
 | `--id <ID>` | Bundle identifier, e.g. `com.example.app`. |
 | `--app-version <VERSION>` | Version, e.g. `1.2.0`. |
 | `--build <BUILD>` | Build number. |
 | `--icon <ICON>` | App icon: a square PNG, ideally 1024×1024. |
-| `--sign <IDENTITY>` | iOS devices: code signing identity, e.g. `"Apple Development: …"`. |
-| `--profile <FILE>` | iOS devices: provisioning profile (`.mobileprovision`). Entitlements come from it. |
+| `--sign <IDENTITY>` | iOS devices and macOS: code signing identity, e.g. `"Apple Development: …"` or `"Developer ID Application: …"`. On macOS, enables Hardened Runtime and secure timestamping. |
+| `--profile <FILE>` | iOS devices: provisioning profile (`.mobileprovision`). Entitlements come from it. Repeat it to give each app extension (`nsh.json` `ios.extensions`) its own. |
 | `--keystore <FILE>` | Android: release keystore. Default: the debug key in `~/.android/debug.keystore` (created if missing). |
 | `--key-alias <ALIAS>` | Android: key alias in the keystore. |
 | `--keystore-password <PASSWORD>` | Android: keystore password. Also read from `NSH_KEYSTORE_PASSWORD`. |
-| `--format <FORMAT>` | Android: `apk` (default) or `aab`, an Android App Bundle for Google Play, signed with `jarsigner`. Not with `--run`. |
+| `--format <FORMAT>` | Android: `apk` (default) or `aab`, an Android App Bundle for Google Play, signed with `jarsigner`. Linux: `appimage` or `flatpak`, besides the directory and archive ([Packaging](./packaging.md#appimage-and-flatpak)). Not with `--run`. |
 | `--abi <ABI>` | Android: the ABIs of the APK (`arm64-v8a`, `armeabi-v7a`, `x86_64`), repeated or separated by commas. Default: `arm64-v8a` and `armeabi-v7a`, plus the device's with `--run`. |
 | `--arch <ARCH>` | macOS: the processors the app runs on, `arm64` (Apple silicon), `x86_64` (Intel) or `universal` (both, in one executable). Default: this Mac's. A runner for another processor needs its Rust target (`rustup target add x86_64-apple-darwin`). |
 | `--run` | Install and launch the app afterwards: in the simulator (`ios-simulator`) or on the connected Android device; `macos`, `linux` and `windows` launch it; `web` serves the site on this machine at the address it prints. |
+| `--device <DEVICE>` | With `--run`: the simulator to run the app in (`ios-simulator`), by name or UDID, as `nsh run`'s; or the Android device or emulator to install it on, by its serial (as `adb devices` lists it). Default for Android: the one `ANDROID_SERIAL` names, else the first one. |
 | `--asset-url <URL>` | Web: the http(s) URL the site's files are served from, a CDN, as the page names them; `index.html` and `manifest.webmanifest` stay at the page's address (named relatively, as without the flag), and the CDN answers with `Access-Control-Allow-Origin`. Default: next to the page, named relatively. `--run` serves the site from this machine as it is, so it goes without it. |
 
 ```sh
@@ -242,7 +246,7 @@ See [Packaging](./packaging.md).
 
 ## External targets
 
-`nsh dev`, `nsh run`, `nsh test` and `nsh package` with a `--target` that is none of NSH's own run the platform of that name, built outside NSH: the program `nsh-platform-<name>` on your `PATH`, as Cargo runs `cargo-<name>`. It gets the command and every argument but `--target` and its value, and the environment variables `NSH` (this `nsh` executable), `NSH_VERSION` and `NSH_TARGET` (the name); its exit code is the command's.
+`nsh dev`, `nsh run`, `nsh test` and `nsh package` with a `--target` that is none of NSH's own run the platform of that name, built outside NSH: the one a [platform nshm](./nshm.md#platform-nshm) of the app provides, else the program `nsh-platform-<name>` on your `PATH`, as Cargo runs `cargo-<name>`. It gets the command and every argument but `--target` and its value, and the environment variables `NSH` (this `nsh` executable), `NSH_VERSION` and `NSH_TARGET` (the name); its exit code is the command's.
 
 ```sh
 nsh package my-app --target miniprogram --out dist
@@ -262,22 +266,41 @@ nsh update [stable|nightly]
 
 ## nsh add
 
-Adds an [nshm](./nshm.md) (NSH module) to the app in the current directory: a Rust crate from crates.io, Git or a local directory whose components, modules and classes the app uses from TSX (`import { Gauge } from "acme/gauge"`) and from Rust (`acme_gauge::gauge()`). Experimental.
+Adds an [nshm](./nshm.md) (NSH module) to the app in the current directory, or the nearest one above it with `nsh.json`: a Rust crate from crates.io, Git or a local directory, or TSX from a Git repository, whose components, modules and classes the app imports (`import { Gauge } from "acme-gauge"`, and `acme_gauge::gauge()` in Rust).
 
 ```sh
-nsh add acme-gauge@1.0                                 # from crates.io: the newest version matching 1.0
-nsh add github:acme/gauge@v1.0.0                    # from GitHub at a tag; or --rev <commit or branch>; neither: the default branch
-nsh add https://git.example.com/gauge.git --tag v1.0.0  # from any Git URL
-nsh add --path ../gauge                              # from a local directory, as it is
+nsh add acme-gauge                                   # crates.io: the newest version
+nsh add acme-gauge@1.2                               # crates.io: the newest matching ^1.2
+nsh add github:acme/ui                               # GitHub: the newest version tag, else the default branch
+nsh add github:acme/ui@^1.4                          # GitHub: the newest tag matching ^1.4
+nsh add https://git.example.com/ui.git --tag v1.4.0  # any Git URL, at a tag; or --rev <commit or branch>
+nsh add --path ../gauge                              # a local directory, as it is
+nsh add nsh-extra --features camera                  # with the crate's Cargo features on (comma-separated or repeated)
 ```
 
-It lists the nshm in `nsh.json` `"modules"` (`"acme-gauge@1.0"`, `"github:acme/gauge@v1.0.0"`, `{ "github": "acme/gauge", "rev": "…" }`, `{ "git": "…", "tag": "v1.0.0" }` or `{ "path": "../gauge" }`), lets Cargo resolve it and pins the version or commit it resolved to in `nsh.lock` (commit it with the app), and adds it to the `[dependencies]` of the app's crate when it has one (`"rust"`). Builds take the locked version or commit (a directory is read as it is); running `nsh add` again updates it. A pure TSX app gets hosts built with the nshm, as an app with a crate of its own does ([Building with Rust](./rust.md)), so its development machine and CI need the Rust toolchain. If the nshm clashes with the app's crates or another nshm (the same package or module), or does not build with this NSH, `nsh.json` and `nsh.lock` are left unchanged.
+It lists the nshm in `nsh.json` `"dependencies"` under its package name (the crate's, or the `"name"` in a Git or local nshm's `nsh.json`), as `Cargo.toml` does: `"acme-gauge": "^1.2.0"`, `{ "github": "acme/ui", "version": "^1.4" }`, `{ "git": "…", "tag": "v1.4.0" }`, `{ "git": "…", "rev": "…" }` or `{ "path": "../gauge" }`, each object with optional `"version"`, `"features"` and `"targets"` (the targets a Rust nshm is linked for, which `nsh add` keeps when it adds the nshm again: [nshm](./nshm.md#using-an-nshm)). Added without a version, it gets `^` and the version it resolved to. Then it resolves every nshm the app reaches again, installs what is missing in `~/.nsh/nshms`, pins them in `nsh.lock` (commit it with the app), and adds a Rust nshm to the `[dependencies]` of the app's crate when it has one (`"rust"`). It prints the specifiers to import, and says so when the nshm brings Rust into a pure TSX app, whose development machine and CI then need the Rust toolchain ([Building with Rust](./rust.md)). If the nshm cannot be resolved, clashes with the app's crates or another nshm (the same package, specifier or module), or does not work with this NSH, the app's files are left unchanged.
 
-An nshm is an ordinary Cargo library with a `#[native_module("<module>")]` entry at its root, the same as an app's crate; TSX imports it by that specifier ([Writing an nshm](./nshm.md#writing-an-nshm)).
+`--features` turns on Cargo features of a Rust nshm, the modules of it the app uses, besides those already listed (`nsh add nsh-extra --features push` after `camera` keeps `camera`); a name the crate does not define stops `nsh add`. To turn one off, remove it from `nsh.json` and from the dependency in the app crate's `Cargo.toml`. What the crates declare under `[package.metadata.nsh]` for the features on goes into the packages, and all but the entitlements into the development hosts ([What the packaged app needs](./nshm.md#what-the-packaged-app-needs)).
 
-Versions are Cargo version requirements with Cargo's meaning: `"acme-gauge@1.2"` takes `^1.2` (any 1.x from 1.2.0), and `~1.2`, `=1.2.3`, `>=1.2, <2` and `*` work as in `Cargo.toml` (quote them in the shell: `nsh add "acme-gauge@>=1.2, <2"`). `nsh.json` says what is acceptable, `nsh.lock` what was resolved: a build takes the locked version while it still meets the requirement, and changing the requirement resolves anew. A Git or path entry may add `"version"` in its object form (`{ "github": "acme/gauge", "tag": "v1.2.0", "version": "1.2" }`); as Cargo does for such dependencies, the package must then be such a version. The NSH versions an nshm builds with are its own `nsh-core` dependency's requirement (`nsh-core = "0.6"`), checked against the running `nsh` before anything compiles.
+Versions are semver requirements with Cargo's meaning: `1.2` and `^1.2` take any 1.x from 1.2.0, and `~1.2`, `=1.2.3`, `>=1.2, <2` and `*` work as in `Cargo.toml` (quote them in the shell: `nsh add "acme-gauge@>=1.2, <2"`). A Git nshm's versions are its tags (`v1.4.0` or `1.4.0`). `nsh.json` says what is acceptable, `nsh.lock` what was resolved: every command builds with the locked versions while they still meet the requirements, without the network; a changed requirement resolves anew. One version of each package is resolved for the whole app, the newest every requirement on it accepts; when none fits, the error names who requires what. The NSH versions an nshm works with are its `nsh.json` `"nsh"` requirement and, for a Rust nshm, its `nsh-core` requirement, checked against the running `nsh`.
 
 Build scripts and procedural macros of an nshm run when the app builds, and its code runs with the app's permissions: review its source and `nsh.lock` changes like the app's own code.
+
+## nsh upgrade
+
+Upgrades the app's nshm to the newest versions their requirements accept, all of them or those named, and pins them in `nsh.lock`; a Rust nshm's dependency in the app's crate follows. To move past a requirement, change it in `nsh.json` or run `nsh add` with the new one.
+
+```sh
+nsh upgrade [NAME]...
+```
+
+## nsh remove
+
+Removes nshm from the app: from `nsh.json` `"dependencies"`, `nsh.lock` and the `[dependencies]` of the app's crate. Their installed copies stay in `~/.nsh/nshms`, where other apps may use them.
+
+```sh
+nsh remove <NAME>...
+```
 
 ## nsh component
 
@@ -304,7 +327,7 @@ Creates an Ed25519 key pair: `<NAME>.secret` and `<NAME>.pub` (e.g. `nsh keygen 
 ### nsh update-manifest
 
 ```sh
-nsh update-manifest [<ARCHIVE>...] [--package <FILE.nshpkg>] [--entry <DIR>] [--key <FILE>] [--notes <FILE>] [--notes <TAG>=<FILE>]... [--link ios=<URL>] [--link android=<URL>] [--base-url <URL>] [-o <DIR>]
+nsh update-manifest [<ARCHIVE>...] [--package <FILE.nshpkg>] [--entry <DIR>] [--key <FILE>] [--notes <FILE>] [--notes <TAG>=<FILE>]... [--link ios=<URL>] [--link android=<URL>] [--previous <ARCHIVE>]... [--base-url <URL>] [-o <DIR>]
 ```
 
 Writes `latest.json` (and `latest.json.sig` with `--key`) for the archives `nsh package` made on each platform and,
@@ -312,6 +335,8 @@ with `--package`, a signed package of the app's code (`nsh publish`'s), which it
 `updater.packages.roots` first: see [OTA Updates](/docs/ota-updates). A release may have only a package.
 `--notes <TAG>=<FILE>` adds the notes in another language (a BCP 47 tag), written beside the manifest as
 `notes.<TAG>.md`; it needs an untagged `--notes` too.
+`--previous <ARCHIVE>` takes the previous release's archive of a platform and writes a patch from it beside the
+manifest (`<archive>.from-<version>.patch`): apps running that version download it instead of the whole archive.
 
 ### nsh certify
 
@@ -358,20 +383,91 @@ may name the package read, and only `--key`, `--cert` and `-o` apply.
 ### nsh publish android
 
 ```sh
-nsh publish android <BUNDLE.aab> [--entry <DIR>] [--package <NAME>] [--credentials <KEY.json>] [--draft]
+nsh publish android <BUNDLE.aab> [--track <TRACK>] [--rollout <FRACTION>] [--status <STATUS>] [--listing] [--draft]
+nsh publish android --from <TRACK> --track <TRACK> [--rollout <FRACTION>]
 ```
 
-Uploads an Android App Bundle to Google Play and releases it to the **internal testing** track, in one edit (insert,
-upload, track update, commit; a failed edit is deleted). It never goes further: promote the release to closed, open or
-production testing in Play Console. Signs in as a Google Cloud service account that has release permission for the app
-in Play Console ([Android](./android.md#upload-to-google-play)).
+Uploads an Android App Bundle to Google Play and releases it to a track, in one edit (insert, upload, track update,
+commit; a failed edit is deleted). Without `--track` the release goes to **internal testing** only; reaching testers
+beyond it, or the public, always takes an explicit `--track`. With `--from` instead of a bundle, it promotes the newest
+release of one track to another. Signs in as a Google Cloud service account that has release permission for the app in
+Play Console ([Publish to Google Play](./publish.md#publish-to-google-play)).
 
 | Flag | Description |
 |---|---|
 | `--entry <DIR>` | The app's directory or entry, whose `nsh.json` `id` is the package name. Default: `.`. |
 | `--package <NAME>` | The package name on Google Play. Default: `nsh.json` `id`. |
 | `--credentials <KEY.json>` | The service account's JSON key. Default: `NSH_PLAY_CREDENTIALS`. Keep it out of the repository. |
+| `--track <TRACK>` | `internal` (default), `alpha`, `beta`, `production` or a custom track's name. |
+| `--from <TRACK>` | Promote: release the version codes of this track's newest release to `--track`, uploading nothing. |
+| `--rollout <FRACTION>` | A staged rollout to this fraction of the track's users, above 0 and below 1, e.g. `0.1`. |
+| `--status <STATUS>` | `completed` (default), `in-progress` (default with `--rollout`), `halted` (stop a staged rollout, with its `--rollout`) or `draft`. |
 | `--draft` | Release as a draft: Play takes only drafts until the app's first release is made in Play Console. |
+| `--store <DIR>` | The [store directory](./publish.md#store-listing). Default: `store` in the app's directory. |
+| `--listing` | Also update the store listing (name, descriptions, images) from the store directory, replacing what Play has for those locales. |
+
+To raise a staged rollout, release the same version again with a larger `--rollout`; to finish it, release it with no
+`--rollout`.
+
+### nsh publish status android
+
+```sh
+nsh publish status android [--entry <DIR>] [--package <NAME>] [--credentials <KEY.json>] [--json]
+```
+
+Prints every track's releases: status, version codes and rollout fraction. It reads them in an edit it deletes, so it
+changes nothing. `--json` prints `{"package", "releases": [{"track", "name", "status", "version_codes",
+"user_fraction"}]}` for scripts.
+
+### nsh publish doctor android
+
+```sh
+nsh publish doctor android [--entry <DIR>] [--package <NAME>] [--credentials <KEY.json>] [--store <DIR>]
+```
+
+Checks, without changing anything on Play, what `nsh publish android` needs: the service account key, the package
+name, the store directory, signing in, and access to the app (it opens an edit and deletes it). Exits with an error if
+a check fails.
+
+### nsh publish linux
+
+```sh
+nsh publish linux <ARCHIVE.tar.gz> [--url <URL>] [--entry <DIR>] [--out <DIR>]
+nsh publish status linux [--entry <DIR>] [--json]
+nsh publish doctor linux [--entry <DIR>]
+```
+
+Writes or updates the app's Flathub manifest (`<id>.yml`) for a release archive: its download URL and SHA-256. It opens
+no pull request; commit the manifest to `flathub/<id>` yourself ([Publishing](./publish.md#publish-to-flathub)). `status`
+prints the app's version on Flathub and exits 1 until it is `nsh.json`'s; `doctor` checks the metadata Flathub asks for
+(`id`, the store listing, `store.linux`, the icon), and validates the metainfo and desktop entry.
+
+| Flag | Description |
+|---|---|
+| `--url <URL>` | Where the archive is downloaded from (HTTPS): the release asset's URL. Default: `nsh.json` `store.linux.archiveUrl`, with `{version}` replaced. |
+| `--entry <DIR>` | The app's directory or entry. Default: `.`. |
+| `--out <DIR>` | The checkout of the app's Flathub repository to write `<id>.yml` into. Default: `.nsh/out/flathub/<id>`. |
+
+### nsh publish windows
+
+```sh
+nsh publish windows <APP.msix> [--entry <DIR>] [--product-id <ID>] [--notes <FILE>|<LANG>=<FILE>]... [--wait]
+nsh publish status windows [--entry <DIR>] [--product-id <ID>] [--submission <ID>] [--json]
+nsh publish doctor windows [--entry <DIR>] [--product-id <ID>]
+```
+
+Submits an MSIX package (`nsh package --target windows --format msix`) to the Microsoft Store with the Store
+submission API: creates a submission from the last published one, replaces its package, sets the release notes of
+its listings (each locale's `releaseNotes` of the [store listing](./publish.md#store-listing), or `--notes`), uploads the package and commits it to certification. A failed submission is deleted before
+it is committed; an app with a pending submission (a draft in Partner Center) is refused, so nothing a person
+started is overwritten. `--wait` polls until certification ends and fails when the Store rejects it. `status` prints
+the latest submission's status and exits 0 when published, 2 while in progress, 1 when failed. `doctor` checks
+`nsh.json`, the credentials and the Store ID without changing anything.
+
+Credentials are an Azure AD app associated with Partner Center (Account settings → User management → Azure AD
+applications, role Manager), read only from `NSH_MS_TENANT_ID`, `NSH_MS_CLIENT_ID` and `NSH_MS_CLIENT_SECRET`. The
+Store ID is `nsh.json` `store.windows.productId` (or `--product-id`). The app's first submission (pricing, age ratings, store
+listing) is made in Partner Center; later ones go through this command.
 
 ### nsh verify
 
@@ -413,6 +509,7 @@ Signs a revocation list: release keys and packages that must not load any more.
 | Variable | Used by | Description |
 |---|---|---|
 | `ANDROID_HOME`, `ANDROID_SDK_ROOT` | Android targets | The Android SDK. Fallback: `~/Library/Android/sdk`. |
+| `ANDROID_SERIAL` | Android targets | The device or emulator to use, by its serial, as adb reads it, when `--device` names none. |
 | `CARGO_TARGET_DIR` | apps with Rust crates | Where the app's runners build. Default: the app's `target/`. |
 | `NSH_KEYSTORE_PASSWORD` | `package --target android` | The keystore password. |
 | `NSH_RUNTIME` | `run`, `package` | A runtime directory to use instead of the one next to the CLI. |
@@ -423,9 +520,13 @@ Signs a revocation list: release keys and packages that must not load any more.
 ## nsh publish ios
 
 ```sh
-nsh publish ios <IPA> --app-id <ID> --issuer-id <ID> --key-id <ID> --private-key <PATH>
+nsh publish ios <IPA> [--app-id <ID>] [--issuer-id <ID>] [--key-id <ID>] [--private-key <PATH>]
 ```
 
-Uploads an App Store-signed IPA on macOS to App Store Connect for TestFlight. Flags also accept
+Uploads an App Store-signed IPA on macOS to App Store Connect, waits for processing, gives it to
+TestFlight groups, prepares the App Store version and listing, and submits it for review with
+`--submit`. `nsh publish status ios` and `nsh publish doctor ios` report the release state and check
+the setup. Flags also accept
 `NSH_APP_STORE_APP_ID`, `NSH_APP_STORE_ISSUER_ID`, `NSH_APP_STORE_KEY_ID` and
-`NSH_APP_STORE_PRIVATE_KEY`. See [Upload to TestFlight](./packaging.md#upload-to-testflight) for signing, credentials and processing.
+`NSH_APP_STORE_PRIVATE_KEY`. The app ID defaults to `nsh.json` `store.ios.appId` and the key to
+`~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8`, so a configured app runs `nsh publish ios <IPA>`. See [Publish to the App Store](./publish.md#upload-to-testflight) for signing, credentials and processing.

@@ -1,30 +1,29 @@
 ---
 title: nsh/mobile
-description: "What iOS and Android have: TabBar, the system's tab bar, DateTimePicker, the system's date and time picker, SegmentedControl, the system's segmented control on iOS, Switch, the system's switch, Haptics, InputAccessoryView on iOS, BackHandler on Android, and isAvailable."
+description: "What iOS and Android have: TabBar, the system's tab bar, DateTimePicker, the system's date and time picker, SegmentedControl, the system's segmented control on iOS, Switch, the system's switch, Haptics, AppSettings, the app's page in the system's settings, InputAccessoryView on iOS, BackHandler on Android, and isAvailable."
 order: 12.2
 ---
 
 # nsh/mobile
 
-`nsh/mobile` holds the capabilities specific to iOS and Android: the system's tab bar, `TabBar`,
-[`DateTimePicker`](#datetimepicker), the system's date and time picker, [`Switch`](#switch), the system's switch, and
-[`Haptics`](#haptics), the device's haptic feedback, on both;
-[`SegmentedControl`](#segmentedcontrol), the system's segmented control, and
-[`InputAccessoryView`](#inputaccessoryview), a bar over the keyboard, on iOS; and [`BackHandler`](#backhandler), the
-back button, on Android. Rust code uses `nsh_core::mobile` and `nsh_core::prelude`; TSX imports `nsh/mobile`. The
-module can be imported on every platform, so one bundle runs everywhere: on the other platforms its components take no
-room and its calls return at once, and `isAvailable` tells you whether you are on iOS or Android (`platform.os` from
-`nsh` tells which). What desktops have is in [nsh/desktop](./nsh-desktop.md).
+`nsh/mobile` holds the components and APIs that exist only on iOS and Android. TSX imports `nsh/mobile`. Rust code uses `nsh_core::mobile` and `nsh_core::prelude`.
 
-```rust tabs
-use nsh_core::mobile::{
-    DateTimePickerMode, DateTimePickerValue, SegmentedControlItem, TabBarItem, date_time_picker, segmented_control,
-    switch, tab_bar,
-};
-```
+| API | What it is | Platforms |
+|---|---|---|
+| `TabBar` | The system's tab bar | iOS, Android |
+| [`DateTimePicker`](#datetimepicker) | The system's date and time picker | iOS, Android |
+| [`Switch`](#switch) | The system's switch | iOS, Android |
+| [`Haptics`](#haptics) | The device's haptic feedback | iOS, Android |
+| [`AppSettings`](#appsettings) | The app's page in the system's settings | iOS, Android |
+| [`SegmentedControl`](#segmentedcontrol) | The system's segmented control | iOS |
+| [`InputAccessoryView`](#inputaccessoryview) | A bar over the keyboard | iOS |
+| [`BackHandler`](#backhandler) | The back button | Android |
+
+You can import the module on every platform, so one bundle runs everywhere. On other platforms its components take no room and its calls return at once. `isAvailable` tells you whether you are on iOS or Android, and `platform.os` from `nsh` tells you which. Desktop APIs are in [nsh/desktop](./nsh-desktop.md).
 
 ```tsx tabs
 import {
+  AppSettings,
   BackHandler,
   DateTimePicker,
   Haptics,
@@ -45,6 +44,13 @@ import type {
 } from "nsh/mobile";
 ```
 
+```rust tabs
+use nsh_core::mobile::{
+    DateTimePickerMode, DateTimePickerValue, SegmentedControlItem, TabBarItem, date_time_picker, segmented_control,
+    switch, tab_bar,
+};
+```
+
 ## Scope
 
 This module exposes capabilities specific to mobile platforms, such as the system tab bar for top-level app navigation. Common controls belong to [`nsh/base`](./nsh-base.md): its [Switch](../elements/switch.md), for example, shares behavior and API across phones, desktops and the web, with the track, thumb and state styles supplied by the app. `TabBar` serves mobile app navigation; `Tabs` serves tabbed content across platforms. Only capabilities with mobile-specific interaction semantics belong here. A system appearance, size or animation alone does not change a common control’s shared role. This distinction guides which capabilities belong here ([Goals and design principles](../docs/goals.md)). `SegmentedControl` is the system's own control for an app that needs exactly the iOS one; a choice in the app's look, on every platform, is `nsh/base`'s [ToggleGroup](../elements/toggle.md) or [RadioGroup](../elements/radio.md). Likewise `DateTimePicker` is the system's own date and time picker on phones; a picker in the app's look, on every platform, is `nsh/base`'s [DatePicker](../elements/date-picker.md) or [TimeField](../elements/time-field.md). `Switch` is the same: the system's own switch for an app that wants exactly the iOS and Android ones; a switch in the app's look, on every platform, is `nsh/base`'s [Switch](../elements/switch.md).
@@ -56,7 +62,8 @@ const isAvailable: boolean;
 ```
 
 `true` on iOS, the iOS simulator, Mac Catalyst and Android; `false` elsewhere. Rust:
-`matches!(os(), Os::Ios | Os::Android)`.
+`matches!(os(), Os::Ios | Os::Android)`. A Mac has no settings page of the app's own, so on Mac Catalyst `isAvailable`
+is `true` while [`AppSettings.available()`](#appsettings) is `false`.
 
 ## TabBar
 
@@ -66,36 +73,6 @@ selection on iOS 26), Material 3's navigation bar on Android, in the system's co
 tabs (`items`), says which one is selected (`selectedIndex`), hears the user's choice (`onChange`), places the bar with
 its `class` and `style`, and shows the selected section's content itself. For tabs inside a page, and on every
 platform, use `nsh/base`'s [Tabs](../elements/tabs.md).
-
-```rust tabs
-use nsh_core::{
-    mobile::{TabBarItem, tab_bar},
-    prelude::*,
-};
-
-fn sections() -> impl IntoElement {
-    let section = signal(0u32);
-    view()
-        .flex_1()
-        .child(text(move || match section.get() {
-            0 => "Records",
-            _ => "Stats",
-        }))
-        .child(
-            tab_bar()
-                .items(vec![
-                    TabBarItem::new("Records").icon("list.bullet"),
-                    TabBarItem::new("Stats").icon("chart.bar"),
-                ])
-                .selected_index(section)
-                .on_change(move |index: &u32| section.set(*index))
-                .absolute()
-                .left_0()
-                .right_0()
-                .bottom_0(),
-        )
-}
-```
 
 ```tsx tabs
 import { mount, signal, Text, View } from "nsh";
@@ -128,9 +105,41 @@ mount(() => (
 ));
 ```
 
+```rust tabs
+use nsh_core::{
+    mobile::{TabBarItem, tab_bar},
+    prelude::*,
+};
+
+fn sections() -> impl IntoElement {
+    let section = signal(0u32);
+    view()
+        .flex_1()
+        .child(text(move || match section.get() {
+            0 => "Records",
+            _ => "Stats",
+        }))
+        .child(
+            tab_bar()
+                .items(vec![
+                    TabBarItem::new("Records").icon("list.bullet"),
+                    TabBarItem::new("Stats").icon("chart.bar"),
+                ])
+                .selected_index(section)
+                .on_change(move |index: &u32| section.set(*index))
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0(),
+        )
+}
+```
+
 `TabBar` comes from `nsh/mobile`, `nsh_core::mobile` in Rust. The selection is the app's: a
 tap reports `onChange` with the tab's index (`{ index }`), the bar shows the choice at once, as the system's does, and the app shows
 that section and passes the index back as `selectedIndex`. Its height is the system's where the style leaves it open.
+A bar out of sight — `hidden`, or a pushed page's `hidesBottomBarWhenPushed` — takes no touches: a press in the
+strip it leaves reaches the views below, so a control the app draws there (a floating action bar) works.
 In Rust, `tab_bar()` makes one, with a setter per prop (`.items(..)`, `.selected_index(..)`), a listener per event
 (`.on_change(..)`) and the typed style methods; `TabBarItem::new(title).icon(name).badge(text)` makes a tab.
 
@@ -140,7 +149,7 @@ In Rust, `tab_bar()` makes one, with a setter per prop (`.items(..)`, `.selected
 |---|---|---|---|---|
 | `items` | `.items(..)` | `TabBarItem[]` | `[]` | The tabs, in order. |
 | `selectedIndex` | `.selected_index(..)` | `number` | `0` | The selected tab, by index; an index past the tabs selects none. |
-| `hidden` | `.hidden(..)` | `boolean` | `false` | iOS: hides the bar without a transition. The app owns this value across pushes and pops. The bar shows when both this prop and the visible stack’s `hidesBottomBarWhenPushed` request are false. |
+| `hidden` | `.hidden(..)` | `boolean` | `false` | iOS and Android: hides the bar without a transition. The app owns this value across pushes and pops; on iOS it shows when both this prop and the visible stack’s `hidesBottomBarWhenPushed` request are false. Out of sight, it takes no touches. |
 | `class`, `style` | style methods | `string`, `StyleProp<ViewStyle>` | none | Where the bar is: its position and size. Its look is the system's, with the selected tab in the theme's `primary`. |
 | `testID` | `.test_id(..)` | `string` | none | Finds the bar in tests and `nsh test --trace`. |
 
@@ -149,7 +158,7 @@ In Rust, `tab_bar()` makes one, with a setter per prop (`.items(..)`, `.selected
 | Field | Rust | Type | Description |
 |---|---|---|---|
 | `title` | `TabBarItem::new(title)` | `string` | The tab's title, which screen readers say. |
-| `icon` | `.icon(name)` | `string` | The tab's icon, by the platform's name for it: an [SF Symbol](https://developer.apple.com/sf-symbols/) on iOS (`"house"`), a drawable of the app on Android (`res/drawable/home.xml` is `"home"`, `"android:ic_menu_search"` the system's). `platform.select` picks one per platform. |
+| `icon` | `.icon(name)` | `string` | The tab's icon, by the platform's name for it: an [SF Symbol](https://developer.apple.com/sf-symbols/) on iOS (`"house"`), a drawable of the app on Android (`android/res/drawable/home.xml` next to `nsh.json` is `"home"`, `"android:ic_menu_search"` the system's). `nsh package --target android` compiles `android/res/` into the APK, laid out as a Gradle module's `src/main/res/` (vector drawables, PNGs per density); the `nsh run` development host has only the system's. `platform.select` picks one per platform. |
 | `badge` | `.badge(text)` | `string` | The tab's badge: a text such as `"3"` or `"New"`, or `""` for a badge with no text; left out (the default), none. In the system's badge look; screen readers say it with the tab's title: its text, or for `""` the system's words for a badge with no text (VoiceOver's; on Android the system's "New notification", in the device's language). |
 
 ### Events
@@ -338,9 +347,10 @@ from `chrono`'s `NaiveDate`, `NaiveTime` and `NaiveDateTime`.
 
 - **iOS and Mac Catalyst**: `UIDatePicker` in its compact style; with `dateTime` the day and the time are two capsules.
   The calendar and the time wheels are the system's, in the user's locale, calendar and clock.
-- **Android**: the value in the system's formats and the user's 12- or 24-hour clock, in a field per part; a press
-  opens the system's date or time dialog. The time dialog offers every minute: a pick between two steps of
-  `minuteInterval` takes the step before it, and a pick past `min` or `max` takes the bound.
+- **Android**: the value in the formats of the app's language ([I18n](../docs/i18n.md)), including one `setLocale`
+  picks, and the user's 12- or 24-hour clock, in a field per part; a press opens the system's date or time dialog,
+  in the same language. The time dialog offers every minute: a pick between two steps of `minuteInterval` takes the
+  step before it, and a pick past `min` or `max` takes the bound.
 - **The desktops and the web**: `DateTimePicker` takes no room and shows nothing, so one layout holds both: pick with
   [DatePicker](../elements/date-picker.md) or [TimeField](../elements/time-field.md) there, chosen by `platform.os`.
 
@@ -369,6 +379,34 @@ A bar over the keyboard (UIKit's `inputAccessoryView`), shown while an input who
 | `children` | `JSX.Element` | `.child(…)` | The bar's content. |
 
 It renders nothing where it is placed in the tree, and nothing at all on Android, so you can place it next to the input it belongs to.
+
+```tsx tabs
+import { type InputRef, signal, Text, View } from "nsh";
+import { Input } from "nsh/base";
+import { InputAccessoryView } from "nsh/mobile";
+
+function Note() {
+  const text = signal("");
+  let input: InputRef | undefined;
+  return (
+    <View>
+      <Input
+        ref={(n) => (input = n)}
+        value={text()}
+        onChange={({ value }) => text.set(value)}
+        placeholder="Write a note"
+        ios={{ inputAccessoryViewID: "note-bar" }}
+      />
+      <InputAccessoryView nativeID="note-bar" style={{ backgroundColor: "#f1f5f9" }}>
+        <View style={{ flexDirection: "row", alignItems: "center", padding: 10 }}>
+          <Text style={{ flex: 1, color: "#64748b" }}>{text().length} characters</Text>
+          <Text onPress={() => input?.blur()} style={{ fontWeight: "600" }}>Done</Text>
+        </View>
+      </InputAccessoryView>
+    </View>
+  );
+}
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -403,34 +441,6 @@ fn Note() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { type InputRef, signal, Text, View } from "nsh";
-import { Input } from "nsh/base";
-import { InputAccessoryView } from "nsh/mobile";
-
-function Note() {
-  const text = signal("");
-  let input: InputRef | undefined;
-  return (
-    <View>
-      <Input
-        ref={(n) => (input = n)}
-        value={text()}
-        onChange={({ value }) => text.set(value)}
-        placeholder="Write a note"
-        ios={{ inputAccessoryViewID: "note-bar" }}
-      />
-      <InputAccessoryView nativeID="note-bar" style={{ backgroundColor: "#f1f5f9" }}>
-        <View style={{ flexDirection: "row", alignItems: "center", padding: 10 }}>
-          <Text style={{ flex: 1, color: "#64748b" }}>{text().length} characters</Text>
-          <Text onPress={() => input?.blur()} style={{ fontWeight: "600" }}>Done</Text>
-        </View>
-      </InputAccessoryView>
-    </View>
-  );
-}
-```
-
 See also [Forms and keyboard](../docs/forms-and-keyboard.md).
 
 ## BackHandler
@@ -440,16 +450,44 @@ On Android; on iOS its listeners are kept and never called, and `exitApp()` retu
 ```ts
 const BackHandler: {
   on(event: "press", listener: () => boolean | void): () => void;
+  on(event: "progress", listener: (event: BackProgressEvent) => void): () => void;
   exitApp(): void;
 };
+
+interface BackProgressEvent {
+  phase: "start" | "move" | "end" | "cancel";
+  progress: number;
+  edge?: "left" | "right";
+}
 ```
 
 The system back button and back gesture. Dialogs handle the back press first (a dialog closes); then `BackHandler`'s listeners run, the most recently added first; when none of them handles it, the top navigation stack pops, and with no page to go back to the app exits.
 
 | Member | Rust | Description |
 |---|---|---|
-| `on("press", listener)` | `on_back_press(listener)` | `listener` returns `true` when it handled the press. Returns a function that stops listening; a listener added while a component renders (or an effect runs) stops with it, in Rust and TSX alike. |
+| `on("press", listener)` | `on_back_press(listener)` | `listener` returns `true` when it handled the press. Returns a function that stops listening; a listener added while a component renders (or an effect runs) stops with it, in TSX and Rust alike. |
+| `on("progress", listener)` | `on_back_progress(listener)` | Follows the back gesture on Android 14 and later: `listener` hears each step of a gesture no dialog takes, `start`, `move`, then `end` (the press follows) or `cancel`, with the `progress` from 0 to 1 and the `edge` the swipe started at. While one listens, the stacks leave the gesture to the app and do not preview their pop. See [Following the back gesture](../docs/navigation.md#following-the-back-gesture). |
 | `exitApp()` | the listener returns `false` | Leaves the app. A Rust listener that returns `false` lets the press go on, so the stack goes back or the app exits. |
+
+```tsx tabs
+import { signal } from "nsh";
+import { BackHandler } from "nsh/mobile";
+import { AlertDialog } from "nsh/base";
+
+function Editor() {
+  const dirty = signal(false);
+  // Stops listening when Editor goes.
+  BackHandler.on("press", () => {
+    if (!dirty()) return false; // let the app go back or exit
+    AlertDialog.show({
+      title: "Discard changes?",
+      actions: [{ label: "Keep", role: "cancel", id: "keep" }, { label: "Discard", role: "destructive", id: "discard" }],
+    }).then(({ action }) => action === "discard" && BackHandler.exitApp());
+    return true;
+  });
+  // ...
+}
+```
 
 ```rust tabs
 use nsh_base::alert_dialog;
@@ -474,28 +512,65 @@ fn Editor() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { signal } from "nsh";
-import { BackHandler } from "nsh/mobile";
-import { AlertDialog } from "nsh/base";
+> [!NOTE]
+> The listener runs after the system has delivered the press: the main thread never waits for the app's code. While at least one listener is registered, NSH takes back presses that dialogs leave, and goes back in the top stack or exits the app itself when no listener returns `true`.
 
-function Editor() {
-  const dirty = signal(false);
-  // Stops listening when Editor goes.
-  BackHandler.on("press", () => {
-    if (!dirty()) return false; // let the app go back or exit
-    AlertDialog.show({
-      title: "Discard changes?",
-      actions: [{ label: "Keep", role: "cancel", id: "keep" }, { label: "Discard", role: "destructive", id: "discard" }],
-    }).then(({ action }) => action === "discard" && BackHandler.exitApp());
-    return true;
-  });
-  // ...
+## AppSettings
+
+On iOS and Android; elsewhere `open` rejects at once.
+
+```ts
+const AppSettings: {
+  open(): Promise<AppSettingsResult>;
+  available(): Promise<boolean>;
+};
+
+interface AppSettingsResult {
+  opened: boolean;
 }
 ```
 
-> [!NOTE]
-> The listener runs after the system has delivered the press: the main thread never waits for the app's code. While at least one listener is registered, NSH takes back presses that dialogs leave, and goes back in the top stack or exits the app itself when no listener returns `true`.
+Opens the app's own page in the system's settings, where the user turns back on a permission they denied (the camera, photos, notifications): once denied, only the system's settings change it, so an explanation of why the app needs it usually comes with an "Open Settings" button. iOS opens the app's page in the Settings app, Android its App info page; an embedded view opens the embedding app's page.
+
+| Member | Rust | Description |
+|---|---|---|
+| `open()` | `open_app_settings()` | Opens the page; resolves with `{ opened }`, whether the system opened it. |
+| `available()` | `app_settings_available()` | Whether `open()` opens the page here; ask it before showing the button. |
+
+- Where there is no page of the app's own (macOS, Windows, Linux, the web, a terminal, `nsh test`, and an iPhone or iPad app running on a Mac, Mac Catalyst included), `available()` resolves `false` and `open()` rejects with an `Error` whose `code` is `"ERR_FEATURE_UNAVAILABLE_ON_PLATFORM"` (Rust: `AppSettingsError::Unavailable`). On macOS, an app that wants a particular privacy pane opens it with [`openUrl`](./nsh.md#openurl).
+- It acts on the application as a whole: an app that declares capabilities needs `"application": true` (see [Sandbox and capabilities](../docs/sandbox-and-capabilities.md#application)). Without it `available()` resolves `false` and `open()` rejects with `"ERR_ACCESS_DENIED"`, `permission` `"application"` (Rust: `AppSettingsError::Denied`).
+- `open()` never throws: every failure rejects. In Rust, both are answers to await in a task (or to drop).
+
+```tsx tabs
+import { Text, View, signal } from "nsh";
+import { AppSettings } from "nsh/mobile";
+
+function OpenSettingsButton() {
+  const canOpen = signal(false);
+  AppSettings.available().then(canOpen.set);
+  return (
+    <If when={canOpen()}>
+      <View onPress={() => AppSettings.open()}>
+        <Text>Open Settings</Text>
+      </View>
+    </If>
+  );
+}
+```
+
+```rust tabs
+use nsh_core::prelude::*;
+
+fn open_settings_button() -> impl IntoElement {
+    let can_open = signal(false);
+    spawn(async move { can_open.set(app_settings_available().await) });
+    when(move || can_open.get(), || {
+        view()
+            .child(text("Open Settings"))
+            .on_press(|_| drop(open_app_settings()))
+    })
+}
+```
 
 ## Haptics
 
@@ -519,23 +594,6 @@ The device plays a haptic under the user's finger: a selection that changed, an 
 
 A name it does not know throws a `TypeError`. Android has no constant for every haptic: it plays the closest one (`CONFIRM` and `REJECT` for success and error, from Android 11; a long press for a warning and, before Android 11, for an error).
 
-```rust tabs
-use nsh_core::prelude::*;
-
-fn save_button() -> impl IntoElement {
-    view().child(text("Save")).on_press(|_| {
-        spawn(async {
-            let saved = save().await;
-            haptic(if saved.is_ok() {
-                Haptic::Notification(HapticNotification::Success)
-            } else {
-                Haptic::Notification(HapticNotification::Error)
-            });
-        });
-    })
-}
-```
-
 ```tsx tabs
 import { Text, View } from "nsh";
 import { Haptics } from "nsh/mobile";
@@ -551,6 +609,23 @@ function SaveButton() {
       <Text>Save</Text>
     </View>
   );
+}
+```
+
+```rust tabs
+use nsh_core::prelude::*;
+
+fn save_button() -> impl IntoElement {
+    view().child(text("Save")).on_press(|_| {
+        spawn(async {
+            let saved = save().await;
+            haptic(if saved.is_ok() {
+                Haptic::Notification(HapticNotification::Success)
+            } else {
+                Haptic::Notification(HapticNotification::Error)
+            });
+        });
+    })
 }
 ```
 

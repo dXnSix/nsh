@@ -35,7 +35,7 @@ use std::{
 use crate::Error;
 
 /// Names what this code leaves next to the app or in it.
-const STAGING: &str = ".nsh-updater-";
+pub(crate) const STAGING: &str = ".nsh-updater-";
 const OLD: &str = ".nsh-updater-old-";
 /// An update unpacked and checked, waiting to replace the app
 /// (`<STAGED><pid>-<app's directory name>`, [`Installation::stage`]).
@@ -99,6 +99,12 @@ impl Installation {
             return false;
         };
         fs::remove_dir(&probe).is_ok()
+    }
+
+    /// Writes the installed app as the reference of a patch to it
+    /// ([`crate::delta::base`]), returning its SHA-256.
+    pub fn delta_base(&self, out: impl std::io::Write) -> Result<String, Error> {
+        crate::delta::base(&self.root, out)
     }
 
     /// Where the new app is unpacked: the directory it can be renamed from.
@@ -204,6 +210,8 @@ impl Installation {
     /// Linux keeps the directory the user's launchers name.
     fn target(&self, new: &Path) -> PathBuf {
         if cfg!(target_os = "macos")
+            && is_app_bundle(new)
+            && is_app_bundle(&self.root)
             && let (Some(name), Some(parent)) = (new.file_name(), self.root.parent())
             && Some(name) != self.root.file_name()
             && !parent.join(name).exists()
@@ -365,6 +373,12 @@ fn dunce_like(path: &Path) -> PathBuf {
     }
 }
 
+/// Whether `path` is a macOS application bundle (`*.app`): only a bundle takes
+/// a new name from an update; a plain directory (`~/.nsh`) keeps its own.
+fn is_app_bundle(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "app")
+}
+
 /// A fresh directory in `parent`.
 fn staging(parent: &Path) -> std::io::Result<PathBuf> {
     let pid = std::process::id();
@@ -391,11 +405,27 @@ fn unpack(archive: &Path, into: &Path) -> Result<(), Error> {
             tar.set_preserve_permissions(true);
             unpack_tar(&mut tar, into).map_err(|e| Error::Install(format!("unpack: {e}")))
         }
+        _ if is_tar(&mut file)? => {
+            let mut tar = tar::Archive::new(file);
+            tar.set_preserve_permissions(true);
+            unpack_tar(&mut tar, into).map_err(|e| Error::Install(format!("unpack: {e}")))
+        }
         b"PK" => zip::ZipArchive::new(file)
             .and_then(|mut zip| zip.extract(into))
             .map_err(|e| Error::Install(format!("unpack: {e}"))),
-        _ => Err(Error::Install("not a .tar.gz or .zip".into())),
+        _ => Err(Error::Install("not a .tar.gz, .tar or .zip".into())),
     }
+}
+
+/// Whether `file` is a plain `.tar` (a patched update, [`crate::delta`]):
+/// `ustar` at offset 257. Leaves the file at its start.
+fn is_tar(file: &mut fs::File) -> std::io::Result<bool> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let mut magic = [0u8; 5];
+    file.seek(SeekFrom::Start(257))?;
+    let tar = file.read_exact(&mut magic).is_ok() && &magic == b"ustar";
+    file.rewind()?;
+    Ok(tar)
 }
 
 /// As [`tar::Archive::unpack`], without the AppleDouble files (`._<name>`)
@@ -462,7 +492,9 @@ fn swap_directory(root: &Path, new: &Path, target: &Path) -> Result<(), Error> {
 /// Swaps the entries of `root` for those of `new`, the old ones renamed in
 /// place, since what runs can be renamed but not removed. A directory
 /// holding `executable` (relative to `root`) cannot be renamed either, so
-/// its entries are swapped instead. Undone if any step fails.
+/// its entries are swapped instead. Entries the installer that put the app
+/// there owns, and the new app does not ship, stay ([`installer_owned`]).
+/// Undone if any step fails.
 fn swap_entries(root: &Path, new: &Path, executable: &Path) -> Result<(), Error> {
     let mut renames = Vec::new();
     if let Err(e) = swap_into(root, new, executable, &mut renames) {
@@ -497,6 +529,8 @@ fn swap_into(
     let descend = first.filter(|first| {
         !rest.as_os_str().is_empty() && root.join(first).is_dir() && new.join(first).is_dir()
     });
+    // The app's own directory, not one inside it holding the executable.
+    let top = renames.is_empty();
     let mut rename = |from: PathBuf, to: PathBuf| -> Result<(), Error> {
         fs::rename(&from, &to)?;
         renames.push((from, to));
@@ -505,6 +539,9 @@ fn swap_into(
     for entry in fs::read_dir(root)?.collect::<Result<Vec<_>, _>>()? {
         let name = entry.file_name();
         if name.to_string_lossy().contains(OLD) || Some(&name) == descend.as_ref() {
+            continue;
+        }
+        if top && installer_owned(&name) && !new.join(&name).exists() {
             continue;
         }
         let mut old = OsString::from(format!("{OLD}{pid}-"));
@@ -522,6 +559,21 @@ fn swap_into(
         Some(dir) => swap_into(&root.join(&dir), &new.join(&dir), rest, renames),
         None => Ok(()),
     }
+}
+
+/// An Inno Setup uninstaller's own files (`unins000.exe`, `.dat`, `.msg`),
+/// which `nsh package --target windows`'s installer writes into the app's
+/// directory: an update that removed them would leave the app installed
+/// with no way to uninstall it, and its entry in Settings › Apps broken.
+fn installer_owned(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy().to_ascii_lowercase();
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    matches!(extension, "exe" | "dat" | "msg")
+        && stem.len() == 8
+        && stem.starts_with("unins")
+        && stem[5..].bytes().all(|b| b.is_ascii_digit())
 }
 
 fn remove(path: &Path) -> std::io::Result<()> {
@@ -706,6 +758,30 @@ mod tests {
     /// `tar -czf` on a Mac, as the guide has a developer archive an app they
     /// signed themselves.
     #[test]
+    fn a_patch_from_the_installed_app_installs() {
+        let dir = TempDir::new();
+        let (root, exe) = package(dir.path(), name(), "com.example.app", "1.0.0");
+        let build = dir.path().join("build");
+        let (new, _) = package(&build, name(), "com.example.app", "2.0.0");
+        fs::write(resources(&new).join("added"), "x").unwrap();
+        sign(&new);
+        let installation = Installation::of(&exe, "com.example.app", CONFIG).unwrap();
+        let mut base = Vec::new();
+        installation.delta_base(&mut base).unwrap();
+        let mut tar = Vec::new();
+        let result = crate::delta::tree(&new, &mut tar).unwrap();
+        let mut patch = Vec::new();
+        crate::delta::make(&base, &tar, &mut patch).unwrap();
+
+        let patched = build.join("patched.tar");
+        let out = fs::File::create(&patched).unwrap();
+        crate::delta::apply(&base, &patch[..], out, &result).unwrap();
+        installation.install(&patched).unwrap();
+        assert_eq!(version(&root), "2.0.0");
+        assert!(resources(&root).join("added").exists());
+    }
+
+    #[test]
     fn apple_double_files_are_not_installed() {
         let dir = TempDir::new();
         let (root, exe) = package(dir.path(), name(), "com.example.app", "1.0.0");
@@ -757,6 +833,19 @@ mod tests {
         let error = installation.install(&archive).unwrap_err().to_string();
         assert!(error.contains("code signature"), "{error}");
         assert_eq!(version(&root), "1.0.0");
+    }
+
+    /// A directory installation (`nsh update` replacing `~/.nsh` with an
+    /// archive whose top entry is `nsh/`) stays where it is on every
+    /// platform: only an `.app` takes the name of the new one.
+    #[test]
+    fn a_directory_keeps_its_place_whatever_the_new_entry_is_named() {
+        let dir = TempDir::new();
+        let root = dir.path().join(".nsh");
+        let installation = Installation::directory(&root, &root.join("bin/nsh")).unwrap();
+        let staged = dir.path().join(format!("{STAGED}1-.nsh"));
+        assert_eq!(installation.target(&staged.join("nsh")), root);
+        assert_eq!(installation.target(&staged.join("nsh.app")), root);
     }
 
     /// `Pal` (`com.example.pal`) becomes `Endless` (`com.example.endless`):
@@ -1013,6 +1102,30 @@ mod tests {
         assert!(!root.join("bin/gone.exe").exists());
         assert!(root.join("runtime/new").exists());
         assert!(!root.join("runtime/old").exists());
+    }
+
+    /// The installer's uninstaller is not the app's: an update keeps it.
+    #[test]
+    fn an_installers_uninstaller_outlives_an_update() {
+        let dir = TempDir::new();
+        let root = dir.path().join("root");
+        let new = dir.path().join("new");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(root.join("App.exe"), "old").unwrap();
+        fs::write(root.join("unins000.exe"), "uninstaller").unwrap();
+        fs::write(root.join("unins000.dat"), "log").unwrap();
+        fs::write(root.join("uninstall-notes.txt"), "old").unwrap();
+        fs::write(new.join("App.exe"), "new").unwrap();
+        swap_entries(&root, &new, Path::new("App.exe")).unwrap();
+        assert_eq!(fs::read_to_string(root.join("App.exe")).unwrap(), "new");
+        assert_eq!(fs::read_to_string(root.join("unins000.exe")).unwrap(), "uninstaller");
+        assert_eq!(fs::read_to_string(root.join("unins000.dat")).unwrap(), "log");
+        // Only the uninstaller's own names: anything else the app no longer ships goes.
+        assert!(!root.join("uninstall-notes.txt").exists());
+        assert!(installer_owned(std::ffi::OsStr::new("UNINS001.MSG")));
+        assert!(!installer_owned(std::ffi::OsStr::new("unins.exe")));
+        assert!(!installer_owned(std::ffi::OsStr::new("uninstall.exe")));
     }
 
     #[test]

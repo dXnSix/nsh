@@ -50,6 +50,16 @@ thread_local! {
     /// The spring of the transition [`transition`] runs, while it restyles:
     /// what [`animate_geometry`] moves its paths with.
     static SPRING: Cell<Option<Spring>> = const { Cell::new(None) };
+    /// The property groups of the transition [`transition`] runs, while it
+    /// restyles ([`transitions`]).
+    static PROPS: Cell<TransitionProps> = const { Cell::new(TransitionProps(0)) };
+}
+
+/// Whether the transition restyling the view now animates `group`
+/// (`TransitionProps`' bits): for geometry only some groups move (a clip
+/// path transitions only when named).
+pub(crate) fn transitions(group: u8) -> bool {
+    PROPS.get().has(group)
 }
 
 /// A transaction's implicit animations (the view's sublayers) take a curve,
@@ -187,7 +197,9 @@ pub(crate) fn transition(view: &UIView, t: &Transition, apply: impl FnOnce()) {
     CATransaction::setAnimationDuration(duration);
     CATransaction::setAnimationTimingFunction(Some(&curve));
     SPRING.set(spring);
+    PROPS.set(t.properties);
     apply();
+    PROPS.set(TransitionProps(0));
     SPRING.set(None);
     CATransaction::commit();
     // SAFETY: a plain clock read.
@@ -212,6 +224,41 @@ pub(crate) fn transition(view: &UIView, t: &Transition, apply: impl FnOnce()) {
         }
         layer.addAnimation_forKey(&a, Some(key));
     }
+}
+
+#[derive(PartialEq, Eq)]
+pub(crate) enum CoverageAnimation {
+    Finite,
+    Persistent,
+}
+
+/// Animations that can expose the backdrop even though the model layer fills it.
+pub(crate) fn coverage_animation(layer: &CALayer) -> Option<CoverageAnimation> {
+    let mut finite = None;
+    for key in [ns_string!("opacity"), ns_string!("transform")] {
+        // SAFETY: both are keys used for layer animations.
+        if let Some(animation) = unsafe { layer.animationForKey(key) } {
+            let (speed, repeat_count, repeat_duration) = (
+                animation.speed(),
+                animation.repeatCount(),
+                animation.repeatDuration(),
+            );
+            // UIKit uses FLT_MAX for UIViewAnimationOptionRepeat.
+            if !animation.isRemovedOnCompletion()
+                || speed <= 0.0
+                || !speed.is_finite()
+                || !repeat_count.is_finite()
+                || repeat_count == f32::MAX
+                || !repeat_duration.is_finite()
+                || repeat_duration == f64::MAX
+                || !animation.duration().is_finite()
+            {
+                return Some(CoverageAnimation::Persistent);
+            }
+            finite = Some(CoverageAnimation::Finite);
+        }
+    }
+    finite
 }
 
 /// The texts whose color transitions (`transition-colors`), stepped on a

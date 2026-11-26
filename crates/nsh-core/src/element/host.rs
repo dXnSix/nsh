@@ -244,6 +244,13 @@ host_element! {
 }
 
 host_element! {
+    /// A view whose box a renderer of the app's own draws with the GPU,
+    /// under its children (`<gpuview>`, TS: `gpuView` of `nsh`), made by
+    /// [`gpu_view`] ([`crate::gpu`]).
+    GpuView
+}
+
+host_element! {
     /// Its children on top of the root view it is in (`<overlay>`, TS:
     /// `Overlay` of `nsh`), made by [`overlay`]: the surface, or the dialog
     /// around it; outside its parent's layout and clipping, while it stays
@@ -253,6 +260,7 @@ host_element! {
 
 impl ParentElement for Overlay {}
 impl ParentElement for ShaderView {}
+impl ParentElement for GpuView {}
 impl ParentElement for Scroll {}
 impl ParentElement for Stack {}
 impl ParentElement for Screen {}
@@ -478,18 +486,25 @@ fn svg_drawing(
     shown
 }
 
+/// A shader view of `tag`, noting that the app uses shaders
+/// ([`crate::shader::USE_MARKER`]).
+fn shader_view(tag: Tag) -> ShaderView {
+    crate::shader::note_use();
+    ShaderView(ElNode::new(tag))
+}
+
 /// A view whose box a shader draws, under its children: give it the
 /// program with [`ShaderView::source`] and its uniforms with
 /// [`ShaderView::uniform`]. Without a program it draws nothing of its own.
 pub fn shader() -> ShaderView {
-    ShaderView(ElNode::new(Tag::Shader))
+    shader_view(Tag::Shader)
 }
 
 /// A view whose children draw through a shader: give it the program with
 /// [`ShaderView::source`], which reads what they draw with
 /// `sample_content`. Without a program the children draw as they are.
 pub fn shader_effect() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ShaderEffect))
+    shader_view(Tag::ShaderEffect)
 }
 
 /// A view whose children change through a shader when its
@@ -497,20 +512,20 @@ pub fn shader_effect() -> ShaderView {
 /// drew, `sample_to` what they draw now, `nsh.progress` how far it is.
 /// Without a program it cross-fades ([`ShaderView::fallback`]).
 pub fn shader_transition() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ShaderTransition))
+    shader_view(Tag::ShaderTransition)
 }
 
 /// The whole surface drawn through a shader, which reads it with
 /// `sample_content`. It takes no space and has no children.
 pub fn screen_effect() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ScreenEffect))
+    shader_view(Tag::ScreenEffect)
 }
 
 /// The whole surface changing through a shader when its
 /// [`ShaderView::value`] changes, as [`shader_transition`] does for its
 /// children. It takes no space and has no children.
 pub fn screen_transition() -> ShaderView {
-    ShaderView(ElNode::new(Tag::ScreenTransition))
+    shader_view(Tag::ScreenTransition)
 }
 
 crate::static_reactive!(crate::shader::Shader: crate::shader::Shader);
@@ -685,6 +700,14 @@ pub fn video(url: impl IntoReactive<String>) -> Video {
     })
 }
 
+/// A view whose box a renderer of the app's own draws with the GPU, under
+/// its children: give it the renderer with `nsh-gpu`'s `GpuViewExt::renderer`
+/// (or one a UI set registered, [`GpuView::renderer_named`]) and its props
+/// with [`GpuView::prop`]. Without a renderer it draws nothing of its own.
+pub fn gpu_view() -> GpuView {
+    GpuView(ElNode::new(Tag::GpuView))
+}
+
 /// The embedder's native component registered as `name`.
 pub fn native(name: &str) -> NativeView {
     NativeView(ElNode::new(Tag::Native)).set(Prop::Component(name.into()))
@@ -772,9 +795,13 @@ impl Input {
     }
 
     /// Whether a multiline input's scroll bar shows (default yes): the
-    /// platform's indicator, or the app's built-in bar once it set one.
-    pub fn scrollbar(self, shows: impl IntoReactive<bool>) -> Self {
-        self.bind_prop(shows, |shows: bool| Prop::Scrollbar(shows.into()))
+    /// platform's indicator, or the app's built-in bar once it set one; or
+    /// a built-in bar of this input's own theme (TS `scrollbar={theme}`:
+    /// `nsh_base::ScrollbarTheme` converts into a setting). The built-in
+    /// bar lies over the input's frame, padding included, while the text
+    /// stays in the content box.
+    pub fn scrollbar(self, setting: impl IntoReactive<crate::ScrollbarSetting>) -> Self {
+        self.bind_prop(setting, Prop::Scrollbar)
     }
 
     /// At most `length` characters, counted as Unicode scalar values
@@ -802,6 +829,14 @@ impl Input {
     /// [`Self::on_paste`] hears what was pasted either way.
     pub fn paste_behavior(self, behavior: impl IntoReactive<PasteBehavior>) -> Self {
         self.bind_prop(behavior, Prop::PasteBehavior)
+    }
+
+    /// Reads pasted files of at most `bytes` bytes (`pasteMaxSize`); a
+    /// larger one reaches [`Self::on_paste`] in
+    /// [`PasteEvent::too_large`], its name, type and size only. Default:
+    /// every file is read.
+    pub fn paste_max_size(self, bytes: impl IntoReactive<u64>) -> Self {
+        self.bind_prop(bytes, |bytes: u64| Prop::PasteMaxSize(Some(bytes)))
     }
 
     /// The user pasted: the text, the files with their bytes (a
@@ -884,7 +919,8 @@ impl Input {
         )
     }
 
-    /// A key was pressed: the character, `Backspace` or `Enter`.
+    /// A key was pressed: the character, `Backspace`, `Enter`, `Escape`,
+    /// `ArrowUp` or `ArrowDown`.
     pub fn on_key_press<M>(self, listener: impl IntoListener<str, M>) -> Self {
         self.listen(EventKind::KeyPress, listener.into_listener(), events::key)
     }
@@ -916,9 +952,11 @@ impl Scroll {
         self.set(Prop::Horizontal(true))
     }
 
-    /// Whether the scroll indicator shows (default yes).
-    pub fn scrollbar(self, shows: impl IntoReactive<bool>) -> Self {
-        self.bind_prop(shows, |shows: bool| Prop::Scrollbar(shows.into()))
+    /// Whether the scroll indicator shows (default yes); or a built-in bar
+    /// of this view's own theme (TS `scrollbar={theme}`:
+    /// `nsh_base::ScrollbarTheme` converts into a setting).
+    pub fn scrollbar(self, setting: impl IntoReactive<crate::ScrollbarSetting>) -> Self {
+        self.bind_prop(setting, Prop::Scrollbar)
     }
 
     /// Pinch zoom between `min` and `max`.
@@ -1172,6 +1210,7 @@ impl Screen {
         shader: impl IntoReactive<Option<crate::shader::TransitionShader>>,
     ) -> Self {
         self.bind_prop(shader, |s: Option<crate::shader::TransitionShader>| {
+            crate::shader::note_use();
             Prop::TransitionShader(s.map(Into::into))
         })
     }
@@ -1412,6 +1451,7 @@ impl Modal {
         shader: impl IntoReactive<Option<crate::shader::TransitionShader>>,
     ) -> Self {
         self.bind_prop(shader, |s: Option<crate::shader::TransitionShader>| {
+            crate::shader::note_use();
             Prop::TransitionShader(s.map(Into::into))
         })
     }
@@ -1593,6 +1633,18 @@ impl WebView {
         })
     }
 
+    /// One more origin the web view may show and navigate to besides
+    /// `webview.hosts`, known only while the app runs
+    /// (`scheme://host[:port]`, matched exactly): needs
+    /// `"runtimeOrigin": true` in `capabilities.webview`
+    /// ([`crate::access::WebOrigin`]). Set with the source, it applies to
+    /// it; changed later, from the next navigation.
+    pub fn allow_origin(self, origin: impl IntoReactive<String>) -> Self {
+        self.bind_prop(origin, |origin: String| {
+            Prop::Native(NativeProp::AllowOrigin(Some(origin.into())))
+        })
+    }
+
     /// Runs before each page's own scripts.
     pub fn injected_java_script_before_content(self, script: impl IntoReactive<String>) -> Self {
         self.bind_prop(script, |script: String| {
@@ -1634,6 +1686,14 @@ impl WebView {
     /// when the web view is made, so it takes a value, not a signal.
     pub fn incognito(self, incognito: bool) -> Self {
         self.set(Prop::Native(NativeProp::Incognito(incognito)))
+    }
+
+    /// Lets the person pinch to zoom the page, also past its viewport's
+    /// scale limits (default no: each platform's own behavior, see the
+    /// `zoomable` prop). Read when the web view is made, as
+    /// [`incognito`](Self::incognito).
+    pub fn zoomable(self, zoomable: bool) -> Self {
+        self.set(Prop::Native(NativeProp::Zoomable(zoomable)))
     }
 
     /// Serves the page the URLs of `scheme` (`"app-image"` for
@@ -1782,6 +1842,14 @@ impl WebView {
 }
 
 impl Video {
+    /// An image (a URL or `asset:/` URI) shown while the video loads,
+    /// until its first frame is ready.
+    pub fn poster(self, url: impl IntoReactive<String>) -> Self {
+        self.bind_prop(url, |url: String| {
+            Prop::Native(NativeProp::Poster(Some(url.into())))
+        })
+    }
+
     /// Paused.
     pub fn paused(self, paused: impl IntoReactive<bool>) -> Self {
         self.bind_prop(paused, |paused: bool| {
@@ -1899,6 +1967,53 @@ impl NativeView {
     }
 
     /// It emitted an event.
+    pub fn on_native_event<M>(self, listener: impl IntoListener<NativeEvent, M>) -> Self {
+        self.listen(
+            EventKind::NativeEvent,
+            listener.into_listener(),
+            events::native,
+        )
+    }
+}
+
+impl GpuView {
+    /// Its renderer (`nsh-gpu` makes the source: `GpuViewExt::renderer`).
+    pub fn source(self, source: crate::gpu::GpuSource) -> Self {
+        self.set(Prop::GpuRenderer(Some(source)))
+    }
+
+    /// The renderer a UI set registered as `name`
+    /// ([`super::Registry::gpu_renderer_source`]), as TSX's `gpuView(name)`
+    /// names it.
+    pub fn renderer_named(self, name: &str) -> Self {
+        self.set(Prop::Component(name.into()))
+    }
+
+    /// Its renderer's prop `name` (any JSON value), handed to the renderer
+    /// before its next frame; a bound one is handed again when it changes.
+    pub fn prop(self, name: &str, value: impl IntoReactive<JsonValue>) -> Self {
+        let name: Arc<str> = name.into();
+        self.bind_prop(value, move |value| {
+            Prop::ComponentProp(name.clone(), Some(value))
+        })
+    }
+
+    /// Binds its renderer's prop `name` to an animated value: the platform
+    /// hands the renderer the value (a number or a color) on every frame it
+    /// changes, with no engine work per frame. A value set with
+    /// [`Self::prop`] under that name waits until the binding goes.
+    pub fn bind_animated_prop(mut self, name: &str, value: &impl super::Animated) -> Self {
+        if let Some(node) = value.animated_node().live() {
+            set(
+                &mut self.0,
+                Prop::ComponentPropBinding(name.into(), Some(node.id())),
+            );
+            self.0.attrs.rare_mut().bound.push(node);
+        }
+        self
+    }
+
+    /// Its renderer emitted an event.
     pub fn on_native_event<M>(self, listener: impl IntoListener<NativeEvent, M>) -> Self {
         self.listen(
             EventKind::NativeEvent,

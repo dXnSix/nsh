@@ -202,10 +202,7 @@ impl Block {
             Block::CodeBlock(code) => out.push_str(code.code.trim_end_matches('\n')),
             Block::Math { tex } => out.push_str(tex),
             Block::Table(table) => {
-                for (i, row) in std::iter::once(&table.head)
-                    .chain(table.rows.iter())
-                    .enumerate()
-                {
+                for (i, row) in table.all_rows().enumerate() {
                     if i > 0 {
                         out.push('\n');
                     }
@@ -272,6 +269,15 @@ pub enum Inline {
         content: Vec<Inline>,
         /// Its background, a CSS color (`<mark color="…">`, `<mark
         /// style="background-color: …">`); the view's own when not given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
+    /// Text in styles the document gives it (`<span style="color: …">`,
+    /// `<font color="…">`; the `textStyle` of `RichEditor` and Tiptap).
+    TextStyle {
+        /// Its content.
+        content: Vec<Inline>,
+        /// Its color, a CSS color; the text's own when not given.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         color: Option<String>,
     },
@@ -356,6 +362,7 @@ pub(crate) fn inline_text(inlines: &[Inline], out: &mut String) {
             | Inline::Strikethrough { content }
             | Inline::Underline { content }
             | Inline::Highlight { content, .. }
+            | Inline::TextStyle { content, .. }
             | Inline::Superscript { content }
             | Inline::Subscript { content }
             | Inline::Small { content }
@@ -419,7 +426,8 @@ pub struct Table {
     /// The alignment of each column.
     #[serde(default)]
     pub align: Vec<ColumnAlign>,
-    /// The header row's cells.
+    /// The header row's cells; none when the table has no header (an
+    /// HTML table without `<th>` cells).
     pub head: Vec<TableCell>,
     /// The body's rows, each as many cells as the header (Markdown fills
     /// or cuts them to its width).
@@ -428,6 +436,12 @@ pub struct Table {
 }
 
 impl Table {
+    /// Its rows, the header first when it has one.
+    pub(crate) fn all_rows(&self) -> impl Iterator<Item = &Vec<TableCell>> {
+        let head = (!self.head.is_empty()).then_some(&self.head);
+        head.into_iter().chain(&self.rows)
+    }
+
     /// The number of columns.
     pub fn columns(&self) -> usize {
         let width = |row: &Vec<TableCell>| row.iter().map(TableCell::span).sum::<usize>();
@@ -783,6 +797,7 @@ export type TextViewInline =
   | { type: \"text\"; text: string }
   | { type: \"strong\" | \"emphasis\" | \"strikethrough\" | \"underline\" | \"superscript\" | \"subscript\" | \"small\"; content: TextViewInline[] }
   | { type: \"highlight\"; content: TextViewInline[]; color?: string }
+  | { type: \"textStyle\"; content: TextViewInline[]; color?: string }
   | { type: \"code\"; code: string }
   | { type: \"keyboard\"; text: string }
   | { type: \"link\"; url: string; title?: string; content: TextViewInline[] }
@@ -812,7 +827,7 @@ const TABLE: &str = "/** A table. */
 export interface TextViewTable {
   /** The alignment of each column. */
   align?: (\"none\" | \"left\" | \"center\" | \"right\")[];
-  /** The header row's cells. */
+  /** The header row's cells; empty when the table has none (an HTML table without `<th>` cells). */
   head: { content: TextViewInline[]; colspan?: number }[];
   /** The body's rows. */
   rows?: { content: TextViewInline[]; colspan?: number }[][];
@@ -996,6 +1011,31 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({ "type": "highlight", "content": [], "color": "#336699" })
+        );
+    }
+
+    #[test]
+    fn text_styles_are_tagged_text_style_with_an_optional_color() {
+        let styled: Inline = serde_json::from_value(serde_json::json!({
+            "type": "textStyle", "content": [{ "type": "text", "text": "x" }]
+        }))
+        .unwrap();
+        assert_eq!(
+            styled,
+            Inline::TextStyle {
+                content: vec![Inline::text("x")],
+                color: None
+            }
+        );
+        assert_eq!(styled.plain_text(), "x");
+        let json = serde_json::to_value(Inline::TextStyle {
+            content: vec![],
+            color: Some("#e54545".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "textStyle", "content": [], "color": "#e54545" })
         );
     }
 }

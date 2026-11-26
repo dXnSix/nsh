@@ -337,6 +337,9 @@ impl Mounter {
                     crate::canvas::set(surface, view, drawing.clone());
                 }
             }
+            // GPU views draw nothing on this backend yet
+            // (`docs/dev/gpu-views.md`).
+            MountItem::GpuView { .. } => {}
             MountItem::Shader { id, layer } => {
                 if let Some(view) = &self.get(*id) {
                     crate::shader::set(surface, view, layer.clone());
@@ -467,10 +470,15 @@ impl Mounter {
                     crate::text_input::set_selection(view, *start, *end);
                 }
             }
-            // Not carried out on this platform yet: the app's paste is lost,
-            // so say so.
-            Command::InsertText(_) => {
-                log::warn!("insertText is not supported on Windows yet; nothing inserted")
+            Command::ClearSelection => {
+                if let Some(view) = view {
+                    crate::selectable_view::clear_in(view);
+                }
+            }
+            Command::InsertText(text) => {
+                if let Some(view) = view {
+                    crate::text_input::insert_text(view, text);
+                }
             }
             Command::ScrollTo { y, .. } if view.is_some_and(|v| v.kind() == ViewKind::Input) => {
                 crate::text_input::scroll_to(view.expect("an input"), *y);
@@ -560,6 +568,7 @@ fn redrawn(item: &MountItem) -> Redraw {
         | MountItem::TreeOrder(_)
         | MountItem::ProjectStates { .. }
         | MountItem::Shader { .. }
+        | MountItem::GpuView { .. }
         | MountItem::NavShader { .. } => Redraw::Nothing,
         MountItem::Frame { id, .. }
         | MountItem::ViewStyle { id, .. }

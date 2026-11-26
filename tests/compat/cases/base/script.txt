@@ -659,8 +659,11 @@ frame id:avoid-padding-inner 0 0 390 30
 frame id:avoid-off 0 185 390 30
 tap text:Dismiss the keyboard
 expect Dismiss: called
+# No region reserved headless.
+expect Reserved regions: 0
 covers [nsh] safeArea
 covers [nsh] safeAreaInsets
+covers [nsh] reservedRegions
 covers [nsh] keyboardFrame
 covers [nsh] Keyboard
 # base-text-view
@@ -709,6 +712,13 @@ expect Task: 0 false
 expect From HTML
 expect An hypertext paragraph.
 style span:hypertext fontWeight 600
+# Text in the colors HTML gives it (a span's style, a font's color).
+expect Colors: red text and green text
+style span:"red text" color #e54545ff
+style span:"green text" color #00aa00ff
+# A text style of the app's document, under its part's styles.
+style span:"Document color" color #336699ff
+style span:"Document color" fontWeight 600
 # The app's own blocks.
 expect From a document
 # Streaming: the `**` left open shows closed, the caret after the text.
@@ -739,7 +749,9 @@ expect Extended: text,custom
 expect CJK emphasis: strong,text
 expect CJK URL: https://example.com,text
 expect Math off: Math $x$
+expect Links off: a i
 expect From HTML: Hi there
+expect Text style: textStyle red
 expect Unknown tag: <US tech> up
 # A code block's annotations show in place of its code; its actions get
 # the block, its id too.
@@ -1399,6 +1411,40 @@ covers [props] accessibilityLabel
 covers [props] accessibilityDescription
 covers [events] onPress
 
+# base-tabs-orientation
+tap id:case-base-tabs-orientation
+expect Default selected: one
+expect Row selected: one
+expect Column selected: one
+# A list with no `orientation` moves with both pairs, as before, and
+# reports no orientation. The base app runs on iOS, where Tab does not
+# stop at views, so the focus reaches the tab through a focus event.
+event id:default-one onFocus
+key right
+expect Default selected: two
+key down
+expect Default selected: three
+key up
+expect Default selected: two
+# `"horizontal"` moves with Left and Right; Up and Down are the page's:
+# after the key settles, the tab the other pair would reach is absent.
+event id:row-one onFocus
+key right
+expect Row selected: two
+key down
+wait 300
+expect Row selected: two
+absent Row selected: three
+# `"vertical"` moves with Up and Down; Left and Right are the page's.
+event id:column-one onFocus
+key down
+expect Column selected: two
+key right
+wait 300
+expect Column selected: two
+absent Column selected: three
+covers [props] Tabs.orientation
+
 # base-toggle
 tap id:case-base-toggle
 # The group is a toolbar for screen readers; each toggle is a button of
@@ -1485,6 +1531,17 @@ covers [props] accessibilityLabel
 covers [events] onChange
 covers [events] onPressDown
 covers [events] onPressUp
+
+# base-title-bar
+tap id:case-base-title-bar
+expect Pressed: none
+# A row of its children, no padding where there are no window controls:
+# the bar as tall as the app says, its items centered across it.
+frame id:back 0 5 20 20
+frame id:share 370 5 20 20
+tap id:share
+expect Pressed: share
+covers [nsh/base] TitleBar
 
 # base-toolbar
 tap id:case-base-toolbar
@@ -2193,6 +2250,28 @@ covers [events] onChange
 covers [events] onFocus
 covers [events] onBlur
 covers [events] onSubmit
+
+# base-time-field
+tap id:case-base-time-field
+# The time the app owns, within `min` and `max`: typed digits before the
+# minimum are held to it when the hour completes.
+expect Appointment 09:30
+prop label:Appointment value 09:30
+type label:Appointment 08
+expect Appointment 09:00
+# After the maximum, held to it.
+expect Office 09:30
+type label:Office 18
+expect Office 17:30
+# A `min` after `max` leaves both out.
+expect Inverted 12:00
+type label:Inverted 08
+expect Inverted 08:00
+covers [nsh/base] TimeField
+covers [props] value
+covers [props] TimeField.min
+covers [props] TimeField.max
+covers [events] onChange
 # base-combobox
 tap id:case-base-combobox
 # The input is a combobox whose value is the selected titles.
@@ -2412,8 +2491,9 @@ tap id:case-base-scrollbar
 # puts the thumb's middle there (the thumb 48 long, `minThumbLength`'s
 # default, over the 40 of 200 of 1000 shown on 200), half its travel: 400
 # of 800; a drag 38 down goes on from there, 38 of the thumb's 152 of
-# travel: 200 more.
-style label:Pages pointerEvents auto
+# travel: 200 more. On a phone the track lets touches through to the
+# content (`box-none`); the steps below drive its responder directly.
+style label:Pages pointerEvents box-none
 frame label:Pages 290 0 10 200
 touch start label:Pages 5 100
 prop id:pages contentOffset y=400
@@ -2426,7 +2506,7 @@ touch end
 # of travel, a tenth: 90 of 900.
 style label:Feed pointerEvents none
 scroll id:feed 0 100
-style label:Feed pointerEvents auto
+style label:Feed pointerEvents box-none
 touch start label:Feed 5 22
 touch end
 prop id:feed contentOffset y=90
@@ -2553,6 +2633,17 @@ tap label:2026-10-12
 prop label:2026-10-12 accessibilityState selected=true
 nostyle label:2026-10-12 backgroundColor
 nostyle label:2026-10-06 backgroundColor
+expect Trip: none
+# The mouse moving over a later day previews the range a press there
+# makes: the days from the start to it styled by the item's
+# `data-range-preview-start:`, `data-range-preview-middle:` and
+# `data-range-preview-end:` classes, the days between not selected.
+event label:2026-10-14 onMouseMove position.x=1 position.y=1
+style label:2026-10-12 backgroundColor #ff00ffff
+style label:2026-10-13 backgroundColor #ffff00ff
+style label:2026-10-14 backgroundColor #00ffffff
+prop label:2026-10-13 accessibilityState {}
+nostyle label:2026-10-15 backgroundColor
 expect Trip: none
 tap label:2026-10-14
 expect Trip: ["2026-10-12","2026-10-14"]
@@ -3766,6 +3857,15 @@ expect token radius-card 14
 style id:up backgroundColor #138a5aff
 style id:primary backgroundColor #17171780
 style id:faded color #138a5a80
+# A number token is a factor to scale, kept while held down, and a ring's
+# width or offset with the `length:` hint.
+style id:token-scale transform scale(0.97)
+state id:token-press pressed
+style id:token-press transform scale(0.97)
+state id:token-press none
+style id:token-ring boxShadow 0 0 0 3 #138a5aff
+style id:token-ring-offset boxShadow 0 0 0 2 #ffffffff, 0 0 0 4 #138a5aff
+style id:token-inset-ring boxShadow inset 0 0 0 3 #138a5aff
 covers [nsh] token
 
 # base-set-theme
@@ -3937,6 +4037,8 @@ expect Tab a*
 expect Tab b
 expect Tab c
 expect Panel a
+# The frame showing the panel is the tab panel for screen readers.
+prop parent:parent:parent:parent:id:panel-a role tabpanel
 # A tab of the other group shows that group.
 tap text:Tab c
 expect Tab c*
@@ -4120,12 +4222,18 @@ frame id:grow 0 0 300 40
 tap id:grow-more
 wait 100
 frame id:grow 0 0 300 60
+# A replacing decoration shows its label in place of its range's text
+# while no caret touches it (the editor is not focused): `a` as `alpha`.
+expect alpha
 # The app's fold ranges (the outer one shorter than the indentation's):
 # level 2 folds the inner block alone.
 # The gutter's strip of decorations' marks is `gutterDecorationsWidth`
 # wide, before the line numbers and the fold markers: the gutter is
 # 12 + 4 + 15 + 20 + 4 wide.
 frame below:parent:parent:parent:parent:span:c(); 0 0 55 200
+# Its vertical scroll view (below the layer drawn over it) keeps its bar
+# within `scrollbarInset`.
+prop below:parent:parent:parent:parent:parent:parent:span:c(); scrollbarInset top=6 right=2 bottom=6
 tap id:fold-level
 expect Folded: 1-2
 # Folding the outer block recursively keeps the inner one folded, so
@@ -4204,6 +4312,12 @@ expect Defined: 3 key 7 5-11
 # Code actions at the selection, start first, with the caret's box.
 tap id:code-actions
 expect Acted: 5-11 5 placed
+# The seventh editor reports where its text is scrolled once laid out:
+# 30 rows of 20 points with no room past the last, wrapped (as wide as
+# its 390 × 100 viewport), at the top. The ref scrolls it, reported.
+expect Scroll: 0 0 390x600 390x100
+tap id:scroll-to
+expect Scroll: 0 470 390x600 390x100
 covers [nsh/base] Editor
 covers [events] Editor.onHover
 covers [events] Editor.onHoverEnd
@@ -4223,8 +4337,19 @@ covers [events] Editor.onInlineCompletionRequest
 covers [props] Editor.diagnostics
 covers [props] Editor.styles
 covers [props] Editor.gutterDecorationsWidth
+covers [props] scrollbarInset
 covers [events] Editor.onDefinitionRequest
 covers [events] Editor.onCodeActionRequest
+covers [events] onScroll
+
+# base-editor-fonts
+tap id:case-base-editor-fonts
+# A decoration's 26 point heading takes a row twice the editor's 20,
+# the caret there is as tall, and the code's row below keeps its 20.
+expect end
+tap id:measure
+expect Rows: 40 20 40
+covers [props] Editor.decorations
 
 # base-diff
 tap id:case-base-diff
@@ -4356,10 +4481,14 @@ expect Selected: row 2 column 2
 tap id:read
 expect Read: 2:1 0-5
 tap id:scroll
+# A typed rectangle round-trips through the same ref, with its active cell.
+tap id:select-range
+tap id:read
+expect Read: range 2:1 to 1:0 active 2:1
 # A title press reports its column. The name cell of row 1 carries the
 # class from `cellClasses`. The rendered text sits in the render's holder,
-# in the placeholder, in that cell.
-style parent:parent:parent:text:"Cell 1:name fig" backgroundColor #00ff00ff
+# in that cell.
+style parent:parent:text:"Cell 1:name fig" backgroundColor #00ff00ff
 tap text:Name
 expect Column: 0 1
 # A sortable column's sort button reports the next sort, which the app
@@ -4384,6 +4513,28 @@ covers [props] DataTable.sort
 covers [props] DataTable.renderCell
 covers [events] DataTable.onSortChange
 covers [events] DataTable.onVisibleRowsChange
+
+# base-data-table-activate
+tap id:case-base-data-table-activate
+expect Activated: none
+# A press on a cell selects it and gives the table the keyboard. Enter /
+# Return activates the focused row, the number `onRowPress` reports.
+tap text:pear
+key enter
+expect Activated: 0
+# An arrow moves the selection; Enter activates the row it moved to.
+key down
+key enter
+expect Activated: 1
+covers [events] DataTable.onRowActivate
+
+# base-data-table-fit-grow
+tap id:case-base-data-table-fit-grow
+# The name column fits its text once the rows come; the qty column grows
+# into the rest of the table's 390 points.
+expect Name
+tap id:widths
+expect Widths: fill 390 fitted true
 
 # base-rich-editor-session
 tap id:case-base-rich-editor-session
@@ -4412,7 +4563,7 @@ expect Attr: true
 expect Split: true 3
 expect Content: Plain line **b**
 expect Html: <h2>T</h2><p>a <em>b</em></p>
-expect Insert: xyb
+expect Insert: xyb aXb aZb
 expect Dispatch: all xy
 expect Node: true node
 expect Items: true true
@@ -4468,6 +4619,8 @@ covers [nsh/base] wrappingRule
 
 # base-rich-editor-tables
 tap id:case-base-rich-editor-tables
+prop scroll:text:"InternationalConferenceAuditorium" horizontal true
+scroll id:rich-editor-table-scroll 30 0
 tap text:RunTables
 expect Insert: true *|*/|
 expect AddRow: true *|*/|/|
@@ -4559,12 +4712,13 @@ expect Named: text threw
 expect Editable: false
 expect Both: threw
 expect Duplicate: threw
-expect Classes: starterKit,doc,paragraph,heading,blockquote,bulletList,orderedList,listItem,taskList,taskItem,codeBlock,hardBreak,horizontalRule,image,bold,italic,strike,code,underline,link,highlight,subscript,superscript,textStyle,textAlign,history,trailingNode,typography,listKeymap
+expect Classes: starterKit,doc,paragraph,heading,blockquote,bulletList,orderedList,listItem,taskList,taskItem,codeBlock,codeBlockHighlight,hardBreak,horizontalRule,image,bold,italic,strike,code,underline,link,highlight,subscript,superscript,textStyle,textAlign,history,trailingNode,typography,listKeymap
 covers [nsh/base] Blockquote
 covers [nsh/base] Bold
 covers [nsh/base] BulletList
 covers [nsh/base] Code
 covers [nsh/base] CodeBlock
+covers [nsh/base] CodeBlockHighlight
 covers [nsh/base] Document
 covers [nsh/base] HardBreak
 covers [nsh/base] Heading
@@ -4620,6 +4774,29 @@ expect Observed: true 1 日Seed
 # Host event names have one shared coverage key, including a component
 # that emits its own payload under that name.
 covers [events] onCompositionChange
+
+# base-rich-editor-readonly-input
+tap id:case-base-rich-editor-readonly-input
+expect Doc: Notes
+# Drive the editor's native input as a soft keyboard does: a typed
+# character, then an input method's commit.
+event label:ReadonlyNotes onChange text=x
+expect Heard: 1
+event label:ReadonlyNotes onCompositionChange composing=true text=ni
+event label:ReadonlyNotes onChange text=x你
+event label:ReadonlyNotes onCompositionChange composing=false text=""
+expect Heard: 2
+expect Doc: Notes
+covers [events] RichEditor.onReadonlyInput
+
+# base-rich-editor-accessory
+tap id:case-base-rich-editor-accessory
+# The input the editor types with names the bar, which is mounted.
+expect Format bar
+expect Rendered
+prop label:AccessoryNotes inputAccessoryViewID format
+prop label:AccessoryNotes inputAccessoryView true
+covers [props] RichEditor.inputAccessoryViewID
 
 # base-rich-editor-node-view
 tap id:case-base-rich-editor-node-view

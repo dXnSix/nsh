@@ -1,5 +1,5 @@
 use super::*;
-use crate::text_view::MarkdownExtension;
+use crate::text_view::{MarkdownExtension, MarkdownOptions};
 
 fn doc(source: &str) -> Vec<Block> {
     parse(&Parser::new(), source).blocks
@@ -157,6 +157,51 @@ fn inline_elements() {
                 content: vec![t("sm")]
             },
         ])]
+    );
+}
+
+#[test]
+fn links_and_images_can_be_left_out() {
+    let parser = Parser::new().options(MarkdownOptions {
+        links: false,
+        images: false,
+        ..MarkdownOptions::default()
+    });
+    assert_eq!(
+        parse(
+            &parser,
+            r#"<p><a href="/x">link</a> <img src="a.png" alt="Alt"></p>"#
+        )
+        .blocks,
+        vec![p(vec![t("link Alt")])]
+    );
+    assert_eq!(
+        parse(
+            &parser,
+            r#"<a href="https://x.y"><img src="a.png" alt="Alt"></a>"#
+        )
+        .blocks,
+        vec![p(vec![t("Alt")])]
+    );
+}
+
+#[test]
+fn images_off_keeps_their_links() {
+    let parser = Parser::new().options(MarkdownOptions {
+        images: false,
+        ..MarkdownOptions::default()
+    });
+    assert_eq!(
+        parse(
+            &parser,
+            r#"<a href="https://x.y"><img src="a.png" alt="Alt"></a>"#
+        )
+        .blocks,
+        vec![p(vec![Inline::Link {
+            url: "https://x.y".into(),
+            title: None,
+            content: vec![t("Alt")],
+        }])]
     );
 }
 
@@ -329,14 +374,58 @@ fn table_without_head_and_spans() {
     assert_eq!(
         blocks,
         vec![Block::Table(Table {
-            align: vec![ColumnAlign::Right, ColumnAlign::Right],
-            head: vec![cell("a"), cell("b")],
-            rows: vec![vec![TableCell {
-                colspan: Some(2),
-                ..cell("c")
-            }]],
+            align: vec![ColumnAlign::None, ColumnAlign::None],
+            head: vec![],
+            rows: vec![
+                vec![cell("a"), cell("b")],
+                vec![TableCell {
+                    colspan: Some(2),
+                    ..cell("c")
+                }]
+            ],
         })]
     );
+}
+
+/// A first row of `<td>` is a row, not a header (emails lay out their
+/// tables so); a first row of `<th>` alone is one.
+#[test]
+fn table_header_is_th_only() {
+    let rows = |blocks: Vec<Block>| match blocks.as_slice() {
+        [Block::Table(table)] => (table.head.clone(), table.rows.clone()),
+        other => panic!("not one table: {other:?}"),
+    };
+    let (head, body) = rows(doc(
+        "<table><tr><td>Item</td><td>Amount</td></tr><tr><td>A</td><td>1</td></tr></table>",
+    ));
+    assert!(head.is_empty());
+    assert_eq!(
+        body,
+        vec![
+            vec![cell("Item"), cell("Amount")],
+            vec![cell("A"), cell("1")]
+        ]
+    );
+
+    let (head, body) = rows(doc(
+        "<table><tr><th>Item</th><th>Amount</th></tr><tr><td>A</td><td>1</td></tr></table>",
+    ));
+    assert_eq!(head, vec![cell("Item"), cell("Amount")]);
+    assert_eq!(body, vec![vec![cell("A"), cell("1")]]);
+
+    // A row header (`<th>` then `<td>`) does not make a header row.
+    let (head, body) = rows(doc(
+        "<table><tr><th>Item</th><td>A</td></tr><tr><th>Total</th><td>1</td></tr></table>",
+    ));
+    assert!(head.is_empty());
+    assert_eq!(body.len(), 2);
+
+    // A `<thead>` is one, whatever its cells.
+    let (head, body) = rows(doc(
+        "<table><tbody><tr><td>A</td><td>1</td></tr></tbody><thead><tr><td>Item</td><td>Amount</td></tr></thead></table>",
+    ));
+    assert_eq!(head, vec![cell("Item"), cell("Amount")]);
+    assert_eq!(body, vec![vec![cell("A"), cell("1")]]);
 }
 
 #[test]
@@ -710,4 +799,53 @@ fn mark_colors() {
         ),
         vec![Some("rgb(1 2 3)".into()), None]
     );
+}
+
+#[test]
+fn text_colors() {
+    let colored = |color: &str, content: Vec<Inline>| Inline::TextStyle {
+        content,
+        color: Some(color.into()),
+    };
+    // A span's style, as written; whitespace collapses around it as around
+    // other formatting.
+    assert_eq!(
+        doc(r##"<p>a <span style="font-weight: bold; color: #e54545"> b </span> c</p>"##),
+        vec![p(vec![t("a "), colored("#e54545", vec![t("b")]), t(" c")])]
+    );
+    // A font's attribute, its style ranking first; formatting inside keeps
+    // the color around it.
+    assert_eq!(
+        doc(
+            r#"<p><font color="red">r</font><font color="red" style="color: rgb(0 0 255)"><b>b</b> c</font></p>"#
+        ),
+        vec![p(vec![
+            colored("red", vec![t("r")]),
+            colored(
+                "rgb(0 0 255)",
+                vec![
+                    Inline::Strong {
+                        content: vec![t("b")]
+                    },
+                    t(" c")
+                ]
+            )
+        ])]
+    );
+    // No color, none CSS reads, one that would hide the text, a span's
+    // `color` attribute (only a font has one): the content alone.
+    assert_eq!(
+        doc(
+            r#"<p><span>a</span> <span style="color: nope">b</span> <span style="color: transparent">c</span> <span color="red">d</span> <font style="color: inherit">e</font></p>"#
+        ),
+        vec![p(vec![t("a b c d e")])]
+    );
+    // A span an extension names is the extension's, its style an
+    // attribute.
+    let parser = Parser::new().extension(MarkdownExtension::tag("span", "span"));
+    let blocks = parse(&parser, r#"<p>x <span style="color: red">y</span></p>"#).blocks;
+    let Some(Block::Paragraph { content }) = blocks.first() else {
+        panic!("{blocks:?}");
+    };
+    assert!(matches!(&content[1], Inline::Custom(node) if node.name == "span"));
 }

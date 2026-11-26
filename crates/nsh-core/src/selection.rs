@@ -8,22 +8,25 @@
 //! lists the texts of an area in document order ([`SelectionTexts`]: their
 //! content, frames and hit-testing), feeds the model its gestures (pointer
 //! presses and drags with their click count, a long press, the handles'
-//! drags, select all) and draws what [`SelectionModel::ranges`] says, with
-//! its own highlight, handles and menus; copying takes
-//! [`SelectionModel::text`].
+//! drags, select all, the keys that extend it) and draws what
+//! [`SelectionModel::ranges`] says, with its own highlight, handles and
+//! menus; copying takes [`SelectionModel::text`].
 //!
 //! Offsets are UTF-16 code units, as everywhere text crosses to the
 //! platforms (`TextLine::start`); the model never puts one inside a
 //! surrogate pair.
 //!
 //! A point is hit-tested across the texts as a browser does, in reading
-//! order: a point inside a text's frame is in that text; otherwise, among
-//! the texts whose rows (vertical extent) contain the point, the
-//! horizontally nearest one; above every text, the first text's start;
-//! below every text, the last text's end; between rows, the end of the last
-//! text above (in document order) or the start of the first text below,
-//! whichever is vertically nearer (the text above on a tie). A point is
-//! clamped into the chosen text's frame before
+//! order: a point inside a text's frame is in that text; otherwise, when the
+//! point sits below a text in a closer, horizontally disjoint column than any
+//! text whose row contains the point, it stays in that column (clamping to the
+//! vertically nearer text above or below in the column) so multi-column gaps,
+//! card margins, space beneath a shorter sidebar and unequal-height table
+//! cells do not jump sideways; otherwise, among the texts whose rows (vertical
+//! extent) contain the point, the horizontally nearest one; above every text,
+//! the first text's start; between rows or below a column, the vertically
+//! nearer text above or below in the point's column (with the text above on a
+//! tie). A point is clamped into the chosen text's frame before
 //! [`SelectionTexts::offset_at`].
 //!
 //! Words are runs of letters, digits, `_` and combining marks, runs of
@@ -38,7 +41,11 @@
 
 use std::ops::Range;
 
-use crate::geometry::{Bounds, Point, Points};
+use crate::{
+    AttributedText,
+    geometry::{Bounds, Point, Points, point, size},
+    text::escape_html,
+};
 
 /// A place in the texts of an area: a text (its index in document order)
 /// and a UTF-16 offset in it.
@@ -70,20 +77,32 @@ pub trait SelectionTexts {
         self.len() == 0
     }
 
-    /// Text `i`'s content (attachments are U+FFFC, left out of copies).
+    /// Text `i`'s content (attachments are U+FFFC).
     fn content(&self, i: usize) -> &str;
 
     /// The UTF-16 range `range` of text `i` as a copy gives it. By default
     /// its content's characters without attachments' placeholders; a
     /// backend that has the texts' runs gives
-    /// [`crate::AttributedText::copied_text`], which also leaves hidden
-    /// runs out (`visibility: "hidden"` on a span).
+    /// [`crate::AttributedText::copied_text`], which puts an attachment's
+    /// copy text (`copyText`) in its place and leaves hidden runs out
+    /// (`visibility: "hidden"` on a span).
     fn copied(&self, i: usize, range: Range<u32>) -> String {
         let content = self.content(i);
         content[byte_offset(content, range.start)..byte_offset(content, range.end)]
             .chars()
             .filter(|&c| c != OBJECT_REPLACEMENT)
             .collect()
+    }
+
+    /// Text `i`'s runs, when the backend has them: what
+    /// [`SelectionModel::html`] takes bold, italic and links from. `None` by
+    /// default (a backend whose texts live on the platform's side), and a
+    /// copy is then plain text only. Hidden: only the platforms' copy reads
+    /// it so far.
+    #[doc(hidden)]
+    fn attributed(&self, i: usize) -> Option<&AttributedText> {
+        let _ = i;
+        None
     }
 
     /// Text `i`'s content box.
@@ -111,6 +130,16 @@ pub trait SelectionTexts {
     fn continues(&self, i: usize) -> bool {
         let _ = i;
         false
+    }
+
+    /// What a copy puts before text `i` when the selection takes it from
+    /// its start: the generated marker drawn beside it that selection
+    /// leaves out (a list item's `•` or `2.`, `userSelect: "none"`), so a
+    /// copied list keeps its markers as a browser's copy does. `None` by
+    /// default.
+    fn marker(&self, i: usize) -> Option<&str> {
+        let _ = i;
+        None
     }
 
     /// The box around what the characters `range` of text `i` cover, in
@@ -166,6 +195,42 @@ pub enum Handle {
     End,
 }
 
+/// How far a key moves the focus of a selection ([`SelectionModel::extend`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Movement {
+    /// A character (Shift+Left / Right): a cluster of combining marks,
+    /// joined emoji or a flag counts as one; from the end of a text to the
+    /// start of the next, which is a line break of its own.
+    Character,
+    /// To the end of the next word or the start of the previous one
+    /// (Option+Shift+Left / Right on macOS, Ctrl+Shift+Left / Right
+    /// elsewhere), over the spaces and punctuation before it.
+    Word,
+    /// To the line below or above (Shift+Down / Up), keeping to the x the
+    /// first of a run of such moves started from.
+    Line,
+    /// To the end or start of the line the focus is on (Cmd+Shift+Right /
+    /// Left on macOS, Shift+End / Home elsewhere).
+    LineEdge,
+    /// To the end or start of the paragraph (a text and the texts that
+    /// continue it), or of the next or previous one when it is there
+    /// already (Option+Shift+Down / Up on macOS).
+    Paragraph,
+    /// To the end or start of all the texts (Cmd+Shift+Down / Up on macOS,
+    /// Ctrl+Shift+End / Home elsewhere).
+    Document,
+}
+
+/// Which way a key moves the focus of a selection, in document order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// Towards the start.
+    Backward,
+    /// Towards the end.
+    Forward,
+}
+
 /// The selection of one area: an anchor where it started and a focus
 /// where it goes, extended by words or paragraphs after a double or triple
 /// click. Methods that change it return whether it changed, so the backend
@@ -181,6 +246,12 @@ pub struct SelectionModel {
     /// The keys of the texts of the anchor, the focus and the anchor unit's
     /// ends ([`SelectionTexts::key`]), as of the last change.
     keys: [Option<u64>; 4],
+    /// The x (area coordinates) a run of [`Movement::Line`] keeps to.
+    goal_x: Option<f32>,
+    /// The focus is at the end of a line rather than at the start of the
+    /// next, which is the same offset where a line wraps: where
+    /// [`Movement::LineEdge`] forward put it.
+    upstream: bool,
 }
 
 impl SelectionModel {
@@ -209,6 +280,7 @@ impl SelectionModel {
         let Some(pos) = hit(texts, point) else {
             return self.clear();
         };
+        self.forget_keys();
         if extend && self.anchor.is_some() {
             self.extend_to(texts, pos);
             self.remember(texts);
@@ -235,6 +307,7 @@ impl SelectionModel {
             return false;
         };
         let before = self.bounds();
+        self.forget_keys();
         self.extend_to(texts, pos);
         self.remember(texts);
         self.bounds() != before
@@ -247,6 +320,7 @@ impl SelectionModel {
         let Some(pos) = hit(texts, point) else {
             return self.clear();
         };
+        self.forget_keys();
         self.select_unit(texts, pos, Unit::Token);
         self.remember(texts);
         self.bounds() != before
@@ -276,6 +350,7 @@ impl SelectionModel {
         self.focus = Some(pos);
         self.granularity = Unit::Character;
         self.anchor_unit = None;
+        self.forget_keys();
         self.remember(texts);
         self.bounds() != Some((start, end))
     }
@@ -297,6 +372,7 @@ impl SelectionModel {
         self.focus = Some(clamp_position(texts, end));
         self.granularity = Unit::Character;
         self.anchor_unit = None;
+        self.forget_keys();
         self.remember(texts);
         self.bounds() != before
     }
@@ -319,6 +395,80 @@ impl SelectionModel {
         let had = self.anchor.is_some();
         *self = Self::default();
         had
+    }
+
+    /// A key extends the selection (Shift with an arrow key, Home or End):
+    /// the focus moves by `movement` towards `direction` and the anchor
+    /// stays, from a press's caret too. A selection of words or paragraphs
+    /// (a double or triple click) has no direction yet: the end `direction`
+    /// points to moves, as in desktop text views. Nothing happens without
+    /// an anchor (nothing pressed in the area) or texts.
+    pub fn extend(
+        &mut self,
+        texts: &impl SelectionTexts,
+        movement: Movement,
+        direction: Direction,
+    ) -> bool {
+        let (Some(anchor), Some(focus)) = (self.anchor, self.focus) else {
+            return false;
+        };
+        if anchor.text >= texts.len() || focus.text >= texts.len() {
+            return false;
+        }
+        let before = self.bounds();
+        let (anchor, focus) = if self.granularity == Unit::Character {
+            (anchor, focus)
+        } else {
+            let (start, end) = (anchor.min(focus), anchor.max(focus));
+            match direction {
+                Direction::Backward => (end, start),
+                Direction::Forward => (start, end),
+            }
+        };
+        let forward = direction == Direction::Forward;
+        let mut goal_x = None;
+        let mut upstream = false;
+        let to = match movement {
+            Movement::Character => step(texts, focus, forward),
+            Movement::Word => word_step(texts, focus, forward),
+            Movement::Line => {
+                let caret = caret(texts, focus, self.upstream);
+                let x = self.goal_x.unwrap_or(caret.left().0);
+                goal_x = Some(x);
+                line_step(texts, focus, caret, x, forward)
+            }
+            Movement::LineEdge => {
+                let caret = caret(texts, focus, self.upstream);
+                upstream = forward;
+                line_edge(texts, focus, caret, forward)
+            }
+            Movement::Paragraph => paragraph_step(texts, focus, forward),
+            Movement::Document => document_edge(texts, forward),
+        };
+        self.anchor = Some(anchor);
+        self.focus = Some(clamp_position(texts, to));
+        self.granularity = Unit::Character;
+        self.anchor_unit = None;
+        self.goal_x = goal_x;
+        self.upstream = upstream;
+        self.remember(texts);
+        self.bounds() != before
+    }
+
+    /// The caret at the selection's focus (a box of no width, line high, in
+    /// the texts' coordinates): where a key that extends the selection
+    /// leaves it, for the backend to scroll into view. `None` without a
+    /// selection.
+    pub fn focus_caret(&self, texts: &impl SelectionTexts) -> Option<Bounds<Points>> {
+        let focus = self.focus.filter(|f| f.text < texts.len())?;
+        Some(caret(texts, focus, self.upstream))
+    }
+
+    /// Forgets what a run of keys kept: the x of line moves, the end of a
+    /// line the focus was put at.
+    fn forget_keys(&mut self) {
+        self.goal_x = None;
+        self.upstream = false;
     }
 
     /// The texts changed (new content, texts added or gone): positions are
@@ -385,6 +535,13 @@ impl SelectionModel {
         ];
     }
 
+    /// Where the selection goes: the end a drag moves (`None` without a
+    /// selection). A selection drag autoscrolls the scroll views around
+    /// its text, innermost first.
+    pub fn focus(&self) -> Option<TextPosition> {
+        self.focus
+    }
+
     /// The start and the end, in document order (`None` without a
     /// selection).
     pub fn bounds(&self) -> Option<(TextPosition, TextPosition)> {
@@ -420,19 +577,101 @@ impl SelectionModel {
             .collect()
     }
 
-    /// The selected text, as a copy gives it: each text's selected part,
-    /// attachments and hidden runs left out ([`SelectionTexts::copied`]),
+    /// The selected text, as a copy gives it: each text's selected part
+    /// as [`SelectionTexts::copied`] gives it (attachments as their copy
+    /// text, hidden runs left out),
     /// a text that continues the one before it
     /// ([`SelectionTexts::continues`]) joined to it with nothing between,
     /// other texts on one row (their frames overlap vertically) joined by a
-    /// tab, the others by a line break; an empty text inside the selection
-    /// counts as a text, so a blank line stays in the copy.
+    /// tab, the others by a line break, or by a blank line when a gap of
+    /// at least [`BLOCK_BREAK`] lies between two single-text rows (two
+    /// paragraphs, two messages; a table's rows stay a line apart); a text taken from its start gets its marker
+    /// ([`SelectionTexts::marker`]) before it. An empty text inside the
+    /// selection counts as a text, so a blank line stays in the copy.
     pub fn text(&self, texts: &impl SelectionTexts) -> String {
+        let rows = self.rows(texts, |i, range, marker| {
+            let mut part = String::new();
+            if let Some(marker) = marker {
+                part.push_str(marker);
+                part.push(' ');
+            }
+            part.push_str(&texts.copied(i, range));
+            part
+        });
         let mut out = String::new();
+        for (n, (gap, cells)) in rows.iter().enumerate() {
+            if n > 0 {
+                out.push('\n');
+                if block_break(&rows, n, *gap) {
+                    out.push('\n');
+                }
+            }
+            out.push_str(&cells.join("\t"));
+        }
+        out
+    }
+
+    /// The selection as an HTML fragment, for the `text/html` flavor of a
+    /// copy beside [`Self::text`]: the same parts, rows and markers, each
+    /// text's part as [`AttributedText::copied_html`] gives it (bold,
+    /// italic and links kept), the rows a blank line apart in [`Self::text`]
+    /// in `<p>`s of their own and the others a `<br>` apart. `None` when
+    /// nothing selected is bold, italic or a link (a plain copy stays
+    /// plain text), or no selected text has runs
+    /// ([`SelectionTexts::attributed`]). Hidden: only the platforms' copy
+    /// reads it so far.
+    #[doc(hidden)]
+    pub fn html(&self, texts: &impl SelectionTexts) -> Option<String> {
+        let mut formatted = false;
+        let rows = self.rows(texts, |i, range, marker| {
+            let mut part = String::new();
+            if let Some(marker) = marker {
+                escape_html(&mut part, marker);
+                part.push(' ');
+            }
+            match texts.attributed(i) {
+                Some(text) => {
+                    let (html, styled) = text.copied_html(range);
+                    formatted |= styled;
+                    part.push_str(&html);
+                }
+                None => escape_html(&mut part, &texts.copied(i, range)),
+            }
+            part
+        });
+        if !formatted {
+            return None;
+        }
+        let mut out = String::from("<meta charset=\"utf-8\"><p>");
+        for (n, (gap, cells)) in rows.iter().enumerate() {
+            if n > 0 {
+                out.push_str(if block_break(&rows, n, *gap) {
+                    "</p><p>"
+                } else {
+                    "<br>"
+                });
+            }
+            out.push_str(&cells.join("\t"));
+        }
+        out.push_str("</p>");
+        Some(out)
+    }
+
+    /// The selection's parts in rows ([`Self::text`]), each row with
+    /// whether a block gap lies above it: `part` gives text `i`'s selected
+    /// `range`, with the marker before it when the selection takes it from
+    /// its start.
+    fn rows(
+        &self,
+        texts: &impl SelectionTexts,
+        mut part: impl FnMut(usize, Range<u32>, Option<&str>) -> String,
+    ) -> Vec<(bool, Vec<String>)> {
+        // Rows of cells, each with whether a block gap lies above it.
+        let mut rows: Vec<(bool, Vec<String>)> = Vec::new();
         let mut previous: Option<(usize, Bounds<Points>)> = None;
         let ranges = self.ranges(texts);
         let (Some(&(first, _)), Some(&(last, _))) = (ranges.first(), ranges.last()) else {
-            return out;
+            return rows;
         };
         let mut ranges = ranges.into_iter().peekable();
         for i in first..=last {
@@ -444,16 +683,33 @@ impl SelectionModel {
                 None => continue,
             };
             let frame = texts.frame(i);
-            if let Some((before, previous)) = previous
-                && (before + 1 != i || !continues(texts, i))
-            {
-                let same_row = previous.top() < frame.bottom() && frame.top() < previous.bottom();
-                out.push(if same_row { '\t' } else { '\n' });
+            let marker = if range.start == 0 && !range.is_empty() {
+                texts.marker(i)
+            } else {
+                None
+            };
+            let part = part(i, range, marker);
+            match previous {
+                Some((before, _)) if before + 1 == i && continues(texts, i) => {
+                    if let Some(cell) = rows.last_mut().and_then(|r| r.1.last_mut()) {
+                        cell.push_str(&part);
+                    }
+                }
+                Some((_, previous))
+                    if previous.top() < frame.bottom() && frame.top() < previous.bottom() =>
+                {
+                    if let Some(row) = rows.last_mut() {
+                        row.1.push(part);
+                    }
+                }
+                Some((_, previous)) => {
+                    rows.push((frame.top() - previous.bottom() >= BLOCK_BREAK, vec![part]))
+                }
+                None => rows.push((false, vec![part])),
             }
             previous = Some((i, frame));
-            out.push_str(&texts.copied(i, range));
         }
-        out
+        rows
     }
 
     /// The box around what is selected in `texts`, in their coordinates:
@@ -642,35 +898,242 @@ fn hit(texts: &impl SelectionTexts, point: Point<Points>) -> Option<TextPosition
         );
         clamp_position(texts, TextPosition::new(i, texts.offset_at(i, clamped)))
     };
-    if let Some(i) = (0..count).find(|&i| texts.frame(i).contains(&point)) {
+    let end_of = |i: usize| TextPosition::new(i, utf16_len(texts.content(i)));
+    let start_of = |i: usize| TextPosition::new(i, 0);
+    let h_dist = |frame: Bounds<Points>| {
+        if point.x < frame.left() {
+            frame.left() - point.x
+        } else if point.x > frame.right() {
+            point.x - frame.right()
+        } else {
+            Points::ZERO
+        }
+    };
+    let v_dist = |frame: Bounds<Points>| {
+        if point.y < frame.top() {
+            frame.top() - point.y
+        } else if point.y > frame.bottom() {
+            point.y - frame.bottom()
+        } else {
+            Points::ZERO
+        }
+    };
+    let h_overlaps =
+        |a: Bounds<Points>, b: Bounds<Points>| a.left() < b.right() && b.left() < a.right();
+
+    // 1. Inside a text's frame: topmost (last in paint order) wins when frames overlap.
+    if let Some(i) = (0..count).rfind(|&i| texts.frame(i).contains(&point)) {
         return Some(at(i));
     }
-    // The texts on the point's row: the horizontally nearest.
+
+    // 2. Nearest texts above and below `point` in `point.x`'s column.
+    //    First check texts whose horizontal span covers `point.x`; when
+    //    `point` sits in a margin or beside shorter lines, anchor on the
+    //    horizontally nearest non-empty-width text (ties broken vertically).
+    let mut col_above: Option<(usize, Points)> = None;
+    let mut col_below: Option<(usize, Points)> = None;
+    let mut any_covering_x = false;
+    for i in 0..count {
+        let frame = texts.frame(i);
+        if h_dist(frame) != Points::ZERO {
+            continue;
+        }
+        any_covering_x = true;
+        if frame.bottom() <= point.y {
+            let d = point.y - frame.bottom();
+            if col_above.is_none_or(|(_, best)| d <= best) {
+                col_above = Some((i, d));
+            }
+        }
+        if frame.top() > point.y {
+            let d = frame.top() - point.y;
+            if col_below.is_none_or(|(_, best)| d < best) {
+                col_below = Some((i, d));
+            }
+        }
+    }
+    let nearest_in_column = |anchor: Bounds<Points>, above: bool, base: Option<(usize, Points)>| {
+        let mut best = base;
+        for i in 0..count {
+            let frame = texts.frame(i);
+            if !h_overlaps(frame, anchor) {
+                continue;
+            }
+            if above && frame.bottom() <= point.y {
+                let d = point.y - frame.bottom();
+                if best.is_none_or(|(bi, b)| {
+                    d < b || (d == b && h_dist(frame) <= h_dist(texts.frame(bi)))
+                }) {
+                    best = Some((i, d));
+                }
+            } else if !above && frame.top() > point.y {
+                let d = frame.top() - point.y;
+                if best.is_none_or(|(bi, b)| {
+                    d < b || (d == b && h_dist(frame) < h_dist(texts.frame(bi)))
+                }) {
+                    best = Some((i, d));
+                }
+            }
+        }
+        best
+    };
+    let refine_covering = |anchor_idx: usize,
+                           other_idx: Option<usize>,
+                           above: bool,
+                           base: Option<(usize, Points)>| {
+        let anchor = texts.frame(anchor_idx);
+        let restrict = other_idx
+            .map(|o| texts.frame(o))
+            .filter(|o| o.size.width < anchor.size.width && h_overlaps(*o, anchor));
+        // Among texts overlapping `anchor` that sit closer vertically than
+        // `base` (and stay within any narrower opposite-side column), pick the
+        // horizontally nearest one first so a full-width header/footer cannot
+        // pull in a closer text from a disjoint sibling column.
+        let sub_anchor = (0..count)
+            .filter(|&i| {
+                let frame = texts.frame(i);
+                if frame.size.width <= Points::ZERO || !h_overlaps(frame, anchor) {
+                    return false;
+                }
+                if let Some(r) = restrict
+                    && !h_overlaps(frame, r)
+                {
+                    return false;
+                }
+                if above {
+                    frame.bottom() <= point.y
+                        && base.is_none_or(|(_, b)| point.y - frame.bottom() < b)
+                } else {
+                    frame.top() > point.y && base.is_none_or(|(_, b)| frame.top() - point.y < b)
+                }
+            })
+            .min_by(|&a, &b| {
+                let (fa, fb) = (texts.frame(a), texts.frame(b));
+                h_dist(fa)
+                    .partial_cmp(&h_dist(fb))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| {
+                        v_dist(fa)
+                            .partial_cmp(&v_dist(fb))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| if above { b.cmp(&a) } else { a.cmp(&b) })
+            });
+        match sub_anchor {
+            Some(sub) => nearest_in_column(texts.frame(sub), above, base),
+            None => base,
+        }
+    };
+    if any_covering_x {
+        // A shorter line in the same column may sit closer vertically than a
+        // wider text that covered `point.x` (e.g. a short last paragraph under
+        // a wide one, or a short heading above a wide paragraph).
+        let (orig_above, orig_below) = (col_above, col_below);
+        if let Some((a, _)) = orig_above {
+            col_above = refine_covering(a, orig_below.map(|(b, _)| b), true, orig_above);
+        }
+        if let Some((b, _)) = orig_below {
+            col_below = refine_covering(b, col_above.map(|(a, _)| a), false, orig_below);
+        } else if let Some((a, _)) = col_above {
+            col_below = refine_covering(a, None, false, None);
+        }
+        if orig_above.is_none()
+            && let Some((b, _)) = col_below
+        {
+            col_above = refine_covering(b, None, true, None);
+        }
+    } else if let Some(anchor) = (0..count)
+        .filter(|&i| texts.frame(i).size.width > Points::ZERO)
+        .min_by(|&a, &b| {
+            let (fa, fb) = (texts.frame(a), texts.frame(b));
+            h_dist(fa)
+                .partial_cmp(&h_dist(fb))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    v_dist(fa)
+                        .partial_cmp(&v_dist(fb))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        })
+    {
+        let anchor_frame = texts.frame(anchor);
+        col_above = nearest_in_column(anchor_frame, true, None);
+        col_below = nearest_in_column(anchor_frame, false, None);
+    }
+
+    // 3. The texts on the point's row: the horizontally nearest.
     let mut nearest: Option<(usize, Points)> = None;
     for i in 0..count {
         let frame = texts.frame(i);
         if point.y >= frame.top() && point.y < frame.bottom() {
-            let distance = if point.x < frame.left() {
-                frame.left() - point.x
-            } else {
-                (point.x - frame.right()).max(Points::ZERO)
-            };
+            let distance = h_dist(frame);
             if nearest.is_none_or(|(_, best)| distance < best) {
                 nearest = Some((i, distance));
             }
         }
     }
-    if let Some((i, _)) = nearest {
+    if let Some((i, row_h_dist)) = nearest {
+        let row_frame = texts.frame(i);
+        // When `point` sits below a text in a closer, horizontally disjoint
+        // column, stay in that column instead of jumping sideways across
+        // columns (gaps in a left column, card margins, space below a shorter
+        // right sidebar, or blank space in a 1-line table cell beside a
+        // wrapped sibling cell).
+        if let Some((a, to_above)) = col_above
+            && !h_overlaps(texts.frame(a), row_frame)
+            && h_dist(texts.frame(a)) < row_h_dist
+        {
+            return Some(match col_below {
+                Some((b, to_below))
+                    if to_below < to_above && h_dist(texts.frame(b)) < row_h_dist =>
+                {
+                    start_of(b)
+                }
+                _ => end_of(a),
+            });
+        }
         return Some(at(i));
     }
-    // Between rows: the end of the last text above or the start of the
-    // first text below, whichever is nearer.
+
+    // 4. Between rows, above all, or below all.
+    if (0..count).all(|i| texts.frame(i).bottom() > point.y) {
+        return Some(start_of(0));
+    }
+    let below_all = (0..count).all(|i| texts.frame(i).bottom() <= point.y);
+    let v_overlaps =
+        |a: Bounds<Points>, b: Bounds<Points>| a.top() < b.bottom() && b.top() < a.bottom();
+    match (col_above, col_below) {
+        (Some((a, to_above)), Some((b, to_below))) => {
+            return Some(if to_above <= to_below {
+                end_of(a)
+            } else {
+                start_of(b)
+            });
+        }
+        (Some((a, _)), None) => {
+            // Below every text in the area: if `a` shares the bottom row with
+            // later sibling cells (e.g. a multi-column table), reach the end
+            // of that row instead of truncating at column 1.
+            let target = if below_all {
+                let af = texts.frame(a);
+                (a..count)
+                    .rev()
+                    .find(|&i| v_overlaps(texts.frame(i), af))
+                    .unwrap_or(a)
+            } else {
+                a
+            };
+            return Some(end_of(target));
+        }
+        (None, Some((b, _))) => return Some(start_of(b)),
+        (None, None) => {}
+    }
+
+    // Fallback when only zero-width or zero-height frames exist.
     let above = (0..count)
         .rev()
         .find(|&i| texts.frame(i).bottom() <= point.y);
     let below = (0..count).find(|&i| texts.frame(i).top() > point.y);
-    let end_of = |i: usize| TextPosition::new(i, utf16_len(texts.content(i)));
-    let start_of = |i: usize| TextPosition::new(i, 0);
     Some(match (above, below) {
         (Some(a), Some(b)) => {
             let to_above = point.y - texts.frame(a).bottom();
@@ -683,7 +1146,6 @@ fn hit(texts: &impl SelectionTexts, point: Point<Points>) -> Option<TextPosition
         }
         (Some(a), None) => end_of(a),
         (None, Some(b)) => start_of(b),
-        // Only frames of no height, which no row contains.
         (None, None) => end_of(count - 1),
     })
 }
@@ -740,6 +1202,36 @@ fn unit_at(
     }
 }
 
+/// The vertical gap between two texts from which a copy puts a blank line
+/// between them, as between two paragraphs: wider than the spacing of a
+/// list's items or a text's lines, narrower than a paragraph's.
+pub const BLOCK_BREAK: Points = Points(8.0);
+
+/// The marker of a text whose frame is `frame`, given the last text that
+/// selection leaves out before it (`chrome`, its content and frame): that
+/// text when it is a short marker drawn on the text's first row, to its
+/// left (a list item's `•`, `2.` or `a)`). A backend listing an area's
+/// texts calls it with the unselectable text it passed last.
+pub fn marker_of(
+    chrome: Option<&(String, Bounds<Points>)>,
+    frame: Bounds<Points>,
+) -> Option<String> {
+    let (text, at) = chrome?;
+    let text = text.trim();
+    let short = !text.is_empty() && text.chars().count() <= 4 && !text.contains('\n');
+    let beside = at.right() <= frame.left() + Points(1.0)
+        && at.top() < frame.top() + Points(24.0)
+        && frame.top() < at.bottom();
+    (short && beside).then(|| text.to_string())
+}
+
+/// Whether row `n` of a copy's [`SelectionModel::rows`] starts a new block
+/// (a blank line before it): a block gap lies above it (`gap`) and it and
+/// the row before are single texts. A table's rows stay a line apart.
+fn block_break(rows: &[(bool, Vec<String>)], n: usize, gap: bool) -> bool {
+    gap && rows[n].1.len() == 1 && rows[n - 1].1.len() == 1
+}
+
 /// Whether text `i` continues the text before it (never the first).
 fn continues(texts: &impl SelectionTexts, i: usize) -> bool {
     i > 0 && i < texts.len() && texts.continues(i)
@@ -757,6 +1249,293 @@ fn line_of(texts: &impl SelectionTexts, i: usize) -> (usize, usize) {
         last += 1;
     }
     (first, last)
+}
+
+/// The offsets of `text` a caret can stop at (UTF-16): between clusters,
+/// not inside a pair of surrogates, before a combining mark, around a
+/// zero-width joiner, before a variation selector, skin tone or tag, or in
+/// a flag's pair of regional indicators. Its start and end included.
+fn caret_stops(text: &str) -> Vec<u32> {
+    let mut stops = vec![0];
+    let mut at = 0u32;
+    let mut previous: Option<char> = None;
+    // Regional indicators in the cluster so far.
+    let mut flags = 0;
+    for c in text.chars() {
+        let regional = matches!(c, '\u{1F1E6}'..='\u{1F1FF}');
+        let joins = at > 0
+            && (is_combining_mark(c)
+                || previous == Some('\u{200D}')
+                || matches!(c,
+                    '\u{FE00}'..='\u{FE0F}'
+                    | '\u{1F3FB}'..='\u{1F3FF}'
+                    | '\u{E0020}'..='\u{E007F}'
+                    | '\u{E0100}'..='\u{E01EF}')
+                || (regional && flags == 1)
+                || (c == '\n' && previous == Some('\r')));
+        if !joins && at > 0 {
+            stops.push(at);
+            flags = 0;
+        }
+        if regional {
+            flags += 1;
+        }
+        at += c.len_utf16() as u32;
+        previous = Some(c);
+    }
+    if at > 0 {
+        stops.push(at);
+    }
+    stops
+}
+
+/// The position one character from `pos` towards the end (`forward`) or
+/// the start. From a text's end it goes to the next text's start, a line
+/// break of its own, or one character into it when it continues the text
+/// (where nothing comes between the two).
+fn step(texts: &impl SelectionTexts, pos: TextPosition, forward: bool) -> TextPosition {
+    let stops = caret_stops(texts.content(pos.text));
+    let len = stops.last().copied().unwrap_or(0);
+    if forward {
+        if pos.offset < len {
+            let next = stops.iter().copied().find(|&s| s > pos.offset);
+            return TextPosition::new(pos.text, next.unwrap_or(len));
+        }
+        if pos.text + 1 >= texts.len() {
+            return pos;
+        }
+        let next = TextPosition::new(pos.text + 1, 0);
+        if continues(texts, next.text) {
+            step(texts, next, true)
+        } else {
+            next
+        }
+    } else {
+        if pos.offset > 0 {
+            let before = stops.iter().copied().rev().find(|&s| s < pos.offset);
+            return TextPosition::new(pos.text, before.unwrap_or(0));
+        }
+        if pos.text == 0 {
+            return pos;
+        }
+        let end = TextPosition::new(pos.text - 1, utf16_len(texts.content(pos.text - 1)));
+        if continues(texts, pos.text) {
+            step(texts, end, false)
+        } else {
+            end
+        }
+    }
+}
+
+/// The character after `pos` (`forward`) or before it, and the position on
+/// its other side: a line break between two texts unless the second
+/// continues the first. `None` at the end or the start of the texts.
+fn char_beside(
+    texts: &impl SelectionTexts,
+    pos: TextPosition,
+    forward: bool,
+) -> Option<(char, TextPosition)> {
+    let content = texts.content(pos.text);
+    let len = utf16_len(content);
+    let inside = if forward {
+        pos.offset < len
+    } else {
+        pos.offset > 0
+    };
+    if inside {
+        let at = byte_offset(content, pos.offset);
+        let c = if forward {
+            content[at..].chars().next()
+        } else {
+            content[..at].chars().next_back()
+        }?;
+        let width = c.len_utf16() as u32;
+        let offset = if forward {
+            pos.offset + width
+        } else {
+            pos.offset - width
+        };
+        return Some((c, TextPosition::new(pos.text, offset)));
+    }
+    let to = if forward {
+        (pos.text + 1 < texts.len()).then(|| TextPosition::new(pos.text + 1, 0))?
+    } else {
+        let i = pos.text.checked_sub(1)?;
+        TextPosition::new(i, utf16_len(texts.content(i)))
+    };
+    let joined = continues(texts, if forward { to.text } else { pos.text });
+    if joined {
+        char_beside(texts, to, forward)
+    } else {
+        Some(('\n', to))
+    }
+}
+
+/// The end of the next word after `pos` (`forward`) or the start of the
+/// one before it, over the spaces, punctuation and line breaks between: a
+/// run of letters, digits and `_`, or one ideograph or kana.
+fn word_step(texts: &impl SelectionTexts, pos: TextPosition, forward: bool) -> TextPosition {
+    let is_word = |c: char| CharKind::of(c) == CharKind::Word;
+    let mut at = pos;
+    while let Some((c, next)) = char_beside(texts, at, forward) {
+        if is_word(c) || is_spaceless_script(c) {
+            break;
+        }
+        at = next;
+    }
+    if let Some((c, next)) = char_beside(texts, at, forward)
+        && is_spaceless_script(c)
+    {
+        return next;
+    }
+    while let Some((c, next)) = char_beside(texts, at, forward) {
+        if !is_word(c) {
+            break;
+        }
+        at = next;
+    }
+    at
+}
+
+/// The caret at `pos` (a box of no width, line high, in the texts'
+/// coordinates): at the right edge of the character before it when
+/// `upstream` (the end of a line), else at the left edge of the one after
+/// it; at the left of the text's frame, as high as it, where the texts
+/// cannot place characters ([`SelectionTexts::range_bounds`]).
+fn caret(texts: &impl SelectionTexts, pos: TextPosition, upstream: bool) -> Bounds<Points> {
+    let content = texts.content(pos.text);
+    let stops = caret_stops(content);
+    let at = byte_offset(content, pos.offset);
+    // A line break's box is not on the line of the caret beside it.
+    let breaks =
+        |c: Option<char>| c.is_some_and(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}'));
+    let before = stops
+        .iter()
+        .copied()
+        .rev()
+        .find(|&s| s < pos.offset)
+        .filter(|_| !breaks(content[..at].chars().next_back()))
+        .and_then(|s| texts.range_bounds(pos.text, s..pos.offset))
+        .map(|b| (b.right(), b));
+    let after = stops
+        .iter()
+        .copied()
+        .find(|&s| s > pos.offset)
+        .filter(|_| !breaks(content[at..].chars().next()))
+        .and_then(|s| texts.range_bounds(pos.text, pos.offset..s))
+        .map(|b| (b.left(), b));
+    let edge = if upstream {
+        before.or(after)
+    } else {
+        after.or(before)
+    };
+    match edge {
+        Some((x, b)) => Bounds::new(point(x, b.top()), size(Points(0.0), b.size.height)),
+        None => {
+            let frame = texts.frame(pos.text);
+            Bounds::new(frame.origin, size(Points(0.0), frame.size.height))
+        }
+    }
+}
+
+/// The position on the line below `caret` (`forward`) or above it nearest
+/// `x`: in the focus's text while it has a line there, else in the first
+/// text after it whose top is below the caret's line (the last before it
+/// whose bottom is above), skipping the texts beside it on its row. Past
+/// the last line, the end of the texts; before the first, their start.
+fn line_step(
+    texts: &impl SelectionTexts,
+    pos: TextPosition,
+    caret: Bounds<Points>,
+    x: f32,
+    forward: bool,
+) -> TextPosition {
+    let half = caret.size.height.0 / 2.0;
+    let frame = texts.frame(pos.text);
+    let in_text = |i: usize, y: f32| {
+        let frame = texts.frame(i);
+        let x = x.clamp(frame.left().0, frame.right().0.max(frame.left().0));
+        let y = y.clamp(frame.top().0, frame.bottom().0.max(frame.top().0));
+        TextPosition::new(i, texts.offset_at(i, point(Points(x), Points(y))))
+    };
+    // A little slack: lines and texts placed at fractional points.
+    const SLACK: f32 = 0.5;
+    if forward {
+        let y = caret.bottom().0 + half;
+        if y < frame.bottom().0 {
+            return in_text(pos.text, y);
+        }
+        let below = (pos.text + 1..texts.len())
+            .find(|&i| texts.frame(i).top().0 >= caret.bottom().0 - SLACK);
+        match below {
+            Some(i) => {
+                let top = texts.frame(i).top().0;
+                in_text(i, top + half.min(texts.frame(i).size.height.0 / 2.0))
+            }
+            None => document_edge(texts, true),
+        }
+    } else {
+        let y = caret.top().0 - half;
+        if y > frame.top().0 {
+            return in_text(pos.text, y);
+        }
+        let above = (0..pos.text)
+            .rev()
+            .find(|&i| texts.frame(i).bottom().0 <= caret.top().0 + SLACK);
+        match above {
+            Some(i) => {
+                let bottom = texts.frame(i).bottom().0;
+                in_text(i, bottom - half.min(texts.frame(i).size.height.0 / 2.0))
+            }
+            None => document_edge(texts, false),
+        }
+    }
+}
+
+/// The end (`forward`) or the start of the line `caret` is on, in the
+/// focus's text.
+fn line_edge(
+    texts: &impl SelectionTexts,
+    pos: TextPosition,
+    caret: Bounds<Points>,
+    forward: bool,
+) -> TextPosition {
+    let frame = texts.frame(pos.text);
+    let x = if forward { frame.right() } else { frame.left() };
+    let y = caret.top() + caret.size.height * 0.5;
+    TextPosition::new(pos.text, texts.offset_at(pos.text, point(x, y)))
+}
+
+/// The end (`forward`) or the start of the paragraph `pos` is in (its text
+/// and the texts that continue it), or of the next or previous paragraph
+/// when it is there already.
+fn paragraph_step(texts: &impl SelectionTexts, pos: TextPosition, forward: bool) -> TextPosition {
+    let (first, last) = line_of(texts, pos.text);
+    if forward {
+        let end = TextPosition::new(last, utf16_len(texts.content(last)));
+        if pos < end || last + 1 >= texts.len() {
+            return end;
+        }
+        let (_, next) = line_of(texts, last + 1);
+        TextPosition::new(next, utf16_len(texts.content(next)))
+    } else {
+        let start = TextPosition::new(first, 0);
+        if pos > start || first == 0 {
+            return start;
+        }
+        let (previous, _) = line_of(texts, first - 1);
+        TextPosition::new(previous, 0)
+    }
+}
+
+/// The end (`forward`) or the start of all the texts.
+fn document_edge(texts: &impl SelectionTexts, forward: bool) -> TextPosition {
+    if forward && !texts.is_empty() {
+        let last = texts.len() - 1;
+        TextPosition::new(last, utf16_len(texts.content(last)))
+    } else {
+        TextPosition::new(0, 0)
+    }
 }
 
 /// What kind of character `c` is, for word boundaries.
@@ -1131,7 +1910,10 @@ mod tests {
             model.ranges(&texts),
             vec![(0, 2..11), (1, 0..21), (2, 0..3)]
         );
-        assert_eq!(model.text(&texts), "llo world\nSecond line\nmore text\nLas");
+        assert_eq!(
+            model.text(&texts),
+            "llo world\n\nSecond line\nmore text\n\nLas"
+        );
         assert!(
             !model.drag(&texts, at(24.0, 105.0)),
             "the same point changes nothing"
@@ -1203,7 +1985,7 @@ mod tests {
         assert_eq!(model.bounds(), Some((pos(0, 0), pos(2, 4))));
         assert_eq!(
             model.text(&texts),
-            "Hello world\nSecond line\nmore text\nLast"
+            "Hello world\n\nSecond line\nmore text\n\nLast"
         );
     }
 
@@ -1266,7 +2048,7 @@ mod tests {
         assert_eq!(model.bounds(), Some((pos(1, 0), pos(1, 21))));
         model.drag(&texts, at(8.0, 105.0));
         assert_eq!(model.bounds(), Some((pos(1, 0), pos(2, 4))));
-        assert_eq!(model.text(&texts), "Second line\nmore text\nLast");
+        assert_eq!(model.text(&texts), "Second line\nmore text\n\nLast");
         model.drag(&texts, at(8.0, 5.0));
         assert_eq!(model.bounds(), Some((pos(0, 0), pos(1, 21))));
     }
@@ -1312,10 +2094,156 @@ mod tests {
         assert_eq!(model.bounds(), Some((pos(0, 0), pos(0, 2))));
         assert!(model.move_handle(&texts, Handle::Start, at(8.0, 45.0)));
         assert_eq!(model.bounds(), Some((pos(0, 2), pos(1, 1))));
-        assert_eq!(model.text(&texts), "llo world\nS");
+        assert_eq!(model.text(&texts), "llo world\n\nS");
         // The start handle passed the end: it is the end now.
         assert!(model.move_handle(&texts, Handle::End, at(24.0, 5.0)));
         assert_eq!(model.bounds(), Some((pos(0, 2), pos(0, 3))));
+    }
+
+    /// Texts with runs ([`SelectionTexts::attributed`]), one per row,
+    /// the rows `.1` apart, with an optional marker each.
+    struct Rich(Vec<(AttributedText, Option<&'static str>)>, f32);
+
+    impl SelectionTexts for Rich {
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        fn content(&self, i: usize) -> &str {
+            &self.0[i].0.text
+        }
+
+        fn copied(&self, i: usize, range: Range<u32>) -> String {
+            self.0[i].0.copied_text(range)
+        }
+
+        fn attributed(&self, i: usize) -> Option<&AttributedText> {
+            Some(&self.0[i].0)
+        }
+
+        fn marker(&self, i: usize) -> Option<&str> {
+            self.0[i].1
+        }
+
+        fn frame(&self, i: usize) -> Bounds<Points> {
+            bounds(
+                point(px(0.0), px(i as f32 * (20.0 + self.1))),
+                size(px(400.0), px(20.0)),
+            )
+        }
+
+        fn offset_at(&self, _: usize, _: Point<Points>) -> u32 {
+            0
+        }
+    }
+
+    fn rich(parts: &[(&str, u16, bool, Option<&str>)]) -> AttributedText {
+        let mut t = AttributedText::default();
+        for &(s, weight, italic, href) in parts {
+            let start = t.len_utf16();
+            t.push(
+                s,
+                crate::ResolvedTextStyle {
+                    font_weight: weight,
+                    italic,
+                    ..Default::default()
+                },
+            );
+            if let Some(href) = href {
+                t.link_hrefs
+                    .push(crate::text::LinkHref::new(t.links.len() as u32, href));
+                t.links.push(crate::text::TextLink {
+                    start,
+                    end: t.len_utf16(),
+                    node: 0,
+                    events: Default::default(),
+                    focus_stop: true,
+                });
+            }
+        }
+        t
+    }
+
+    #[test]
+    fn html_keeps_bold_italic_and_links() {
+        let texts = Rich(
+            vec![
+                (rich(&[("Title", 700, false, None)]), None),
+                (
+                    rich(&[
+                        ("See ", 400, false, None),
+                        ("the <docs>", 400, false, Some("https://x.y/?a=1&b=\"2\"")),
+                        (" and ", 400, false, None),
+                        ("this", 600, true, None),
+                    ]),
+                    None,
+                ),
+                (rich(&[("one & two", 400, true, None)]), Some("\u{2022}")),
+            ],
+            12.0,
+        );
+        let mut model = SelectionModel::new();
+        assert!(model.select_all(&texts));
+        assert_eq!(
+            model.text(&texts),
+            "Title\n\nSee the <docs> and this\n\n\u{2022} one & two"
+        );
+        assert_eq!(
+            model.html(&texts).as_deref(),
+            Some(
+                "<meta charset=\"utf-8\"><p><b>Title</b></p><p>See \
+                 <a href=\"https://x.y/?a=1&amp;b=&quot;2&quot;\">the &lt;docs&gt;</a> and \
+                 <b><i>this</i></b></p><p>\u{2022} <i>one &amp; two</i></p>"
+            )
+        );
+    }
+
+    #[test]
+    fn html_of_plain_text_is_none() {
+        let texts = Rich(
+            vec![
+                (rich(&[("one", 400, false, None)]), None),
+                (rich(&[("two\nthree", 400, false, None)]), None),
+            ],
+            0.0,
+        );
+        let mut model = SelectionModel::new();
+        assert!(model.select_all(&texts));
+        assert_eq!(model.text(&texts), "one\ntwo\nthree");
+        assert_eq!(model.html(&texts), None);
+        // Line breaks inside a text and rows without a gap are `<br>`s.
+        let texts = Rich(
+            vec![
+                (rich(&[("one", 700, false, None)]), None),
+                (rich(&[("two\nthree", 400, false, None)]), None),
+            ],
+            0.0,
+        );
+        assert_eq!(
+            model.html(&texts).as_deref(),
+            Some("<meta charset=\"utf-8\"><p><b>one</b><br>two<br>three</p>")
+        );
+    }
+
+    #[test]
+    fn copied_html_skips_hidden_runs_and_uses_copy_texts() {
+        let bold = crate::ResolvedTextStyle {
+            font_weight: 700,
+            ..Default::default()
+        };
+        let mut t = AttributedText::default();
+        t.push("a", bold);
+        t.push("hidden", bold.hide());
+        t.copy_texts
+            .push(crate::AttachmentCopyText::new(t.len_utf16(), "$x<1$"));
+        t.push_attachment(crate::geometry::size_pt(8.0, 8.0), bold);
+        t.push_attachment(crate::geometry::size_pt(8.0, 8.0), bold);
+        let len = t.len_utf16();
+        assert_eq!(
+            t.copied_html(0..len),
+            ("<b>a$x&lt;1$</b>".to_string(), true)
+        );
+        assert_eq!(t.copied_html(1..7), (String::new(), false));
     }
 
     #[test]
@@ -1585,7 +2513,7 @@ mod tests {
         );
         assert!(model.texts_changed(&more));
         assert_eq!(model.bounds(), Some((pos(2, 0), pos(3, 2))));
-        assert_eq!(model.text(&more), "Second line\nmore text\nLa");
+        assert_eq!(model.text(&more), "Second line\nmore text\n\nLa");
         // The text of an end goes: the selection goes too.
         let gone = Keyed(
             Fake::new(&[
@@ -1699,6 +2627,236 @@ mod tests {
         assert_eq!(model.text(&texts), "}\n\nnext");
     }
 
+    // The keys that extend a selection.
+
+    fn keyed(texts: &impl SelectionTexts, from: TextPosition) -> SelectionModel {
+        let mut model = SelectionModel::new();
+        model.select_range(texts, from, from);
+        model
+    }
+
+    #[test]
+    fn keys_do_nothing_before_a_press() {
+        let texts = column();
+        let mut model = SelectionModel::new();
+        assert!(!model.extend(&texts, Movement::Character, Direction::Forward));
+        assert_eq!(model.bounds(), None);
+    }
+
+    #[test]
+    fn a_character_key_extends_from_a_press_and_crosses_texts() {
+        let texts = column();
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(72.0, 5.0), 1, false);
+        assert_eq!(model.focus(), Some(pos(0, 9)));
+        for _ in 0..2 {
+            assert!(model.extend(&texts, Movement::Character, Direction::Forward));
+        }
+        assert_eq!(model.text(&texts), "ld");
+        // The end of a text, then the next one's start: the break between.
+        assert!(model.extend(&texts, Movement::Character, Direction::Forward));
+        assert_eq!(model.focus(), Some(pos(1, 0)));
+        assert!(model.extend(&texts, Movement::Character, Direction::Forward));
+        assert_eq!(model.text(&texts), "ld\n\nS");
+        // Back past the anchor: the anchor stays.
+        for _ in 0..6 {
+            model.extend(&texts, Movement::Character, Direction::Backward);
+        }
+        assert_eq!(model.bounds(), Some((pos(0, 7), pos(0, 9))));
+        assert_eq!(model.text(&texts), "or");
+        // At the start of the texts, nothing moves.
+        let mut model = keyed(&texts, pos(0, 0));
+        assert!(!model.extend(&texts, Movement::Character, Direction::Backward));
+        let mut model = keyed(&texts, pos(2, 4));
+        assert!(!model.extend(&texts, Movement::Character, Direction::Forward));
+    }
+
+    #[test]
+    fn a_character_key_steps_over_clusters() {
+        let texts = Fake::new(&[("e\u{301}🇩🇪👍🏽\r\nx", (0.0, 0.0, 200.0, 40.0))]);
+        let mut model = keyed(&texts, pos(0, 0));
+        let mut stops = Vec::new();
+        while model.extend(&texts, Movement::Character, Direction::Forward) {
+            stops.push(model.focus().unwrap().offset);
+        }
+        assert_eq!(stops, vec![2, 6, 10, 12, 13]);
+        let mut back = Vec::new();
+        while model.extend(&texts, Movement::Character, Direction::Backward) {
+            back.push(model.focus().unwrap().offset);
+        }
+        assert_eq!(back, vec![12, 10, 6, 2, 0]);
+    }
+
+    #[test]
+    fn a_character_key_runs_on_across_a_wrapped_lines_parts() {
+        let texts = wrapped();
+        let mut model = keyed(&texts, pos(1, 8));
+        model.extend(&texts, Movement::Character, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(1, 9)));
+        // The part after starts where this one ends: one more character.
+        model.extend(&texts, Movement::Character, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(2, 1)));
+        assert_eq!(model.text(&texts), "in");
+        model.extend(&texts, Movement::Character, Direction::Backward);
+        model.extend(&texts, Movement::Character, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(1, 8)));
+    }
+
+    #[test]
+    fn a_word_key_goes_over_spaces_and_punctuation_to_a_words_edge() {
+        let texts = Fake::new(&[
+            ("foo, bar.baz  ", (0.0, 0.0, 200.0, 20.0)),
+            ("  next 日本", (0.0, 20.0, 200.0, 20.0)),
+        ]);
+        let mut model = keyed(&texts, pos(0, 0));
+        let mut stops = Vec::new();
+        while model.extend(&texts, Movement::Word, Direction::Forward) {
+            stops.push(model.focus().unwrap());
+        }
+        assert_eq!(
+            stops,
+            vec![
+                pos(0, 3),
+                pos(0, 8),
+                pos(0, 12),
+                pos(1, 6),
+                pos(1, 8),
+                pos(1, 9)
+            ]
+        );
+        let mut back = Vec::new();
+        while model.extend(&texts, Movement::Word, Direction::Backward) {
+            back.push(model.focus().unwrap());
+        }
+        assert_eq!(
+            back,
+            vec![
+                pos(1, 8),
+                pos(1, 7),
+                pos(1, 2),
+                pos(0, 9),
+                pos(0, 5),
+                pos(0, 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_line_key_keeps_its_x_across_short_lines_and_texts() {
+        let texts = Fake::new(&[
+            (
+                "a long first line\nab\nanother long line",
+                (0.0, 0.0, 200.0, 60.0),
+            ),
+            ("x", (0.0, 70.0, 200.0, 20.0)),
+            ("the last long line", (0.0, 100.0, 200.0, 20.0)),
+        ]);
+        // Column 10 of the first line.
+        let mut model = keyed(&texts, pos(0, 10));
+        model.extend(&texts, Movement::Line, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(0, 20)), "the end of `ab`");
+        model.extend(&texts, Movement::Line, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(0, 31)), "column 10 again");
+        model.extend(&texts, Movement::Line, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(1, 1)), "the end of `x`");
+        model.extend(&texts, Movement::Line, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(2, 10)));
+        // Past the last line: the end.
+        model.extend(&texts, Movement::Line, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(2, 18)));
+        // Another key forgets the x.
+        let mut model = keyed(&texts, pos(2, 10));
+        model.extend(&texts, Movement::Line, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(1, 1)));
+        model.extend(&texts, Movement::Character, Direction::Backward);
+        model.extend(&texts, Movement::Line, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(0, 21)), "column 0 of the last line");
+        model.extend(&texts, Movement::Line, Direction::Backward);
+        model.extend(&texts, Movement::Line, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(0, 0)));
+        // Before the first line: the start.
+        model.extend(&texts, Movement::Line, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(0, 0)));
+    }
+
+    #[test]
+    fn a_line_key_skips_the_texts_beside_on_a_row() {
+        let texts = Fake::new(&[
+            ("name", (0.0, 0.0, 100.0, 20.0)),
+            ("value", (100.0, 0.0, 100.0, 20.0)),
+            ("below the row", (0.0, 30.0, 200.0, 20.0)),
+        ]);
+        let mut model = keyed(&texts, pos(0, 2));
+        model.extend(&texts, Movement::Line, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(2, 2)));
+        model.extend(&texts, Movement::Line, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(1, 0)), "the last text above");
+    }
+
+    #[test]
+    fn a_line_edge_key_goes_to_the_ends_of_the_focus_line() {
+        let texts = Fake::new(&[("first line\nsecond", (0.0, 0.0, 200.0, 40.0))]);
+        let mut model = keyed(&texts, pos(0, 3));
+        model.extend(&texts, Movement::LineEdge, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(0, 10)));
+        // Again: it stays at the end of that line.
+        assert!(!model.extend(&texts, Movement::LineEdge, Direction::Forward));
+        model.extend(&texts, Movement::LineEdge, Direction::Backward);
+        assert_eq!(model.bounds(), Some((pos(0, 0), pos(0, 3))));
+        let mut model = keyed(&texts, pos(0, 14));
+        model.extend(&texts, Movement::LineEdge, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(0, 11)));
+        model.extend(&texts, Movement::LineEdge, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(0, 17)));
+    }
+
+    #[test]
+    fn paragraph_and_document_keys() {
+        let texts = wrapped();
+        let mut model = keyed(&texts, pos(1, 3));
+        model.extend(&texts, Movement::Paragraph, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(2, 10)), "the wrapped line's end");
+        model.extend(&texts, Movement::Paragraph, Direction::Forward);
+        assert_eq!(model.focus(), Some(pos(3, 4)));
+        model.extend(&texts, Movement::Paragraph, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(3, 0)));
+        model.extend(&texts, Movement::Paragraph, Direction::Backward);
+        assert_eq!(model.focus(), Some(pos(1, 0)), "the wrapped line's start");
+        model.extend(&texts, Movement::Document, Direction::Backward);
+        assert_eq!(model.bounds(), Some((pos(0, 0), pos(1, 3))));
+        model.extend(&texts, Movement::Document, Direction::Forward);
+        assert_eq!(model.bounds(), Some((pos(1, 3), pos(3, 4))));
+    }
+
+    #[test]
+    fn a_double_clicked_word_extends_from_the_end_the_key_points_to() {
+        let texts = column();
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(56.0, 5.0), 2, false);
+        assert_eq!(model.text(&texts), "world");
+        model.extend(&texts, Movement::Character, Direction::Backward);
+        assert_eq!(model.text(&texts), " world");
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(56.0, 5.0), 2, false);
+        model.extend(&texts, Movement::Character, Direction::Forward);
+        assert_eq!(model.bounds(), Some((pos(0, 6), pos(1, 0))));
+    }
+
+    #[test]
+    fn the_focus_caret_follows_the_keys() {
+        let texts = column();
+        let mut model = keyed(&texts, pos(1, 3));
+        assert_eq!(
+            model.focus_caret(&texts),
+            Some(bounds(point(px(24.0), px(40.0)), size(px(0.0), px(20.0))))
+        );
+        model.extend(&texts, Movement::Line, Direction::Forward);
+        assert_eq!(
+            model.focus_caret(&texts),
+            Some(bounds(point(px(24.0), px(60.0)), size(px(0.0), px(20.0))))
+        );
+    }
+
     fn wrapped() -> Wrapped {
         Wrapped(
             Fake::new(&[
@@ -1761,5 +2919,209 @@ mod tests {
         model.press(&texts, at(60.0, 5.0), 2, false);
         assert_eq!(model.text(&texts), "line");
         assert_eq!(model.bounds(), Some((pos(0, 6), pos(0, 10))));
+    }
+
+    #[test]
+    fn two_column_gaps_and_short_sidebar_stay_in_their_column() {
+        let texts = Fake::new(&[
+            ("Left 1", (12.0, 12.0, 200.0, 40.0)),
+            ("Left 2", (12.0, 66.0, 200.0, 40.0)),
+            ("Left 3", (12.0, 120.0, 200.0, 40.0)),
+            ("Sidebar", (240.0, 20.0, 140.0, 70.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(20.0, 20.0), 1, false);
+        // Gap between Left 1 and Left 2 (vertically overlapping Sidebar):
+        // stays at Left 1's end instead of jumping to Sidebar.
+        model.drag(&texts, at(80.0, 59.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(0, 6))));
+        assert_eq!(model.text(&texts), "eft 1");
+        // Entering Left 2 grows monotonically.
+        model.drag(&texts, at(80.0, 80.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(1, 6))));
+        // Below Left 3 in the left column: stays at Left 3's end.
+        model.drag(&texts, at(80.0, 190.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(2, 6))));
+        // Dragging right into Sidebar, then straight down into the empty space
+        // beneath Sidebar (beside Left 3) and past the bottom: stays at
+        // Sidebar's end and never jumps back to Left 3 or shrinks.
+        model.drag(&texts, at(280.0, 50.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(3, 5))));
+        model.drag(&texts, at(280.0, 140.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(3, 7))));
+        model.drag(&texts, at(280.0, 220.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(3, 7))));
+    }
+
+    #[test]
+    fn absolute_top_badge_does_not_hijack_body_gaps_or_bottom() {
+        let texts = Fake::new(&[
+            ("Title", (14.0, 14.0, 360.0, 22.0)),
+            ("Body 1", (14.0, 50.0, 360.0, 40.0)),
+            ("Body 2", (14.0, 104.0, 360.0, 40.0)),
+            ("BADGE", (310.0, 15.0, 60.0, 18.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(20.0, 20.0), 1, false);
+        // Gap between Title and Body 1: stays on Title, never flashes BADGE.
+        model.drag(&texts, at(100.0, 43.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(0, 5))));
+        assert_eq!(model.text(&texts), "itle");
+        // Below Body 2: stays on Body 2, never jumps up to BADGE.
+        model.drag(&texts, at(100.0, 160.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(2, 6))));
+        assert!(!model.text(&texts).contains("BADGE"));
+        // Even directly under BADGE's x below Body 2, Body 2 is much nearer.
+        model.drag(&texts, at(330.0, 160.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(2, 6))));
+    }
+
+    #[test]
+    fn wrapped_table_cell_blank_space_does_not_jump_back_to_tall_sibling() {
+        let texts = Fake::new(&[
+            ("Long wrapped cell", (0.0, 40.0, 200.0, 60.0)),
+            ("UIKit", (220.0, 40.0, 100.0, 20.0)),
+            ("CoreText", (340.0, 40.0, 100.0, 20.0)),
+            ("Next row left", (0.0, 110.0, 200.0, 20.0)),
+            ("Views", (220.0, 110.0, 100.0, 20.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(228.0, 48.0), 1, false);
+        // Dragging down into the blank lower half of the UIKit cell (y=75,
+        // still vertically inside the tall left cell 40..100): stays at
+        // UIKit's end rather than jumping backward to cell 0.
+        model.drag(&texts, at(260.0, 75.0));
+        assert_eq!(model.bounds(), Some((pos(1, 1), pos(1, 5))));
+        assert_eq!(model.text(&texts), "IKit");
+    }
+
+    #[test]
+    fn single_column_short_lines_still_hit_their_row_and_bottom() {
+        let texts = Fake::new(&[
+            ("Hi", (0.0, 0.0, 40.0, 20.0)),
+            ("A much wider middle paragraph", (0.0, 30.0, 300.0, 20.0)),
+            ("End", (0.0, 60.0, 40.0, 20.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        // Beside the short heading (directly above the wide middle line):
+        // stays on the heading's row.
+        model.press(&texts, at(0.0, 10.0), 1, false);
+        model.drag(&texts, at(150.0, 10.0));
+        assert_eq!(model.bounds(), Some((pos(0, 0), pos(0, 2))));
+        // Below the short last line, under the wide middle line's right half:
+        // still reaches the short last line's end.
+        model.drag(&texts, at(150.0, 120.0));
+        assert_eq!(model.bounds(), Some((pos(0, 0), pos(2, 3))));
+    }
+
+    #[test]
+    fn margins_and_short_column_lines_stay_in_nearest_column() {
+        let texts = Fake::new(&[
+            ("Apple", (20.0, 12.0, 50.0, 20.0)),
+            ("Banana", (20.0, 48.0, 60.0, 20.0)),
+            ("Cherry", (20.0, 84.0, 60.0, 20.0)),
+            ("Sidebar", (300.0, 12.0, 120.0, 50.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(28.0, 20.0), 1, false);
+        // Left margin across the gap between Apple and Banana: stays on Apple.
+        model.drag(&texts, at(4.0, 38.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(0, 5))));
+        // Empty space to the right of short left-column lines (still far
+        // closer to Left than Sidebar): stays on Apple instead of Sidebar.
+        model.drag(&texts, at(120.0, 38.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(0, 5))));
+        // Right margin below Sidebar (beside Cherry): stays on Sidebar.
+        model.drag(&texts, at(340.0, 30.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(3, 5))));
+        model.drag(&texts, at(440.0, 92.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(3, 7))));
+    }
+
+    #[test]
+    fn full_width_header_and_footer_around_two_columns_stay_monotonic() {
+        let texts = Fake::new(&[
+            ("Header", (0.0, 0.0, 500.0, 20.0)),
+            ("Left 1", (0.0, 40.0, 200.0, 40.0)),
+            ("Left 2", (0.0, 100.0, 200.0, 80.0)),
+            ("Right", (300.0, 40.0, 200.0, 60.0)),
+            ("Footer", (0.0, 200.0, 500.0, 20.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(10.0, 10.0), 1, false);
+        // Gutter near Left 2 (20px from Left 2, 80px from Right) stays on Left 2.
+        model.drag(&texts, at(220.0, 140.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(2, 6))));
+        // Dragging down Right into the space below Right transitions smoothly
+        // from Right to Footer without shrinking back to Left 2.
+        model.drag(&texts, at(350.0, 70.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(3, 5))));
+        model.drag(&texts, at(350.0, 130.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(3, 5))));
+        model.drag(&texts, at(350.0, 180.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(4, 0))));
+    }
+
+    #[test]
+    fn full_width_header_does_not_pull_sibling_column_into_narrow_right_column() {
+        let texts = Fake::new(&[
+            ("Full-width Header", (16.0, 12.0, 420.0, 22.0)),
+            ("Left column item 1", (16.0, 50.0, 190.0, 36.0)),
+            ("Left column item 2", (16.0, 98.0, 190.0, 24.0)),
+            ("Left column item 3", (16.0, 134.0, 190.0, 44.0)),
+            ("Right", (280.0, 50.0, 56.0, 48.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(288.0, 66.0), 1, false);
+        // Dragging into the empty right-column margin under the full-width
+        // header stays on `Right` instead of pulling in `Left column item 2/3`.
+        for y in [126.0, 129.0, 132.0, 156.0] {
+            model.drag(&texts, at(356.0, y));
+            assert_eq!(model.bounds(), Some((pos(4, 1), pos(4, 5))), "at y={y}");
+            assert_eq!(model.text(&texts), "ight", "at y={y}");
+        }
+    }
+
+    #[test]
+    fn dragging_below_a_multi_column_table_reaches_the_last_cell() {
+        let texts = Fake::new(&[
+            ("Column A", (16.0, 20.0, 160.0, 24.0)),
+            ("Column B", (200.0, 20.0, 160.0, 24.0)),
+            ("Row 1 Left", (16.0, 58.0, 160.0, 24.0)),
+            ("Row 1 Right", (200.0, 58.0, 160.0, 24.0)),
+            ("Row 2 Left", (16.0, 96.0, 160.0, 24.0)),
+            ("Row 2 Right", (200.0, 96.0, 160.0, 24.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(24.0, 32.0), 1, false);
+        model.drag(&texts, at(80.0, 156.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(5, 11))));
+        assert_eq!(
+            model.text(&texts),
+            "olumn A\tColumn B\nRow 1 Left\tRow 1 Right\nRow 2 Left\tRow 2 Right"
+        );
+    }
+
+    #[test]
+    fn same_bottom_side_by_side_texts_under_wide_title_keep_right_text() {
+        let texts = Fake::new(&[
+            (
+                "Wide section title above two tags",
+                (16.0, 20.0, 360.0, 24.0),
+            ),
+            ("Status:", (16.0, 60.0, 64.0, 24.0)),
+            ("Ready", (96.0, 60.0, 56.0, 24.0)),
+            ("Next paragraph below", (16.0, 140.0, 240.0, 24.0)),
+        ]);
+        let mut model = SelectionModel::new();
+        model.press(&texts, at(24.0, 32.0), 1, false);
+        // Gap to the right of `Ready` (still under the wide title): reaches
+        // `Ready`'s end instead of dropping back to `Status:`.
+        model.drag(&texts, at(230.0, 96.0));
+        assert_eq!(model.bounds(), Some((pos(0, 1), pos(2, 5))));
+        assert_eq!(
+            model.text(&texts),
+            "ide section title above two tags\nStatus:\tReady"
+        );
     }
 }

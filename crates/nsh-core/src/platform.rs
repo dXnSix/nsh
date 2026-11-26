@@ -5,7 +5,7 @@
 pub mod clipboard;
 pub mod web_evaluation;
 
-use crate::geometry::{Edges, Points, Size};
+use crate::geometry::{Bounds, Edges, Points, Size};
 
 /// The native component of `nsh/mobile`'s `TabBar`, which the iOS and
 /// Android backends register themselves (`TabBarComponent.java`'s `NAME` keeps
@@ -128,6 +128,21 @@ impl Os {
         }
     }
 
+    /// The OS named `name` ([`Os::name`]): a scoped asset's target in a
+    /// UI set's description.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        [
+            Os::Ios,
+            Os::Android,
+            Os::MacOs,
+            Os::Windows,
+            Os::Linux,
+            Os::Web,
+        ]
+        .into_iter()
+        .find(|os| os.name() == name)
+    }
+
     /// The OS of a desktop backend (macOS, Windows, Linux): it has windows
     /// and menus (`nsh/desktop`'s `isAvailable`). Desktop behavior
     /// (`desktop={{…}}` props, `platform.select({ desktop })`,
@@ -236,6 +251,155 @@ impl Lifecycle {
     }
 }
 
+/// How the device reaches the network now (`network()`), as the system's
+/// path monitor reports it: the kind of link its default route takes,
+/// whether that link costs the user (`expensive`) or the user asked to save
+/// data on it (`constrained`), and on iOS whether the user lets the app use
+/// cellular data. Platforms that cannot tell report
+/// [`NetworkKind::Unknown`], which counts as online: the app tries and
+/// learns from its requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct Network {
+    /// The kind of link the default route takes, [`NetworkKind::None`]
+    /// without one.
+    pub kind: NetworkKind,
+    /// The link costs the user: cellular data, a phone's hotspot, a
+    /// metered connection (Apple's `isExpensive`, Android's metered
+    /// networks, the browser's `cellular` connection).
+    pub expensive: bool,
+    /// The user asked to use less data on this link: Low Data Mode (iOS,
+    /// macOS), Data Saver (Android), the browser's `saveData`.
+    pub constrained: bool,
+    /// Whether the user lets the app use cellular data (iOS:
+    /// `CTCellularData`; on devices sold in mainland China, the system's
+    /// prompt for wireless data). [`CellularData::Unknown`] elsewhere.
+    pub cellular_data: CellularData,
+}
+
+impl Network {
+    /// A network of `kind`, neither expensive nor constrained, with the
+    /// cellular data permission unknown.
+    pub fn new(kind: NetworkKind) -> Self {
+        Self {
+            kind,
+            ..Self::default()
+        }
+    }
+
+    /// The link costs the user.
+    pub fn expensive(mut self, expensive: bool) -> Self {
+        self.expensive = expensive;
+        self
+    }
+
+    /// The user asked to use less data on this link.
+    pub fn constrained(mut self, constrained: bool) -> Self {
+        self.constrained = constrained;
+        self
+    }
+
+    /// Whether the user lets the app use cellular data.
+    pub fn cellular_data(mut self, cellular_data: CellularData) -> Self {
+        self.cellular_data = cellular_data;
+        self
+    }
+
+    /// Whether a route to the network exists (TS: `network().online`):
+    /// false only when the platform knows there is none, true while it
+    /// does not know ([`NetworkKind::Unknown`]).
+    pub fn online(&self) -> bool {
+        self.kind != NetworkKind::None
+    }
+}
+
+/// The kind of link the device's default route takes (`network().kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::element::PropEnum)]
+#[non_exhaustive]
+pub enum NetworkKind {
+    /// The platform does not say (it has no monitor, or has not answered
+    /// yet).
+    #[default]
+    Unknown,
+    /// No route to the network: offline.
+    None,
+    /// Wi-Fi.
+    Wifi,
+    /// Cellular data.
+    Cellular,
+    /// A wired link: Ethernet.
+    Wired,
+    /// Another link: a VPN without a known link beneath, Bluetooth, a
+    /// USB tether, loopback only.
+    Other,
+}
+
+impl NetworkKind {
+    /// Its `network().kind` name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::None => "none",
+            Self::Wifi => "wifi",
+            Self::Cellular => "cellular",
+            Self::Wired => "wired",
+            Self::Other => "other",
+        }
+    }
+
+    /// The kind named `name` ([`Self::name`]).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "unknown" => Self::Unknown,
+            "none" => Self::None,
+            "wifi" => Self::Wifi,
+            "cellular" => Self::Cellular,
+            "wired" => Self::Wired,
+            "other" => Self::Other,
+            _ => return None,
+        })
+    }
+}
+
+/// Whether the user lets the app use cellular data
+/// (`network().cellularData`): iOS's `CTCellularData.restrictedState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, crate::element::PropEnum)]
+#[non_exhaustive]
+pub enum CellularData {
+    /// Not known: the user has not decided yet (the first launch on a
+    /// device that asks), or the platform does not report it (every
+    /// platform but iOS).
+    #[default]
+    Unknown,
+    /// The user turned cellular data off for the app (on devices that ask
+    /// for wireless data, also "Off" or "WLAN" only): its requests over
+    /// cellular fail, and only the system's settings change it.
+    Restricted,
+    /// The app may use cellular data.
+    NotRestricted,
+}
+
+impl CellularData {
+    /// Its `network().cellularData` name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Restricted => "restricted",
+            Self::NotRestricted => "notRestricted",
+        }
+    }
+
+    /// The state named `name` ([`Self::name`]).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "unknown" => Self::Unknown,
+            "restricted" => Self::Restricted,
+            "notRestricted" => Self::NotRestricted,
+            _ => return None,
+        })
+    }
+}
+
 /// The space available along one axis of a surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SizeClass {
@@ -276,6 +440,11 @@ pub struct Environment {
     pub vertical_size_class: Option<SizeClass>,
     /// Insets not covered by system UI (notch, home indicator, title bar).
     pub safe_area: Edges<Points>,
+    /// The parts of the surface the device reserves inside the safe area
+    /// (TS: `reservedRegions()`): the fold of a partly folded display,
+    /// a camera that shows through it. Empty where the platform reports
+    /// none.
+    pub reserved_regions: ReservedRegions,
     /// The title bar's area while the app hides it (desktops,
     /// [`crate::desktop::TitleBarStyle::Hidden`]): `top` is its height,
     /// `left` and `right` the widths the system's window controls take at
@@ -353,10 +522,21 @@ pub struct Environment {
     /// app in front), while its network connections and timers did not
     /// live through it.
     pub wake_count: u32,
+    /// How the device reaches the network (TS: `network()`): the platform
+    /// reports each change of the system's default route and, on iOS, of
+    /// the cellular data permission. [`NetworkKind::Unknown`] where it has
+    /// no monitor.
+    pub network: Network,
     /// The platform picks a color from the screen
     /// ([`crate::Command::PickScreenColor`]); without it, a pick answers
     /// no color at once.
     pub screen_color: bool,
+    /// The platform reports whether each clipboard write
+    /// ([`crate::Command::SetClipboard`], [`crate::Command::SetClipboardItem`])
+    /// reached the system clipboard, as [`crate::EventKind::ClipboardWrite`]
+    /// in the order of the writes; without it, a write answers
+    /// [`crate::element::ClipboardWrite::Requested`] at once.
+    pub clipboard_write_result: bool,
     /// The platform renders canvas drawings offscreen into images
     /// ([`crate::Command::RenderCanvas`], `OffscreenCanvas`); without it,
     /// a render fails at once with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
@@ -365,21 +545,35 @@ pub struct Environment {
     /// ([`crate::Command::Share`], `Share.show`); without it, a share fails
     /// at once with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`.
     pub share: bool,
+    /// The platform opens the app's own page in the system's settings
+    /// ([`crate::Command::OpenAppSettings`], `nsh/mobile`'s
+    /// `AppSettings.open`: iOS and Android); without it, opening it fails at
+    /// once with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`
+    /// ([`crate::mobile::open_app_settings`]).
+    pub app_settings: bool,
     /// The platform shows web sign-in sessions
     /// ([`crate::Command::AuthSession`]: iOS's
     /// `ASWebAuthenticationSession`, Android's Custom Tabs); without it,
     /// a session opens the system browser and waits for a link of a scheme
-    /// the app claims ([`crate::auth_session`]).
+    /// the app claims where the platform hands it such links
+    /// ([`Self::scheme_links()`]), and fails at once elsewhere
+    /// ([`crate::auth_session`]).
     pub auth_session: bool,
+    /// Whether the platform hands the app links of the schemes it claims
+    /// (`nsh.json` `schemes`, [`crate::element::next_url_scheme_open`]).
+    /// `None` (the default): as NSH's native backends on [`Self::os`],
+    /// every OS but the web, where a page hears only its own address. The
+    /// GPUI and terminal backends, which hear no links, say `Some(false)`,
+    /// as does a platform built outside NSH that hears none. Without it, a
+    /// sign-in session the platform does not show itself
+    /// ([`Self::auth_session`]) fails at once, since nothing could bring
+    /// its callback back ([`Self::scheme_links()`]).
+    pub scheme_links: Option<bool>,
     /// The platform handles file requests ([`crate::Command::FileRequest`]).
     /// Desktops implement the full set; mobile platforms answer the open
     /// dialog and reject operations they do not support. Without it, all
     /// file requests answer at once with an error.
     pub file_requests: bool,
-    /// The platform recognizes speech ([`crate::Command::Speech`],
-    /// [`crate::speech`]); without it, a session ends at once
-    /// (`unavailable`) unless the core has a [`crate::speech::SpeechBackend`].
-    pub speech: bool,
     /// The platform shows notifications ([`crate::Command::Notification`],
     /// [`crate::notifications`]); without it, the permission is
     /// `unavailable` and nothing shows.
@@ -398,8 +592,7 @@ pub struct Environment {
     pub tab_bar: bool,
     /// Whether the platform puts images on the system clipboard and reads
     /// them back (`Clipboard.readImage`, `writeImage`, `hasImage`). `None`
-    /// (the default): as NSH's own backends on [`Self::os`], every OS but
-    /// Android, whose backend holds text only. A platform built outside
+    /// (the default): yes, as every NSH backend does. A platform built outside
     /// NSH says what it does with `Some`: without images its image calls
     /// reject with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` and `hasImage` is
     /// false.
@@ -473,6 +666,13 @@ impl Environment {
     pub fn reported_idiom(&self) -> Idiom {
         self.idiom.reported_on(self.os)
     }
+
+    /// Whether links of the schemes the app claims reach it
+    /// ([`field@Environment::scheme_links`], or by the OS: all but the
+    /// web).
+    pub fn scheme_links(&self) -> bool {
+        self.scheme_links.unwrap_or(self.os != Os::Web)
+    }
 }
 
 impl Default for Environment {
@@ -482,6 +682,7 @@ impl Default for Environment {
             horizontal_size_class: None,
             vertical_size_class: None,
             safe_area: Edges::default(),
+            reserved_regions: ReservedRegions::NONE,
             title_bar: Edges::default(),
             window_state: None,
             keyboard_height: Points(0.0),
@@ -504,12 +705,15 @@ impl Default for Environment {
             host: false,
             lifecycle: Lifecycle::Active,
             wake_count: 0,
+            network: Network::default(),
             screen_color: false,
+            clipboard_write_result: false,
             canvas_render: false,
             share: false,
+            app_settings: false,
             auth_session: false,
+            scheme_links: None,
             file_requests: false,
-            speech: false,
             notifications: false,
             audio: false,
             tab_bar: true,
@@ -650,6 +854,125 @@ impl std::fmt::Debug for Locale {
 impl std::fmt::Display for Locale {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+/// What a reserved region asks of the content in it (TS:
+/// `ReservedRegion["kind"]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, crate::element::PropEnum)]
+#[non_exhaustive]
+pub enum ReservedRegionKind {
+    /// Something covers it (a camera that shows through the display):
+    /// keep what matters out of it.
+    #[default]
+    Occlusion,
+    /// The display divides there (the fold of a partly folded display):
+    /// keep content clear of it, on either side.
+    Division,
+}
+
+impl ReservedRegionKind {
+    /// The kind's name in TS (`"occlusion"`, `"division"`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Occlusion => "occlusion",
+            Self::Division => "division",
+        }
+    }
+}
+
+/// A part of the surface the device reserves (TS: `ReservedRegion`): what
+/// UIKit calls a reserved region (`UIView.ReservedRegion`), Jetpack
+/// WindowManager a display feature.
+#[derive(Debug, Clone, Copy, PartialEq, Default, crate::element::JsObject)]
+#[non_exhaustive]
+pub struct ReservedRegion {
+    /// What it asks of the content in it.
+    pub kind: ReservedRegionKind,
+    /// Where it is, in the surface's points (as layout places views),
+    /// with the margin interactive content keeps from it.
+    pub bounds: Bounds<Points>,
+}
+
+impl ReservedRegion {
+    /// A region of `kind` at `bounds`.
+    pub fn new(kind: ReservedRegionKind, bounds: Bounds<Points>) -> ReservedRegion {
+        ReservedRegion { kind, bounds }
+    }
+}
+
+/// The regions the device reserves in a surface ([`ReservedRegion`]), at
+/// most [`ReservedRegions::CAPACITY`]. Held inline so that the environment
+/// stays `Copy`.
+#[derive(Clone, Copy, PartialEq)]
+pub struct ReservedRegions {
+    regions: [ReservedRegion; ReservedRegions::CAPACITY],
+    len: u8,
+}
+
+impl ReservedRegions {
+    /// How many it keeps: a device reserves a few (iPhone Duo: its fold
+    /// and its cameras); the rest are left out.
+    pub const CAPACITY: usize = 8;
+
+    /// None, the default.
+    pub const NONE: ReservedRegions = ReservedRegions {
+        regions: [ReservedRegion {
+            kind: ReservedRegionKind::Occlusion,
+            bounds: Bounds {
+                origin: crate::geometry::Point {
+                    x: Points(0.0),
+                    y: Points(0.0),
+                },
+                size: Size {
+                    width: Points(0.0),
+                    height: Points(0.0),
+                },
+            },
+        }; ReservedRegions::CAPACITY],
+        len: 0,
+    };
+
+    /// These regions, the first [`ReservedRegions::CAPACITY`] kept.
+    pub fn new(regions: impl IntoIterator<Item = ReservedRegion>) -> ReservedRegions {
+        let mut list = Self::NONE;
+        for region in regions.into_iter().take(Self::CAPACITY) {
+            list.regions[usize::from(list.len)] = region;
+            list.len += 1;
+        }
+        list
+    }
+
+    /// All of them.
+    pub fn as_slice(&self) -> &[ReservedRegion] {
+        &self.regions[..usize::from(self.len)]
+    }
+
+    /// All of them.
+    pub fn iter(&self) -> impl Iterator<Item = ReservedRegion> + '_ {
+        self.as_slice().iter().copied()
+    }
+
+    /// There are none.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// How many there are.
+    pub fn len(&self) -> usize {
+        usize::from(self.len)
+    }
+}
+
+impl Default for ReservedRegions {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl std::fmt::Debug for ReservedRegions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.as_slice()).finish()
     }
 }
 
@@ -901,6 +1224,11 @@ pub struct PerfStats {
     /// The share of recent frames that took longer than one refresh, from 0
     /// to 1 (`0.05` is 5%), as TS's `dropped` reads it.
     pub dropped: crate::geometry::Percentage,
+    /// Memory the process owns, in bytes, as the monitor's panel shows it:
+    /// the physical footprint on Apple platforms (Activity Monitor's Memory
+    /// column), the resident set elsewhere. `None` where the platform does
+    /// not say, and on the web.
+    pub memory: Option<u64>,
 }
 
 impl PerfStats {
@@ -913,6 +1241,61 @@ impl PerfStats {
             fps,
             ..PerfStats::default()
         }
+    }
+}
+
+/// The app as it was built (TS: `appInfo()`; Rust:
+/// [`crate::element::app_info`]): its id, name, version and build number,
+/// and whether it is a development build. A Rust app's root carries it
+/// ([`crate::element::Root::app_info`], which nsh's generated code sets
+/// from `nsh.json`, or from the package: `nsh package --id`, `--name`,
+/// `--version` and `--build` included); a TSX app's is JS's `appInfo()`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct AppInfo {
+    /// The app's id (`nsh.json` `"id"`; a package's as it names it).
+    pub id: Option<String>,
+    /// The app's name (`nsh.json` `"name"`; a package's as it names it).
+    pub name: Option<String>,
+    /// The app's version (`nsh.json` `"version"`; a package's, `1.0.0`
+    /// where nothing gives one).
+    pub version: Option<String>,
+    /// The build number (`nsh.json` `"build"`; a package's, `1` where
+    /// nothing gives one).
+    pub build: Option<u64>,
+    /// A development build (`nsh run`, `nsh dev`, `nsh test`, a build
+    /// without `--release`), not a package's.
+    pub development: bool,
+}
+
+impl AppInfo {
+    /// From the JSON `appInfo()` reports (`{"id", "name", "version",
+    /// "build", "development"}`): a key that is missing, `null` or of
+    /// another type is left unknown, and other keys are ignored.
+    #[doc(hidden)]
+    pub fn from_json(value: &crate::JsonValue) -> AppInfo {
+        let text = |key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_owned);
+        AppInfo {
+            id: text("id"),
+            name: text("name"),
+            version: text("version"),
+            build: value.get("build").and_then(|v| v.as_u64()),
+            development: value
+                .get("development")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        }
+    }
+
+    /// As `appInfo()` reports it: unknown fields are `null`.
+    pub fn to_json(&self) -> crate::JsonValue {
+        serde_json::json!({
+            "id": self.id,
+            "name": self.name,
+            "version": self.version,
+            "build": self.build,
+            "development": self.development,
+        })
     }
 }
 
@@ -1336,6 +1719,62 @@ pub struct HttpRequest {
     pub body: HttpBody,
     /// Follow redirects (`redirect: "follow"`, the default).
     pub follow_redirects: bool,
+    /// How the request uses the platform's HTTP cache (`cache` of
+    /// `fetch`).
+    pub cache: HttpCache,
+}
+
+/// How a request uses the HTTP cache: the Fetch standard's
+/// [cache modes](https://fetch.spec.whatwg.org/#concept-request-cache-mode).
+///
+/// Honoured where the platform's network stack has a cache (Web: the
+/// browser's; macOS / iOS: `NSURLSession`'s). Elsewhere requests always go
+/// to the network, which every mode but [`HttpCache::OnlyIfCached`]
+/// allows; that one fails there, as nothing is cached.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum HttpCache {
+    /// Use a fresh cached response, revalidate a stale one, store the
+    /// response (`"default"`).
+    #[default]
+    Default,
+    /// Neither read nor update the cache (`"no-store"`).
+    NoStore,
+    /// Skip the cache, then store the response (`"reload"`).
+    Reload,
+    /// Revalidate any cached response with the server (`"no-cache"`).
+    NoCache,
+    /// Use any cached response, stale or not; else the network
+    /// (`"force-cache"`).
+    ForceCache,
+    /// Use only a cached response; fail without one (`"only-if-cached"`).
+    OnlyIfCached,
+}
+
+impl HttpCache {
+    /// The mode's Fetch name (`"no-store"`, ...).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::NoStore => "no-store",
+            Self::Reload => "reload",
+            Self::NoCache => "no-cache",
+            Self::ForceCache => "force-cache",
+            Self::OnlyIfCached => "only-if-cached",
+        }
+    }
+
+    /// The mode named `name` (Fetch's names; `None` for others).
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "default" => Self::Default,
+            "no-store" => Self::NoStore,
+            "reload" => Self::Reload,
+            "no-cache" => Self::NoCache,
+            "force-cache" => Self::ForceCache,
+            "only-if-cached" => Self::OnlyIfCached,
+            _ => return None,
+        })
+    }
 }
 
 impl HttpRequest {
@@ -1348,6 +1787,7 @@ impl HttpRequest {
             headers: Vec::new(),
             body: HttpBody::Empty,
             follow_redirects: true,
+            cache: HttpCache::Default,
         }
     }
 
@@ -1372,6 +1812,13 @@ impl HttpRequest {
     #[must_use]
     pub fn body(mut self, body: impl Into<Vec<u8>>) -> Self {
         self.body = HttpBody::Bytes(body.into());
+        self
+    }
+
+    /// Uses the HTTP cache as `cache` says.
+    #[must_use]
+    pub fn cache(mut self, cache: HttpCache) -> Self {
+        self.cache = cache;
         self
     }
 }
@@ -1587,6 +2034,60 @@ pub enum FetchOp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn app_info_reads_and_writes_app_infos_json() {
+        use super::AppInfo;
+        let json = serde_json::json!({
+            "id": "com.example.orders",
+            "name": "Orders",
+            "version": "2.1.0",
+            "build": 7,
+            "development": true,
+            "store": "play",
+        });
+        let info = AppInfo::from_json(&json);
+        assert_eq!(info.id.as_deref(), Some("com.example.orders"));
+        assert_eq!(info.name.as_deref(), Some("Orders"));
+        assert_eq!(info.version.as_deref(), Some("2.1.0"));
+        assert_eq!(info.build, Some(7));
+        assert!(info.development);
+        assert_eq!(AppInfo::from_json(&info.to_json()), info);
+        // Missing, null or mistyped: unknown.
+        let partial = AppInfo::from_json(&serde_json::json!({
+            "id": null,
+            "version": 2,
+            "build": "7",
+        }));
+        assert_eq!(partial, AppInfo::default());
+        assert_eq!(
+            AppInfo::default().to_json(),
+            serde_json::json!({
+                "id": null, "name": null, "version": null, "build": null, "development": false,
+            })
+        );
+    }
+
+    #[test]
+    fn scheme_links_follow_the_os_unless_the_platform_says() {
+        use super::{Environment, Os};
+        let on = |os: Os, scheme_links: Option<bool>| {
+            Environment {
+                os,
+                scheme_links,
+                ..Environment::default()
+            }
+            .scheme_links()
+        };
+        for os in [Os::Ios, Os::Android, Os::MacOs, Os::Windows, Os::Linux] {
+            assert!(on(os, None), "{os:?}");
+            assert!(on(os, Some(true)), "{os:?}");
+            assert!(!on(os, Some(false)), "{os:?}");
+        }
+        assert!(!on(Os::Web, None));
+        assert!(on(Os::Web, Some(true)));
+        assert!(!on(Os::Web, Some(false)));
+    }
+
     #[test]
     fn size_class_fallback_uses_points_and_native_traits_win() {
         use super::{Environment, SizeClass};
@@ -1962,5 +2463,76 @@ mod tests {
         ] {
             assert_eq!(file_mime_type(none), "", "{none}");
         }
+    }
+}
+
+/// Logs, once per backend and command kind, that a backend ignores a command.
+///
+/// Backends call this from their catch-all arm so an app learns that a call
+/// does nothing on this platform, without one log line per frame or call. The
+/// kind is the leading variant chain of the command's `Debug` output (for
+/// `Desktop(SetAttributes(..))`, `Desktop(SetAttributes`), so commands with
+/// different payloads share one warning.
+pub fn warn_unsupported(backend: &str, command: &dyn std::fmt::Debug) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let debug = format!("{command:?}");
+    let key = format!("{backend}:{}", unsupported_kind(&debug));
+    let seen = SEEN.get_or_init(Default::default);
+    if seen
+        .lock()
+        .map(|mut seen| seen.insert(key))
+        .unwrap_or(false)
+    {
+        log::warn!(
+            "{backend}: {} is not supported on this platform and is ignored",
+            unsupported_kind(&debug)
+        );
+    }
+}
+
+/// The leading `Variant(Variant` (at most two levels) of a `Debug` string.
+fn unsupported_kind(debug: &str) -> &str {
+    let mut end = 0;
+    let bytes = debug.as_bytes();
+    let mut i = 0;
+    // A command and, for grouped commands such as `Desktop`, its subcommand.
+    for _ in 0..2 {
+        let start = i;
+        // Variants start with an uppercase letter; a number or a string is a payload.
+        if !bytes.get(i).is_some_and(u8::is_ascii_uppercase) {
+            break;
+        }
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        if i == start {
+            break;
+        }
+        end = i;
+        if i < bytes.len() && bytes[i] == b'(' {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    if end == 0 { debug } else { &debug[..end] }
+}
+
+#[cfg(test)]
+mod unsupported_tests {
+    use super::unsupported_kind;
+
+    #[test]
+    fn kind_is_the_variant_chain() {
+        assert_eq!(
+            unsupported_kind("Desktop(SetAttributes(Foo { a: 1 }))"),
+            "Desktop(SetAttributes"
+        );
+        assert_eq!(unsupported_kind("Share { text: \"x\" }"), "Share");
+        assert_eq!(unsupported_kind("Vibrate(12)"), "Vibrate");
+        assert_eq!(unsupported_kind("Quit"), "Quit");
     }
 }

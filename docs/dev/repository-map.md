@@ -62,9 +62,20 @@ crates/
                        (`declarations.rs`, from the declaration next to each export and spec)
   nsh-engine/          Engine thread: drives nsh-js + nsh-core and hands one MountBatch per frame to the platform;
                        feature `shader`: the native backends' shader renderer (`shader.rs`: shader views' WGSL rendered with
-                       wgpu offscreen, read back asynchronously, never blocking the main thread; docs/dev/shaders.md)
+                       wgpu offscreen, read back asynchronously, never blocking the main thread; docs/dev/shaders.md), and
+                       GPU views' runtime (`gpu.rs`: apps' renderers on a render thread per surface; docs/dev/gpu-views.md)
+  nsh-gpu/             GPU views' app API: the `GpuRenderer` trait apps write with wgpu (re-exported), `GpuFrame`, registration
+                       by name on a UI set's `Registry` (docs/dev/gpu-views.md); the runtime is nsh-engine's `gpu.rs`
   nsh-package/         Signed packages (`.nshpkg`): Ed25519 keys, release-key certificates, revocation lists, the trust store
   nsh-updater/          App self-update: manifests and their signatures, verified downloads, replacing the installed app on the desktop (docs/dev/updater.md); `nsh-core`'s `runtime/updater.rs` is its JS face, `nsh/updater`
+  nsh-extra/           NSH's official modules, an nshm apps install with `nsh add nsh-extra --features <name>`: one Cargo feature
+                       per module (`camera`: `Camera`, photos from the system's camera on iOS and Android; `location`: `Location`, the
+                       device's position on macOS, iOS and the web; `photos`:
+                       `Photos`, the recent photos of the user's library on iOS; `push`: `Push`,
+                       remote notifications on iOS and, through a push service's binding, Android; `speech`:
+                       `Speech`, speech recognized as the user talks on macOS, iOS, Android, Windows and the web), its code in
+                       `src/<name>/` on the platform crates' extension points, what the packaged app needs under
+                       `[package.metadata.nsh.features.<name>]` (merged into packages by `nsh-cli`'s `module_meta.rs`)
   nsh-bundler/         Bundler: rolldown + Oxc (TS stripping) + NSH's JSX compiler (`jsx.rs`, docs/dev/native-pipeline.md) + source maps;
                        imports of the native modules stay imports (`plugin.rs`), so a bundle holds only the app's code;
                        the app's themes (nsh.json `tailwind` / `theme`, checked, handed to the renderer by the entry) and the
@@ -102,7 +113,9 @@ crates/
                        the test agent's platform part (`agent.rs`: `nsh test --target linux`) (docs/dev/linux.md)
   nsh-linux-host/      Development host on Linux (`nsh run --target linux`): connects to a dev server or runs a bundle
   nsh-linux-app/       Release runner on Linux: the executable of apps built by `nsh package --target linux`
-  nsh-platform-apple/  Shared by the macOS and iOS backends: the Speech recognizer, the notification center, and
+  nsh-platform-apple/  Shared by the macOS and iOS backends: the notification center, how
+                       drawn text splits into screen reader elements around its links and inline views, whether a
+                       view shows through the ancestors that clip it (`sight`), and
                        `unified_log`, the logger of the release runners and the iOS SDK (the unified log; stderr too
                        wherever it goes but /dev/null)
   nsh-platform-macos/  AppKit backend (macOS): one flipped, layer-backed `NSView` per node decorated by Core Animation, CoreText text
@@ -140,7 +153,7 @@ crates/
                        browser host's pages (`web.rs`, `web/`); `nsh test --target web`'s headless browser (`cdp.rs`, `test_web.rs`);
                        what it prints (`ui.rs`:
                        one line per step, tools' output only on failure, `-v` for everything; docs/dev/tooling.md "Output")
-  xtask/               Maintainer tasks: `cargo xtask android` (Android runtime), `ios-embed` (the iOS SDK), `dist` (the distribution),
+  xtask/               Maintainer tasks: `cargo xtask android` (Android runtime), `android-embed` (the Android SDK), `ios-embed` (the iOS SDK), `dist` (the distribution),
                        `web` (the WebAssembly runtime and the website's demos), `emoji-data` (`EmojiPicker`'s emoji from a release of emojibase-data), `compat` (runs `nsh-compat` against this checkout;
                        `compat record <version>`: records a release there)
 tests/compat/         The apps whose scripts check the API apps use (`nsh-compat` builds and runs them): `cases/<domain>/` (one app per
@@ -195,6 +208,7 @@ are never linked into the CLI: it reads their UI sets as data (`nsh_core::elemen
 | scroll views, zooming, `List` | `docs/dev/scrolling-and-lists.md` |
 | animation, canvas, images | `docs/dev/animation.md`, `canvas.md`, `images.md` |
 | shaders: WGSL views, the renderer | `docs/dev/shaders.md` |
+| GPU views: app renderers on wgpu, their render thread | `docs/dev/gpu-views.md` |
 | VM limits, capabilities, signed packages | `docs/dev/sandbox.md`, `signed-packages.md` |
 | packaging, the iOS / Android SDKs, native components | `docs/dev/embedding.md` |
 | `.nsh/types`, the dev server, hot reload | `docs/dev/tooling.md` |

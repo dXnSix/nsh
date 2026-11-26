@@ -84,12 +84,18 @@ drawing id:canvas rect 120 10 60 40
 nodrawing id:canvas clearRect...
 expect Not checked
 tap id:check
-expect size 200x100 canvas 200x100 drawn true context true gradient true in true out false added true current true stroke true dash 3,1 measured true
+expect size 200x100 canvas 200x100 drawn true context true gradient true in true out false added true current true stroke true dash 3,1 measured true extent true
 covers [nsh] Canvas
 covers [nsh] CanvasGradient
 covers [nsh] CanvasRenderingContext2D
 covers [nsh] Path2D
 covers [props] Canvas.draw
+# core-gpu-view
+tap id:case-core-gpu-view
+expect Over the scene
+frame id:scene 0 64 200 100
+frame id:label 10 10 180 17
+covers [nsh] gpuView
 # core-shader
 tap id:case-core-shader
 expect Over the shader
@@ -278,6 +284,12 @@ covers [nsh] untracked
 covers [nsh:rt] cond
 covers [nsh:rt] merge
 covers [nsh:rt] spread
+# core-clear-selection
+tap id:case-core-clear-selection
+expect Cleared: no
+# Clearing a selectable view with nothing selected is no error.
+tap id:clear
+expect Cleared: yes
 # core-ref
 tap id:case-core-ref
 # The signal and the function got their node when the views were made.

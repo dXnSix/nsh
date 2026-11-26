@@ -12,10 +12,11 @@
 use std::time::Duration;
 
 use nsh_core::{
-    NodeId,
+    NodeId, ScrollbarSetting,
     element::{
         AnyValue, BuiltInScrollbar, ElementRef, JsHost, JsIn, JsOwned, JsValue, ModuleCx, NodeRef,
-        PropError, ScrollEvent, Style, TsTypes, from_json, set_builtin_scrollbars,
+        PropError, ScrollEvent, ScrollbarThemeValue, Style, TsTypes, from_json,
+        set_builtin_scrollbars,
     },
     geometry::{Along, Axis},
     prelude::*,
@@ -658,9 +659,14 @@ pub fn Scrollbar(props: ScrollbarProps, _cx: Scope<NoEvent>) -> impl IntoElement
         .on_responder_release(move |_: &ResponderEvent| ctl.release())
         .on_responder_terminate(move |_: &ResponderEvent| ctl.release())
         .bind_opacity(&ctl.opacity)
+        // On touch screens the track is invisible and passes touches
+        // through, as iOS's and Android's indicators do: a tap near the
+        // edge must not jump the content. Only the thumb drags there.
         .pointer_events(move || {
-            if takes() {
+            if takes() && is_desktop() {
                 PointerEvents::Auto
+            } else if takes() {
+                PointerEvents::BoxNone
             } else {
                 PointerEvents::None
             }
@@ -737,6 +743,17 @@ impl ScrollbarTheme {
     }
 }
 
+/// A theme of one view's own: its built-in bar is drawn with it, whether
+/// or not the app set a theme for every view (TS `scrollbar={theme}`), as
+/// `scroll().scrollbar(theme)` or a multiline `input().scrollbar(theme)`.
+impl From<ScrollbarTheme> for ScrollbarSetting {
+    fn from(theme: ScrollbarTheme) -> Self {
+        ScrollbarSetting::ThemeValue(ScrollbarThemeValue::new(built_in, AnyValue::new(theme)))
+    }
+}
+
+nsh_core::static_reactive!(ScrollbarSetting: ScrollbarTheme);
+
 /// `theme` as the core keeps it for the built-in bars.
 fn kept(theme: Option<ScrollbarTheme>) -> Option<AnyValue> {
     theme.map(AnyValue::new)
@@ -767,15 +784,16 @@ impl Scrollbar {
 /// app's (`Registry::scrollbars_from`, [`set_scrollbar_theme`]): `None`
 /// when that theme has no look for the view's axis.
 pub(crate) fn built_in(of: &BuiltInScrollbar) -> Option<AnyElement> {
-    let theme = match &of.theme {
-        Some(json) => match from_json::<ScrollbarTheme>(json) {
+    let theme = match (&of.theme_value, &of.theme) {
+        (Some(own), _) => own.clone().take::<ScrollbarTheme>()?,
+        (None, Some(json)) => match from_json::<ScrollbarTheme>(json) {
             Ok(theme) => theme,
             Err(e) => {
                 log::warn!(target: "js", "`scrollbar`: {}", e.0);
                 return None;
             }
         },
-        None => of.app_theme.clone()?.take::<ScrollbarTheme>()?,
+        (None, None) => of.app_theme.clone()?.take::<ScrollbarTheme>()?,
     };
     theme.look(of.horizontal)?;
     Some(

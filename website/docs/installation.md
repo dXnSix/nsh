@@ -7,9 +7,9 @@ group: start
 
 # Installation
 
-Everything NSH does goes through one command, `nsh`. It builds apps written in Rust or TSX, runs them on every platform, serves TSX to development hosts with hot updates, and packages installable apps. You can use it from a prebuilt distribution or build it from a checkout of the repository.
+Everything NSH does goes through one command, `nsh`. It builds apps written in TSX or Rust, runs them on every platform, serves TSX to development hosts with hot updates, and packages installable apps. You can use it from a prebuilt distribution or build it from a checkout of the repository.
 
-Apps written in Rust also need a Rust toolchain ([below](#for-apps-written-in-rust)); TSX apps need `nsh` alone. On top of that, each platform needs its own tools:
+TSX apps need `nsh` alone. Apps with Rust in them (their own crates in `ext/`, a Rust nshm, or an app written in Rust) also need a Rust toolchain ([below](#for-apps-written-in-rust)). On top of that, each platform needs its own tools:
 
 | Platform | Develop and package on | Needs |
 |---|---|---|
@@ -20,7 +20,7 @@ Apps written in Rust also need a Rust toolchain ([below](#for-apps-written-in-ru
 | Linux | Linux | GTK 4.14+ (and its development packages to build the runtime) |
 | [GPUI](./gpui.md) (embedding in GPUI apps) | macOS, Windows or Linux | A GPU (Metal, DirectX or Vulkan); on Linux, Wayland or X11 |
 
-The AppKit host is the default on macOS. Mac Catalyst (`--target catalyst`) needs Xcode like iOS. Details are under [Platform tools](#platform-tools).
+The AppKit host is the default on macOS. Mac Catalyst (`--target catalyst`), a development tool for Catalyst-specific work, needs Xcode like iOS. Details are under [Platform tools](#platform-tools).
 
 ## Installing a release
 
@@ -81,7 +81,7 @@ nsh component remove gpui
 |---|---|---|
 | `android` | The Android runtime (`--target android`) | Every platform |
 | `android-symbols` | The Android runtime's symbols, for crash reports and `ndk-stack` | Every platform |
-| `ios` | The iOS and Mac Catalyst runtimes (`--target ios`, `catalyst`) | macOS on Apple silicon |
+| `ios` | The iOS and Mac Catalyst runtimes (`--target ios`, `catalyst`, `nsh package --target ios`). On Intel Macs only the simulator and Mac Catalyst ones (`--target ios`, `catalyst`, `nsh package --target ios-simulator`), built with the iOS 18 SDK of Xcode 16.4, the last Xcode that runs on Intel; there is no device runner, so no `nsh package --target ios` | macOS (Apple silicon and Intel) |
 | `web` | The web runtimes (`--target web`) | Every platform |
 | `gpui` | The [GPUI](./gpui.md) development host (`--target gpui`) | Every platform, built for it |
 | `tui` | The terminal development host (`--target tui`) | Every platform, built for it |
@@ -90,7 +90,7 @@ A component always comes from the same build as the CLI. `nsh update` adds the i
 
 ## For apps written in Rust
 
-Install Rust through [rustup](https://rustup.rs). `nsh` builds a Rust app's runner for each target with Cargo, from your crate and NSH's crates on crates.io at the CLI's version, so add the Rust targets of the platforms you run on. For the iOS simulator, iOS devices and Mac Catalyst:
+Install Rust through [rustup](https://rustup.rs) when the app has Rust in it: a crate of its own in `ext/`, a Rust nshm, or a whole app in Rust. `nsh` builds the app's runner for each target with Cargo, from those crates and NSH's crates on crates.io at the CLI's version, so add the Rust targets of the platforms you run on. For the iOS simulator, iOS devices and Mac Catalyst:
 
 ```sh
 rustup target add aarch64-apple-ios-sim aarch64-apple-ios aarch64-apple-ios-macabi
@@ -151,7 +151,7 @@ export PATH="$PWD/dist/nsh/bin:$PATH"
 nsh --version
 ```
 
-The distribution is made with `cargo xtask dist` in a checkout (below). The `nsh` binary it contains is built for that machine. On a Mac with Xcode it includes the iOS and macOS runtimes (Apple Silicon); on Linux it includes the Linux runtime instead, built for that machine; on Windows the Windows runtime, with `bin\nsh.exe`. Each also includes the [GPUI](./gpui.md) and terminal development hosts, built for that machine. All include the Android runtime (on Windows only when the Android SDK is found).
+The distribution is made with `cargo xtask dist` in a checkout (below). The `nsh` binary it contains is built for that machine. On a Mac with Xcode it includes the iOS and macOS runtimes (the simulator and Mac Catalyst of its processor; the device runner on Apple silicon only); on Linux it includes the Linux runtime instead, built for that machine; on Windows the Windows runtime, with `bin\nsh.exe`. Each also includes the [GPUI](./gpui.md) and terminal development hosts, built for that machine. All include the Android runtime (on Windows only when the Android SDK is found).
 
 ## Installing the nightly build
 
@@ -233,7 +233,7 @@ See [macOS](./macos.md).
 
 - **GTK 4.14** or later, with their development packages and clang to build the runtime: `libgtk-4-dev clang` (Debian, Ubuntu 24.04 or later), `gtk4 clang` (Arch), `gtk4-devel clang` (Fedora).
 - **WebKitGTK 6.0** (2.42 or later) for web views and download decisions: `libwebkitgtk-6.0-dev` (Debian, Ubuntu), `webkitgtk-6.0` (Arch), `webkitgtk6.0-devel` (Fedora) to build the runtime; apps then need it where they run. Without it, `cargo xtask dist` builds the runtime with placeholders for web views.
-- **GStreamer** 1.14 or later, for video and sound: `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev` (Debian, Ubuntu), `gstreamer gst-plugins-base` (Arch), `gstreamer1-devel gstreamer1-plugins-base-devel` (Fedora) to build the runtime, and the plug-ins for the video and audio formats apps play. Its development packages are for `Sound` (the feature `sound`): a Rust app without it builds with GTK alone.
+- **GStreamer** 1.14 or later, for video and sound, where apps run: its base plug-ins and the plug-ins for the video and audio formats apps play. Building needs nothing of it; without it an app still starts, and loading a sound fails naming the missing library.
 
 See [Linux](./linux.md).
 
@@ -246,14 +246,13 @@ See [Windows](./windows.md).
 
 ### Building the Android runtime
 
-Building the Android runtime from a checkout (`cargo xtask android`) additionally needs an **NDK** from the SDK (`ndk;<version>`; set `ANDROID_NDK_HOME` if the newest one installed is incomplete) and `javac`.
+Building the Android runtime from a checkout (`cargo xtask android`) additionally needs an **NDK** from the SDK (`ndk;<version>`; set `ANDROID_NDK_HOME` if the newest one installed is incomplete) and `javac`. The embedding libraries alone: `cargo xtask android-embed` (`dist/nsh/embed/android/{nsh,nsh-dev}.aar`).
 
 ## What works where
 
 | Command | macOS | Linux | Windows |
 |---|---|---|---|
 | `nsh init`, `nsh build`, `nsh test`, `nsh dev`, `nsh check` | Yes | Yes | Yes |
-| `nsh run --target catalyst` (Mac Catalyst) | Yes | No | No |
 | `nsh run --target macos`, `nsh package --target macos` | Yes | No | No |
 | `nsh run --target linux` (the default on Linux), `nsh package --target linux` | No | Yes | No |
 | `nsh run --target windows` (the default on Windows), `nsh package --target windows` | No | No | Yes |
@@ -261,6 +260,7 @@ Building the Android runtime from a checkout (`cargo xtask android`) additionall
 | `nsh run --target ios`, `nsh package --target ios` / `ios-simulator` | Yes, with Xcode | No | No |
 | `nsh run --target android`, `nsh package --target android` | Yes | Yes, from a checkout | Yes, with the Android runtime |
 | `nsh keygen`, `certify`, `publish`, `verify`, `revoke` | Yes | Yes | Yes |
+| `nsh run --target catalyst` (Mac Catalyst) | Yes | No | No |
 
 On Linux, build the CLI and the Android runtime from a checkout (`cargo build -p nsh-cli` and `cargo xtask android --dev`); the NDK's Linux toolchain is used automatically. On Windows the NDK's Windows toolchain is used the same way, and `cargo xtask dist` includes the Android runtime when it finds the Android SDK.
 

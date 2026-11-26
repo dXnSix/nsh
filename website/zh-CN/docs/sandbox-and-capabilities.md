@@ -7,10 +7,11 @@ group: delivery
 
 # 沙箱与能力
 
-用 Rust 编写的应用是编译进发布它的应用中的原生代码，和该应用的其余部分一样，以它的信任运行；它对 NSH 服务的调用（`fetch`、图片、
-web view、状态栏）和 TSX 一样经过同样的原生检查，受宿主授予的范围约束。应用运行的 TSX 和 JavaScript（它自己的，或它下载的
-[签名包](./signed-packages.md)）在每个视图一个的 QuickJS VM 中运行，它们在 VM 之外能做的一切都要经过 NSH 的原生运行时。因此，
-你可以在宿主应用制定的规则下运行并非自己编写的代码，例如第三方小程序或下载的更新：
+沙箱让宿主应用可以在自己制定的规则下运行别人写的代码，例如第三方小程序或下载的更新。
+
+应用运行的 TSX 和 JavaScript（它自己的，或它下载的[签名包](./signed-packages.md)）在每个视图一个的 QuickJS VM 中运行，它们在 VM
+之外能做的一切都要经过 NSH 的原生运行时。Rust 代码不同：它是编译进应用的原生代码，以应用的信任运行；它对 NSH 服务的调用
+（`fetch`、图片、web view、状态栏）仍和 TSX 一样经过同样的原生检查，受宿主授予的范围约束。运行时提供三层保护：
 
 - **限制（Limits）** 约束单个应用可使用的内存、时间和原生资源。
 - **加固（Hardening）** 在 release 构建中移除所有把字符串变成代码的途径。
@@ -63,6 +64,13 @@ VM 会继续运行：下一个事件、定时器或帧照常执行。
 不论是否为空（`new Array(2 ** 32 - 1)`）。更长的数组会抛出应用可以捕获的错误：`RangeError`，菜单和托盘则是 `TypeError`；
 动画的 `start` 会让它的 Promise 被拒绝；画布调用会忽略它并给出警告。导航栈最多容纳同样多的页面：超出后 `push` 会抛出
 `RangeError`。子节点、子菜单和样式嵌套超过 64 层会抛出 `TypeError`。`<List>` 的 `each` 行数不受此限。
+
+**视图最多嵌套 1024 层，所有应用都是如此。** 布局和挂载在原生代码中逐层遍历视图树，解释器的栈限制管不到那里。
+视图嵌套得更深的应用会被停止，与超出配额时一样：
+
+```text
+the app nested views more than 1024 deep and was stopped
+```
 
 > [!TIP]
 > 对普通应用来说，这些限制相当宽松。如果你触到了 2 s 的调用预算，说明这项工作本来就不该放在一个事件里：它会让应用的
@@ -193,6 +201,7 @@ Web 上它沿用页面的协议，按补全后的 URL 检查；原生应用没�
 | `hosts` | `string[]` | [web view](./web-view-and-video.md) 可以显示和导航到的主机（`http` 和 `https`）。没有 `webview` 时，应用完全不能显示网页。 |
 | `input` | `boolean` | web view 的 ref 可以向页面发送可信输入（[`sendInput`](./web-view-and-video.md#像用户一样输入)）。只有声明了才会授予，没有 `"capabilities"` 的应用也不例外。 |
 | `media` | `string[]` | 网页可以通过 `getUserMedia` 采集的媒体：`"microphone"`、`"camera"`。只有声明了才会授予，没有 `"capabilities"` 的应用也不例外。 |
+| `runtimeOrigin` | `boolean` | web view 的 `allowOrigin` 可以在应用运行时为这个 web view 增加一个可显示的源（[`allowOrigin`](../elements/web-view.md)）。只有声明了才会授予，没有 `"capabilities"` 的应用也不例外。 |
 
 web view 内的顶层导航也会在加载前由平台的导航代理检查。页面自身的子资源（脚本、图片、XHR）属于网页内容自己的事，
 不做检查。`about:blank` 和内联 HTML（`html`）只要求 web view 被授予即可：`"webview": { "hosts": [] }`
@@ -202,6 +211,10 @@ web view 内的顶层导航也会在加载前由平台的导航代理检查。�
 页面可以显示和下载它自己创建的 `blob:` URL（`URL.createObjectURL`、`<a download>` 链接）：blob URL
 内嵌创建它的文档的源，因此只有当该源是 `hosts` 中的主机时才允许；页面不能显示的主机的 blob，以及不透明
 blob（`blob:null/…`），都不允许。所有平台的检查方式相同。
+
+来自主机的下载遵循同一规则：响应来自不在 `hosts` 中的主机的下载不会被保存，`onDownload` 报告 `failed`，`code` 为
+`"ERR_ACCESS_DENIED"`。在 iOS、macOS 和 Linux 上，无论经过怎样的重定向都是如此；在 iOS 和 macOS 上，指向这类主机的
+重定向在发出请求之前就会被取消。页面自身内容（`data:` 和 `blob:` URL）的下载不来自任何主机，照常保存。
 
 `input` 与 `hosts` 分开，是因为可信输入带有用户激活，而 `injectJavaScript` 永远得不到它：页面因此可以打开窗口、写入剪贴板、
 打开系统的文件面板、发起 WebAuthn 或权限提示，以及按下任何检查 `isTrusted` 的按钮。没有它时，核心会丢弃 `sendInput`
@@ -229,13 +242,15 @@ blob（`blob:null/…`），都不允许。所有平台的检查方式相同。
 
 `"picker": true` 允许应用显示系统的照片选择器（[`Picker`](../modules/nsh.md#picker)）：由用户决定哪些内容交给应用。
 
+开启了 `nsh-extra` 的 [`Photos`](./nshm.md#photos) 的应用，也由它授予相册：读取最近的照片、它们的缩略图和照片本身。用户允许的范围对整个应用有效，所以由这项能力决定哪些代码能拿到照片。
+
 ### `share`
 
 `"share": true` 允许应用显示系统的分享面板（[`Share`](../modules/nsh.md#share)）：由用户决定内容发往哪里。分享的文件还需要能在 `fs.read` 下读取。
 
 ### `speech`
 
-`"speech": true` 允许应用识别用户说的话（[`Speech`](../modules/nsh.md#speech)）：使用麦克风和系统的语音识别器，转写文本交给应用。系统仍会向用户请求一次权限。
+`"speech": true` 允许应用识别用户说的话（`nsh-extra` 的 [`Speech`](./nshm.md#speech)）：使用麦克风和系统的语音识别器，转写文本交给应用。系统仍会向用户请求一次权限。
 
 ### `audio`
 
@@ -245,9 +260,11 @@ blob（`blob:null/…`），都不允许。所有平台的检查方式相同。
 
 `"notifications": true` 允许应用显示系统通知并设置应用图标的角标（[`Notifications`](../modules/nsh.md#notifications)）。需要询问的系统仍会向用户请求一次权限。
 
+开启了 `nsh-extra` 的 [`Push`](./nshm.md#push) 的应用，也由它授予远程通知：注册设备并读取 token、监听投递和点按、决定通知在前台怎么显示、移除某个 thread 里已送达的通知。注册和后台投递从不询问用户，用户允许的权限又属于整个应用，所以由这项能力决定哪些代码能用到它们。
+
 ### `application`
 
-`"application": true` 允许应用在桌面上作用于整个应用（[`nsh/desktop`](../modules/nsh-desktop.md)）：应用菜单（`Menu.setApplicationMenu`）、托盘、全局快捷键、`Application.quit()`、`Application.setQuitMode()`、`Application.restart()` 和 `Application.setLaunchAtLogin()`。没有这项能力时它们什么也不做，`Application.launchAtLogin()` 返回 `false`，`setLaunchAtLogin` 以 `ERR_ACCESS_DENIED`（`permission` 为 `"application"`）拒绝。右键菜单（`Menu.popup`）显示在应用自己的视图中，应用打开的窗口由 [`windows`](#windows) 授权，两者都不需要这项能力。
+`"application": true` 允许应用作用于整个应用：在桌面上（[`nsh/desktop`](../modules/nsh-desktop.md)）是应用菜单（`Menu.setApplicationMenu`）、托盘、全局快捷键、`Application.quit()`、`Application.setQuitMode()`、`Application.restart()` 和 `Application.setLaunchAtLogin()`，在 iOS 和 Android 上是系统设置中本应用的页面（`nsh/mobile` 的 [`AppSettings.open()`](../modules/nsh-mobile.md#appsettings)；嵌入的视图打开宿主应用的页面）。没有这项能力时它们什么也不做，`Application.launchAtLogin()` 和 `AppSettings.available()` 返回 `false`，`setLaunchAtLogin` 和 `AppSettings.open()` 以 `ERR_ACCESS_DENIED`（`permission` 为 `"application"`）拒绝。右键菜单（`Menu.popup`）显示在应用自己的视图中，应用打开的窗口由 [`windows`](#windows) 授权，两者都不需要这项能力。
 
 ### `homeDir`
 
@@ -312,6 +329,8 @@ if (host.available()) {
 | 声音 | `Sound.load` reject、`new AudioPlayer` 抛出 `ERR_ACCESS_DENIED`，`permission` 为 `"audio"`，`resource` 为音源；不读取也不播放任何内容。 |
 | 语音 | `Speech.start` 抛出 `ERR_ACCESS_DENIED`，`permission` 为 `"speech"`，`resource` 为 `""`；麦克风不会打开。 |
 | 通知 | `Notifications` 的函数 reject 或抛出 `ERR_ACCESS_DENIED`，`permission` 为 `"notifications"`，`resource` 为 `""`；不会显示任何东西。 |
+| 相册 | `nsh-extra` 的 `Photos` 除 `access()` 外的函数 reject 或抛出 `ERR_ACCESS_DENIED`，`permission` 为 `"picker"`，`resource` 为 `""`；不读取相册，也不询问用户。 |
+| 推送 | `nsh-extra` 的 `Push` 除 `available()` 外的函数 reject 或抛出 `ERR_ACCESS_DENIED`，`permission` 为 `"notifications"`，`resource` 为 `""`；设备不会注册，token 和投递都不会到达应用。 |
 | `openUrl` | Promise 以 `ERR_ACCESS_DENIED` 被 reject，`permission` 为 `"openUrl"`，`resource` 为该 URL；不会打开任何东西。 |
 | 宿主调用 | `host.call` 以 `ERR_ACCESS_DENIED` 被 reject，`permission` 为 `"host"`，`resource` 为函数名（`host.post` 抛出同样的错误）；调用不会到达宿主。 |
 | 文件（`fs/promises`） | Promise 以 `ERR_ACCESS_DENIED` 被 reject，`permission` 为 `"fs"`，`resource` 为该路径；不会访问磁盘。 |

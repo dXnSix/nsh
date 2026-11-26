@@ -8,12 +8,17 @@ in `crates/nsh-core/src/runtime/updater.rs`, the toolchain's side in `crates/nsh
 
 1. `nsh.json`'s `"updater"` (`github` or `url`, `channels`, `publicKey`) is checked by `nsh package`, which adds it with the app's
    id and version to the package's assets as `nsh-updater.json`, and leaves `<name>-<version>-<os>-<arch>.<ext>`.
-2. `nsh update-manifest` writes `latest.json` and `latest.json.sig` for one version's archives.
+2. `nsh update-manifest` writes `latest.json` and `latest.json.sig` for one version's archives; with `--previous`,
+   a zstd patch per platform from the previous version (`Asset::deltas`, `nsh_updater::delta`).
 3. `checkForUpdate` reads the asset, gets the manifest, checks the signature, the id and that the version is newer.
    With `{ channel }` it reads that channel's manifest instead (`Config::channel`); a name the asset does not declare
    rejects before any request.
 4. `downloadUpdate` streams the asset into `<data dir>/updates/download-<sha256>.part` (resuming an existing partial
-   with HTTP `Range`), checks its size and SHA-256, and renames it to `download-<sha256>`.
+   with HTTP `Range`), checks its size and SHA-256, and renames it to `download-<sha256>`. When `Available::delta`
+   offers a patch from the running version it goes first: the installed app written as the patch's reference
+   (`delta::base`: entries sorted, no modes, owners or times, so publisher and app write the same bytes) must hash to
+   `base`, the patch downloads resumably as `delta-<result>.patch`, and what it makes, a `.tar` of the new app, must
+   hash to `result`; any failure logs and downloads the archive.
 5. `installAndRestart` unpacks next to the app, checks the new app, swaps it in, then restarts the app as
    `Application.restart()` does (`DesktopCommand::Restart`): this run quits, and the new version starts once it has
    exited (`nsh_core::restart`). Or `installOnQuit` unpacks and checks it now (`Installation::stage`) and leaves the
@@ -72,7 +77,17 @@ packages' are removed at launch). `runningPackage()` is `Bundle::package`. `shel
   manifest at run time, which the user chooses in its settings. `"channels"` keeps the choice of *where* in the
   package: the code passes a name, `Config::channel` looks it up, and every channel needs HTTPS and `publicKey` as
   `url` does. Only the source changes, so the id, the signature and the newer-version check hold on every channel,
-  and leaving one never downgrades. `checkForPackage` reads only the default source.
+  and leaving one never downgrades. `checkForPackage` reads only the default source, unless the app opts in to
+  runtime feeds (below).
+- **Runtime package feeds are an opt-in exception** (#3298). One build serving several self-hosted servers learns the
+  feed only when the user signs in. `"packages": { "source": "runtime" }` lets `checkForPackage({ url })` name the
+  manifest (`Config::package_feed`); `publicKey` is then required and the roots stay the shipped app's, so the URL
+  changes where bytes come from, not what is trusted. `"allowHttp": true` allows a plain-HTTP feed for private
+  networks. It cannot widen what HTTPS already allowed: the signature, notes and package must be on the feed's origin
+  (`Config::check_package_url`), redirects from a plain-HTTP hop stay on that origin or go to HTTPS
+  (`updater_redirect_allowed` in `nsh-engine`), and a replayed older manifest offers nothing (a package's build must be
+  newer than the running one, and `verify_package` refuses builds below the trust store's floor). URLs with user info
+  are refused. App updates (`github`, `url`, `channels`) stay HTTPS.
 - **A plugin cannot replace its host.** `Installation::current` needs the executable beside an `app.json` of the id and
   a `nsh-updater.json` with the same bytes the module read. A plugin has other assets, and if it had the same bytes it
   would only update from the host's own source.

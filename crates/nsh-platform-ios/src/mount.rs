@@ -1,7 +1,11 @@
 //! Applies mount batches to UIKit views and owns the per-surface native
 //! state: views, animation graph, image loads and gesture recognizers.
 
-use std::{cell::RefCell, ptr::NonNull, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    ptr::NonNull,
+    sync::Arc,
+};
 
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, MainThreadBound};
@@ -11,7 +15,7 @@ use nsh_core::{
     MountBatch, MountItem, NodeId, PayloadValue, Points, ResizeMode, StickyCell, SubmitBehavior,
     ViewKind, ViewProps, ViewStyle,
     animation::{AnimationProp, AnimationValue},
-    geometry::{DevicePixels, point, size},
+    geometry::{DevicePixels, Size, point, size},
     shader::ShaderRole,
     time::Instant,
 };
@@ -38,6 +42,7 @@ use crate::{
     decor::{self, Decor},
     image::{AssetBase, DecodedImage, ImageLoader, Request},
     input::Input,
+    interaction::{CoverageAnimation, coverage_animation},
     native_view::NshView,
     navigation::{ModalHost, ScreenHost, StackHost},
     press::{PressAt, PressRecognizer},
@@ -203,6 +208,8 @@ struct Gestures {
     pan: Option<Retained<UIPanGestureRecognizer>>,
     pinch: Option<Retained<UIPinchGestureRecognizer>>,
     rotation: Option<Retained<UIRotationGestureRecognizer>>,
+    /// `onFileDrop`: a `UIDropInteraction` ([`crate::file_drop`]).
+    file_drop: Option<Retained<objc2::runtime::AnyObject>>,
     /// `panActivation`.
     gate: Option<Retained<crate::touch::PanGate>>,
     refresh: Option<Refresh>,
@@ -442,6 +449,35 @@ impl KeyboardMotion {
     }
 }
 
+/// Where `view` is laid out in its window, as `convertRect:toView:nil` of
+/// its bounds says without the layers' transforms. The keyboard is avoided
+/// for where a view rests: a transform moves what is drawn, often for a
+/// while (a sheet coming in as the keyboard rises moves its input by the
+/// animator's frames), and measuring it mid-way would move the content up
+/// by what the sheet itself is about to clear.
+fn laid_out_in_window(view: &UIView) -> CGRect {
+    // `center` and `bounds` are the layout's (`frame` follows the
+    // transform); nsh keeps every layer's anchor at its middle.
+    let offset = |v: &UIView| {
+        let (center, bounds) = (v.center(), v.bounds());
+        CGPoint::new(
+            center.x - bounds.size.width / 2.0,
+            center.y - bounds.size.height / 2.0,
+        )
+    };
+    let size = view.bounds().size;
+    let mut origin = offset(view);
+    let mut parent = view.superview();
+    // Up to the window, whose own place on the screen is not counted.
+    while let Some(p) = parent.filter(|p| p.superview().is_some()) {
+        let (at, scrolled) = (offset(&p), p.bounds().origin);
+        origin.x += at.x - scrolled.x;
+        origin.y += at.y - scrolled.y;
+        parent = p.superview();
+    }
+    CGRect::new(origin, size)
+}
+
 /// Moves the content of `view` up by `shift` (through its bounds' origin,
 /// so neither its frame nor a transform the app set changes) along
 /// `motion`, the keyboard's.
@@ -563,6 +599,11 @@ struct Slot {
     gesture_start: [f32; 4],
     pan_scroll_handoff: bool,
     pan_scroll: Option<PanScroll>,
+    /// `panActivation`: the view's own pan starts as it activates.
+    pan_activation: Option<nsh_core::PanActivation>,
+    /// Where the finger of the view's own pan went down (window points),
+    /// for `PanEvent::origin`.
+    pan_down: CGPoint,
     /// `delayLongPress` (milliseconds).
     long_press_delay: Option<f32>,
     /// A horizontal list laid out right to left: mirrored as a whole.
@@ -585,6 +626,8 @@ struct Slot {
     image_options: nsh_core::ImageOptions,
     /// The placeholder's load in flight.
     placeholder_key: Option<String>,
+    /// The video poster's load in flight.
+    poster_key: Option<String>,
     /// The image (not its placeholder) is shown.
     image_shown: bool,
     /// Interaction states the core wants reported (`tailwind::state`).
@@ -636,6 +679,8 @@ impl Slot {
             gesture_start: [0.0; 4],
             pan_scroll_handoff: false,
             pan_scroll: None,
+            pan_activation: None,
+            pan_down: CGPoint::ZERO,
             long_press_delay: None,
             mirrored: false,
             in_mirrored: false,
@@ -648,6 +693,7 @@ impl Slot {
             image_key: None,
             image_options: nsh_core::ImageOptions::default(),
             placeholder_key: None,
+            poster_key: None,
             image_shown: false,
             tracked: 0,
             states: 0,
@@ -671,6 +717,13 @@ struct LeavingScreen {
 pub(crate) struct Mounter {
     /// Indexed by node id (ids are dense).
     views: Vec<Option<Slot>>,
+    /// The viewport the engine has laid out, which can lag UIKit's bounds.
+    mounted_viewport: Size<Points>,
+    /// First mounted child if it animates the backdrop, with its last
+    /// eligible color. Animation frames never walk the UIKit hierarchy.
+    animated_backdrop: Option<(NodeId, Option<Color>)>,
+    /// The current backdrop candidate waiting for a finite native animation.
+    backdrop_waiting: Option<NodeId>,
     /// Views with animated bindings, re-evaluated when values change.
     animated: Vec<NodeId>,
     /// Image views waiting for their frame before loading.
@@ -715,13 +768,17 @@ pub(crate) struct Mounter {
     /// The scroll view edges views name (`ios={{ scrollEdgeElement }}`),
     /// with how many name each: soft while any does (`crate::scroll_edge`).
     soft_edges: Vec<(NodeId, nsh_core::ScrollEdge, u32)>,
-    /// One-shot display link for `requestAnimationFrame`.
+    /// Display link for JS frame requests and pending native backdrops.
     frame_link: Retained<objc2_quartz_core::CADisplayLink>,
+    frame_requested: Cell<bool>,
     /// Parents of screens, header items and modals (which are not
     /// subviews of their parent).
     hosts: rustc_hash::FxHashMap<NodeId, NodeId>,
     /// Stacks whose screens changed in the current batch.
     dirty_stacks: Vec<NodeId>,
+    /// Views whose transform went back to the identity: the stacks inside
+    /// them are laid out again ([`Mounter::lay_out_untransformed`]).
+    untransformed: Vec<NodeId>,
     /// A retained tab changed visibility; sync the newly visible stack.
     bottom_bar_dirty: bool,
     /// Stacks whose screens changed during a push or pop transition: they
@@ -742,6 +799,25 @@ pub(crate) struct Mounter {
     following_scroll: Vec<NodeId>,
     /// Modals to present or dismiss at the end of the current batch.
     dirty_modals: Vec<NodeId>,
+    /// Every modal, with whether it was in the tree when last checked: a
+    /// modal leaves with the subtree it is in, not when its node is
+    /// released (a later batch), and comes back with it.
+    modal_attached: Vec<(NodeId, bool)>,
+    /// Views were inserted, removed or deleted in this batch: the modals
+    /// are checked against the tree.
+    tree_changed: bool,
+    /// Modals the app shows that wait for a transition to end
+    /// ([`navigation::transition_over`]): presented over a modal on its
+    /// way out, they would go with it.
+    waiting_modals: Vec<NodeId>,
+    /// Modals dismissed since the last [`Mounter::finish_modals`], which a
+    /// modal presented there waits for even before their transition
+    /// starts.
+    dismissed_now: Vec<NodeId>,
+    /// Modals taken along by a dismissal under them, then hidden or
+    /// deleted by the app: reported closed once that dismissal ends. With
+    /// their controllers, which outlive a deleted modal's slot.
+    closing_taken: Vec<(NodeId, Retained<crate::navigation::ModalController>)>,
     /// Where `asset:/` URIs of videos resolve.
     asset_base: Option<AssetBase>,
     /// Report touches to JS: on the root and on each modal's root.
@@ -782,6 +858,8 @@ pub(crate) struct Mounter {
     fps: Option<std::rc::Rc<crate::fps::Fps>>,
     /// Shader views and the GPU device they render with.
     shaders: crate::shader::Shaders,
+    /// GPU views and the display link they render on.
+    gpu: crate::gpu::SurfaceGpu,
     /// Texts whose color transitions.
     text_colors: crate::interaction::TextColors,
     /// The `transitionShader`s of pages and dialogs.
@@ -826,9 +904,13 @@ impl Mounter {
         let mut views = Vec::with_capacity(256);
         views.resize_with(2, || None);
         root.setTag(nsh_core::ROOT_ID as isize);
+        let mounted_viewport = viewport_size(root.bounds().size);
         views[nsh_core::ROOT_ID as usize] = Some(Slot::new(Native::Root(root)));
         Self {
             views,
+            mounted_viewport,
+            animated_backdrop: None,
+            backdrop_waiting: None,
             animated: Vec::new(),
             pending_images: Vec::new(),
             image_scale: 0.0,
@@ -868,7 +950,9 @@ impl Mounter {
             disappearing: Default::default(),
             soft_edges: Vec::new(),
             frame_link: crate::animation::frame_link(&target_for_link),
+            frame_requested: Cell::new(false),
             shaders,
+            gpu: crate::gpu::SurfaceGpu::new(&target_for_link),
             text_colors: crate::interaction::TextColors::new(&target_for_link),
             nav_shaders: rustc_hash::FxHashMap::default(),
             leaving_screens: rustc_hash::FxHashMap::default(),
@@ -878,6 +962,7 @@ impl Mounter {
             auth_session: Default::default(),
             hosts: Default::default(),
             dirty_stacks: Vec::new(),
+            untransformed: Vec::new(),
             bottom_bar_dirty: false,
             deferred_stacks: Vec::new(),
             orientations: None,
@@ -885,6 +970,11 @@ impl Mounter {
             dirty_headers: Vec::new(),
             following_scroll: Vec::new(),
             dirty_modals: Vec::new(),
+            modal_attached: Vec::new(),
+            tree_changed: false,
+            waiting_modals: Vec::new(),
+            dismissed_now: Vec::new(),
+            closing_taken: Vec::new(),
             asset_base: asset_base.clone(),
             sticky: Default::default(),
             touch_trackers: Vec::new(),
@@ -940,7 +1030,9 @@ impl Mounter {
     fn apply_batch(&mut self, batch: MountBatch) {
         let initial_inputs = initial_input_layouts(&batch.items);
         let mut animation_changed = false;
+        let mut backdrop_changed = false;
         for item in batch.items {
+            backdrop_changed = backdrop_changed || self.affects_backdrop(&item);
             animation_changed |= self.apply_item(item, &initial_inputs);
         }
         if let Some(animation) = self.layout_animation.take() {
@@ -949,9 +1041,14 @@ impl Mounter {
         self.created.clear();
         self.finish_navigation();
         self.apply_orientations();
+        if backdrop_changed {
+            self.animated_backdrop = None;
+            self.backdrop_waiting = None;
+        }
         if animation_changed {
             self.apply_animations();
         }
+        self.lay_out_untransformed();
         self.report_finished();
         self.start_image_loads();
         for (_, area) in &self.areas {
@@ -965,6 +1062,111 @@ impl Mounter {
         if !self.keyboard_pending && self.keyboard > 0.0 && self.focused.is_some() {
             self.pan_for_keyboard(self.keyboard_motion);
         }
+        if backdrop_changed {
+            self.follow_background();
+        }
+    }
+
+    fn affects_backdrop(&self, item: &MountItem) -> bool {
+        let id = match *item {
+            MountItem::Insert { parent, child, .. } => {
+                if parent == nsh_core::ROOT_ID {
+                    return true;
+                }
+                child
+            }
+            MountItem::Remove { id }
+            | MountItem::Delete { id }
+            | MountItem::Frame { id, .. }
+            | MountItem::AnimationBindings { id, .. }
+            | MountItem::ViewStyle { id, .. } => id,
+            _ => return false,
+        };
+        id == nsh_core::ROOT_ID
+            || self
+                .slot(id)
+                .is_some_and(|s| s.parent == Some(nsh_core::ROOT_ID))
+    }
+
+    /// Keep the standalone backdrop in sync with the first mounted child
+    /// when it paints the whole viewport, not with overlays above it.
+    fn follow_background(&mut self) {
+        let Some(root) = self.slot(nsh_core::ROOT_ID) else {
+            return;
+        };
+        let view = root.native.view();
+        let Some((controller, window)) = crate::app::RootController::for_surface(view) else {
+            self.animated_backdrop = None;
+            self.backdrop_waiting = None;
+            return;
+        };
+        let viewport = view.bounds().size;
+        if viewport_size(viewport) != self.mounted_viewport {
+            return;
+        }
+        let candidate = root
+            .decor
+            .container(view)
+            .subviews()
+            .iter()
+            .find_map(|view| {
+                let id = view.tag() as NodeId;
+                let slot = self.slot(id)?;
+                (slot.parent == Some(nsh_core::ROOT_ID) && std::ptr::eq(slot.native.view(), &*view))
+                    .then_some((id, slot))
+            });
+        let (color, waiting) = candidate.map_or((None, None), |(id, slot)| {
+            let (color, pending) = backdrop_color(slot, viewport, &self.animator);
+            (color, pending.then_some(id))
+        });
+        self.animated_backdrop = candidate
+            .filter(|(_, slot)| {
+                slot.bindings.iter().any(|(prop, _)| {
+                    matches!(
+                        prop,
+                        AnimationProp::BackgroundColor
+                            | AnimationProp::Opacity
+                            | AnimationProp::Transform(_)
+                    )
+                })
+            })
+            .map(|(id, _)| (id, color));
+        self.wait_for_backdrop(waiting);
+        controller.set_backdrop(&window, color);
+    }
+
+    fn follow_animated_background(&mut self, id: NodeId, previous: Option<Color>) {
+        let Some(root) = self.slot(nsh_core::ROOT_ID) else {
+            return;
+        };
+        let view = root.native.view();
+        let viewport = view.bounds().size;
+        if viewport_size(viewport) != self.mounted_viewport {
+            return;
+        }
+        let (color, pending) = self.slot(id).map_or((None, false), |slot| {
+            backdrop_color(slot, viewport, &self.animator)
+        });
+        let owner = (color != previous)
+            .then(|| crate::app::RootController::for_surface(view))
+            .flatten();
+        self.wait_for_backdrop(pending.then_some(id));
+        if let Some((controller, window)) = owner {
+            self.animated_backdrop = Some((id, color));
+            controller.set_backdrop(&window, color);
+        }
+    }
+
+    fn wait_for_backdrop(&mut self, candidate: Option<NodeId>) {
+        if self.backdrop_waiting != candidate && candidate.is_some() {
+            self.frame_link.setPaused(false);
+        }
+        self.backdrop_waiting = candidate;
+    }
+
+    pub(crate) fn resized(&mut self, viewport: Size<Points>) {
+        self.mounted_viewport = viewport;
+        self.follow_background();
     }
 
     /// Narrows the content size of a vertical scroll view to its width when
@@ -1111,6 +1313,34 @@ impl Mounter {
         Some((start.max(0.0), end.max(0.0)))
     }
 
+    /// What the content insets of scroll view `id` keep clear at its start
+    /// and its end along its axis, as UIKit adjusts them: the room kept for
+    /// the keyboard and for a refresh, the app's own insets, and a large
+    /// title's bar (`None`: it is no scroll view).
+    #[cfg(feature = "dev")]
+    pub(crate) fn scroll_insets(&self, id: NodeId, horizontal: bool) -> Option<(CGFloat, CGFloat)> {
+        let Native::Scroll(scroll) = &self.slot(id)?.native else {
+            return None;
+        };
+        let inset = scroll.adjustedContentInset();
+        Some(if horizontal {
+            (inset.left, inset.right)
+        } else {
+            (inset.top, inset.bottom)
+        })
+    }
+
+    /// Whether `view` is inside one of the app's component elements: the
+    /// app's own view (a `TabBar` draws its `UITabBar` there), not one
+    /// UIKit draws over the app.
+    #[cfg(feature = "dev")]
+    pub(crate) fn in_component(&self, view: &UIView) -> bool {
+        self.views.iter().flatten().any(|s| match &s.native {
+            Native::Component(c) => view.isDescendantOfView(&c.container),
+            _ => false,
+        })
+    }
+
     /// The text input `id` holds (`None`: it is no input).
     #[cfg(feature = "dev")]
     pub(crate) fn input_text(&self, id: NodeId) -> Option<String> {
@@ -1236,8 +1466,11 @@ impl Mounter {
                 }
                 let modal = matches!(native, Native::Modal(_));
                 self.views[idx] = Some(Slot::new(native));
-                if modal && self.touch_listeners > 0 {
-                    self.add_touch_tracker(id);
+                if modal {
+                    self.modal_attached.push((id, false));
+                    if self.touch_listeners > 0 {
+                        self.add_touch_tracker(id);
+                    }
                 }
                 if self.layout_animation.is_some() {
                     self.created.push(id);
@@ -1251,6 +1484,7 @@ impl Mounter {
                 if let Some(s) = self.slot_mut(child) {
                     s.parent = Some(parent);
                 }
+                self.tree_changed = true;
                 if self.insert_hosted(parent, child, before) {
                     return false;
                 }
@@ -1259,7 +1493,9 @@ impl Mounter {
                 {
                     // Back before its removal finished animating.
                     c.native.view().layer().removeAllAnimations();
-                    apply_dynamic(c, &self.animator);
+                    if apply_dynamic(c, &self.animator) {
+                        self.untransformed.push(child);
+                    }
                 }
                 if let (Some(p), Some(c)) = (self.slot(parent), self.slot(child)) {
                     let zoom = p.zoom_view();
@@ -1283,6 +1519,7 @@ impl Mounter {
                 if let Some(s) = self.slot_mut(id) {
                     s.parent = None;
                 }
+                self.tree_changed = true;
                 if self.remove_hosted(id) {
                     return false;
                 }
@@ -1312,6 +1549,7 @@ impl Mounter {
                         Some((self.root_view_of(view)?, view.window()?))
                     });
                 self.remove_hosted(id);
+                self.tree_changed = true;
                 self.sticky.remove(&id);
                 self.split_deleted(id);
                 // A removal animation it was running ends with it: its end
@@ -1330,10 +1568,43 @@ impl Mounter {
                     // released it, or released its subtree without a
                     // remove) goes away too, as on Android: through its
                     // shader (from the picture held when it was removed) or
-                    // with its own motion.
+                    // with its own motion, and its close is reported once
+                    // it is gone. JS releases a node it removes at once:
+                    // this is how a dialog the app closes goes.
                     if let Native::Modal(modal) = &mut s.native {
-                        let at_once = modal.changes(false) && self.dialog_overlay(id, false);
-                        modal.dismiss(at_once, || {});
+                        self.modal_attached.retain(|&(m, _)| m != id);
+                        self.waiting_modals.retain(|&m| m != id);
+                        // Taken along by a dismissal under it: reported
+                        // closed once that one ends.
+                        match modal.hidden_after_taken() {
+                            Some(true) => self.control.dispatch_event(
+                                id,
+                                EventKind::Dismiss,
+                                EventPayload::None,
+                            ),
+                            Some(false) => self.closing_taken.push((id, modal.controller.clone())),
+                            None => {}
+                        }
+                        let changes = modal.changes(false);
+                        let at_once = changes && self.dialog_overlay(id, false);
+                        // The modals over it go with it: those the app
+                        // still shows come back once it is gone.
+                        if changes {
+                            for above in modal.modals_above() {
+                                if self.modal_mut(above).is_some_and(|m| m.dismissed_under()) {
+                                    self.waiting_modals.push(above);
+                                }
+                            }
+                        }
+                        if changes {
+                            self.dismissed_now.push(id);
+                        }
+                        let control = self.control.clone();
+                        let shared = self.shared.clone();
+                        modal.dismiss(at_once, move || {
+                            control.dispatch_event(id, EventKind::Dismiss, EventPayload::None);
+                            Self::present_waiting(&shared);
+                        });
                     }
                     if s.events.contains(EventKind::Touch) {
                         self.touch_listener_changed(false);
@@ -1350,6 +1621,7 @@ impl Mounter {
                 if was_screen {
                     self.release_root_effect();
                 }
+                self.gpu.deleted(id);
                 self.nav_shaders.remove(&id);
                 if let Some((root, window)) = restore {
                     self.target.restore_root_focus(root, window);
@@ -1448,6 +1720,7 @@ impl Mounter {
                 if self.shaders.has(id) {
                     self.layout_shader(id);
                 }
+                self.layout_gpu(id);
             }
             MountItem::TrackStates { id, states } => self.track_states(id, states),
             MountItem::Overflow { id, extent } => {
@@ -1536,8 +1809,10 @@ impl Mounter {
                         .iter()
                         .map(|v| v.tag() as NodeId)
                         .collect();
-                    if let Some(s) = self.slot(id) {
-                        apply_dynamic(s, &self.animator);
+                    if let Some(s) = self.slot(id)
+                        && apply_dynamic(s, &self.animator)
+                    {
+                        self.untransformed.push(id);
                     }
                     for cell in cells {
                         self.set_in_mirrored(cell, mirrored);
@@ -1727,6 +2002,14 @@ impl Mounter {
                     self.nav_shaders.remove(&id);
                 }
             },
+            MountItem::GpuView { id, source } => {
+                let scale = self.display_scale();
+                if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+                    self.gpu.set(id, s.native.view(), &s.style, scale, source);
+                    // Bindings that came before it, for the new renderer.
+                    self.gpu.rebound(id, &s.bindings, &self.animator);
+                }
+            }
             MountItem::Shader { id, layer } => {
                 let scale = self.display_scale();
                 let was_screen = self.shaders.draws_screen(id);
@@ -1784,8 +2067,10 @@ impl Mounter {
                     }
                     // Bound values apply now too (a canvas reads them when
                     // it draws next).
-                    if let Some(s) = self.slot(id) {
-                        apply_dynamic(s, &self.animator);
+                    if let Some(s) = self.slot(id)
+                        && apply_dynamic(s, &self.animator)
+                    {
+                        self.untransformed.push(id);
                     }
                     self.push_shader_args(id);
                     // A component gets what is bound again.
@@ -1794,6 +2079,10 @@ impl Mounter {
                     {
                         host.forget();
                         host.push(&s.bindings, &self.animator);
+                    }
+                    // A GPU view's renderer too.
+                    if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+                        self.gpu.rebound(id, &s.bindings, &self.animator);
                     }
                     return true;
                 }
@@ -1910,12 +2199,13 @@ impl Mounter {
                 }
             }
             MountItem::ComponentPropSlots { id, names } => {
-                if let Some(Slot {
-                    native: Native::Component(host),
-                    ..
-                }) = self.slot_mut(id)
+                if !self.gpu.prop_slots(id, &names)
+                    && let Some(Slot {
+                        native: Native::Component(host),
+                        ..
+                    }) = self.slot_mut(id)
                 {
-                    host.slots = names;
+                    host.bound.slots = names;
                     host.forget();
                 }
             }
@@ -1927,10 +2217,11 @@ impl Mounter {
                 }
             }
             MountItem::ComponentProps { id, props } => {
-                if let Some(Slot {
-                    native: Native::Component(host),
-                    ..
-                }) = self.slot_mut(id)
+                if !self.gpu.props(id, &props)
+                    && let Some(Slot {
+                        native: Native::Component(host),
+                        ..
+                    }) = self.slot_mut(id)
                     && let Some(component) = host.component.as_mut()
                 {
                     for (name, value) in &props {
@@ -1955,6 +2246,23 @@ impl Mounter {
                 && let Some(component) = host.component.as_mut()
             {
                 component.command(name, args);
+            }
+            return;
+        }
+        if let Command::ClearSelection = command {
+            let within = |mut inner: NodeId, outer: NodeId| loop {
+                if inner == outer {
+                    return true;
+                }
+                match self.slot(inner).and_then(|s| s.parent) {
+                    Some(parent) => inner = parent,
+                    None => return false,
+                }
+            };
+            for (area_id, area) in &self.areas {
+                if within(*area_id, id) || within(id, *area_id) {
+                    area.clear();
+                }
             }
             return;
         }
@@ -2139,9 +2447,6 @@ impl Mounter {
                     &self.control,
                 );
             }
-            (Command::Speech(command), _) if id == nsh_core::ROOT_ID => {
-                crate::speech::command(&self.control, &command);
-            }
             (Command::Audio(command), _) if id == nsh_core::ROOT_ID => {
                 use nsh_core::image::loader::AssetBase as Base;
                 let base = self.images.asset_base().map(|base| match base {
@@ -2186,6 +2491,7 @@ impl Mounter {
             (Command::PerfMonitor(true), _) => self.measure(),
             (Command::PerfMonitor(false), _) => self.stop_measuring(),
             (Command::Tokens(tokens), _) => self.alert_tint = crate::system::alert_tint(&tokens),
+            (Command::TextLocale(locale), _) => self.target.set_text_locale(locale),
             (Command::ImageInfo { id, uri }, _) => self.images.info(id, &uri),
             (Command::SetClipboard(text), _) => crate::system::set_clipboard(&text),
             (Command::SetClipboardItem(item), _) => match &item.html {
@@ -2193,6 +2499,9 @@ impl Mounter {
                 None => crate::system::set_clipboard(&item.text),
             },
             (Command::OpenUrl { id, url }, _) => crate::system::open_url(id, &url, &self.control),
+            (Command::OpenAppSettings { id }, _) => {
+                crate::system::open_app_settings(id, &self.control)
+            }
             (Command::ReadClipboard { id, has_only }, _) => {
                 let (has, text, denied) = crate::system::read_clipboard(has_only);
                 let mut fields = vec![
@@ -2460,22 +2769,29 @@ impl Mounter {
     pub(crate) fn keyboard_changed(&mut self, height: f32, motion: KeyboardMotion) {
         self.keyboard = height;
         self.keyboard_motion = motion;
-        self.avoid_keyboard(motion);
         if height <= 0.0 {
             // Hiding: what moved up comes back down with the keyboard.
+            self.avoid_keyboard(motion);
             self.pan_for_keyboard(motion);
         } else {
             // Showing: the app may make room for the keyboard itself, in
-            // the batch it answers with ([`Mounter::keyboard_settled`]).
+            // the batch it answers with ([`Mounter::keyboard_settled`]). A
+            // scroll view it lifts above the keyboard (a panel padded by
+            // the keyboard's height) needs no inset: measured before that
+            // batch, it would keep one as tall as the keyboard and scroll
+            // its content up for nothing.
             self.keyboard_pending = true;
         }
     }
 
     /// The engine handled the keyboard's change: the batch the app
-    /// answered with, if any, is applied. If the focused input is in no
-    /// scroll view and still under the keyboard, its content moves up.
+    /// answered with, if any, is applied. What the keyboard still covers
+    /// of the focused input's scroll view gets a bottom inset; if the
+    /// input is in no scroll view and still under the keyboard, its
+    /// content moves up.
     pub(crate) fn keyboard_settled(&mut self) {
         if std::mem::take(&mut self.keyboard_pending) {
+            self.avoid_keyboard(self.keyboard_motion);
             self.pan_for_keyboard(self.keyboard_motion);
         }
     }
@@ -2533,8 +2849,7 @@ impl Mounter {
             }
             let container = self.pan_container(id)?;
             let view = self.slot(container)?.native.view();
-            let editor = input.editor_view();
-            let rect = editor.convertRect_toView(editor.bounds(), None);
+            let rect = laid_out_in_window(input.editor_view());
             // Where it would be unmoved.
             let bottom = rect.origin.y + rect.size.height + view.bounds().origin.y;
             let margin = 12.0;
@@ -2587,12 +2902,12 @@ impl Mounter {
         if self.keyboard <= 0.0 {
             return;
         }
-        let Some(parent) = scroll.superview() else {
+        if scroll.superview().is_none() {
             return;
-        };
+        }
         // In window coordinates: the scroll view may be in a modal, which
         // is not inside the surface's root view.
-        let frame = parent.convertRect_toView(scroll.frame(), None);
+        let frame = laid_out_in_window(&scroll);
         let Some(keyboard_top) = self.keyboard_top() else {
             return;
         };
@@ -2699,15 +3014,15 @@ impl Mounter {
             self.touch_listeners = self.touch_listeners.saturating_sub(1);
         }
         let on = self.touch_listeners > 0;
-        if on && self.touch_trackers.is_empty() {
+        // Ensure the root view and every modal still carry a tracker while
+        // touches are listened to. Gating this on `touch_trackers.is_empty()`
+        // left a modal opened after the first tracker set (the root's tracker
+        // outlives every modal) without one, so a modal reopened later never
+        // delivered its JS touch gestures. `add_touch_tracker` dedupes by
+        // node, so re-ensuring here each time is idempotent.
+        if on {
             self.add_touch_tracker(nsh_core::ROOT_ID);
-            let modals: Vec<NodeId> = self
-                .views
-                .iter()
-                .flatten()
-                .filter(|s| matches!(s.native, Native::Modal(_)))
-                .map(|s| s.native.view().tag() as NodeId)
-                .collect();
+            let modals: Vec<NodeId> = self.modal_attached.iter().map(|&(id, _)| id).collect();
             for modal in modals {
                 self.add_touch_tracker(modal);
             }
@@ -2776,8 +3091,10 @@ impl Mounter {
             && c.in_mirrored != mirrored
         {
             c.in_mirrored = mirrored;
-            if let Some(c) = self.slot(id) {
-                apply_dynamic(c, &self.animator);
+            if let Some(c) = self.slot(id)
+                && apply_dynamic(c, &self.animator)
+            {
+                self.untransformed.push(id);
             }
         }
     }
@@ -2960,6 +3277,9 @@ impl Mounter {
         let transition = style
             .transition
             .filter(|t| t.run_ms() > 0.0 && s.styled && view.window().is_some());
+        if let Some(nsh) = s.native.nsh() {
+            nsh.set_clip_path(style.clip_path().copied());
+        }
         s.style = style;
         s.styled = true;
         view.setHidden(s.style.hidden);
@@ -2973,15 +3293,19 @@ impl Mounter {
                     // the closure runs synchronously inside it.
                     let this = unsafe { &mut *this };
                     this.decorate_animated(id);
-                    if let Some(s) = this.slot(id) {
-                        apply_dynamic(s, &this.animator);
+                    if let Some(s) = this.slot(id)
+                        && apply_dynamic(s, &this.animator)
+                    {
+                        this.untransformed.push(id);
                     }
                 });
             }
             None => {
                 self.decorate(id);
-                if let Some(s) = self.slot(id) {
-                    apply_dynamic(s, &self.animator);
+                if let Some(s) = self.slot(id)
+                    && apply_dynamic(s, &self.animator)
+                {
+                    self.untransformed.push(id);
                 }
             }
         }
@@ -3029,10 +3353,11 @@ impl Mounter {
                 self.pending_images.push(id);
             }
         }
-        // Its corners clip the shader.
+        // Its corners clip the shader, or a GPU view's frames.
         if self.shaders.has(id) {
             self.layout_shader(id);
         }
+        self.layout_gpu(id);
     }
 
     /// Restyles with Core Animation's implicit animations on.
@@ -3141,6 +3466,67 @@ impl Mounter {
         );
         self.control
             .dispatch_event(id, EventKind::ContextMenu, EventPayload::ContextMenu(event));
+    }
+
+    /// A drag of files entered (`entered`) or left listener `id`
+    /// ([`crate::file_drop`]): its URLs are not known before the drop.
+    pub(crate) fn file_drag(&mut self, id: NodeId, entered: bool) {
+        let kind = if entered {
+            EventKind::FileDragEnter
+        } else {
+            EventKind::FileDragLeave
+        };
+        if self.slot(id).is_some_and(|s| s.events.contains(kind)) {
+            let payload = if entered {
+                EventPayload::FileDrop(Vec::new())
+            } else {
+                EventPayload::None
+            };
+            self.control.dispatch_event(id, kind, payload);
+        }
+    }
+
+    /// Files `uris` were dropped on listener `id` at `in_window` (the
+    /// window's coordinates), then the drag is over: `onFileDrop`, then
+    /// `onFileDragLeave`, as the desktop backends report them.
+    pub(crate) fn files_dropped(&mut self, id: NodeId, in_window: CGPoint, uris: Vec<String>) {
+        let Some(slot) = self.slot(id) else { return };
+        let events = slot.events;
+        let view = slot.native.view().retain();
+        if !uris.is_empty() && events.contains(EventKind::FileDrop) {
+            let (_, page_position) = self.pointer_positions(&view, in_window);
+            self.control.dispatch_event(
+                id,
+                EventKind::FileDrop,
+                EventPayload::FileDropAt {
+                    uris,
+                    page_position,
+                },
+            );
+        }
+        self.file_drag(id, false);
+    }
+
+    /// Text (`text`, and `html` when the drag had some) was dropped on view
+    /// `id` at `in_window` (the window's coordinates).
+    pub(crate) fn text_dropped(
+        &mut self,
+        id: NodeId,
+        in_window: CGPoint,
+        text: String,
+        html: String,
+    ) {
+        let Some(slot) = self.slot(id) else { return };
+        if (text.is_empty() && html.is_empty()) || !slot.events.contains(EventKind::TextDrop) {
+            return;
+        }
+        let view = slot.native.view().retain();
+        let (_, page_position) = self.pointer_positions(&view, in_window);
+        self.control.dispatch_event(
+            id,
+            EventKind::TextDrop,
+            EventPayload::TextDrop(Box::new(nsh_core::TextDrop::new(text, html, page_position))),
+        );
     }
 
     /// `in_window` (the window's coordinates) in `view` and in the root
@@ -3259,10 +3645,12 @@ impl Mounter {
     }
 
     /// The surface moved to a window (or out of one): the shaders in it
-    /// take the pictures they missed.
+    /// take the pictures they missed, the GPU views render.
     pub(crate) fn window_changed(&mut self) {
         self.shaders.revisit();
+        self.gpu.reveal();
         self.restore_root_focus();
+        self.follow_background();
     }
 
     /// The surface's traits changed: on a screen of another scale (an
@@ -3270,6 +3658,7 @@ impl Mounter {
     pub(crate) fn traits_changed(&mut self) {
         let scale = self.display_scale();
         self.shaders.rescale(scale);
+        self.gpu.rescale(scale);
         if scale == self.image_scale {
             return;
         }
@@ -3477,6 +3866,30 @@ impl Mounter {
                 }
                 continue;
             }
+            let video_poster = match self.slot(id) {
+                Some(s)
+                    if s.poster_key.as_deref() == Some(key)
+                        && matches!(&s.native, Native::Video(_)) =>
+                {
+                    match &s.native {
+                        Native::Video(v) => Some(v.poster_mode()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some(mode) = video_poster {
+                if let Some(s) = self.slot_mut(id) {
+                    s.poster_key = None;
+                    if let (Native::Video(v), Ok(decoded)) = (&mut s.native, &result) {
+                        v.show_poster(decoded.image.clone(), mode);
+                    }
+                }
+                if let Err(message) = &result {
+                    log::warn!("video poster failed: {message}");
+                }
+                continue;
+            }
             if self.shaders.pictured()
                 && let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
             {
@@ -3574,6 +3987,7 @@ impl Mounter {
         }
         let v = slot.values;
         let handoff = slot.pan_scroll_handoff;
+        let activation = slot.pan_activation;
         let any = |kinds: &[EventKind]| kinds.iter().any(|&k| events.contains(k));
         let handles_press = any(&[
             EventKind::Press,
@@ -3603,16 +4017,7 @@ impl Mounter {
         // mounter keeps alive as long as the recognizers; so is the delegate.
         unsafe {
             toggle(&mut g.pan, wants_pan, view, || {
-                let r = UIPanGestureRecognizer::initWithTarget_action(
-                    UIPanGestureRecognizer::alloc(mtm),
-                    Some(&target),
-                    Some(sel!(handlePan:)),
-                );
-                r.setDelegate(Some(delegate));
-                if handoff {
-                    r.setMaximumNumberOfTouches(1);
-                }
-                r
+                new_pan(mtm, &target, activation, handoff)
             });
             toggle(&mut g.pinch, wants_pinch, view, || {
                 let r = UIPinchGestureRecognizer::initWithTarget_action(
@@ -3633,6 +4038,8 @@ impl Mounter {
                 r
             });
         }
+        let gated = nsh_core::input::gate_activation(&v, events, activation);
+        sync_gate(&mut g.gate, view, gated, mtm);
         if let Some(press) = &g.press {
             press.set_long_press(events.contains(EventKind::LongPress) || links_long_press);
             press.set_own(own_press, handles_press, nsh_core::input::has_tap(events));
@@ -3670,8 +4077,26 @@ impl Mounter {
                 r
             }
         });
+        let wants_drop =
+            events.contains(EventKind::FileDrop) || events.contains(EventKind::TextDrop);
+        match (&slot.gestures.file_drop, wants_drop) {
+            (None, true) => {
+                if let Some(i) = crate::file_drop::interaction(&target) {
+                    // SAFETY: UIView's `addInteraction:` with a UIInteraction.
+                    let _: () = unsafe { objc2::msg_send![view, addInteraction: &*i] };
+                    slot.gestures.file_drop = Some(i);
+                }
+            }
+            (Some(i), false) => {
+                // SAFETY: UIView's `removeInteraction:` with its interaction.
+                let _: () = unsafe { objc2::msg_send![view, removeInteraction: &**i] };
+                slot.gestures.file_drop = None;
+            }
+            _ => {}
+        }
         let wants_touch = events.contains(EventKind::Touch);
-        if wants_press
+        if wants_drop
+            || wants_press
             || wants_pan
             || wants_pinch
             || wants_rotation
@@ -3680,6 +4105,9 @@ impl Mounter {
             || wants_context
         {
             view.setUserInteractionEnabled(true);
+        }
+        if wants_touch || wants_pinch || wants_rotation {
+            view.setMultipleTouchEnabled(true);
         }
         if let Some(nsh) = slot.native.nsh() {
             nsh.set_target(&target);
@@ -4100,7 +4528,8 @@ impl Mounter {
                     // already on screen (new content, or a header that turned
                     // large in place) would keep its offset: its content
                     // under the header, read as scrolled, the title collapsed.
-                    let at_top = scroll.contentOffset().y <= -scroll.adjustedContentInset().top;
+                    let at_top =
+                        scroll.contentOffset().y <= -scroll.adjustedContentInset().top + 0.5;
                     scroll.setContentInsetAdjustmentBehavior(
                         UIScrollViewContentInsetAdjustmentBehavior::Automatic,
                     );
@@ -4110,6 +4539,25 @@ impl Mounter {
                         scroll.setContentOffset(offset);
                     }
                 }
+            } else if let Some(scroll) = first_scroll_view(&screen.view)
+                && scroll.contentInsetAdjustmentBehavior()
+                    != UIScrollViewContentInsetAdjustmentBehavior::Never
+            {
+                let at_top = scroll.contentOffset().y <= -scroll.adjustedContentInset().top + 0.5;
+                scroll.setContentInsetAdjustmentBehavior(
+                    UIScrollViewContentInsetAdjustmentBehavior::Never,
+                );
+                if at_top {
+                    let mut offset = scroll.contentOffset();
+                    offset.y = -scroll.contentInset().top;
+                    scroll.setContentOffset(offset);
+                }
+            }
+            screen.controller.follow_large_title();
+            // A header changed under a transform is laid out for where the
+            // stack is, not for the picture the transform shows.
+            if let Some(nav) = screen.controller.navigationController() {
+                crate::navigation::lay_out_header_in_place(&nav);
             }
         }
         for (id, follows) in follows {
@@ -4118,37 +4566,7 @@ impl Mounter {
                 self.following_scroll.push(id);
             }
         }
-        let modals = std::mem::take(&mut self.dirty_modals);
-        let root = self
-            .slot(nsh_core::ROOT_ID)
-            .map(|s| s.native.view().retain());
-        for id in modals {
-            let shown = self.hosts.contains_key(&id);
-            let changes = matches!(
-                self.slot(id).map(|s| &s.native),
-                Some(Native::Modal(modal)) if modal.changes(shown)
-            );
-            // Through its shader, pictured before it comes or goes at once
-            // (where the shader cannot draw, with its own motion).
-            let at_once = changes && self.dialog_overlay(id, shown);
-            let control = self.control.clone();
-            let Some(Slot {
-                native: Native::Modal(modal),
-                ..
-            }) = self.views.get_mut(id as usize).and_then(Option::as_mut)
-            else {
-                continue;
-            };
-            if shown {
-                if let Some(root) = &root {
-                    modal.present(root, at_once);
-                }
-            } else {
-                modal.dismiss(at_once, move || {
-                    control.dispatch_event(id, EventKind::Dismiss, EventPayload::None)
-                });
-            }
-        }
+        self.finish_modals();
         let views = &self.views;
         self.following_scroll.retain(
             |&id| match views.get(id as usize).and_then(Option::as_ref) {
@@ -4170,6 +4588,231 @@ impl Mounter {
         self.shaders.release_held(|key| deferred.contains(&key));
     }
 
+    /// Presents and dismisses the modals whose place in the tree changed.
+    fn finish_modals(&mut self) {
+        if std::mem::take(&mut self.tree_changed) {
+            for i in 0..self.modal_attached.len() {
+                let (id, was) = self.modal_attached[i];
+                let now = self.in_tree(id);
+                if now != was {
+                    self.modal_attached[i].1 = now;
+                    self.dirty_modals.push(id);
+                }
+            }
+        }
+        // Taken along by a dismissal and hidden (or deleted) since: closed
+        // once it ends.
+        let control = self.control.clone();
+        self.closing_taken.retain(|(id, controller)| {
+            let gone = controller.presentingViewController().is_none();
+            if gone {
+                control.dispatch_event(*id, EventKind::Dismiss, EventPayload::None);
+            }
+            !gone
+        });
+        if self.dirty_modals.is_empty() {
+            self.dismissed_now.clear();
+            return;
+        }
+        let mut modals = std::mem::take(&mut self.dirty_modals);
+        let mut seen = 0;
+        while seen < modals.len() {
+            let id = modals[seen];
+            if modals[..seen].contains(&id) {
+                modals.remove(seen);
+            } else {
+                seen += 1;
+            }
+        }
+        let (shown, mut hidden): (Vec<NodeId>, Vec<NodeId>) =
+            modals.into_iter().partition(|&id| self.in_tree(id));
+        // Dismissals first, the lowest first: UIKit dismisses everything
+        // above the modal it dismisses, so the ones the app hides over it
+        // go with it, those it shows come back once it is gone, and one
+        // presented now waits for it.
+        hidden.sort_by_cached_key(|&id| self.modal(id).map_or(0, ModalHost::depth));
+        // Taken along by a dismissal under it (its presentation was
+        // UIKit's undoing, not the app's): reported closed when gone.
+        for &id in &hidden {
+            let Some(modal) = self.modal_mut(id) else {
+                continue;
+            };
+            match modal.hidden_after_taken() {
+                Some(true) => {
+                    self.control
+                        .dispatch_event(id, EventKind::Dismiss, EventPayload::None)
+                }
+                Some(false) => {
+                    let controller = modal.controller.clone();
+                    self.closing_taken.push((id, controller));
+                }
+                None => {}
+            }
+        }
+        let mut handled = Vec::new();
+        for &id in &hidden {
+            if handled.contains(&id) {
+                continue;
+            }
+            let Some(modal) = self.modal(id) else {
+                continue;
+            };
+            let changes = modal.changes(false);
+            let above = if changes {
+                modal.modals_above()
+            } else {
+                Vec::new()
+            };
+            // Through its shader, pictured before it goes at once (where
+            // the shader cannot draw, with its own motion).
+            let at_once = changes && self.dialog_overlay(id, false);
+            let mut gone = vec![id];
+            for other in above {
+                let hides = hidden.contains(&other);
+                let Some(modal) = self.modal_mut(other) else {
+                    continue;
+                };
+                if modal.dismissed_under() {
+                    if hides {
+                        gone.push(other);
+                    } else {
+                        self.waiting_modals.push(other);
+                    }
+                } else if hides {
+                    // Closed by the user already (and reported).
+                    modal.dismiss(false, || {});
+                }
+                if hides {
+                    handled.push(other);
+                }
+            }
+            let control = self.control.clone();
+            let shared = self.shared.clone();
+            if changes {
+                self.dismissed_now.push(id);
+            }
+            let Some(modal) = self.modal_mut(id) else {
+                continue;
+            };
+            modal.dismiss(at_once, move || {
+                for &id in &gone {
+                    control.dispatch_event(id, EventKind::Dismiss, EventPayload::None);
+                }
+                Self::present_waiting(&shared);
+            });
+        }
+        let dismissed = std::mem::take(&mut self.dismissed_now);
+        let Some(root) = self
+            .slot(nsh_core::ROOT_ID)
+            .map(|s| s.native.view().retain())
+        else {
+            return;
+        };
+        for id in shown {
+            let Some(modal) = self.modal(id) else {
+                continue;
+            };
+            if !modal.changes(true) {
+                continue;
+            }
+            if let Some(awaited) = crate::navigation::transition_over(&root, &dismissed) {
+                self.wait_for(id, &awaited);
+                continue;
+            }
+            // Through its shader, pictured before it comes at once (where
+            // the shader cannot draw, with its own motion).
+            let at_once = self.dialog_overlay(id, true);
+            if let Some(modal) = self.modal_mut(id) {
+                modal.present(&root, at_once);
+            }
+        }
+    }
+
+    /// Whether `id` is in the tree: its parents lead to the root. A view
+    /// whose parent was deleted keeps its id until its own deletion, and a
+    /// new view may take that id: the walk stops after as many steps as
+    /// there are views.
+    fn in_tree(&self, mut id: NodeId) -> bool {
+        for _ in 0..self.views.len() {
+            if id == nsh_core::ROOT_ID {
+                return true;
+            }
+            match self.slot(id).and_then(|s| s.parent) {
+                Some(parent) => id = parent,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    fn modal(&self, id: NodeId) -> Option<&ModalHost> {
+        match self.slot(id) {
+            Some(Slot {
+                native: Native::Modal(modal),
+                ..
+            }) => Some(modal),
+            _ => None,
+        }
+    }
+
+    fn modal_mut(&mut self, id: NodeId) -> Option<&mut ModalHost> {
+        match self.slot_mut(id) {
+            Some(Slot {
+                native: Native::Modal(modal),
+                ..
+            }) => Some(modal),
+            _ => None,
+        }
+    }
+
+    /// Modal `id` is presented once the transition of `awaited` ends
+    /// ([`Mounter::present_waiting`]), and NSH's dismissal presents the
+    /// waiting modals when it is done. One NSH just dismissed with no
+    /// transition yet, or whose dismissal waited for a transition that
+    /// ended, is looked at again on the main queue's next turn: by then its
+    /// transition runs, or it is gone, or UIKit refused it.
+    fn wait_for(&mut self, id: NodeId, awaited: &objc2_ui_kit::UIViewController) {
+        if !self.waiting_modals.contains(&id) {
+            self.waiting_modals.push(id);
+        }
+        // Presented once that modal is gone: its dismissal's end does so.
+        if crate::navigation::held_under_system_ui(awaited) {
+            return;
+        }
+        let Some(coordinator) = awaited.transitionCoordinator() else {
+            return Self::present_waiting(&self.shared);
+        };
+        let shared = self.shared.clone();
+        let done = RcBlock::new(
+            move |_: NonNull<ProtocolObject<dyn UIViewControllerTransitionCoordinatorContext>>| {
+                Self::present_waiting(&shared)
+            },
+        );
+        // Refused when the transition is already ending.
+        if !coordinator.animateAlongsideTransition_completion(None, Some(&done)) {
+            Self::present_waiting(&self.shared);
+        }
+    }
+
+    /// Presents the modals waiting for a transition to end
+    /// ([`Mounter::wait_for`]) and reports the taken ones hidden since
+    /// (`closing_taken`), on the main queue's next turn: the controller
+    /// that left is out of the presentation by then. One still in the way
+    /// of another transition waits again.
+    fn present_waiting(shared: &SharedMounter) {
+        let shared = shared.clone();
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new().expect("main queue");
+            if let Some(m) = shared.get(mtm).borrow_mut().as_mut()
+                && !(m.waiting_modals.is_empty() && m.closing_taken.is_empty())
+            {
+                let waiting = std::mem::take(&mut m.waiting_modals);
+                m.dirty_modals.extend(waiting);
+                m.finish_navigation();
+            }
+        });
+    }
+
     /// A stack is about to show a screen: its header options apply.
     pub(crate) fn stack_will_show(
         &mut self,
@@ -4178,8 +4821,9 @@ impl Mounter {
         animated: bool,
     ) {
         // A page shown again is back in the window: the shaders in it take
-        // the pictures they missed.
+        // the pictures they missed, the GPU views render.
         self.shaders.revisit();
+        self.gpu.reveal();
         let Some(screen) = controller.downcast_ref::<crate::navigation::ScreenController>() else {
             return;
         };
@@ -4199,6 +4843,7 @@ impl Mounter {
     /// swipe) are reported so the app removes them.
     pub(crate) fn stack_did_show(&mut self, id: NodeId) {
         self.shaders.revisit();
+        self.gpu.reveal();
         if self.splits.contains_key(&id) {
             self.compact_did_show(id);
         } else {
@@ -4906,11 +5551,49 @@ impl Mounter {
     /// Properties of a web view or video.
     fn set_native_props(&mut self, id: NodeId, props: nsh_core::NativeProps) {
         use nsh_core::NativeProps as P;
-        let Some(s) = self.slot_mut(id) else { return };
-        match (&mut s.native, props) {
-            (Native::Web(v), P::WebView(p)) => v.configure(*p),
-            (Native::Video(v), P::Video(p)) => v.configure(*p),
-            _ => {}
+        let mut poster = None;
+        {
+            let Some(s) = self.slot_mut(id) else { return };
+            match (&mut s.native, props) {
+                (Native::Web(v), P::WebView(p)) => v.configure(*p),
+                (Native::Video(v), P::Video(p)) => {
+                    v.configure(*p);
+                    poster = v.take_poster_request();
+                }
+                _ => {}
+            }
+        }
+        if let Some(uri) = poster {
+            self.load_video_poster(id, &uri);
+        }
+    }
+
+    /// Loads video `id`'s poster at the video's display size.
+    fn load_video_poster(&mut self, id: NodeId, uri: &str) {
+        let (size, mode) = {
+            let Some(s) = self.slot(id) else { return };
+            let Native::Video(v) = &s.native else { return };
+            (v.view.bounds().size, v.poster_mode())
+        };
+        let scale = self.display_scale();
+        let max_pixels = (size.width.max(size.height) * scale).ceil() as u32;
+        let key = crate::image::ImageLoader::key(uri, max_pixels, Default::default());
+        match self
+            .images
+            .request(id, uri, None, max_pixels, scale, Default::default())
+        {
+            crate::image::Request::Ready(decoded) => {
+                if let Some(s) = self.slot_mut(id)
+                    && let Native::Video(v) = &mut s.native
+                {
+                    v.show_poster(decoded.image, mode);
+                }
+            }
+            crate::image::Request::Pending => {
+                if let Some(s) = self.slot_mut(id) {
+                    s.poster_key = Some(key);
+                }
+            }
         }
     }
 
@@ -4933,15 +5616,20 @@ impl Mounter {
             });
         }
         let activation = props.pan_activation;
-        toggle(
-            &mut s.gestures.gate,
-            activation.is_some(),
-            s.native.view(),
-            || crate::touch::PanGate::new(mtm, activation.unwrap_or_default()),
-        );
-        if let (Some(gate), Some(a)) = (&s.gestures.gate, activation) {
-            gate.set_activation(a);
+        // The view's own pan follows the activation: a different one may
+        // need a different recognizer.
+        if s.pan_activation != activation {
+            s.pan_activation = activation;
+            if let Some(old) = s.gestures.pan.take() {
+                let view = s.native.view();
+                view.removeGestureRecognizer(&old);
+                let pan = new_pan(mtm, &target, activation, s.pan_scroll_handoff);
+                view.addGestureRecognizer(&pan);
+                s.gestures.pan = Some(pan);
+            }
         }
+        let gated = nsh_core::input::gate_activation(&s.values, s.events, activation);
+        sync_gate(&mut s.gestures.gate, s.native.view(), gated, mtm);
         if let Some(press) = &s.gestures.press {
             press.set_long_press_delay(props.long_press_delay);
         }
@@ -5128,8 +5816,9 @@ impl Mounter {
         }
     }
 
-    /// Give a tapped focus stop keyboard focus. An input using the software
-    /// keyboard keeps focus so the layout stays in place under the finger.
+    /// Give a tapped `focusable` view that takes no presses keyboard focus.
+    /// An input using the software keyboard keeps focus so the layout stays
+    /// in place under the finger.
     pub(crate) fn focus_node(&mut self, id: NodeId) {
         if !self.typing()
             && let Some(view) = self.slot(id).and_then(|s| s.native.focus_view())
@@ -5149,13 +5838,15 @@ impl Mounter {
         } else {
             EventKind::PressUp
         };
+        // A tap gives a control (a button, a select's trigger, a switch) no
+        // keyboard focus, as UIKit's controls and Safari give none: with a
+        // hardware keyboard, Return and Space stay the app's shortcuts
+        // instead of pressing the control last tapped. A `focusable` view
+        // that takes no presses takes it from its focus tap
+        // (`handleFocusTap:`).
         if s.events.contains(event) {
             let payload = self.press_payload(id, at);
             self.control.dispatch_event(id, event, payload);
-        }
-        // Queue press-down before UIKit sends the resulting focus notifications.
-        if pressed {
-            self.focus_node(id);
         }
     }
 
@@ -5264,9 +5955,13 @@ impl Mounter {
 
     /// Whether a drag on view `id` moving at `velocity` may start: a pan
     /// with only a horizontal (or vertical) value waits for a mostly
-    /// horizontal (vertical) movement, so it coexists with scrolling.
+    /// horizontal (vertical) movement, so it coexists with scrolling. A pan
+    /// with a `panActivation` begins as the activation activates instead.
     pub(crate) fn pan_should_begin(&self, id: NodeId, velocity: CGPoint) -> bool {
         let Some(s) = self.slot(id) else { return true };
+        if s.pan_activation.is_some() {
+            return true;
+        }
         match (s.values.pan_x.is_some(), s.values.pan_y.is_some()) {
             (true, false) => velocity.x.abs() > velocity.y.abs(),
             (false, true) => velocity.y.abs() > velocity.x.abs(),
@@ -5275,9 +5970,14 @@ impl Mounter {
     }
 
     /// A cooperating pan sees only scrolls between its view and the touch,
-    /// never a scroll elsewhere in the sheet or behind its backdrop.
-    pub(crate) fn pan_touch(&mut self, id: NodeId, touched: &UIView) {
+    /// never a scroll elsewhere in the sheet or behind its backdrop. `down`
+    /// is where the pan's first finger goes down (window points), when this
+    /// touch is that finger.
+    pub(crate) fn pan_touch(&mut self, id: NodeId, touched: &UIView, down: Option<CGPoint>) {
         let Some(s) = self.slot_mut(id) else { return };
+        if let Some(down) = down {
+            s.pan_down = down;
+        }
         s.pan_scroll = None;
         if !s.pan_scroll_handoff {
             return;
@@ -5364,6 +6064,7 @@ impl Mounter {
     ) {
         let Some(s) = self.slot(id) else { return };
         let (values, events) = (s.values, s.events);
+        let origin = self.pointer_positions(s.native.view(), s.pan_down).1;
         let payload = |m: &Self| {
             if state == UIGestureRecognizerState::Cancelled {
                 EventPayload::PanCancelled {
@@ -5372,6 +6073,7 @@ impl Mounter {
                     velocity_y: v.y as f32,
                     value_x: values.pan_x.map(|n| Points(m.animator.value(n))),
                     value_y: values.pan_y.map(|n| Points(m.animator.value(n))),
+                    origin,
                 }
             } else {
                 EventPayload::Pan {
@@ -5380,6 +6082,7 @@ impl Mounter {
                     velocity_y: v.y as f32,
                     value_x: values.pan_x.map(|n| Points(m.animator.value(n))),
                     value_y: values.pan_y.map(|n| Points(m.animator.value(n))),
+                    origin,
                 }
             }
         };
@@ -5514,18 +6217,42 @@ impl Mounter {
 
     /// JS waits for a display frame (`requestAnimationFrame`).
     pub(crate) fn request_frame(&self) {
+        self.frame_requested.set(true);
         self.frame_link.setPaused(false);
     }
 
+    #[cfg(test)]
+    pub(crate) fn frame_link_paused(&self) -> bool {
+        self.frame_link.isPaused()
+    }
+
     /// The frame link fired.
-    pub(crate) fn frame(&self) {
+    pub(crate) fn frame(&mut self) {
         self.frame_link.setPaused(true);
-        self.control.frame();
+        if self.frame_requested.replace(false) {
+            self.control.frame();
+        }
+        if let Some(id) = self.backdrop_waiting.take()
+            && let Some(slot) = self.slot(id)
+            && slot.parent == Some(nsh_core::ROOT_ID)
+        {
+            let layer = slot.native.view().layer();
+            if coverage_animation(&layer) == Some(CoverageAnimation::Finite) {
+                self.wait_for_backdrop(Some(id));
+            } else {
+                self.follow_background();
+            }
+        }
     }
 
     /// The shaders' display link fired.
     pub(crate) fn shader_frame(&mut self) {
         self.shaders.frame();
+    }
+
+    /// The GPU views' display link fired.
+    pub(crate) fn gpu_frame(&mut self) {
+        self.gpu.frame(&self.control);
     }
 
     /// The GPU device the shaders asked for opened (`None`: there is none,
@@ -5546,6 +6273,17 @@ impl Mounter {
         let scale = self.display_scale();
         if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
             self.shaders.layout(id, &s.style, scale);
+        }
+    }
+
+    /// GPU view `id` (if it is one) follows its frame and corners.
+    fn layout_gpu(&mut self, id: NodeId) {
+        if !self.gpu.has(id) {
+            return;
+        }
+        let scale = self.display_scale();
+        if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+            self.gpu.resized(id, &s.style, scale);
         }
     }
 
@@ -5780,6 +6518,10 @@ impl Mounter {
 
     fn follow_scroll(&mut self, id: NodeId, offset: CGPoint) {
         self.pin_sticky(id);
+        // Shader and GPU views scrolled back into sight render what fell
+        // due.
+        self.shaders.revisit();
+        self.gpu.reveal();
         if self.shaders.pictured()
             && let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
         {
@@ -5836,11 +6578,50 @@ impl Mounter {
         }
     }
 
+    /// Lays the stacks inside [`Mounter::untransformed`] out again.
+    ///
+    /// UIKit lays a stack out through the transforms around it: a header
+    /// that changes while a container shows the stack moved or scaled (a
+    /// push drawer) gets its bar laid out for that picture, which puts a bar
+    /// the device keeps along one side of the screen (the iPhone Duo's
+    /// vertical bar) on the side the picture is nearest. A transform going
+    /// back to the identity starts no layout pass, so the bar would stay
+    /// there, and the stack's safe area with what it was measured through
+    /// the transform, until something else lays it out.
+    fn lay_out_untransformed(&mut self) {
+        if self.untransformed.is_empty() {
+            return;
+        }
+        let views: Vec<Retained<UIView>> = std::mem::take(&mut self.untransformed)
+            .into_iter()
+            .filter_map(|id| self.slot(id).map(|s| s.native.view().retain()))
+            .collect();
+        let inside = |nav: &UINavigationController| {
+            nav.viewIfLoaded()
+                .is_some_and(|v| views.iter().any(|t| v.isDescendantOfView(t)))
+        };
+        for slot in self.views.iter().flatten() {
+            if let Native::Stack(stack) = &slot.native
+                && inside(&stack.nav)
+            {
+                crate::navigation::lay_out_in_place(&stack.nav);
+            }
+        }
+        // A collapsed split's pages are in its compact stack.
+        for split in self.splits.values() {
+            if inside(&split.compact.nav) {
+                crate::navigation::lay_out_in_place(&split.compact.nav);
+            }
+        }
+    }
+
     fn apply_animations(&mut self) {
         let animator = &self.animator;
         for &id in &self.animated {
-            if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
-                apply_dynamic(s, animator);
+            if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref)
+                && apply_dynamic(s, animator)
+            {
+                self.untransformed.push(id);
             }
         }
         // Shaders get their bound uniforms; those that picture the views
@@ -5854,6 +6635,12 @@ impl Mounter {
                 if pictured {
                     self.shaders.ui_changed(s.native.view());
                 }
+            }
+        }
+        // GPU views' renderers get their bound props' changes.
+        for &id in &self.animated {
+            if let Some(s) = self.views.get(id as usize).and_then(Option::as_ref) {
+                self.gpu.animated(id, &s.bindings, animator);
             }
         }
         // Components get their bound props' changes (no view borrowed while
@@ -5870,6 +6657,10 @@ impl Mounter {
             if cells.iter().any(|c| c.offset.is_some()) {
                 self.pin_sticky(id);
             }
+        }
+        self.lay_out_untransformed();
+        if let Some((id, previous)) = self.animated_backdrop {
+            self.follow_animated_background(id, previous);
         }
     }
 
@@ -5909,6 +6700,79 @@ pub(crate) fn first_scroll_view(view: &UIView) -> Option<Retained<UIScrollView>>
 }
 
 /// Adds or removes a gesture recognizer.
+/// A view's own pan, as its `panActivation` asks: an edge pan is the
+/// system's screen edge pan (which waits for a stack's swipe back, see
+/// `gestureRecognizer:shouldRequireFailureOfGestureRecognizer:`); a pan
+/// along a way or past offsets begins as the activation activates.
+fn new_pan(
+    mtm: MainThreadMarker,
+    target: &Retained<EventTarget>,
+    activation: Option<nsh_core::PanActivation>,
+    handoff: bool,
+) -> Retained<UIPanGestureRecognizer> {
+    use nsh_core::PanEdge;
+    use objc2_ui_kit::{UIRectEdge, UIScreenEdgePanGestureRecognizer};
+    let action = sel!(handlePan:);
+    let r: Retained<UIPanGestureRecognizer> = match activation {
+        Some(nsh_core::PanActivation {
+            edge: Some(edge), ..
+        }) => {
+            // SAFETY: `EventTarget` implements `handlePan:` and outlives
+            // the recognizer (the mounter keeps both).
+            let r = unsafe {
+                UIScreenEdgePanGestureRecognizer::initWithTarget_action(
+                    UIScreenEdgePanGestureRecognizer::alloc(mtm),
+                    Some(target),
+                    Some(action),
+                )
+            };
+            r.setEdges(match edge {
+                PanEdge::Left => UIRectEdge::Left,
+                PanEdge::Right => UIRectEdge::Right,
+                PanEdge::Top => UIRectEdge::Top,
+                PanEdge::Bottom => UIRectEdge::Bottom,
+                // An edge this backend does not know starts no pan.
+                _ => UIRectEdge::None,
+            });
+            Retained::into_super(r)
+        }
+        Some(a) => Retained::into_super(crate::touch::ActivatedPan::new(mtm, a, target, action)),
+        // SAFETY: as above.
+        None => unsafe {
+            UIPanGestureRecognizer::initWithTarget_action(
+                UIPanGestureRecognizer::alloc(mtm),
+                Some(target),
+                Some(action),
+            )
+        },
+    };
+    r.setDelegate(Some(ProtocolObject::from_ref(&**target)));
+    if handoff {
+        r.setMaximumNumberOfTouches(1);
+    }
+    r
+}
+
+/// Adds or removes the gate of a view's `panActivation` (`PanGate`), which
+/// decides with `activation` (`nsh_core::input::gate_activation`): none
+/// while neither the view's native pan nor its responder follows the
+/// activation, so that a view whose pan is off leaves the drags to its
+/// content, among them a stack's swipe back from the middle of its page,
+/// which the gate would otherwise prevent.
+fn sync_gate(
+    gate: &mut Option<Retained<crate::touch::PanGate>>,
+    view: &UIView,
+    activation: Option<nsh_core::PanActivation>,
+    mtm: MainThreadMarker,
+) {
+    toggle(gate, activation.is_some(), view, || {
+        crate::touch::PanGate::new(mtm, activation.unwrap_or_default())
+    });
+    if let (Some(gate), Some(a)) = (gate.as_ref(), activation) {
+        gate.set_activation(a);
+    }
+}
+
 fn toggle<G: AsRef<UIGestureRecognizer>>(
     slot: &mut Option<Retained<G>>,
     wanted: bool,
@@ -5938,7 +6802,52 @@ fn key_modifiers(flags: isize) -> nsh_core::keymap::Modifiers {
         alt: has(19),
         shift: has(17),
         cmd: has(20),
+        alt_graph: false,
     }
+}
+
+fn viewport_size(size: CGSize) -> Size<Points> {
+    Size::new(Points(size.width as f32), Points(size.height as f32))
+}
+
+/// The backdrop color and whether a finite native animation temporarily blocks it.
+fn backdrop_color(slot: &Slot, viewport: CGSize, animator: &Animator) -> (Option<Color>, bool) {
+    let view = slot.native.view();
+    if !slot.style.radii().is_zero()
+        || slot.style.clip_path().is_some()
+        || slot
+            .style
+            .effects
+            .as_ref()
+            .is_some_and(|e| !e.mask_images.is_empty())
+        || slot.style.animation.is_some()
+        || view.isHidden()
+        || view.alpha() != 1.0
+    {
+        return (None, false);
+    }
+    let layer = view.layer();
+    if !layer.transform().is_identity() {
+        return (None, false);
+    }
+    let color = opaque_backdrop(view.frame(), viewport, dynamic_background(slot, animator));
+    match color.and_then(|_| coverage_animation(&layer)) {
+        Some(CoverageAnimation::Finite) => (None, true),
+        Some(CoverageAnimation::Persistent) => (None, false),
+        None => (color, false),
+    }
+}
+
+fn opaque_backdrop(frame: CGRect, viewport: CGSize, color: Color) -> Option<Color> {
+    let (width, height) = (viewport.width, viewport.height);
+    (color.0 & 0xff == 0xff
+        && width > 0.0
+        && height > 0.0
+        && frame.origin.x <= 0.0
+        && frame.origin.y <= 0.0
+        && frame.origin.x + frame.size.width >= width
+        && frame.origin.y + frame.size.height >= height)
+        .then_some(color)
 }
 
 /// Sets a frame through `bounds` + `center`: `frame` is undefined for
@@ -6113,8 +7022,9 @@ fn shader_args<'a>(
 }
 
 /// Opacity, background color and transform: static values overridden by
-/// animated bindings.
-fn apply_dynamic(slot: &Slot, animator: &Animator) {
+/// animated bindings. True when the view's transform went back to the
+/// identity, which UIKit lays nothing out for ([`Mounter::untransformed`]).
+fn apply_dynamic(slot: &Slot, animator: &Animator) -> bool {
     if let Native::Canvas(canvas) = &slot.native {
         canvas.set_values(slot.bindings.iter().filter_map(|&(prop, node)| match prop {
             AnimationProp::CanvasArg(k) => Some((k, animator.eval(node))),
@@ -6122,17 +7032,13 @@ fn apply_dynamic(slot: &Slot, animator: &Animator) {
         }));
     }
     let view = slot.native.view();
-    let mut background = slot.style.background_color;
-    for &(prop, node) in &slot.bindings {
-        if prop == AnimationProp::BackgroundColor
-            && let AnimationValue::Color(c) = animator.eval(node)
-        {
-            background = Color(c);
-        }
-    }
     view.setAlpha(dynamic_opacity(slot, animator) as CGFloat);
-    slot.decor.set_background(view, background);
-    view.layer().setTransform(dynamic_transform(slot, animator));
+    slot.decor
+        .set_background(view, dynamic_background(slot, animator));
+    let layer = view.layer();
+    let transform = dynamic_transform(slot, animator);
+    let untransformed = transform.is_identity() && !layer.transform().is_identity();
+    layer.setTransform(transform);
     apply_bound_decor(slot, animator);
     if let Native::Text(text) = &slot.native {
         let color = slot.bindings.iter().find_map(|&(prop, node)| match prop {
@@ -6144,6 +7050,7 @@ fn apply_dynamic(slot: &Slot, animator: &Animator) {
         });
         text.set_color(color);
     }
+    untransformed
 }
 
 /// Runs `f` in a UIKit animation of `view` following `t`; on the
@@ -6303,6 +7210,26 @@ mod tests {
     use nsh_core::geometry::px;
 
     use super::*;
+
+    #[test]
+    fn only_an_opaque_view_covering_the_viewport_supplies_a_backdrop() {
+        let viewport = CGSize::new(390.0, 844.0);
+        let full = CGRect::new(CGPoint::ZERO, viewport);
+        for color in [Color::BLACK, Color::rgba(242, 242, 247, 255)] {
+            assert_eq!(opaque_backdrop(full, viewport, color), Some(color));
+        }
+        assert_eq!(opaque_backdrop(full, viewport, Color::TRANSPARENT), None);
+        assert_eq!(
+            opaque_backdrop(full, viewport, Color::rgba(0, 0, 0, 254)),
+            None
+        );
+        let shifted = CGRect::new(CGPoint::new(1.0, 0.0), full.size);
+        assert_eq!(opaque_backdrop(shifted, viewport, Color::BLACK), None);
+        assert_eq!(
+            opaque_backdrop(full, CGSize::new(844.0, 390.0), Color::BLACK),
+            None
+        );
+    }
 
     #[test]
     fn a_new_input_has_its_layout_before_insertion() {

@@ -11,6 +11,36 @@ NSH 应用用 `fetch` 发起 HTTP 请求：在 Rust 中是 `nsh_core::prelude` �
 
 ## 获取 JSON
 
+```tsx tabs
+import { mount, resource, Scroll, Text, View } from "nsh";
+import { Window } from "nsh/desktop";
+
+type Post = { id: number; title: string };
+
+function App() {
+  const posts = resource(async ({ signal }) => {
+    const response = await fetch("https://jsonplaceholder.typicode.com/posts?_limit=5", { signal });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return (await response.json()) as Post[];
+  });
+
+  return (
+    <Scroll style={{ flex: 1 }}>
+      <View style={{ padding: 16, paddingTop: 60, gap: 8 }}>
+        <Text style={{ color: "#57606a" }}>{posts.loading() ? "loading…" : String(posts.error() ?? "")}</Text>
+        <Each of={posts() ?? []}>{(post) => <Text style={{ numberOfLines: 1 }}>{post().title}</Text>}</Each>
+      </View>
+    </Scroll>
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -63,41 +93,32 @@ fn App() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, resource, Scroll, Text, View } from "nsh";
-import { Window } from "nsh/desktop";
-
-type Post = { id: number; title: string };
-
-function App() {
-  const posts = resource(async ({ signal }) => {
-    const response = await fetch("https://jsonplaceholder.typicode.com/posts?_limit=5", { signal });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return (await response.json()) as Post[];
-  });
-
-  return (
-    <Scroll style={{ flex: 1 }}>
-      <View style={{ padding: 16, paddingTop: 60, gap: 8 }}>
-        <Text style={{ color: "#57606a" }}>{posts.loading() ? "loading…" : String(posts.error() ?? "")}</Text>
-        <Each of={posts() ?? []}>{(post) => <Text style={{ numberOfLines: 1 }}>{post().title}</Text>}</Each>
-      </View>
-    </Scroll>
-  );
-}
-
-mount(() => (
-  <Window id="main">
-    <App />
-  </Window>
-));
-```
-
 [`resource`](./reactivity.md#resource) 会保存值、错误以及是否正在加载；source 变化（或调用 `refetch()`）时重新加载；对于不再需要的加载（组件被移除，或有更新的加载开始）会取消请求：Rust 中丢弃加载任务，其请求随之取消；TSX 中通过它传入的 `signal` 取消。Rust 的 `fetch` 使用绝对 URL；JSON 用 `serde_json` 等 crate 解析。
 
 在 TSX 中，`Response` 的响应体只能读取一次，可以用 `json()`、`text()`、`arrayBuffer()`、`bytes()`、`blob()` 或 `formData()`，也可以读取 `body` 流。2xx 状态码时 `response.ok` 为 true；与浏览器一样，HTTP 错误状态码不会让 promise 被拒绝。
 
 ## 发送数据
+
+```tsx tabs
+// JSON
+const created = await fetch("https://api.example.com/notes", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+  body: JSON.stringify({ title: "Groceries", items: ["milk", "eggs"] }),
+});
+
+// URL 编码的表单
+await fetch("https://api.example.com/login", {
+  method: "POST",
+  body: new URLSearchParams({ user: "ada", password: "…" }),
+});
+
+// 查询字符串
+const url = new URL("https://api.example.com/search");
+url.searchParams.set("q", "native shell");
+url.searchParams.set("page", "2");
+const results = await (await fetch(url)).json();
+```
 
 ```rust tabs
 use nsh_core::prelude::*;
@@ -122,27 +143,6 @@ fetch(
 fetch(HttpRequest::new("DELETE", "https://api.example.com/notes/1")).await?;
 ```
 
-```tsx tabs
-// JSON
-const created = await fetch("https://api.example.com/notes", {
-  method: "POST",
-  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-  body: JSON.stringify({ title: "Groceries", items: ["milk", "eggs"] }),
-});
-
-// URL 编码的表单
-await fetch("https://api.example.com/login", {
-  method: "POST",
-  body: new URLSearchParams({ user: "ada", password: "…" }),
-});
-
-// 查询字符串
-const url = new URL("https://api.example.com/search");
-url.searchParams.set("q", "native shell");
-url.searchParams.set("page", "2");
-const results = await (await fetch(url)).json();
-```
-
 `HttpRequest::new(method, url)`、`get` 和 `post` 创建请求，`.header(..)` 和 `.body(..)` 补充它。在 TSX 中，`body` 可以是字符串、`URLSearchParams`、`FormData`、`Blob` 或 `File`、`ArrayBuffer` 或类型化数组，或者 `ReadableStream`。
 
 ### 用 FormData 上传文件
@@ -162,6 +162,17 @@ const response = await fetch("https://api.example.com/photos", { method: "POST",
 [`Picker`](../modules/nsh.md#picker) 把用户选中的照片交给应用，它们是字节留在原生侧的文件，已经缩小并转成服务器认的格式；
 Rust 直接发送字节，TSX 把 `File` 加进 `FormData`：
 
+```tsx tabs
+import { Picker } from "nsh";
+
+const [photo] = await Picker.pickImages({ maxDimension: 2048 });
+if (photo) {
+  const form = new FormData();
+  form.append("photo", photo.file);
+  await fetch("https://api.example.com/photos", { method: "POST", body: form });
+}
+```
+
 ```rust tabs
 use nsh_core::geometry::DevicePixels;
 use nsh_core::picker::PickRequest;
@@ -177,17 +188,6 @@ spawn(async move {
         let _ = fetch(upload).await;
     }
 });
-```
-
-```tsx tabs
-import { Picker } from "nsh";
-
-const [photo] = await Picker.pickImages({ maxDimension: 2048 });
-if (photo) {
-  const form = new FormData();
-  form.append("photo", photo.file);
-  await fetch("https://api.example.com/photos", { method: "POST", body: form });
-}
 ```
 
 ## 流式传输
@@ -255,6 +255,14 @@ await fetch("https://api.example.com/logs", { method: "POST", body, duplex: "hal
 
 在 Rust 中，请求在任务中运行，并随任务一起取消：任务所属的组件被移除时，或对 `spawn` 返回的任务调用 `cancel()` 时。在 TSX 中，传入 `AbortSignal` 即可取消请求；promise 会以 signal 的 reason 被拒绝（默认是 `AbortError` 类型的 `DOMException`），正在读取的响应体也会停止。
 
+```tsx tabs
+const controller = new AbortController();
+const request = fetch("https://api.example.com/search?q=" + encodeURIComponent(query), { signal: controller.signal });
+
+// 用户又输入了：取消上一次搜索。
+controller.abort();
+```
+
 ```rust tabs
 let task = spawn(async move {
     if let Ok(response) = fetch(format!("https://api.example.com/search?q={query}")).await {
@@ -266,14 +274,6 @@ let task = spawn(async move {
 task.cancel();
 ```
 
-```tsx tabs
-const controller = new AbortController();
-const request = fetch("https://api.example.com/search?q=" + encodeURIComponent(query), { signal: controller.signal });
-
-// 用户又输入了：取消上一次搜索。
-controller.abort();
-```
-
 在 TSX 中，`AbortSignal.timeout(ms)` 创建一个在延迟后中止的 signal，`AbortSignal.any([...])` 组合多个 signal：
 
 ```ts
@@ -281,21 +281,6 @@ const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
 ```
 
 加载数据的组件应该在销毁时取消请求：Rust 任务会自动取消，TSX 在 [`cleanup`](./reactivity.md) 中中止：
-
-```rust tabs
-use nsh_core::prelude::*;
-
-fn weather(city: String) -> impl IntoElement {
-    let data = signal(String::new());
-    // 组件被移除时，任务及其请求随之结束。
-    spawn(async move {
-        if let Ok(response) = fetch(format!("https://api.example.com/weather?city={city}")).await {
-            data.set(response.text());
-        }
-    });
-    text(move || data.get())
-}
-```
 
 ```tsx tabs
 import { cleanup, signal, Text } from "nsh";
@@ -312,17 +297,24 @@ function Weather(props: { city: string }) {
 }
 ```
 
+```rust tabs
+use nsh_core::prelude::*;
+
+fn weather(city: String) -> impl IntoElement {
+    let data = signal(String::new());
+    // 组件被移除时，任务及其请求随之结束。
+    spawn(async move {
+        if let Ok(response) = fetch(format!("https://api.example.com/weather?city={city}")).await {
+            data.set(response.text());
+        }
+    });
+    text(move || data.get())
+}
+```
+
 ## 错误
 
 没有得到 HTTP 响应的请求会失败：Rust 的 `fetch` 给出带消息的 `Err`，TSX 的 `fetch` 以 `TypeError` 被拒绝，其消息以 `Network request failed:` 开头。这发生在无网络连接、DNS 或 TLS 失败、不支持的 URL 协议，或者应用的能力声明不允许该请求时。HTTP 错误请检查 `ok()` / `status()`（TSX：`response.ok`、`response.status`）。
-
-```rust tabs
-match fetch(url).await {
-    Ok(response) if response.ok() => items.set(response.text()),
-    Ok(response) => error.set(format!("Server answered {}", response.status())),
-    Err(message) => error.set(message), // 没有响应，或未获授权
-}
-```
 
 ```tsx tabs
 try {
@@ -332,6 +324,14 @@ try {
 } catch (e) {
   if (e instanceof DOMException && e.name === "AbortError") return; // 已取消
   showError(String(e));
+}
+```
+
+```rust tabs
+match fetch(url).await {
+    Ok(response) if response.ok() => items.set(response.text()),
+    Ok(response) => error.set(format!("Server answered {}", response.status())),
+    Err(message) => error.set(message), // 没有响应，或未获授权
 }
 ```
 
@@ -373,7 +373,7 @@ Rust 组件、`#[module]` 函数和 `#[class]` 成员在任务中调用 `fetch`�
     else throw error;
   }
   ```
-- **每次重定向都会再次检查。** NSH 自己跟随重定向（最多 20 次），而不交给平台处理，所以获准的主机无法把应用重定向到未获准的主机。
+- **每次重定向都会再次检查。** NSH 自己跟随重定向（最多 20 次），而不交给平台处理，所以获准的主机无法把应用重定向到未获准的主机。跳转到另一个源（协议、主机或端口不同）时，请求的 `Authorization`、`Cookie` 和 `Proxy-Authorization` 头在这一跳及之后的每一跳都不再发送，与 Fetch 标准对 `Authorization` 的处理一致，所以发给某个服务器的凭据只会到达该服务器。
 - 同样的 `network` 授权也适用于远程图片（包括画布中的图片和 `Image.getSize` / `prefetch`）和视频来源。应用自身包中的 `asset:` URI 始终允许。
 - 主机取最后一个 `@` 之后的部分，所以 `https://ok.com@evil.io` 被视为 `evil.io`。
 
@@ -384,7 +384,7 @@ Rust 组件、`#[module]` 函数和 `#[class]` 成员在任务中调用 `fetch`�
 TSX 的 `fetch` 遵循 Fetch 标准，但在对应用（而不是网页）有意义的地方有所不同：
 
 - **没有 CORS。** 应用可以访问其能力允许的任何主机；没有预检请求，也没有不透明响应。
-- **没有禁止的请求头。** 应用可以设置 `Cookie`、`User-Agent`、`Origin` 等。
+- **没有禁止的请求头。** 应用可以设置 `Cookie`、`User-Agent`、`Origin` 等。声明了 `"capabilities"` 的应用由 NSH 自己跟随重定向，凭据头（`Authorization`、`Cookie`、`Proxy-Authorization`）只留在设置它们的源；没有声明时，由平台的网络栈按它自己的规则跟随重定向。
 - **`redirect: "manual"`** 返回 3xx 响应本身（带有 `Location` 头），而不是不透明重定向。`redirect: "error"` 遇到重定向时拒绝。
 - **`data:` 和 `blob:` URL** 在本地应答。`URL.createObjectURL(blob)` 生成一个 `blob:` URL，在撤销之前 `fetch` 都可以读取它。
 - **`asset:/` URL** 指应用随附的文件，从应用自身的文件中读取，无需任何能力授权（[运行时读取文件](./images-and-assets.md#运行时读取文件)）。

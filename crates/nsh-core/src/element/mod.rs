@@ -39,7 +39,7 @@ pub(crate) mod builder;
 pub(crate) mod call;
 mod callback;
 pub(crate) mod class;
-mod component;
+pub(crate) mod component;
 pub mod description;
 pub mod desktop;
 mod element_ref;
@@ -49,6 +49,7 @@ mod events;
 pub(crate) mod flow;
 pub mod header;
 pub(crate) mod host;
+pub(crate) mod host_events;
 mod js;
 pub(crate) mod json_host;
 mod keyboard;
@@ -107,6 +108,17 @@ pub use nsh_macros::{
 // The core's parts of `nsh_base`'s navigation and dialogs.
 #[doc(hidden)]
 pub use self::host::{modal, screen, stack};
+pub(crate) use self::{
+    ambient::act,
+    animated::LiveNode,
+    back::BackListener,
+    builder::{ElKind, PlaceFn},
+    component::{AnyInstance, caught, panic_message},
+    task::{
+        Action, AfterAnswer, AnswerSlot, AudioAction, ClipboardRead, Executor, FileAnswer,
+        NotificationAction,
+    },
+};
 pub use self::{
     ambient::*,
     animated::{
@@ -141,7 +153,7 @@ pub use self::{
     component::{
         Api, BuiltInScrollbar, Component, ComponentError, ComponentSpec, Event, EventSpec,
         HOST_PROPS, Method, MethodSpec, Methods, NoEvent, Param, PropDecode, PropKind, PropSpec,
-        Props, Registry, Root, ScrollbarSource, declarations,
+        Props, Registry, Root, ScrollbarSource, ScrollbarThemeValue, declarations,
     },
     element_ref::{
         ComponentRef, ElementRef, ElementTarget, EvaluateOptions, Evaluation, FollowTarget,
@@ -156,11 +168,11 @@ pub use self::{
     },
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic, each, when},
     host::{
-        CanvasArg, CanvasPaint, CanvasView, Input, InputAccessoryView, IntoUniform, Modal,
+        CanvasArg, CanvasPaint, CanvasView, GpuView, Input, InputAccessoryView, IntoUniform, Modal,
         NativeView, Orientation, Overlay, Painter, Screen, Scroll, ShaderView, Stack, Svg, Uniform,
-        Video, WebView, canvas, input, input_accessory_view, native, overlay, screen_effect,
-        screen_transition, scroll, shader, shader_effect, shader_transition, svg, video, web_view,
-        web_view_html,
+        Video, WebView, canvas, gpu_view, input, input_accessory_view, native, overlay,
+        screen_effect, screen_transition, scroll, shader, shader_effect, shader_transition, svg,
+        video, web_view, web_view_html,
     },
     js::{JsClass, JsHost, JsIn, JsKind, JsOwned, JsPrimitive, JsRaw},
     json_host::from_json,
@@ -191,23 +203,16 @@ pub use self::{
         Quotas, RefuseConnections, Stop, System, codes, io_code,
     },
     task::{
-        Answer, ClipboardImage, ClipboardItem, DialogAnswer, DialogCloser, DialogReply, ImageSize,
-        Task,
+        Answer, ClipboardImage, ClipboardItem, ClipboardWrite, DialogAnswer, DialogCloser,
+        DialogReply, ImageSize, Task,
     },
     tokens::{FONT_MONO, FONT_SANS, ThemeTokens, Token, TokenSource, Tokens},
-    value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
+    value::{
+        InContext, JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes,
+        render_params_of, ts_of,
+    },
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
     watch::OrderWatch,
-};
-pub(crate) use self::{
-    animated::LiveNode,
-    back::BackListener,
-    builder::{ElKind, PlaceFn},
-    component::{AnyInstance, caught, panic_message},
-    task::{
-        Action, AfterAnswer, AnswerSlot, AudioAction, ClipboardRead, Executor, FileAnswer,
-        NotificationAction, SpeechAction,
-    },
 };
 /// The geometry Rust components style with (`crate::geometry`).
 pub use crate::geometry::{
@@ -216,19 +221,20 @@ pub use crate::geometry::{
     relative, rems, size,
 };
 pub use crate::{
-    AccessibilityRole, AccessibilityState, AutoCapitalize, AutoFill, BackdropMaterial, BlendMode,
-    BoxShadow, ColorStop, ContextMenuEvent, Cursor, Dialog, DialogButton, DialogButtonStyle,
-    DialogInput, EdgeInsets, EllipsizeMode, EventKind, EventPayload, FpsMode, Haptic, HapticImpact,
-    HapticNotification, HeaderSystemItem, HeaderTitleAlign, KeyCapture, KeyEvent,
-    KeyboardAppearance, KeyboardDismissMode, KeyboardTaps, KeyboardType, KeyframeAnimation,
-    Keyframes, LayoutAnimation, LayoutCurve, LayoutProperty, LayoutTransition, ListAlignment,
-    ListScrollPosition, ListViewport, MacOsBackdrop, MacOsBackdropBlending, MacOsBackdropMaterial,
-    MacOsBackdropState, Measurement, ModalAnimation, ModalPresentation, MouseButton, MouseEvent,
-    PanActivation, PasteBehavior, PasteEvent, PastedFile, PinchEvent, PinchPhase, PointerEvents,
-    PointerType, PressEvent, ResizeMode, ReturnKeyType, RevealOptions, ScreenAnimation,
-    ScrollAlignment, ScrollEdge, SheetDetent, SnapAlignment, StatusBarConfig, StatusBarSetting,
-    StatusBarStyle, SubmitBehavior, TextShadow, TouchEvent, TransformKind, TransformOrigin,
-    Viewability, WheelDelta, WheelEvent,
+    AccessibilityRole, AccessibilityState, AutoCapitalize, AutoFill, BackPhase, BackProgressEvent,
+    BackdropMaterial, BlendMode, BoxShadow, ColorStop, ContextMenuEvent, Cursor, Dialog,
+    DialogButton, DialogButtonStyle, DialogInput, EdgeInsets, EllipsizeMode, EventKind,
+    EventPayload, FpsMode, Haptic, HapticImpact, HapticNotification, HeaderSystemItem,
+    HeaderTitleAlign, KeyCapture, KeyEvent, KeyboardAppearance, KeyboardDismissMode, KeyboardTaps,
+    KeyboardType, KeyframeAnimation, Keyframes, LayoutAnimation, LayoutCurve, LayoutProperty,
+    LayoutTransition, ListAlignment, ListScrollPosition, ListViewport, MacOsBackdrop,
+    MacOsBackdropBlending, MacOsBackdropMaterial, MacOsBackdropState, Measurement, ModalAnimation,
+    ModalPresentation, MouseButton, MouseEvent, PanActivation, PanDirection, PanEdge,
+    PasteBehavior, PasteEvent, PastedFile, PinchEvent, PinchPhase, PointerEvents, PointerType,
+    PressEvent, ResizeMode, ReturnKeyType, RevealOptions, ScreenAnimation, ScrollAlignment,
+    ScrollEdge, SheetDetent, SnapAlignment, StatusBarConfig, StatusBarSetting, StatusBarStyle,
+    SubmitBehavior, TextShadow, TouchEvent, TransformKind, TransformOrigin, Viewability,
+    WheelDelta, WheelEvent,
     animation::{
         Curve, EaseMode, Easing, Extrapolate, Keyframe, KeyframeTiming, MotionChannel, MotionKind,
         MotionPreset, MotionSpec, Output as AnimationOutput, PlaybackDirection, StaggerFrom,
@@ -241,9 +247,10 @@ pub use crate::{
     main_thread::{MainThreadError, OnMainThread},
     overlay::{Align, Placement},
     platform::{
-        Appearance, HourCycle, HttpBody, HttpHead, HttpRequest, Idiom, Languages, Lifecycle,
-        Locale, LocaleSettings, MeasurementSystem, Os, PerfStats, SizeClass, TemperatureUnit,
-        TimeZone, Weekday,
+        Appearance, CellularData, HourCycle, HttpBody, HttpHead, HttpRequest, Idiom, Languages,
+        Lifecycle, Locale, LocaleSettings, MeasurementSystem, Network, NetworkKind, Os, PerfStats,
+        ReservedRegion, ReservedRegionKind, ReservedRegions, SizeClass, TemperatureUnit, TimeZone,
+        Weekday,
     },
     style::Color,
 };
@@ -252,6 +259,9 @@ pub use crate::{
 #[doc(hidden)]
 pub mod __private {
     pub use serde_json::Map as JsonMap;
+
+    pub use super::component::BY_NAME_MARKER;
+    pub use crate::shader::USE_MARKER as SHADER_USE_MARKER;
 
     /// The type of a props struct's field `I` as its setter takes it (the
     /// value of an `Option`): `#[derive(Props)]` implements it where the

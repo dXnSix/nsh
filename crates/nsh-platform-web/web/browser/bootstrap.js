@@ -3375,6 +3375,7 @@
 		for (const name of [
 			"focus",
 			"blur",
+			"clearSelection",
 			"scrollTo",
 			"zoomTo",
 			"scrollToIndex",
@@ -3849,7 +3850,7 @@
 			children(id, wanted) {
 				state(id)?.lazy.set(wanted);
 			},
-			render(id, prop, key, value, func) {
+			render(id, prop, key, value, spread, func) {
 				const current = state(id);
 				if (!current) return;
 				const held = typeof func === "function" ? current.renders.get(prop)?.get(key) : void 0;
@@ -3863,7 +3864,7 @@
 						const holder = dom.rt.element("view");
 						dom.rt.prop(holder, "componentRender", `${prop}\x1f${key}`);
 						try {
-							dom.rt.insert(holder, reactive.untracked(() => render(signal ? propsOf(signal) : value)));
+							dom.rt.insert(holder, reactive.untracked(() => signal ? render(propsOf(signal)) : spread ? render(...value) : render(value)));
 							dom.rt.append(current.node, holder);
 						} catch (error) {
 							dispose();
@@ -3986,7 +3987,7 @@
 			}
 		};
 		const point = (p) => {
-			const { identifier, target, pageX, pageY, locationX, locationY, timestamp, pointerType, pressure, tiltX, tiltY } = p;
+			const { identifier, target, pageX, pageY, locationX, locationY, timestamp, pointerType, pressure, tiltX, tiltY, eraser, barrel, coalesced } = p;
 			return {
 				identifier,
 				target,
@@ -3998,7 +3999,10 @@
 				pointerType,
 				pressure,
 				tiltX,
-				tiltY
+				tiltY,
+				eraser,
+				barrel,
+				coalesced
 			};
 		};
 		const dispatch = (touch) => reactive.batch(() => reactive.untracked(() => {
@@ -5164,10 +5168,12 @@
 					popped.set(page, () => entries.set(untracked(entries).filter((value) => value !== entry)));
 					return page;
 				};
-				return typeof rendered === "function" ? computed(() => {
-					const value = rendered();
+				if (typeof rendered !== "function") return screenFor(rendered);
+				return computed(() => {
+					let value = rendered();
+					while (typeof value === "function") value = value();
 					return untracked(() => screenFor(value));
-				}) : screenFor(rendered);
+				});
 			});
 			rt.insert(node, rows);
 			return node;
@@ -5280,7 +5286,8 @@
 			e.when,
 			e.repeat,
 			e.passThrough,
-			e.forFocus
+			e.forFocus,
+			e.overFocused
 		]), !!platform.appleKeyboard]);
 		dom.rootProp("onKeyCommand", (id) => {
 			const entry = entries.find((entry) => entry.id === id);
@@ -5300,8 +5307,9 @@
 					pairs = [[String(first), handler]];
 				}
 				if (options != null && typeof options !== "object") throw new TypeError("keymap.bind: options must be an object");
-				const when = options?.when, repeat = !!options?.repeat, passThrough = !!options?.passThrough, forFocus = !!options?.forFocus;
+				const when = options?.when, repeat = !!options?.repeat, passThrough = !!options?.passThrough, forFocus = !!options?.forFocus, overFocused = options?.overFocused === "pointer" ? "pointer" : !!options?.overFocused;
 				if (when !== void 0 && when !== "always" && when !== "notEditing") throw new TypeError("keymap.bind: when must be always or notEditing");
+				if (typeof options?.overFocused === "string" && overFocused !== "pointer") throw new TypeError("keymap.bind: overFocused must be a boolean or pointer");
 				const added = pairs.map(([text, handler]) => {
 					if (typeof handler !== "function") throw new TypeError(`keymap.bind: the handler of ${JSON.stringify(text)} is not a function`);
 					if (next >= 4294967295) throw new RangeError("shortcut IDs exhausted");
@@ -5312,7 +5320,8 @@
 						when,
 						repeat,
 						passThrough,
-						forFocus
+						forFocus,
+						overFocused
 					};
 				});
 				const updated = [...entries, ...added];
@@ -5372,6 +5381,7 @@
 				bottom: 0,
 				left: 0
 			},
+			reservedRegions: [],
 			titleBar: {
 				height: 0,
 				left: 0,
@@ -5391,6 +5401,13 @@
 			lifecycle: "active",
 			shaders: true,
 			wakeCount: 0,
+			network: {
+				online: true,
+				kind: "unknown",
+				expensive: false,
+				constrained: false,
+				cellularData: "unknown"
+			},
 			horizontalSizeClass: "compact",
 			verticalSizeClass: "compact",
 			localeSettings: {
@@ -5440,6 +5457,7 @@
 			windowSize: () => fields.window(),
 			colorScheme: () => fields.colorScheme(),
 			setColorScheme,
+			reservedRegions: () => fields.reservedRegions(),
 			fontScale: () => fields.fontScale(),
 			pixelRatio: () => fields.pixelRatio(),
 			locale: () => fields.locale(),
@@ -5448,6 +5466,7 @@
 			platform,
 			shadersAvailable: () => fields.shaders(),
 			wakeCount: () => fields.wakeCount(),
+			network: () => fields.network(),
 			fpsEnabled: () => false,
 			perfStats: () => null
 		};
@@ -5491,7 +5510,7 @@
 				reactive.batch(() => {
 					for (const [name, signal] of Object.entries(fields)) {
 						const value = name === "colorScheme" && appearance !== "system" ? appearance : next[name];
-						if (!same(value, reactive.untracked(signal), 2)) signal.set(value);
+						if (!same(value, reactive.untracked(signal), 4)) signal.set(value);
 					}
 				});
 				dom.rootProp("layoutDirectionRtl", next.rtl);
@@ -5532,20 +5551,22 @@
 /** `nsh/i18n` in the browser, as nsh-js's (`src/i18n.rs`): the bundle's
 	* translations (`nsh:rt`'s `i18n`, run before the app's modules), `t`
 	* looking a key up as rust-i18n does in the first of the user's languages
-	* the app has, and `setLocale`. The engine gets
-	* both too (ops 407 and 408), for the core's components and the language
+	* the app has, `setLocale`, and `addTranslations`. The engine gets
+	* them too (ops 407, 408 and 409), for the core's components and the language
 	* it reports. The browser's own `Intl` formats every language, so the
 	* bundle's language data stays unused here. */
 	function createI18n(reactive, invoke, env) {
-		let translations = {};
+		let translations = Object.create(null);
 		const version = reactive.signal(0);
 		/** `key`'s text in `locale`, each shorter tag, then English. */
 		const lookup = (locale, key) => {
 			for (let tag = locale; tag; tag = tag.includes("-") ? tag.slice(0, tag.lastIndexOf("-")) : "") {
-				const text = translations[tag]?.[key];
+				const table = Object.hasOwn(translations, tag) ? translations[tag] : void 0;
+				const text = table && Object.hasOwn(table, key) ? table[key] : void 0;
 				if (typeof text === "string") return text;
 			}
-			return locale === "en" ? void 0 : translations.en?.[key];
+			const en = Object.hasOwn(translations, "en") ? translations.en : void 0;
+			return locale === "en" ? void 0 : en && Object.hasOwn(en, key) ? en[key] : void 0;
 		};
 		/** Whether the translations have `tag` or a shorter tag of it. */
 		const has = (tag) => {
@@ -5582,14 +5603,50 @@
 				availableLocales: () => {
 					version();
 					return Object.keys(translations).sort();
+				},
+				addTranslations(map) {
+					if (!map || typeof map !== "object" || Array.isArray(map)) throw new TypeError("addTranslations: expected an object of { [locale]: { [key]: string } }");
+					const entries = [];
+					for (const [locale, table] of Object.entries(map)) {
+						if (!table || typeof table !== "object" || Array.isArray(table)) throw new TypeError("addTranslations: expected an object of translations for each locale");
+						const texts = Object.create(null);
+						for (const [key, value] of Object.entries(table)) {
+							if (typeof value !== "string") throw new TypeError("addTranslations: expected string translation values");
+							texts[key] = value;
+						}
+						entries.push([locale, texts]);
+					}
+					if (!entries.length) return;
+					const next = Object.create(null);
+					for (const [locale, table] of Object.entries(translations)) next[locale] = table;
+					const added = Object.create(null);
+					for (const [locale, texts] of entries) {
+						const merged = Object.create(null);
+						if (Object.hasOwn(next, locale)) Object.assign(merged, next[locale]);
+						Object.assign(merged, texts);
+						next[locale] = merged;
+						added[locale] = texts;
+					}
+					translations = next;
+					version.update((value) => value + 1);
+					invoke(409, [JSON.stringify(added)]);
 				}
 			},
 			setup(json) {
+				let parsed;
 				try {
-					translations = JSON.parse(json).translations ?? {};
+					parsed = JSON.parse(json).translations ?? {};
 				} catch {
 					return;
 				}
+				const next = Object.create(null);
+				for (const [locale, table] of Object.entries(parsed)) {
+					if (!table || typeof table !== "object") continue;
+					const texts = Object.create(null);
+					for (const [key, value] of Object.entries(table)) if (typeof value === "string") texts[key] = value;
+					next[locale] = texts;
+				}
+				translations = next;
 				version.update((value) => value + 1);
 				invoke(407, [json]);
 			}
@@ -5948,7 +6005,8 @@
 					url,
 					headers,
 					body,
-					request.redirect === "follow"
+					request.redirect === "follow",
+					request.cache
 				]);
 				const entry = {
 					resolve,

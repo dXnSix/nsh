@@ -46,7 +46,7 @@ use super::{
         Alert, Block, CodeBlock, ColumnAlign, CustomNode, Document, Footnote, Image, Inline,
         ListItem, Table, TableCell, inline_text,
     },
-    extension::{ParseContext, ReadChildren},
+    extension::{ConversionId, ParseContext, ReadChildren},
     html,
 };
 use crate::mdast_tree::{Mdast, plain_text};
@@ -63,6 +63,12 @@ pub(crate) fn parse(parser: &Parser, source: &str) -> Document {
 
 /// Markdown `source` read in one parse.
 pub(crate) fn parse_whole(parser: &Parser, source: &str) -> Document {
+    parse_whole_in(parser, source, ConversionId::next())
+}
+
+/// [`parse_whole`] as part of conversion `conversion` (what plugins are
+/// told).
+fn parse_whole_in(parser: &Parser, source: &str, conversion: ConversionId) -> Document {
     let source = if source.contains('\r') {
         Cow::Owned(source.replace("\r\n", "\n").replace('\r', "\n"))
     } else {
@@ -100,7 +106,7 @@ pub(crate) fn parse_whole(parser: &Parser, source: &str) -> Document {
         }
     }
 
-    let mut converter = Converter::new(parser, &trees);
+    let mut converter = Converter::new(parser, &trees, conversion);
     let mut blocks = Vec::new();
     let mut next = 0;
     converter.segments(&segments, &trees, &mut next, &mut blocks);
@@ -362,6 +368,8 @@ fn is_prose(source: &str, tex: &str, start: usize, end: usize) -> bool {
 /// Reads the trees into the document.
 struct Converter<'a> {
     parser: &'a Parser,
+    /// The conversion it reads for (`ParseContext::conversion_id`).
+    conversion: ConversionId,
     /// The source of the tree being read.
     source: &'a str,
     /// Link and image definitions by identifier.
@@ -378,9 +386,10 @@ struct Converter<'a> {
 }
 
 impl<'a> Converter<'a> {
-    fn new(parser: &'a Parser, trees: &'a [Tree<'a>]) -> Self {
+    fn new(parser: &'a Parser, trees: &'a [Tree<'a>], conversion: ConversionId) -> Self {
         let mut converter = Self {
             parser,
+            conversion,
             source: "",
             definitions: HashMap::new(),
             footnote_definitions: HashMap::new(),
@@ -488,10 +497,11 @@ impl<'a> Converter<'a> {
         if parser.plugins.is_empty() {
             return None;
         }
-        let source = self.source;
+        let (source, conversion) = (self.source, self.conversion);
         let mut cx = ParseContext {
             source,
             reader: self,
+            conversion,
         };
         parser.plugins.0.iter().find_map(|p| p.block(node, &mut cx))
     }
@@ -501,10 +511,11 @@ impl<'a> Converter<'a> {
         if parser.plugins.is_empty() {
             return None;
         }
-        let source = self.source;
+        let (source, conversion) = (self.source, self.conversion);
         let mut cx = ParseContext {
             source,
             reader: self,
+            conversion,
         };
         parser
             .plugins
@@ -762,7 +773,7 @@ impl<'a> Converter<'a> {
         let Node::Html(open) = &nodes[at] else {
             return None;
         };
-        let name = unclosed_element(&open.value).filter(|name| self.is_element(name))?;
+        let name = unclosed_element(&open.value).filter(|name| is_element(self.parser, name))?;
         let close = matching_close(nodes, at, name)?;
         let Node::Html(close_node) = &nodes[close] else {
             return None;
@@ -805,7 +816,7 @@ impl<'a> Converter<'a> {
         self.depth += 1;
         let out = self.read_inlines(nodes);
         self.depth -= 1;
-        out
+        common::without_links_and_images(&self.parser.options, out)
     }
 
     fn read_inlines(&mut self, nodes: &[Node]) -> Vec<Inline> {
@@ -839,7 +850,7 @@ impl<'a> Converter<'a> {
         if !self.parser.options.html {
             return None;
         }
-        let name = unclosed_element(&open.value).filter(|name| self.is_element(name))?;
+        let name = unclosed_element(&open.value).filter(|name| is_element(self.parser, name))?;
         let close = matching_close(nodes, at, name)?;
         let start = nodes[at].position()?.start.offset;
         let end = nodes[close].position()?.end.offset;
@@ -849,14 +860,15 @@ impl<'a> Converter<'a> {
     /// A formatting element in text whose content is Markdown
     /// (`<strong>b *c*</strong>`: `c` is emphasized), as gpui-kit pairs
     /// formatting tags: the element as HTML reads its opening tag (a
-    /// `<mark>`'s color, a link's URL), holding the Markdown between its
-    /// tags. `None` for other elements, read as HTML.
+    /// `<mark>`'s color, a `<span>`'s text color, a link's URL), holding the
+    /// Markdown between its tags. `None` for other elements (and for a
+    /// `<span>` or `<font>` without a color), read as HTML.
     fn formatting_element(&mut self, nodes: &[Node], open: usize, close: usize) -> Option<Inline> {
         /// Stands for the content while the opening tag is read.
         const CONTENT: &str = "\u{e000}";
         const FORMATTING: &[&str] = &[
-            "a", "b", "cite", "del", "dfn", "em", "i", "ins", "mark", "s", "small", "strike",
-            "strong", "sub", "sup", "u", "var",
+            "a", "b", "cite", "del", "dfn", "em", "font", "i", "ins", "mark", "s", "small", "span",
+            "strike", "strong", "sub", "sup", "u", "var",
         ];
         let Node::Html(tag) = &nodes[open] else {
             return None;
@@ -873,6 +885,7 @@ impl<'a> Converter<'a> {
             | Inline::Strikethrough { content }
             | Inline::Underline { content }
             | Inline::Highlight { content, .. }
+            | Inline::TextStyle { content, .. }
             | Inline::Superscript { content }
             | Inline::Subscript { content }
             | Inline::Small { content }
@@ -996,19 +1009,8 @@ impl<'a> Converter<'a> {
         }
     }
 
-    /// Whether `name` is an element of HTML or of a `tag` extension: a tag
-    /// of another name (`<US tech>`, `</Foo>`) is text.
-    fn is_element(&self, name: &str) -> bool {
-        html::is_element(name)
-            || self.parser.extensions.iter().any(|ext| {
-                ext.tag
-                    .as_deref()
-                    .is_some_and(|tag| tag.eq_ignore_ascii_case(name))
-            })
-    }
-
     /// Whether HTML `html` is markup: it starts with a tag of an element
-    /// ([`Self::is_element`]), a comment, a declaration or an instruction.
+    /// ([`is_element`]), a comment, a declaration or an instruction.
     fn is_tag(&self, html: &str) -> bool {
         let inner = html.trim_start().strip_prefix('<').unwrap_or_default();
         let name = inner.strip_prefix('/').unwrap_or(inner);
@@ -1016,7 +1018,7 @@ impl<'a> Converter<'a> {
             .bytes()
             .take_while(|b| b.is_ascii_alphanumeric() || *b == b'-')
             .count();
-        len == 0 || self.is_element(&name[..len])
+        len == 0 || is_element(self.parser, &name[..len])
     }
 
     /// Node `node` as the text it was written as.
@@ -1052,6 +1054,17 @@ impl<'a> Converter<'a> {
         }
         node
     }
+}
+
+/// Whether `name` is an element of HTML or of one of `parser`'s `tag`
+/// extensions: a tag of another name (`<US tech>`, `</Foo>`) is text.
+fn is_element(parser: &Parser, name: &str) -> bool {
+    html::is_element(name)
+        || parser.extensions.iter().any(|ext| {
+            ext.tag
+                .as_deref()
+                .is_some_and(|tag| tag.eq_ignore_ascii_case(name))
+        })
 }
 
 impl ReadChildren for Converter<'_> {
@@ -1222,6 +1235,7 @@ fn has_link(inline: &Inline) -> bool {
         | Inline::Strikethrough { content }
         | Inline::Underline { content }
         | Inline::Highlight { content, .. }
+        | Inline::TextStyle { content, .. }
         | Inline::Superscript { content }
         | Inline::Subscript { content }
         | Inline::Small { content } => content.iter().any(has_link),
@@ -1237,6 +1251,7 @@ fn formatted_content(inline: &mut Inline) -> Option<&mut Vec<Inline>> {
         | Inline::Strikethrough { content }
         | Inline::Underline { content }
         | Inline::Highlight { content, .. }
+        | Inline::TextStyle { content, .. }
         | Inline::Superscript { content }
         | Inline::Subscript { content }
         | Inline::Small { content } => Some(content),

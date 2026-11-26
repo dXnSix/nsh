@@ -16,31 +16,6 @@ Pick the highest level that does the job: the higher the level, the less work cr
 
 Every element accepts the press handlers; there is no separate "touchable" component. Put `.on_press` / `onPress` on a view, a text, an image or anything else.
 
-```rust tabs
-use nsh_core::prelude::*;
-
-#[component]
-fn App() -> impl IntoElement {
-    let count = signal(0_u32);
-    view().flex_1().items_center().justify_center().child(
-        view()
-            .on_press(move || count.update(|n| *n += 1))
-            .on_long_press(move || count.set(0))
-            .active(|s| s.opacity(0.6))
-            .role(AccessibilityRole::Button)
-            .px(px(20.0))
-            .py(px(12.0))
-            .rounded(px(10.0))
-            .bg(rgb(0x0969da))
-            .child(
-                text(move || format!("Pressed {} times", count.get()))
-                    .text_color(white())
-                    .font_weight(FontWeight::SEMIBOLD),
-            ),
-    )
-}
-```
-
 ```tsx tabs
 import { mount, signal, Text, View } from "nsh";
 import { Window } from "nsh/desktop";
@@ -67,6 +42,31 @@ mount(() => (
     <App />
   </Window>
 ));
+```
+
+```rust tabs
+use nsh_core::prelude::*;
+
+#[component]
+fn App() -> impl IntoElement {
+    let count = signal(0_u32);
+    view().flex_1().items_center().justify_center().child(
+        view()
+            .on_press(move || count.update(|n| *n += 1))
+            .on_long_press(move || count.set(0))
+            .active(|s| s.opacity(0.6))
+            .role(AccessibilityRole::Button)
+            .px(px(20.0))
+            .py(px(12.0))
+            .rounded(px(10.0))
+            .bg(rgb(0x0969da))
+            .child(
+                text(move || format!("Pressed {} times", count.get()))
+                    .text_color(white())
+                    .font_weight(FontWeight::SEMIBOLD),
+            ),
+    )
+}
 ```
 
 | Rust | TSX | Default | Description |
@@ -96,12 +96,26 @@ Press feedback is the app's: styles the view takes while it is pressed, hovered,
 | `.active(\|s\| ..)` | `activeStyle` | `active:` | While pressed. |
 | `.hover(\|s\| ..)` | `hoverStyle` | `hover:` | While a pointer is over it (desktops, iPad pointers, browsers). |
 | `.focus(\|s\| ..)` | `focusStyle` | `focus:` | While it has focus. |
-| `.focus_visible(\|s\| ..)` | `focusVisibleStyle` | `focus-visible:` | While it has focus and shows it: the keyboard moved it there (a press or a tap gives focus without it). |
+| `.focus_visible(\|s\| ..)` | `focusVisibleStyle` | `focus-visible:` | While it has focus and shows it: the keyboard moved it there (on macOS and iOS a press or a tap gives a control no focus; elsewhere, and for a view that takes keys, it gives focus without showing it). |
 | `.focus_within(\|s\| ..)` | `focusWithinStyle` | `focus-within:` | While it or a view inside it has focus: a field's frame around the input that edits. |
 | `.disabled_style(\|s\| ..)` | `disabledStyle` | `disabled:` | While disabled. |
 | `.ripple(Ripple { .. })` | `android={{ ripple }}` | | Android's material ripple (`color`, `borderless`, `radius`, `foreground`), in addition to the styles. |
 
 The state styles go over the view's own styles. Later states win (hover, focus, active), the disabled style wins over all, and the others do not apply while the view is disabled.
+
+```tsx tabs
+<View onPress={open} activeStyle={{ opacity: 0.5 }}>…</View>
+
+<View onPress={open} activeStyle={{ backgroundColor: "#ddf4ff" }} style={{ padding: 16 }}>…</View>
+
+<View
+  onPress={open}
+  activeStyle={{ opacity: 0.6 }}
+  android={{ ripple: { color: "rgba(9,105,218,0.3)" } }}
+>
+  …
+</View>
+```
 
 ```rust tabs
 use nsh_core::{Ripple, prelude::*};
@@ -119,23 +133,18 @@ view()
     })
 ```
 
-```tsx tabs
-<View onPress={open} activeStyle={{ opacity: 0.5 }}>…</View>
-
-<View onPress={open} activeStyle={{ backgroundColor: "#ddf4ff" }} style={{ padding: 16 }}>…</View>
-
-<View
-  onPress={open}
-  activeStyle={{ opacity: 0.6 }}
-  android={{ ripple: { color: "rgba(9,105,218,0.3)" } }}
->
-  …
-</View>
-```
-
 A borderless ripple spreads outside the view, which suits icon buttons: `Ripple { borderless: true, radius: Some(px(24.0)), .. }`, `android={{ ripple: { borderless: true, radius: 24 } }}`. See [Platform-specific code](./platform-specific.md).
 
 With a transition (`.transition()`, the `transition` class) the change of state animates. `.group()` (the `group` class) makes a view a group, and `.group_active(..)` (`group-active:`) styles its children while it is pressed:
+
+```tsx tabs
+<View
+  onPress={save}
+  class="group rounded-xl bg-emerald-600 p-4 transition active:scale-95 active:bg-emerald-800"
+>
+  <Text class="font-semibold text-white group-active:opacity-85">Save</Text>
+</View>
+```
 
 ```rust tabs
 view()
@@ -154,18 +163,14 @@ view()
     )
 ```
 
-```tsx tabs
-<View
-  onPress={save}
-  class="group rounded-xl bg-emerald-600 p-4 transition active:scale-95 active:bg-emerald-800"
->
-  <Text class="font-semibold text-white group-active:opacity-85">Save</Text>
-</View>
-```
-
 ## Hit areas: hitSlop
 
 The hit slop (`.hit_slop(..)`, `hitSlop`) extends the area that takes touches beyond the view's bounds, without changing its layout. Use it for small targets such as close buttons and toggles.
+
+```tsx tabs
+<View hitSlop={12} onPress={close} style={{ width: 20, height: 20 }}>…</View>
+<View hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }} onPress={next}>…</View>
+```
 
 ```rust tabs
 view().hit_slop(EdgeInsets::all(px(12.0))).on_press(close).size(px(20.0))
@@ -173,11 +178,6 @@ view().hit_slop(EdgeInsets::all(px(12.0))).on_press(close).size(px(20.0))
 view()
     .hit_slop(EdgeInsets { top: px(10.0), bottom: px(10.0), left: px(4.0), right: px(4.0) })
     .on_press(next)
-```
-
-```tsx tabs
-<View hitSlop={12} onPress={close} style={{ width: 20, height: 20 }}>…</View>
-<View hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }} onPress={next}>…</View>
 ```
 
 | Rust | TSX | Description |
@@ -205,6 +205,18 @@ The style key `pointerEvents` (`.pointer_events(..)` in Rust) decides which view
 
 The typical uses: an overlay that must not block what is under it (none), a full-screen container whose empty space should let touches through to the content behind while its buttons still work (box-none), and a row that should take a press even when the finger lands on a child (box-only).
 
+```tsx tabs
+<View style={{ flex: 1 }}>
+  <Map />
+  {/* A floating toolbar: the empty area passes touches to the map. */}
+  <View style={{ pointerEvents: "box-none", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, justifyContent: "flex-end", padding: 16 }}>
+    <View onPress={locate} style={{ alignSelf: "flex-end", padding: 12, borderRadius: 24, backgroundColor: "#ffffff" }}>
+      <Text>Locate</Text>
+    </View>
+  </View>
+</View>
+```
+
 ```rust tabs
 view().flex_1().child(map()).child(
     // A floating toolbar: the empty area passes touches to the map.
@@ -226,48 +238,11 @@ view().flex_1().child(map()).child(
 )
 ```
 
-```tsx tabs
-<View style={{ flex: 1 }}>
-  <Map />
-  {/* A floating toolbar: the empty area passes touches to the map. */}
-  <View style={{ pointerEvents: "box-none", position: "absolute", top: 0, left: 0, right: 0, bottom: 0, justifyContent: "flex-end", padding: 16 }}>
-    <View onPress={locate} style={{ alignSelf: "flex-end", padding: 12, borderRadius: 24, backgroundColor: "#ffffff" }}>
-      <Text>Locate</Text>
-    </View>
-  </View>
-</View>
-```
-
 `"none"` is inherited as CSS's `pointer-events`: a view inside it that sets `"auto"` takes touches again. `"box-none"` and `"box-only"` apply to the view that sets them. The Tailwind classes `pointer-events-none` and `pointer-events-auto` set `"none"` and `"auto"`, and as a style key `pointerEvents` also takes state styles (`activeStyle`, ...) and variants.
 
 ## Native gestures: pan, pinch and rotation
 
 For drags, pinches and rotations that move something on screen, bind [animated values](./animation.md#animated-values) to the gesture. The platform's gesture recognizer writes the values on the UI thread and the views bound to them move in the same frame; your code is told when the gesture starts and ends.
-
-```rust tabs
-use nsh_core::prelude::*;
-
-#[component]
-fn App() -> impl IntoElement {
-    let x = animated_value(0.0);
-    let y = animated_value(0.0);
-    view().flex_1().items_center().justify_center().child(
-        view()
-            .pan_values(Some(&x), Some(&y))
-            .on_pan_end(move |e: &PanEvent| {
-                // Spring back, starting at the speed the finger let go with.
-                let spring = |velocity| Spring { velocity: Some(velocity), ..Spring::default() };
-                x.spring(0.0, spring(e.velocity_x));
-                y.spring(0.0, spring(e.velocity_y));
-            })
-            .size(px(120.0))
-            .rounded(px(24.0))
-            .bg(rgb(0x8250df))
-            .bind_translate_x(&x)
-            .bind_translate_y(&y),
-    )
-}
-```
 
 ```tsx tabs
 import { mount, View } from "nsh";
@@ -299,6 +274,31 @@ mount(() => (
 ));
 ```
 
+```rust tabs
+use nsh_core::prelude::*;
+
+#[component]
+fn App() -> impl IntoElement {
+    let x = animated_value(0.0);
+    let y = animated_value(0.0);
+    view().flex_1().items_center().justify_center().child(
+        view()
+            .pan_values(Some(&x), Some(&y))
+            .on_pan_end(move |e: &PanEvent| {
+                // Spring back, starting at the speed the finger let go with.
+                let spring = |velocity| Spring { velocity: Some(velocity), ..Spring::default() };
+                x.spring(0.0, spring(e.velocity_x));
+                y.spring(0.0, spring(e.velocity_y));
+            })
+            .size(px(120.0))
+            .rounded(px(24.0))
+            .bg(rgb(0x8250df))
+            .bind_translate_x(&x)
+            .bind_translate_y(&y),
+    )
+}
+```
+
 | Rust | TSX | Description |
 |---|---|---|
 | `.pan_values(Some(&x), Some(&y))` | `pan={{ x?, y? }}` | One-finger drags move these values, in points. |
@@ -308,7 +308,7 @@ mount(() => (
 | `.on_pinch_start` / `.on_pinch_end` | `onPinchStart` / `onPinchEnd` | The pinch started / ended: its scale and velocity (`GestureEvent`). |
 | `.on_rotation_start` / `.on_rotation_end` | `onRotationStart` / `onRotationEnd` | The rotation started / ended: its angle (Rust: `GestureEvent<Radians>`) and velocity. |
 
-A pan event has the translation (`translation`, a `Point`: points since the start), the velocity (`velocity_x` / `velocity_y`; TSX: `velocity`, a `Point`: points per **second**) and the bound values at that moment (`value_x` / `value_y`; TSX: `value`, `{ x?, y? }` with the axes `pan` binds).
+A pan event has where the drag started (`origin`, a `Point` in surface points, like a touch's page position; the same at the start and the end), the translation (`translation`, a `Point`: points since the start), the velocity (`velocity_x` / `velocity_y`; TSX: `velocity`, a `Point`: points per **second**) and the bound values at that moment (`value_x` / `value_y`; TSX: `value`, `{ x?, y? }` with the axes `pan` binds).
 
 What the native side does for you:
 
@@ -318,18 +318,6 @@ What the native side does for you:
 - **Release velocity for physics.** The pan end's velocity feeds a spring's or a decay's velocity directly; the values let you pick a snap point.
 
 A view pans while it has a pan handler or `pan` values, so a condition in the expression turns its pan off and on: with `onPanEnd={zoomed() ? undefined : close}` the drags go to the content inside while `zoomed()` is true. The condition goes in the expression itself: a plain name (`onPanEnd={handler}`) is set once ([What runs again](./jsx-and-components.md#what-runs-again)).
-
-```rust tabs
-// A card that snaps to the left or right edge.
-view()
-    .pan_values(Some(&x), None)
-    .on_pan_end(move |e: &PanEvent| {
-        let projected = e.value_x.unwrap_or(0.0) + e.velocity_x * 0.2;
-        let to = if projected > 0.0 { 140.0 } else { -140.0 };
-        x.spring(to, Spring { velocity: Some(e.velocity_x), ..Spring::default() });
-    })
-    .bind_translate_x(&x)
-```
 
 ```tsx tabs
 // A card that snaps to the left or right edge.
@@ -341,6 +329,18 @@ view()
   }}
   style={{ translate: [x, 0] }}
 />
+```
+
+```rust tabs
+// A card that snaps to the left or right edge.
+view()
+    .pan_values(Some(&x), None)
+    .on_pan_end(move |e: &PanEvent| {
+        let projected = e.value_x.unwrap_or(0.0) + e.velocity_x * 0.2;
+        let to = if projected > 0.0 { 140.0 } else { -140.0 };
+        x.spring(to, Spring { velocity: Some(e.velocity_x), ..Spring::default() });
+    })
+    .bind_translate_x(&x)
 ```
 
 > [!TIP]
@@ -375,6 +375,14 @@ Each TSX handler gets a `GestureResponderEvent`:
 | `nativeEvent` | The event itself, so `e.nativeEvent.locationX` works too. |
 | `stopPropagation()` | Views further out do not see this touch event. |
 
+```tsx tabs
+<View
+  onTouchStart={(e) => console.log("down", e.locationX, e.locationY, e.touches.length)}
+  onTouchMove={(e) => console.log("move", e.pageX, e.pageY)}
+  onTouchEnd={() => console.log("up")}
+/>
+```
+
 ```rust tabs
 use nsh_core::{TouchPhase, element::{TouchEvent}, prelude::*};
 
@@ -388,17 +396,24 @@ view().on_touch(|e: &TouchEvent| {
 })
 ```
 
-```tsx tabs
-<View
-  onTouchStart={(e) => console.log("down", e.locationX, e.locationY, e.touches.length)}
-  onTouchMove={(e) => console.log("move", e.pageX, e.pageY)}
-  onTouchEnd={() => console.log("up")}
-/>
-```
-
 ### Where a view is: measure
 
 A touch's location is relative to the view the finger went down on, which may be a child of the view you care about (a slider's knob). Measuring a view tells you where it is, so you can use the page position instead. In Rust, put an `element_ref()` on the view and await its `measure()`; in TSX, call `measure()` on its ref:
+
+```tsx tabs
+let track!: ViewRef;
+let origin = 0;
+<View
+  ref={track}
+  onStartShouldSetResponder={() => true}
+  onResponderGrant={async (e) => {
+    const x = e.pageX;
+    origin = (await track.measure())?.pagePosition.x ?? 0;
+    seek(x - origin);
+  }}
+  onResponderMove={(e) => seek(e.pageX - origin)}
+/>;
+```
 
 ```rust tabs
 let track = element_ref();
@@ -415,21 +430,6 @@ view()
         });
     })
     .on_responder_move(move |e: &ResponderEvent| seek(e.page.x - origin.get()))
-```
-
-```tsx tabs
-let track!: ViewRef;
-let origin = 0;
-<View
-  ref={track}
-  onStartShouldSetResponder={() => true}
-  onResponderGrant={async (e) => {
-    const x = e.pageX;
-    origin = (await track.measure())?.pagePosition.x ?? 0;
-    seek(x - origin);
-  }}
-  onResponderMove={(e) => seek(e.pageX - origin)}
-/>;
 ```
 
 It resolves once the changes made so far are laid out: in Rust to a `Measurement` (`frame`, the frame in the parent as the layout handler reports it, and `page`, the top left corner), in TSX to `{ bounds, pagePosition }`. The corner is in the surface, or in the dialog the view is in, the same coordinates as touches' page positions. The offsets of the scroll views and lists around it are taken into account; transforms (animations included) are not. It resolves to `None` / `null` for a view that is not on screen.
@@ -465,37 +465,6 @@ While responding:
 A Rust component's responder stays pressed from its grant until its touches end, wherever the finger or pointer goes, as CSS's `:active` holds until the button is released: its `.active(..)` styles and the `group-active:` classes inside it keep their look for the whole drag (a resize handle dragged off its band).
 
 The Rust handlers get a `ResponderEvent`: the finger's `location` in the view it went down on, its `page` position, the `timestamp`, the `modifiers` held when it went down and the `gesture` since the grant.
-
-```rust tabs
-use nsh_core::prelude::*;
-
-fn sketch() -> impl IntoElement {
-    let strokes = signal(Vec::<Vec<Point<Points>>>::new());
-    canvas(move || {
-        strokes.with(|all| {
-            all.iter().fold(Painter::new().line_width(3.0), |p, s| {
-                let mut p = p.begin_path();
-                for (i, pt) in s.iter().enumerate() {
-                    p = if i == 0 { p.move_to(pt.x, pt.y) } else { p.line_to(pt.x, pt.y) };
-                }
-                p.stroke()
-            })
-        })
-    })
-    .flex_1()
-    // The responder: the scroll view around does not take the touches.
-    .claim_touches(TouchClaim::on_start())
-    .keep_touches(true)
-    .on_responder_grant(move |e: &ResponderEvent| strokes.update(|all| all.push(vec![e.location])))
-    .on_responder_move(move |e: &ResponderEvent| {
-        strokes.update(|all| {
-            if let Some(last) = all.last_mut() {
-                last.push(e.location);
-            }
-        })
-    })
-}
-```
 
 ```tsx tabs
 import { Canvas, type GestureResponderEvent, mount, signal } from "nsh";
@@ -536,6 +505,37 @@ mount(() => (
 ));
 ```
 
+```rust tabs
+use nsh_core::prelude::*;
+
+fn sketch() -> impl IntoElement {
+    let strokes = signal(Vec::<Vec<Point<Points>>>::new());
+    canvas(move || {
+        strokes.with(|all| {
+            all.iter().fold(Painter::new().line_width(3.0), |p, s| {
+                let mut p = p.begin_path();
+                for (i, pt) in s.iter().enumerate() {
+                    p = if i == 0 { p.move_to(pt.x, pt.y) } else { p.line_to(pt.x, pt.y) };
+                }
+                p.stroke()
+            })
+        })
+    })
+    .flex_1()
+    // The responder: the scroll view around does not take the touches.
+    .claim_touches(TouchClaim::on_start())
+    .keep_touches(true)
+    .on_responder_grant(move |e: &ResponderEvent| strokes.update(|all| all.push(vec![e.location])))
+    .on_responder_move(move |e: &ResponderEvent| {
+        strokes.update(|all| {
+            if let Some(last) = all.last_mut() {
+                last.push(e.location);
+            }
+        })
+    })
+}
+```
+
 How it runs: a view with any touch or responder handler listens to touches natively; the platform reports the touches on it (and inside it) with the path of listening views, and the negotiation runs in NSH's Rust core, asking the claims and calling your handlers in order: the captures from the outermost view inwards, then the others from the target outwards. Two consequences:
 
 - **Native scroll views and responders compete.** While a responder blocks them, the scroll views around it stop taking the touches until it ends. If a native scroll view starts dragging first, it wins: the responder gets the terminate handler and the touch handlers a cancel.
@@ -544,35 +544,6 @@ How it runs: a view with any touch or responder handler listens to touches nativ
 ## PanResponder
 
 In Rust, the responder events already carry the gesture: `ResponderEvent::gesture` is a `PanGesture` with the distance from the start, the velocity and the number of fingers. In TSX, `PanResponder` from `nsh` wraps the responder system and adds the same gesture state; spread its `panHandlers` on a view.
-
-```rust tabs
-use nsh_core::prelude::*;
-
-fn ball() -> impl IntoElement {
-    let pos = signal((0.0_f32, 0.0_f32));
-    let start = stored((0.0_f32, 0.0_f32));
-    view()
-        .size(px(60.0))
-        .rounded(px(30.0))
-        .bg(rgb(0x0969da))
-        .style_with(move |s| {
-            let (x, y) = pos.get();
-            s.translate_x(px(x)).translate_y(px(y))
-        })
-        .claim_touches(TouchClaim::on_start())
-        .on_responder_grant(move |_: &ResponderEvent| {
-            start.replace(pos.get_untracked());
-        })
-        .on_responder_move(move |e: &ResponderEvent| {
-            let (x, y) = start.get();
-            let d = e.gesture.delta;
-            pos.set((x + d.x.0, y + d.y.0));
-        })
-        .on_responder_release(move |e: &ResponderEvent| {
-            log::info!("released at {} {} pt/s", e.gesture.vx, e.gesture.vy)
-        })
-}
-```
 
 ```tsx tabs
 import { mount, signal, View } from "nsh";
@@ -605,6 +576,35 @@ mount(() => (
 ));
 ```
 
+```rust tabs
+use nsh_core::prelude::*;
+
+fn ball() -> impl IntoElement {
+    let pos = signal((0.0_f32, 0.0_f32));
+    let start = stored((0.0_f32, 0.0_f32));
+    view()
+        .size(px(60.0))
+        .rounded(px(30.0))
+        .bg(rgb(0x0969da))
+        .style_with(move |s| {
+            let (x, y) = pos.get();
+            s.translate_x(px(x)).translate_y(px(y))
+        })
+        .claim_touches(TouchClaim::on_start())
+        .on_responder_grant(move |_: &ResponderEvent| {
+            start.replace(pos.get_untracked());
+        })
+        .on_responder_move(move |e: &ResponderEvent| {
+            let (x, y) = start.get();
+            let d = e.gesture.delta;
+            pos.set((x + d.x.0, y + d.y.0));
+        })
+        .on_responder_release(move |e: &ResponderEvent| {
+            log::info!("released at {} {} pt/s", e.gesture.vx, e.gesture.vy)
+        })
+}
+```
+
 The gesture state:
 
 | Rust (`PanGesture`) | TSX (`gestureState`) | Description |
@@ -622,15 +622,6 @@ The gesture state:
 
 A chart scrubbed sideways inside a vertical scroll view has to take horizontal drags and leave vertical ones to the scroll view. Claiming the touch on start blocks scrolling from the first pixel, and deciding on the moves in your code is too late: by the time it answers, the scroll view may have taken the touch. Pan activation (`TouchClaim::on_pan(..)`, `panActivation`) lets the platform decide on the main thread, as the finger moves:
 
-```rust tabs
-view()
-    .claim_touches(TouchClaim::on_pan(PanActivation::horizontal(px(10.0), px(10.0))))
-    .on_responder_grant(|e: &ResponderEvent| scrub(Some(e.location.x)))
-    .on_responder_move(|e: &ResponderEvent| scrub(Some(e.location.x)))
-    .on_responder_release(|_: &ResponderEvent| scrub(None))
-    .child(chart())
-```
-
 ```tsx tabs
 <View
   panActivation={{ activeOffsetX: 10, failOffsetY: 10 }}
@@ -642,12 +633,52 @@ view()
 </View>
 ```
 
+```rust tabs
+view()
+    .claim_touches(TouchClaim::on_pan(PanActivation::horizontal(px(10.0), px(10.0))))
+    .on_responder_grant(|e: &ResponderEvent| scrub(Some(e.location.x)))
+    .on_responder_move(|e: &ResponderEvent| scrub(Some(e.location.x)))
+    .on_responder_release(|_: &ResponderEvent| scrub(None))
+    .child(chart())
+```
+
 | Rust (`PanActivation`) | TSX | Description |
 |---|---|---|
 | `active_offset_x`, `active_offset_y` | `activeOffsetX`, `activeOffsetY` | The pan activates once the finger has moved further than this from where it went down, along that axis (either direction, points). |
 | `fail_offset_x`, `fail_offset_y` | `failOffsetX`, `failOffsetY` | The pan fails once the finger has moved further than this first: the scroll views keep the touches. |
+| `direction` | `direction` | The one way it activates in (`left`, `right`, `up`, `down`): a drag the other way, or mostly across it, fails and stays with the views around. |
+| `edge` | `edge` | Only a finger that goes down at this edge (`left`, `right`, `top`, `bottom`) starts it, moving away from the edge. |
 
-`PanActivation::horizontal(active, fail)` and `PanActivation::vertical(active, fail)` set the usual pairs. Without active offsets the pan activates after 10 points in any direction. Until it activates, the scroll views around wait for it (iOS) and the view's other claims are not asked. When it activates, the scroll views can no longer take these touches and the view becomes the responder (the grant, then the moves); when it fails, the scroll view scrolls as usual. In TSX, `PanResponder`'s `panHandlers` work with it too: spread them next to the prop, and `onPanResponderGrant` runs at the activation.
+`PanActivation::horizontal(active, fail)` and `PanActivation::vertical(active, fail)` set the usual pairs. Without active offsets the pan activates after 10 points in any direction. Until it activates, the scroll views around wait for it (iOS) and the view's other claims are not asked. A scroll view inside the view that cannot scroll along the pan's one axis (a vertical list inside a view that pans sideways) takes only the drags the pan fails on, as on the other platforms: a diagonal goes to whichever offset the finger passes first. When it activates, the scroll views can no longer take these touches and the view becomes the responder (the grant, then the moves); when it fails, the scroll view scrolls as usual. In TSX, `PanResponder`'s `panHandlers` work with it too: spread them next to the prop, and `onPanResponderGrant` runs at the activation.
+
+### One way, or from a screen edge
+
+A view's own pan (`pan` values, `onPanStart` / `onPanEnd`) follows its pan activation too: it starts when the activation activates. A drawer opens with a drag from the left edge of the screen, and the open drawer's content closes with a drag to the left, while drags the other way go to the pager or the list underneath:
+
+```tsx tabs
+{/* Opens from the left edge of the screen. */}
+<View panActivation={{ edge: "left" }} pan={{ x: offset }} onPanEnd={settle} />
+{/* The open drawer: only drags to the left close it. */}
+<View panActivation={{ direction: "left" }} pan={{ x: offset }} onPanEnd={settle} />
+```
+
+```rust tabs
+// Opens from the left edge of the screen.
+let opener = view()
+    .pan_activation(PanActivation::default().edge(PanEdge::Left))
+    .pan_values(Some(&offset), None)
+    .on_pan_end(move |e: &PanEvent| settle(e));
+// The open drawer: only drags to the left close it.
+let content = view()
+    .pan_activation(PanActivation::default().direction(PanDirection::Left))
+    .pan_values(Some(&offset), None)
+    .on_pan_end(move |e: &PanEvent| settle(e));
+```
+
+An edge pan starts only when the finger goes down within 20 points of that edge: of the screen on phones and tablets, of the window on desktops and of the page on the web. Its pan event's `origin` tells where.
+
+- **iOS** recognizes the drag as the system's screen edge pan. Inside a navigation stack, swiping back goes first: from the left edge, a screen with one to go back to goes back, and the pan takes the drag on the first screen.
+- **Android** leaves the left and right edges to the system's back gesture under gesture navigation: a swipe it takes there goes back, and a pan that had started ends with `cancelled`. With three-button navigation, the pan takes every drag from its edge.
 
 > [!NOTE]
 > Every velocity is in points per second: the responder gesture's `vx` / `vy`, a pan's velocity and a spring's or a decay's, so `vx` goes to a spring or a decay as it is.

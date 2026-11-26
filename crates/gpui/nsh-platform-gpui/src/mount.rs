@@ -330,6 +330,9 @@ impl Mounter {
             MountItem::ShaderTransition { .. }
             | MountItem::ShaderInput { .. }
             | MountItem::NavShader { .. } => {}
+            // GPU views draw nothing on this backend yet
+            // (`docs/dev/gpu-views.md`).
+            MountItem::GpuView { .. } => {}
             MountItem::Shader { id, layer } => {
                 if let Some(view) = &self.get(*id) {
                     let fill = layer
@@ -438,6 +441,11 @@ impl Mounter {
             Command::SetSelection { start, end } => {
                 if let Some(view) = view {
                     crate::text_input::set_selection(view, *start, *end);
+                }
+            }
+            Command::ClearSelection => {
+                if let Some(view) = view {
+                    crate::selectable_view::clear_in(view);
                 }
             }
             // Not carried out on this platform yet: the app's paste is lost,

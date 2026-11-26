@@ -18,6 +18,52 @@ The picker owns the behavior: the value (the app's, or its own), the open state,
 the keyboard and what screen readers hear. The look is the app's: it draws the trigger (with the value, a
 placeholder, an icon) and styles the popup, the calendar's parts, the presets and the time field.
 
+```tsx tabs
+import { mount, signal, Text, View } from "nsh";
+import { DatePicker, type DatePickerValue } from "nsh/base";
+import { Window } from "nsh/desktop";
+
+function App() {
+  const due = signal<DatePickerValue>(null);
+  return (
+    <DatePicker
+      value={due()}
+      onChange={({ value }) => due.set(value)}
+      timePrecision="minute"
+      cleanable
+      clearButton={<Text>×</Text>}
+      clearButtonAccessibilityLabel="Clear the due date"
+      presets={[{ label: "Tomorrow 9:00", value: "2026-10-29T09:00" }]}
+      accessibilityLabel="Due"
+      offset={4}
+      popupClass="rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-md"
+      backdropClass="bg-black/40"
+      contentClass="flex-row gap-3"
+      presetClass="rounded-md px-2 py-1.5 text-sm hover:bg-accent"
+      headerClass="flex-row items-center justify-between"
+      rowClass="flex-row justify-between"
+      itemClass="h-8 min-w-8 items-center justify-center rounded-md text-sm focus-visible:ring-2 focus-visible:ring-ring selected:bg-primary selected:text-primary-foreground disabled:opacity-50"
+      timeClass="mt-2 gap-3"
+      timeLabel={<Text class="text-sm">Time</Text>}
+      timeAccessibilityLabel="Due time"
+      timeFieldClass="flex-row rounded-md border border-input px-2 py-1"
+      segmentClass="text-sm tabular-nums focus:bg-accent"
+      trigger={
+        <View class="h-9 w-56 justify-center rounded-md border border-input px-3 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
+          <Text>{typeof due() === "string" ? (due() as string).replace("T", " ") : "Pick a date"}</Text>
+        </View>
+      }
+    />
+  );
+}
+
+mount(() => (
+  <Window id="main">
+    <App />
+  </Window>
+));
+```
+
 ```rust tabs
 use chrono::NaiveDate;
 use nsh_base::{DateRangePreset, DateTime, PickedDate, date_picker, theme};
@@ -65,52 +111,6 @@ fn trip_dates() -> impl IntoElement {
 }
 ```
 
-```tsx tabs
-import { mount, signal, Text, View } from "nsh";
-import { DatePicker, type DatePickerValue } from "nsh/base";
-import { Window } from "nsh/desktop";
-
-function App() {
-  const due = signal<DatePickerValue>(null);
-  return (
-    <DatePicker
-      value={due()}
-      onChange={({ value }) => due.set(value)}
-      timePrecision="minute"
-      cleanable
-      clearButton={<Text>×</Text>}
-      clearButtonAccessibilityLabel="Clear the due date"
-      presets={[{ label: "Tomorrow 9:00", value: "2026-10-29T09:00" }]}
-      accessibilityLabel="Due"
-      offset={4}
-      popupClass="rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-md"
-      backdropClass="bg-black/40"
-      contentClass="flex-row gap-3"
-      presetClass="rounded-md px-2 py-1.5 text-sm hover:bg-accent"
-      headerClass="flex-row items-center justify-between"
-      rowClass="flex-row justify-between"
-      itemClass="h-8 min-w-8 items-center justify-center rounded-md text-sm focus-visible:ring-2 focus-visible:ring-ring selected:bg-primary selected:text-primary-foreground disabled:opacity-50"
-      timeClass="mt-2 gap-3"
-      timeLabel={<Text class="text-sm">Time</Text>}
-      timeAccessibilityLabel="Due time"
-      timeFieldClass="flex-row rounded-md border border-input px-2 py-1"
-      segmentClass="text-sm tabular-nums focus:bg-accent"
-      trigger={
-        <View class="h-9 w-56 justify-center rounded-md border border-input px-3 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring">
-          <Text>{typeof due() === "string" ? (due() as string).replace("T", " ") : "Pick a date"}</Text>
-        </View>
-      }
-    />
-  );
-}
-
-mount(() => (
-  <Window id="main">
-    <App />
-  </Window>
-));
-```
-
 `DatePicker` comes from [`nsh/base`](../modules/nsh-base.md), the `nsh-base` crate in Rust. In Rust, `date_picker()`
 makes one with a setter per prop (`.value(..)`, `.range(..)`, `.time_precision(..)`) and a listener per event
 (`.on_change(..)`). Its value is a `DateTime` (`DateTime::Single`, `DateTime::Range`, from `chrono` dates or dates and
@@ -118,9 +118,15 @@ times); `onChange` gives a `PickedDate`, the value with the picker's time precis
 
 ## Value
 
-The value is in the forms of the HTML inputs: an ISO date, `"2026-10-28"`, as `<input type="date">`'s; with `range`
-`[start, end]`; with `timePrecision` a date and time, `"2026-10-28T09:30"` (`"2026-10-28T09:30:15"` at seconds), as
-`<input type="datetime-local">`'s; `null` is none. With `value`, the app owns it: the picker shows it and reports each
+The value is in the forms of the HTML inputs:
+
+- A date is an ISO date, `"2026-10-28"`, as in `<input type="date">`.
+- With `range`, it is `[start, end]`.
+- With `timePrecision`, it is a date and time, `"2026-10-28T09:30"` (`"2026-10-28T09:30:15"` at seconds), as in
+  `<input type="datetime-local">`.
+- `null` is none.
+
+With `value`, the app owns it: the picker shows it and reports each
 change with `onChange({ value })`; the app sets `value` to follow it. Left out, the picker keeps its own value, from
 `defaultValue` at first.
 
@@ -162,8 +168,8 @@ spread apart (`flex-row items-center justify-between`, as `gpui-component`'s). T
 On the desktops the popup comes and goes with your transitions, as a [Popover](./popover.md#entrance-and-exit)'s:
 `popupStartingClass` is its look in its first frame, and the `transition-*` classes of `popupClass` carry it to its own
 look; `popupEndingClass` is its look once closed, which it keeps, taking no presses, while those transitions run, and
-`onClose` follows. The keyboard focus is back on the trigger as it closes, unless the choice's `onChange` focused
-another view (the next field of a form), which keeps it. Opened again on its way out, it returns to its look from where
+`onClose` follows. The keyboard focus is back on the trigger as it closes (on macOS and iOS, where it was before it opened,
+when a pointer opened it), unless the choice's `onChange` focused another view (the next field of a form), which keeps it. Opened again on its way out, it returns to its look from where
 it is. `popupStartingStyle` and `popupEndingStyle` do the same with inline styles. When the user asks for less motion it
 appears and goes at once; the sheet of touch screens slides in and out on its own.
 

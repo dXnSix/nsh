@@ -9,8 +9,9 @@ use taffy::{
 use crate::{
     css,
     effects::{
-        BackdropMaterial, BlendMode, BoxShadow, Cursor, Effects, Filter, GlassEffect, Gradient,
-        KeyframeAnimation, Keyframes, MacOsBackdrop, Outline, Transition, TransitionProps,
+        BackdropMaterial, BlendMode, BoxShadow, ClipInset, Cursor, Effects, Filter, GlassEffect,
+        Gradient, KeyframeAnimation, Keyframes, MacOsBackdrop, Outline, Transition,
+        TransitionProps,
     },
     element::PropEnum,
     geometry::{
@@ -1036,6 +1037,12 @@ impl ViewStyle {
         }
     }
 
+    /// `clipPath`: the shape everything the view draws is clipped to.
+    #[inline]
+    pub fn clip_path(&self) -> Option<&ClipInset> {
+        self.effects.as_deref().and_then(|e| e.clip_path.as_ref())
+    }
+
     /// The radius of each corner (before fitting them to a size with
     /// [`CornerRadii::fit`]).
     pub fn radii(&self) -> CornerRadii {
@@ -1849,7 +1856,8 @@ style_keys! {
     BackgroundImage = "backgroundImage": View "string" "CSS gradients drawn over the background color: `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)`, several separated by commas.",
     Filter = "filter": View "string" "CSS filters of the view and its content: `brightness()`, `contrast()`, `grayscale()`, `hue-rotate()`, `invert()`, `saturate()`, `sepia()`, `opacity()`, `blur()`, `drop-shadow()`.",
     BackdropFilter = "backdropFilter": View "string" "CSS filters of what is behind the view (`blur(10px)`).",
-    MaskImage = "maskImage": View "string" "A CSS gradient whose alpha decides how much of the view is drawn, fully where opaque and not at all where transparent: `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)`. Masks everything the view draws, its backdrop filter included, whose blur then draws without the system material's tint. Not drawn on Windows and GPUI.",
+    MaskImage = "maskImage": View "string" "A CSS gradient whose alpha decides how much of the view is drawn, fully where opaque and not at all where transparent: `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)`. Masks everything the view draws, its backdrop filter included, whose blur then draws without the system material's tint. It transitions (`transitionProperty: \"mask-image\"`, or `all`) between gradients of the same kind and number of stops, each stop's color and position on its own, so a fade can grow in from an edge; any other change, and to or from `none`, applies at once, as in CSS. Not drawn on Windows and GPUI.",
+    ClipPath = "clipPath": View "string" "CSS's `clip-path` with an `inset()` shape: `\"inset(8px 0 0 50% round 12px)\"` moves each edge in (one to four lengths or percentages of the width or height, as `margin`) and rounds the corners (`round`, one to four radii in points), or `\"none\"`. Everything the view draws, the views in it included, shows only inside the shape, and only there does a press reach the view or the views in it. It transitions (`transitionProperty: \"clip-path\"`, or `all`), each edge and radius on its own, so a panel can open out of a corner; to or from `none` it changes at once, as in CSS.",
     GlassEffect = "glassEffect": View "\"none\" | \"regular\" | \"clear\"" "A glass material behind the view's content (Apple's Liquid Glass). Drawn on iOS 26 and macOS 26 and later; elsewhere the view's `backdropFilter` is drawn as before, so give a glass view a blur to fall back to.",
     GlassTintColor = "glassTintColor": View "ColorValue" "A tint of the glass material (`glassEffect`; iOS 26 and macOS 26 and later): the color the native glass takes on, or `null` for the system default. A transparent color is an explicit tint, not a reset. Has no effect without glass; the blur fallback on earlier systems stays unchanged.",
     MixBlendMode = "mixBlendMode": View "\"normal\" | \"multiply\" | \"screen\" | \"overlay\" | \"darken\" | \"lighten\" | \"color-dodge\" | \"color-burn\" | \"hard-light\" | \"soft-light\" | \"difference\" | \"exclusion\" | \"hue\" | \"saturation\" | \"color\" | \"luminosity\" | \"plus-darker\" | \"plus-lighter\"" "How the view blends with what is behind it.",
@@ -1859,7 +1867,7 @@ style_keys! {
     OutlineOffset = "outlineOffset": View "number" "Distance from the border edge (negative: inside).",
     Visibility = "visibility": View "\"visible\" | \"hidden\" | \"collapse\"" "Hidden views keep their space. On a nested text (a span), its characters keep their place, are not drawn, and are left out of copies and screen readers.",
     Cursor = "cursor": View "\"auto\" | \"default\" | \"context-menu\" | \"alias\" | \"copy\" | \"cell\" | \"pointer\" | \"text\" | \"vertical-text\" | \"wait\" | \"progress\" | \"help\" | \"crosshair\" | \"move\" | \"all-scroll\" | \"grab\" | \"grabbing\" | \"not-allowed\" | \"no-drop\" | \"zoom-in\" | \"zoom-out\" | \"col-resize\" | \"e-resize\" | \"w-resize\" | \"ew-resize\" | \"row-resize\" | \"n-resize\" | \"s-resize\" | \"ns-resize\" | \"ne-resize\" | \"nw-resize\" | \"se-resize\" | \"sw-resize\" | \"nesw-resize\" | \"nwse-resize\" | \"none\"" "The pointer over the view (pointers and desktops).",
-    TransitionProperty = "transitionProperty": View "string" "The properties that animate when they change (`\"opacity, transform\"`, `\"all\"`, `\"colors\"`).",
+    TransitionProperty = "transitionProperty": View "string" "The properties that animate when they change (`\"opacity, transform\"`, `\"all\"`, `\"colors\"`, `\"clip-path\"`, `\"mask-image\"`).",
     TransitionDuration = "transitionDuration": View "number | `${number}ms` | `${number}s`" "Milliseconds as a number, or `\"150ms\"` / `\"0.2s\"`.",
     TransitionDelay = "transitionDelay": View "number | `${number}ms` | `${number}s`",
     TransitionTimingFunction = "transitionTimingFunction": View "\"linear\" | \"ease\" | \"ease-in\" | \"ease-out\" | \"ease-in-out\" | `cubic-bezier(${string})` | `spring(${string})`" "CSS's keywords and `cubic-bezier(x1, y1, x2, y2)` (a `y` outside 0..1 overshoots), or NSH's `spring(stiffness, damping)` / `spring(stiffness, damping, mass)`: a spring's physics (a mass of 1 by default) that times itself, lasting until it settles, so `transitionDuration` is not used.",
@@ -2094,6 +2102,8 @@ pub enum PropertyValue {
     Shadows(Rc<[(BoxShadow, bool)]>),
     /// `backgroundImage`, `maskImage`.
     Gradients(Rc<[Gradient]>),
+    /// `clipPath` (`None`: `none`).
+    ClipPath(Option<ClipInset>),
     /// `filter`, `backdropFilter`, each with whether a `drop-shadow()`
     /// names its color.
     Filters(Rc<[(Filter, bool)]>),
@@ -2883,6 +2893,8 @@ fn transition_properties(s: &str) -> Option<TransitionProps> {
             "border-radius" | "borderRadius" | "border-width" | "borderWidth" => {
                 TransitionProps::SHAPE
             }
+            "clip-path" | "clipPath" => TransitionProps::CLIP_PATH,
+            "mask-image" | "maskImage" | "-webkit-mask-image" | "mask" => TransitionProps::MASK,
             // Properties that do not animate natively.
             "filter" | "backdrop-filter" | "display" | "visibility" | "content-visibility"
             | "overlay" | "pointer-events" => 0,
@@ -3423,6 +3435,10 @@ impl StyleKey {
             K::MaskImage => PropertyValue::Gradients(match keyword(value)? {
                 None | Some("none") => Rc::from([]),
                 Some(s) => css::gradients(s).ok_or(StyleError::InvalidValue)?.into(),
+            }),
+            K::ClipPath => PropertyValue::ClipPath(match keyword(value)? {
+                None | Some("none") => None,
+                Some(s) => Some(css::clip_inset(s).ok_or(StyleError::InvalidValue)?),
             }),
             K::Filter => PropertyValue::Filters(match keyword(value)? {
                 None => Rc::from([]),
@@ -4088,6 +4104,10 @@ impl Style {
             (K::MaskImage, V::Gradients(list)) => {
                 let list = list.to_vec();
                 self.edit_effects(|e| e.mask_images = list);
+            }
+            (K::ClipPath, V::ClipPath(clip)) => {
+                let clip = *clip;
+                self.edit_effects(|e| e.clip_path = clip);
             }
             (K::Filter, V::Filters(list)) => {
                 // A `drop-shadow()` without a color is the text color's.
@@ -5393,6 +5413,107 @@ mod tests {
             s.set("maskImage", StyleValue::Str("url(a.png)")),
             Err(StyleError::InvalidValue)
         );
+    }
+
+    #[test]
+    fn clip_path_parses_css_inset_shapes() {
+        use crate::geometry::{Corners, Edges, px};
+        let clip = |v: &str| {
+            let mut s = Style::default();
+            s.set("clipPath", StyleValue::Str(v))
+                .map(|()| s.view.clip_path().copied())
+        };
+        let insets = |c: ClipInset| (c.offsets, c.fractions.map(|f| f.0), c.radii);
+        // One to four edges as `margin` takes them, lengths and percentages.
+        assert_eq!(
+            insets(clip("inset(10px)").unwrap().unwrap()),
+            (Edges::all(px(10.0)), Edges::all(0.0), Corners::all(px(0.0)))
+        );
+        assert_eq!(
+            insets(clip("inset(1px 2px 3px 4px round 5px)").unwrap().unwrap()),
+            (
+                Edges::from([px(1.0), px(2.0), px(3.0), px(4.0)]),
+                Edges::all(0.0),
+                Corners::all(px(5.0))
+            )
+        );
+        assert_eq!(
+            insets(clip("inset(0 0 100% 100% round 12px)").unwrap().unwrap()),
+            (
+                Edges::all(px(0.0)),
+                Edges::from([0.0, 0.0, 1.0, 1.0]),
+                Corners::all(px(12.0))
+            )
+        );
+        assert_eq!(
+            insets(clip("inset(10% 4px)").unwrap().unwrap()),
+            (
+                Edges::from([px(0.0), px(4.0), px(0.0), px(4.0)]),
+                Edges::from([0.1, 0.0, 0.1, 0.0]),
+                Corners::all(px(0.0))
+            )
+        );
+        assert_eq!(
+            insets(clip("inset(1px 2px 3px)").unwrap().unwrap()).0,
+            Edges::from([px(1.0), px(2.0), px(3.0), px(2.0)])
+        );
+        // Radii spread from the top left as `border-radius` spreads them.
+        let radii = |v: &str| clip(v).unwrap().unwrap().radii.to_array();
+        assert_eq!(
+            radii("inset(0 round 1px 2px)"),
+            [1.0, 2.0, 1.0, 2.0].map(px)
+        );
+        assert_eq!(
+            radii("inset(0 round 1px 2px 3px)"),
+            [1.0, 2.0, 3.0, 2.0].map(px)
+        );
+        assert_eq!(
+            radii("inset(0 round 1px 2px 3px 4px)"),
+            [1.0, 2.0, 3.0, 4.0].map(px)
+        );
+        // Negative edges reach outside the box.
+        assert_eq!(clip("inset(-8px)").unwrap().unwrap().offsets.top, px(-8.0));
+        // `none` and null clear it.
+        assert_eq!(clip("none"), Ok(None));
+        let mut s = Style::default();
+        s.set("clipPath", StyleValue::Str("inset(4px)")).unwrap();
+        s.set("clipPath", StyleValue::Null).unwrap();
+        assert!(s.view.clip_path().is_none());
+        assert!(s.view.effects.is_none());
+        // Other shapes and forms NSH does not draw are rejected.
+        for bad in [
+            "inset()",
+            "inset(1px 2px 3px 4px 5px)",
+            "inset(1px round)",
+            "inset(round 4px)",
+            "inset(1px round 10%)",
+            "inset(1px round -2px)",
+            "inset(1px round 2px / 4px)",
+            "inset(1px",
+            "inset(red)",
+            "circle(10px)",
+            "polygon(0 0, 10px 0, 0 10px)",
+            "url(#clip)",
+        ] {
+            assert_eq!(clip(bad), Err(StyleError::InvalidValue), "{bad}");
+        }
+    }
+
+    #[test]
+    fn clip_path_and_mask_transition_as_their_own_properties() {
+        let props = |v: &str| {
+            let mut s = Style::default();
+            s.set("transitionProperty", StyleValue::Str(v)).unwrap();
+            s.view.transition.unwrap().properties
+        };
+        assert_eq!(props("clip-path").0, TransitionProps::CLIP_PATH);
+        assert_eq!(props("clipPath").0, TransitionProps::CLIP_PATH);
+        assert!(props("all").has(TransitionProps::CLIP_PATH));
+        assert!(!props("border-radius").has(TransitionProps::CLIP_PATH));
+        assert_eq!(props("mask-image").0, TransitionProps::MASK);
+        assert_eq!(props("maskImage").0, TransitionProps::MASK);
+        assert!(props("all").has(TransitionProps::MASK));
+        assert!(!props("clip-path").has(TransitionProps::MASK));
     }
 
     #[test]

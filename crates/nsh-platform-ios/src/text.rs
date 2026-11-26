@@ -1,15 +1,16 @@
 //! CoreText text engine: typesets on the engine thread, draws on the main
 //! thread from finished `CTLine`s, so every text is laid out once.
 
-use std::{cell::RefCell, ffi::c_void, ptr::NonNull, sync::Arc};
+use std::{cell::RefCell, ffi::c_void, ops::Range, ptr::NonNull, sync::Arc};
 
 use nsh_core::{
     Affinity, AttributedText, Color, EllipsizeMode, FamilyName, FontFamily, Point, Points,
     ResolvedTextStyle, Size, TextAlign, TextEngine, TextLayout, TextPosition,
 };
 use nsh_platform_apple::core_text::{
-    background_key, decoration_key, ellipsis_key, paragraph_is_rtl, strikethrough_key,
-    truncated_line_x, underline_key,
+    background_key, decoration_key, ellipsis_key, italic, italic_face, paragraph_is_rtl,
+    reaches_past, slant_fallbacks, strikethrough_key, truncated_line_growth, truncated_line_x,
+    underline_key,
 };
 use objc2::rc::Retained;
 use objc2_core_foundation::{
@@ -18,15 +19,15 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::{CGColor, CGPath};
 use objc2_core_text::{
-    CTFont, CTFontDescriptor, CTFontManagerRegisterFontsForURL, CTFontManagerScope,
-    CTFontSymbolicTraits, CTFrame, CTFramesetter, CTLine, CTLineTruncationType, CTParagraphStyle,
-    CTParagraphStyleSetting, CTParagraphStyleSpecifier, CTRun, CTRunDelegate,
-    CTRunDelegateCallbacks, CTRunStatus, CTTextAlignment, CTTypesetter, CTWritingDirection,
-    kCTFontAttributeName, kCTFontCascadeListAttribute, kCTFontFamilyNameAttribute,
-    kCTFontFeatureSettingsAttribute, kCTFontOpenTypeFeatureTag, kCTFontOpenTypeFeatureValue,
-    kCTFontTraitsAttribute, kCTFontWeightTrait, kCTForegroundColorAttributeName,
-    kCTKernAttributeName, kCTParagraphStyleAttributeName, kCTRunDelegateAttributeName,
-    kCTRunDelegateCurrentVersion, kCTUnderlineColorAttributeName, kCTUnderlineStyleAttributeName,
+    CTFont, CTFontDescriptor, CTFontManagerRegisterFontsForURL, CTFontManagerScope, CTFrame,
+    CTFramesetter, CTLine, CTLineTruncationType, CTParagraphStyle, CTParagraphStyleSetting,
+    CTParagraphStyleSpecifier, CTRun, CTRunDelegate, CTRunDelegateCallbacks, CTRunStatus,
+    CTTextAlignment, CTTypesetter, CTWritingDirection, kCTFontAttributeName,
+    kCTFontCascadeListAttribute, kCTFontFamilyNameAttribute, kCTFontFeatureSettingsAttribute,
+    kCTFontOpenTypeFeatureTag, kCTFontOpenTypeFeatureValue, kCTFontTraitsAttribute,
+    kCTFontWeightTrait, kCTForegroundColorAttributeName, kCTKernAttributeName,
+    kCTParagraphStyleAttributeName, kCTRunDelegateAttributeName, kCTRunDelegateCurrentVersion,
+    kCTUnderlineColorAttributeName, kCTUnderlineStyleAttributeName,
 };
 use objc2_ui_kit::{
     UIFont, UIFontWeight, UIFontWeightBlack, UIFontWeightBold, UIFontWeightHeavy,
@@ -79,15 +80,17 @@ pub(crate) fn make_font(style: &ResolvedTextStyle) -> CFRetained<CTFont> {
         .font_family
         .and_then(|family| listed_fonts(&family.name(), size, style.font_weight))
         .unwrap_or_else(|| (system_font(size, style.font_weight), Vec::new()));
-    let font = if style.italic {
-        let italic = CTFontSymbolicTraits::TraitItalic;
-        // SAFETY: a valid font; size 0 keeps the size, null matrix keeps it.
-        unsafe { font.copy_with_symbolic_traits(0.0, std::ptr::null(), italic, italic) }
-            // No italic face (CJK fonts): keep the upright one, CoreText
-            // synthesizes no oblique (browsers do).
-            .unwrap_or(font)
+    let (font, fallbacks) = if style.italic {
+        // The listed families' italic faces. A family without one leans
+        // ([`italic`]); as a fallback it stays upright here, where CoreText
+        // would ignore the lean, and `slant_fallbacks` leans its runs.
+        let fallbacks = fallbacks
+            .into_iter()
+            .map(|f| italic_face(&f).unwrap_or(f))
+            .collect();
+        (italic(&font), fallbacks)
     } else {
-        font
+        (font, fallbacks)
     };
     with_cascade(with_features(font, style.font_variant), &fallbacks)
 }
@@ -683,33 +686,42 @@ impl CoreTextEngine {
         let (up, down) = alignments.extent(a, font);
         let (up, down) = (up.0 as CGFloat, down.0 as CGFloat);
         // A fixed `lineHeight`: CoreText centers a line's own extent in
-        // it, so a placeholder reaching past the font on one side only
-        // would move its line's baseline (lines unevenly spaced). Its
-        // delegate reserves the font's half-leading box instead (the CSS
-        // strut), and where the attachment reaches past that box, as much
-        // again on the other side: the line grows only when it must,
-        // evenly, its text where other lines' is.
+        // it, so a placeholder smaller than the half-leading box (the CSS
+        // strut) would move its line's baseline. Keep at least the strut
+        // on both sides; a `middle` attachment taller than the strut grows
+        // both sides evenly to stay centered on its text, while other
+        // alignments grow only the side they reach past.
         let line_height = line_height(text);
         if line_height <= 0.0 {
             return (top, up, down);
         }
         let half = (line_height - (ascent + descent + leading)) / 2.0;
         let (strut_up, strut_down) = (ascent + half, descent + half);
-        let grow = (up - strut_up).max(down - strut_down).max(0.0);
-        (top, strut_up + grow, strut_down + grow)
+        if align == nsh_core::VerticalAlign::Middle {
+            let grow = (up - strut_up).max(down - strut_down).max(0.0);
+            (top, strut_up + grow, strut_down + grow)
+        } else {
+            (top, up.max(strut_up), down.max(strut_down))
+        }
     }
 
-    /// The height a line holding the tallest attachment needs: its extent
-    /// around the baseline joined with its placeholder font's. A fixed
-    /// `lineHeight` caps text lines, not these: the view's line grows to
-    /// hold it (as a replaced inline box in CSS) instead of painting over
-    /// its neighbours.
+    /// Upper bound on the height of a line holding attachments when a fixed
+    /// `lineHeight` is set (`0` when every attachment fits in `lineHeight`,
+    /// keeping `MaximumLineHeight` at `lineHeight`). When an attachment
+    /// grows past `lineHeight`, combine the widest extent above and below
+    /// the baseline across attachments and spans so mixed alignments or
+    /// larger text spans on that line are not clamped by `CTParagraphStyle`.
     fn tallest_attachment_line(
         &self,
         text: &AttributedText,
         alignments: &nsh_core::AttachmentAlignments,
     ) -> CGFloat {
-        text.attachments.iter().fold(0.0, |tallest: CGFloat, a| {
+        let line_height = line_height(text);
+        if line_height <= 0.0 || text.attachments.is_empty() {
+            return 0.0;
+        }
+        let (mut fit_up, mut fit_down, mut fit_lead) = (0.0_f64, 0.0_f64, 0.0_f64);
+        for a in &text.attachments {
             let (_, up, down) = self.attachment_metrics(text, a, alignments);
             let style = text
                 .span_at(a.index)
@@ -717,8 +729,32 @@ impl CoreTextEngine {
             let f = self.fonts.get(&style);
             // SAFETY: a valid font.
             let (ascent, descent, leading) = unsafe { (f.ascent(), f.descent(), f.leading()) };
-            tallest.max(up.max(ascent) + down.max(descent) + leading)
-        })
+            fit_up = fit_up.max(up).max(ascent);
+            fit_down = fit_down.max(down).max(descent);
+            fit_lead = fit_lead.max(leading);
+        }
+        let (mut all_up, mut all_down, mut all_lead) = (fit_up, fit_down, fit_lead);
+        for span in &text.spans {
+            if span.start >= span.end {
+                continue;
+            }
+            let f = self.fonts.get(&span.style);
+            // SAFETY: a valid font.
+            let (ascent, descent, leading) = unsafe { (f.ascent(), f.descent(), f.leading()) };
+            if ascent + descent + leading <= line_height + 1e-4 {
+                fit_up = fit_up.max(ascent);
+                fit_down = fit_down.max(descent);
+                fit_lead = fit_lead.max(leading);
+            }
+            all_up = all_up.max(ascent);
+            all_down = all_down.max(descent);
+            all_lead = all_lead.max(leading);
+        }
+        if fit_up + fit_down + fit_lead <= line_height + 1e-4 {
+            0.0
+        } else {
+            all_up + all_down + all_lead
+        }
     }
 
     fn attributed_string(
@@ -855,6 +891,15 @@ impl CoreTextEngine {
             );
         }
         CFMutableAttributedString::end_editing(s);
+        // Italic text CoreText takes from fallback fonts without an italic
+        // face (CJK in the system font) leans like the rest.
+        for span in text.spans.iter().filter(|span| span.style.italic) {
+            let range = CFRange {
+                location: span.start as CFIndex,
+                length: (span.end - span.start) as CFIndex,
+            };
+            slant_fallbacks(&string, range, &self.fonts.get(&span.style));
+        }
         string
     }
 }
@@ -1054,8 +1099,13 @@ impl Prepared {
 
     /// Length (UTF-16 units) of the first `lines` lines at `width`.
     fn lines_length(&self, lines: u32, width: f64) -> CFIndex {
+        self.last_line(lines, width).end
+    }
+
+    /// The characters of the last of the first `lines` lines at `width`.
+    fn last_line(&self, lines: u32, width: f64) -> Range<CFIndex> {
         let typesetter = self.typesetter();
-        let mut end = 0;
+        let (mut start, mut end) = (0, 0);
         for _ in 0..lines {
             if end >= self.length {
                 break;
@@ -1065,9 +1115,43 @@ impl Prepared {
             if count <= 0 {
                 break;
             }
+            start = end;
             end += count;
         }
-        end
+        start..end
+    }
+
+    /// How much taller (above and below its baseline) the last line gets
+    /// when the text left over after `line` is truncated `width` wide
+    /// ([`truncated_line_growth`]). A clipped line holds the rest of the
+    /// text past the box's edge, not shown, and keeps its line's height.
+    fn truncation_growth(&self, line: Range<CFIndex>, width: f64) -> (CGFloat, CGFloat) {
+        if self.ellipsize == EllipsizeMode::Clip || line.end >= self.length || line.is_empty() {
+            return (0.0, 0.0);
+        }
+        // SAFETY: ranges within the string; the lines typeset from it.
+        unsafe {
+            let typesetter = self.typesetter();
+            let set = typesetter.line(CFRange {
+                location: line.start,
+                length: line.end - line.start,
+            });
+            // The truncated line keeps characters of the rest of the text
+            // and an ellipsis in the font of one of them: no taller than
+            // the rest set on one line. Most texts end in the fonts of
+            // their last line, and skip truncating.
+            let rest = typesetter.line(CFRange {
+                location: line.start,
+                length: self.length - line.start,
+            });
+            if !reaches_past(&rest, &set) {
+                return (0.0, 0.0);
+            }
+            let Some(shown) = self.truncate(line.start, width) else {
+                return (0.0, 0.0);
+            };
+            truncated_line_growth(&self.string, &set, &shown)
+        }
     }
 
     /// `line` (starting at `start`) cut to `width` with an ellipsis, as
@@ -1179,14 +1263,11 @@ impl TextEngine for CoreTextEngine {
 
     fn measure(&self, prepared: &Prepared, max_width: Option<Points>) -> Size<Points> {
         let width = max_width.map_or(CGFloat::MAX, |w| w.0 as CGFloat);
-        let range = if prepared.max_lines > 0 {
-            CFRange {
-                location: 0,
-                length: prepared.lines_length(prepared.max_lines, width),
-            }
-        } else {
-            WHOLE
-        };
+        let last = (prepared.max_lines > 0).then(|| prepared.last_line(prepared.max_lines, width));
+        let range = last.as_ref().map_or(WHOLE, |last| CFRange {
+            location: 0,
+            length: last.end,
+        });
         // SAFETY: a range within the string, no frame attributes, no fit
         // range out-param.
         let size = unsafe {
@@ -1197,7 +1278,13 @@ impl TextEngine for CoreTextEngine {
                 std::ptr::null_mut(),
             )
         };
-        Size::new(Points(size.width as f32), Points(size.height as f32))
+        let size = Size::new(Points(size.width as f32), Points(size.height as f32));
+        // The last line as the box this returns lays it out: truncated as
+        // wide as the box.
+        let (up, down) = last.map_or((0.0, 0.0), |last| {
+            prepared.truncation_growth(last, size.width.0 as CGFloat)
+        });
+        Size::new(size.width, Points(size.height.0 + (up + down) as f32))
     }
 
     fn first_baseline(&self, prepared: &Prepared, width: Points) -> Option<Points> {
@@ -1303,6 +1390,13 @@ impl TextEngine for CoreTextEngine {
                         width,
                     )
                 };
+                // As `measure` grew the box for it: below the line above.
+                if prepared.ellipsize != EllipsizeMode::Clip {
+                    // SAFETY: lines typeset from the prepared string.
+                    let (up, _) =
+                        unsafe { truncated_line_growth(&prepared.string, &last.line, &truncated) };
+                    last.origin.y -= up;
+                }
                 last.line = truncated;
                 last.caret_end = prepared.length;
                 last.truncated = true;
@@ -1762,5 +1856,198 @@ mod first_baseline {
         );
         let (large, _) = baseline(24.0);
         assert!(large > small * 1.5, "{small} {large}");
+    }
+}
+
+#[cfg(test)]
+mod truncated_tail {
+    use nsh_core::{AttachmentAlignments, TextLine, VerticalAlign};
+
+    use super::*;
+
+    /// What ends the text after the long, small run of words.
+    #[derive(Clone, Copy, Debug)]
+    enum End {
+        /// A word in the same font: the control.
+        Same,
+        /// A word in a font three times the size.
+        Big,
+        /// An attachment twice as tall as the line.
+        Tall,
+    }
+
+    const WORDS: &str = "alpha beta gamma delta epsilon zeta eta theta iota kappa ";
+
+    fn text(
+        end: End,
+        mode: EllipsizeMode,
+        max_lines: u32,
+        line_height: f32,
+    ) -> (AttributedText, AttachmentAlignments) {
+        let style = ResolvedTextStyle {
+            font_size: Points(14.0),
+            line_height: Points(line_height),
+            ..Default::default()
+        };
+        let mut t = AttributedText {
+            max_lines,
+            ellipsize: mode,
+            ..Default::default()
+        };
+        let mut a = AttachmentAlignments::default();
+        t.push(WORDS, style);
+        t.push(WORDS, style);
+        match end {
+            End::Same => t.push("omega", style),
+            End::Big => t.push(
+                "OMEGA",
+                ResolvedTextStyle {
+                    font_size: Points(42.0),
+                    ..style
+                },
+            ),
+            End::Tall => {
+                t.push("omega ", style);
+                a.push(
+                    &mut t,
+                    Size::new(Points(20.0), Points(40.0)),
+                    VerticalAlign::Baseline,
+                    style,
+                );
+            }
+        }
+        (t, a)
+    }
+
+    struct Laid {
+        size: Size<Points>,
+        lines: Vec<TextLine>,
+        attachments: Vec<Option<Point<Points>>>,
+    }
+
+    impl Laid {
+        fn last(&self) -> &TextLine {
+            self.lines.last().expect("a line")
+        }
+
+        fn baseline(&self) -> f32 {
+            self.last().y.0 + self.last().ascender.0
+        }
+
+        /// The last line's glyph box sits below the line above it and
+        /// inside the box.
+        fn fits(&self) -> bool {
+            let last = self.last();
+            let (top, bottom) = (last.y.0, last.y.0 + last.ascender.0 + last.descender.0);
+            let above = self
+                .lines
+                .iter()
+                .rev()
+                .nth(1)
+                .map_or(0.0, |l| l.y.0 + l.ascender.0 + l.descender.0);
+            top >= above - 0.5 && bottom <= self.size.height.0 + 0.5
+        }
+    }
+
+    /// Lays the text out in `size`, or the box it measures 150 wide.
+    fn lay((t, a): (AttributedText, AttachmentAlignments), size: Option<Size<Points>>) -> Laid {
+        let engine = CoreTextEngine::default();
+        let prepared = engine.prepare_aligned(&t, &a);
+        let size = size.unwrap_or_else(|| {
+            let size = engine.measure(&prepared, Some(Points(150.0)));
+            // Measuring as wide as it measured keeps its truncation.
+            assert_eq!(engine.measure(&prepared, Some(size.width)), size);
+            size
+        });
+        let layout = engine.layout(&prepared, size);
+        Laid {
+            size,
+            lines: engine.lines(&layout),
+            attachments: engine.attachments(&layout),
+        }
+    }
+
+    /// `ellipsis-start` and `ellipsis-middle` keep the end of the text on
+    /// the last line: a larger font or a taller attachment there grows
+    /// the measured box, below the line above, as on a line not
+    /// truncated. A fixed `lineHeight` holds a larger font as on any line.
+    /// The ellipsis takes the font of the text's end, in every mode.
+    #[test]
+    fn a_kept_end_fits_in_the_measured_box() {
+        for line_height in [0.0, 20.0] {
+            for max_lines in [1, 2] {
+                let same = lay(
+                    text(End::Same, EllipsizeMode::Tail, max_lines, line_height),
+                    None,
+                );
+                if line_height > 0.0 {
+                    assert_eq!(same.size.height.0, line_height * max_lines as f32);
+                }
+                for mode in [
+                    EllipsizeMode::Head,
+                    EllipsizeMode::Middle,
+                    EllipsizeMode::Tail,
+                ] {
+                    for end in [End::Same, End::Big, End::Tall] {
+                        let what = format!(
+                            "{mode:?}, {max_lines} lines, {end:?}, lineHeight {line_height}"
+                        );
+                        let laid = lay(text(end, mode, max_lines, line_height), None);
+                        assert_eq!(laid.lines.len(), max_lines as usize, "{what}");
+                        let grows = match end {
+                            End::Same => false,
+                            End::Big => line_height == 0.0,
+                            End::Tall => mode != EllipsizeMode::Tail,
+                        };
+                        if !grows {
+                            assert_eq!(laid.size, same.size, "{what}");
+                            assert_eq!(laid.baseline(), same.baseline(), "{what}");
+                            continue;
+                        }
+                        assert!(
+                            laid.size.height.0 > same.size.height.0 + 20.0,
+                            "{what}: {:?}",
+                            laid.size
+                        );
+                        assert!(laid.fits(), "{what}: {:?} in {:?}", laid.lines, laid.size);
+                        if let End::Tall = end {
+                            let top = laid.attachments[0].expect("kept").y.0;
+                            let above = laid
+                                .lines
+                                .iter()
+                                .rev()
+                                .nth(1)
+                                .map_or(0.0, |l| l.y.0 + l.height.0);
+                            assert!(
+                                top >= above - 0.5 && top + 40.0 <= laid.size.height.0 + 0.5,
+                                "{what}: {top} in {:?}",
+                                laid.size
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A box too short for the text (`max_lines` 0) ellipsizes its last
+    /// fitting line; a taller end it keeps sits below the line above.
+    #[test]
+    fn a_kept_end_in_a_short_box_stays_below_the_line_above() {
+        for mode in [EllipsizeMode::Head, EllipsizeMode::Middle] {
+            for end in [End::Big, End::Tall] {
+                let laid = lay(
+                    text(end, mode, 0, 0.0),
+                    Some(Size::new(Points(150.0), Points(34.0))),
+                );
+                assert_eq!(laid.lines.len(), 2, "{mode:?} {end:?}");
+                let first = &laid.lines[0];
+                assert!(
+                    laid.last().y.0 >= first.y.0 + first.ascender.0 + first.descender.0 - 0.5,
+                    "{mode:?} {end:?}: {:?}",
+                    laid.lines
+                );
+            }
+        }
     }
 }

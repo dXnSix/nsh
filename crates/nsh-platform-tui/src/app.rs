@@ -264,6 +264,8 @@ impl AppView {
             // report Command: Ctrl stands in for it, and labels say so.
             ctrl_for_command: OS == nsh_core::platform::Os::MacOs
                 && !options.capabilities.command_key,
+            // No link of the app's schemes reaches a terminal app.
+            scheme_links: Some(false),
             ..Default::default()
         };
         let clipboard = options
@@ -640,6 +642,9 @@ impl AppView {
             }
             _ => None,
         };
+        if let Some(modality) = modality {
+            self.tree.pointer_focus = modality == nsh_core::platform::InputModality::Pointer;
+        }
         if let (Some(modality), Some(engine)) = (modality, &self.surface.engine) {
             engine.control().set_input_modality(modality);
         }
@@ -1836,6 +1841,10 @@ impl AppView {
             {
                 self.surface.wake.notify();
             }
+            for id in std::mem::take(&mut self.tree.clear_selection_requests) {
+                self.selection.clear_in(&self.tree, id);
+                self.surface.wake.notify();
+            }
             if let Some(engine) = &self.surface.engine {
                 let control = engine.control();
                 for (id, focus) in std::mem::take(&mut self.tree.focus_requests) {
@@ -1873,6 +1882,8 @@ impl AppView {
         self.diagnostics.draw(area, buffer);
         if self.options.capabilities.colors == ColorDepth::Monochrome {
             crate::palette::strip_colors(buffer, area);
+        } else if self.options.capabilities.colors == ColorDepth::TrueColor {
+            crate::palette::brand_accent(buffer, area, self.environment.color_scheme);
         }
         if let (Some(drawing), Some(perf)) = (drawing, &mut self.perf) {
             perf.pending.draw = drawing.elapsed();

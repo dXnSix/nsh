@@ -44,6 +44,9 @@ struct HarnessProps {
     invalid: bool,
     /// The app's `cover`, unless left to the platform.
     cover: Option<bool>,
+    /// The app binds Space (`space` in the log), taking it over a control
+    /// a pointer focused when true (`OverFocused::Pointer`).
+    space: Option<bool>,
 }
 
 fn fruits() -> Vec<SelectItem> {
@@ -78,6 +81,7 @@ fn props(items: Vec<SelectItem>) -> HarnessProps {
         cleanable: false,
         invalid: false,
         cover: None,
+        space: None,
     }
 }
 
@@ -94,10 +98,25 @@ fn Harness(props: HarnessProps) -> impl IntoElement {
     let push = move |s: String| log.update(|l| l.push(s));
     let items = signal(props.items.clone());
     let invalid = signal(props.invalid);
+    let searchable = signal(props.searchable);
+    on_key("f7", move |_| searchable.update(|s| *s = !*s));
     // Only the trigger that starts invalid is busy too, so that the other
     // tests' trigger carries no state of the app's.
     let busy = props.invalid;
     on_key("f6", move |_| invalid.update(|i| *i = !*i));
+    if let Some(over) = props.space {
+        let over_focused = if over {
+            nsh_core::keymap::OverFocused::Pointer
+        } else {
+            nsh_core::keymap::OverFocused::Never
+        };
+        let options = KeyOptions {
+            when: nsh_core::keymap::When::NotEditing,
+            over_focused,
+            ..Default::default()
+        };
+        on_key_with("space", options, move |_| push("space".into()));
+    }
     on_key("f5", move |_| {
         items.set(vec![
             SelectItem::new("kiwi", "Kiwi"),
@@ -107,7 +126,7 @@ fn Harness(props: HarnessProps) -> impl IntoElement {
     let follow = props.follow;
     let mut el = select()
         .items(items)
-        .searchable(props.searchable)
+        .searchable(searchable)
         .disabled(props.disabled)
         .default_open(props.default_open)
         .search_placeholder("Search")
@@ -676,7 +695,78 @@ fn escape_cancels_and_gives_the_trigger_the_keyboard_back() {
 
 #[test]
 fn choosing_gives_the_trigger_the_keyboard_back() {
+    // The trigger had the keyboard (Tab) when the list opened.
+    let mut app = focused(props(fruits()));
+    let trigger = app.id("role:combobox");
+    app.open_list();
+    app.press("role:option[Carrot]").unwrap();
+    app.gone("role:listbox");
+    assert!(app.sent(trigger, &Command::Focus));
+}
+
+#[test]
+fn choosing_in_a_list_a_press_opened_leaves_the_trigger_without_the_keyboard() {
+    // A press opened it with nothing focused: the trigger never had the
+    // keyboard, so Space and Return stay the app's shortcuts.
     let mut app = desktop(props(fruits()));
+    let trigger = app.id("role:combobox");
+    app.open_list();
+    app.press("role:option[Carrot]").unwrap();
+    app.gone("role:listbox");
+    assert!(!app.sent(trigger, &Command::Focus));
+}
+
+#[test]
+fn on_windows_an_app_binding_over_a_pointers_focus_takes_space_from_the_trigger() {
+    for over in [false, true] {
+        let mut p = props(fruits());
+        p.space = Some(over);
+        let mut app = start_on(p, Os::Windows, Idiom::Desktop, false);
+        // Chosen with the pointer, the trigger has the focus back.
+        app.open_list();
+        app.press("role:option[Carrot]").unwrap();
+        app.gone("role:listbox");
+        app.key("space");
+        if over {
+            // The pointer's focus: the app's Space takes the key.
+            app.log_ends("space");
+            assert!(!app.shows("role:listbox"), "the list stays closed");
+        } else {
+            // Without the option the trigger's Space opens it again.
+            app.wait_for("role:listbox").unwrap();
+            assert!(!app.log().ends_with("space"), "{}", app.log());
+        }
+        // Opened with the pointer, closed with Escape: still the pointer's.
+        if over {
+            app.open_list();
+            app.key("escape");
+            app.gone("role:listbox");
+            app.key("space");
+            app.log_ends("openChange:false:Cancel close space");
+            assert!(!app.shows("role:listbox"), "the list stays closed");
+        }
+    }
+}
+
+#[test]
+fn an_app_binding_over_a_pointers_focus_leaves_space_to_a_trigger_the_keyboard_focused() {
+    for os in [Os::Windows, Os::MacOs] {
+        let mut p = props(fruits());
+        p.space = Some(true);
+        let mut app = start_on(p, os, Idiom::Desktop, false);
+        // Tab gives the trigger the focus: Space opens the list.
+        app.key("tab");
+        app.key("space");
+        app.wait_for("role:listbox")
+            .unwrap_or_else(|e| panic!("{os:?}: {e}"));
+        assert!(!app.log().contains("space"), "{os:?}: {}", app.log());
+    }
+}
+
+#[test]
+fn on_windows_choosing_in_a_list_a_press_opened_gives_the_trigger_the_keyboard() {
+    // A press focuses a button there, as native buttons do.
+    let mut app = start_on(props(fruits()), Os::Windows, Idiom::Desktop, false);
     let trigger = app.id("role:combobox");
     app.open_list();
     app.press("role:option[Carrot]").unwrap();
@@ -796,6 +886,38 @@ fn the_pointer_highlights_only_when_it_moves_and_a_press_chooses() {
 }
 
 // 6. Search.
+
+#[test]
+fn turning_searchable_off_while_open_drops_the_query() {
+    let mut app = desktop(HarnessProps {
+        searchable: true,
+        ..props(fruits())
+    });
+    app.open_list();
+    app.type_text("Search", "ric").unwrap();
+    app.see_row(">Rice");
+    assert!(!app.shows("Apple"));
+    // The field goes away with the list still open: every item again.
+    app.key("f7");
+    app.gone("id:food-search");
+    app.wait_for("role:listbox").unwrap();
+    app.see("Apple");
+    app.see("Rice");
+    // Searchable again: the field starts empty, and still filters.
+    app.key("f7");
+    app.wait_for("id:food-search").unwrap();
+    app.see("Apple");
+    app.type_text("Search", "cel").unwrap();
+    app.see_row(">Celery");
+    assert!(!app.shows("Apple"));
+    // Off while closed, then reopened: every item.
+    app.key("escape");
+    app.gone("role:listbox");
+    app.key("f7");
+    app.open_list();
+    app.see("Apple");
+    app.see("Celery");
+}
 
 #[test]
 fn search_filters_the_items_and_their_sections() {

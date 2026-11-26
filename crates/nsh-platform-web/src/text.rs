@@ -11,7 +11,7 @@
 //! UAX #14, enough for app text.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     ops::Range,
     rc::Rc,
     sync::{Arc, OnceLock},
@@ -48,9 +48,6 @@ pub(crate) struct WebTextEngine {
     /// How much wider the DOM draws an emoji cluster in a font than canvas
     /// measures it.
     emoji: RefCell<FxHashMap<(Arc<str>, String), f32>>,
-    /// Whether a width since the caches were cleared has an emoji's excess:
-    /// those are stale once the pixel ratio changes.
-    emoji_measured: Cell<bool>,
     /// Ascent and descent of a font.
     metrics: RefCell<FxHashMap<Arc<str>, (f32, f32)>>,
     /// The x height of a font (attachments in the middle of a line).
@@ -62,11 +59,10 @@ pub(crate) struct WebTextEngine {
 
 impl WebTextEngine {
     /// Forgets the measurements: a font finished loading, so what was
-    /// measured with a fallback font is stale.
+    /// measured with a fallback font is stale, or the pixel ratio changed.
     pub(crate) fn clear_caches(&self) {
         self.widths.borrow_mut().clear();
         self.emoji.borrow_mut().clear();
-        self.emoji_measured.set(false);
         self.metrics.borrow_mut().clear();
         self.x_heights.borrow_mut().clear();
         // Their pieces' widths are stale too.
@@ -124,17 +120,10 @@ impl WebTextEngine {
         w
     }
 
-    /// Whether a width measured since the caches were cleared has an
-    /// emoji's excess ([`emoji_excess`]).
-    pub(crate) fn emoji_measured(&self) -> bool {
-        self.emoji_measured.get()
-    }
-
     /// How much wider the DOM draws emoji `cluster` than canvas measures
     /// it: measured in the DOM once per font, so a line being typed is
     /// still measured on canvas.
     fn cluster_excess(&self, font: &Arc<str>, cluster: &str) -> f32 {
-        self.emoji_measured.set(true);
         let key = (font.clone(), cluster.to_owned());
         if let Some(&e) = self.emoji.borrow().get(&key) {
             return e;
@@ -344,6 +333,11 @@ pub(crate) struct Run {
     /// What follows the run when the text is copied: the line's break (a
     /// newline, or the spaces a wrap dropped) after its last run.
     pub(crate) after: String,
+    /// The height of its line when it is not the run's own (a line height
+    /// the text sets, a taller run beside it): the DOM gives the run a line
+    /// box that tall around its baseline, so a selection highlights the
+    /// whole line, as a browser's own text does.
+    pub(crate) line_height: Option<f32>,
 }
 
 /// A box of a span background, behind the runs.
@@ -370,6 +364,43 @@ pub(crate) struct WebLayout {
     /// `lines`.
     hit: Vec<HitLine>,
     attachments: Vec<Option<(f32, f32)>>,
+}
+
+impl WebLayout {
+    /// Where a copy of the text puts the attachment at UTF-16 offset
+    /// `index` among the runs, which hold no attachments: after the
+    /// characters of run `r` (`false`: before the line's break after them)
+    /// or before them (`true`). It goes after the last run before it on its
+    /// line, else before the first after it on its line, else before the
+    /// first run of a later line, else after the last run. `None` when it is
+    /// not laid out (cut off with the lines after `numberOfLines`).
+    pub(crate) fn attachment_place(&self, index: u32) -> Option<(usize, bool)> {
+        let run_of = |p: &HitPart| p.text.as_ref().map(|t| t.run);
+        for (n, line) in self.hit.iter().enumerate() {
+            let Some(at) = line
+                .parts
+                .iter()
+                .position(|p| p.text.is_none() && p.start == index)
+            else {
+                continue;
+            };
+            if let Some(r) = line.parts[..at].iter().rev().find_map(run_of) {
+                return Some((r, false));
+            }
+            if let Some(r) = line.parts[at + 1..].iter().find_map(run_of) {
+                return Some((r, true));
+            }
+            if let Some(r) = self.hit[n + 1..]
+                .iter()
+                .flat_map(|l| &l.parts)
+                .find_map(run_of)
+            {
+                return Some((r, true));
+            }
+            return self.runs.len().checked_sub(1).map(|r| (r, false));
+        }
+        None
+    }
 }
 
 /// A line's drawn pieces, for hit testing, and where the caret can stand on
@@ -437,6 +468,26 @@ struct LineBox {
     height: f32,
     /// The largest ascent (with half-leading) above the baseline.
     above: f32,
+}
+
+/// The `font-weight` range a face covers: its `wght` axis for a variable
+/// font, else its one OS/2 weight. A single-value `FontFace` descriptor pins
+/// a variable font's `wght` axis, so every requested weight would draw at the
+/// default instance.
+fn weight_range(face: &ttf_parser::Face) -> (u16, u16) {
+    let weight = face.weight().to_number();
+    face.variation_axes()
+        .into_iter()
+        .find(|a| a.tag == ttf_parser::Tag::from_bytes(b"wght"))
+        .map(|a| {
+            let (lo, hi) = (
+                a.min_value.round().clamp(1.0, 1000.0),
+                a.max_value.round().clamp(1.0, 1000.0),
+            );
+            (lo as u16, hi as u16)
+        })
+        .filter(|(lo, hi)| lo < hi)
+        .unwrap_or((weight, weight))
 }
 
 #[cfg(test)]
@@ -1428,7 +1479,10 @@ impl TextEngine for WebTextEngine {
                         (index.saturating_sub(1), byte)
                     }
                     _ => {
+                        let natural = s.ascent + s.descent;
                         runs.push(Run {
+                            line_height: ((line.height - natural).abs() > 0.01)
+                                .then_some(line.height),
                             x,
                             y: baseline - s.ascent,
                             text: text.to_string(),
@@ -1584,7 +1638,8 @@ impl TextEngine for WebTextEngine {
         let family = name(ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
             .or_else(|| name(ttf_parser::name_id::FAMILY))
             .ok_or("the font has no family name")?;
-        ffi::register_font(&family, data, face.weight().to_number(), face.is_italic());
+        let (min, max) = weight_range(&face);
+        ffi::register_font(&family, data, min, max, face.is_italic());
         // Widths measured with a fallback font are stale now (and again
         // when the face finishes loading: `nsh_fonts_loaded`).
         self.clear_caches();

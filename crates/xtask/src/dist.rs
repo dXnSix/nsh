@@ -18,8 +18,10 @@
 //! dist/nsh/embed/android/{nsh,nsh-dev}.aar                     embedding in Android apps
 //! ```
 //!
-//! The iOS runtimes and SDK need Xcode: they are built on Apple silicon Macs
-//! only. The macOS (AppKit) runtime is built on macOS, for this machine. The
+//! The iOS runtimes need Xcode and are built on a Mac, for its own simulator
+//! and Mac Catalyst (arm64 on Apple silicon, x86_64 on Intel); the device
+//! runner and the embedding SDK are built on Apple silicon only. The macOS
+//! (AppKit) runtime is built on macOS, for this machine. The
 //! Linux runtime is built for this machine, on Linux only (where it runs,
 //! GTK 4, Pango and, for web views, WebKitGTK 6.0 must be installed;
 //! without WebKitGTK's development files it is built with placeholders for
@@ -43,13 +45,24 @@ use anyhow::{Context as _, bail};
 use crate::{android, term};
 
 const IOS: &str = "aarch64-apple-ios";
-const IOS_SIM: &str = "aarch64-apple-ios-sim";
-const CATALYST: &str = "aarch64-apple-ios-macabi";
-/// Whether the distribution has the iOS runtimes and SDK: on Apple silicon
-/// only, the `ios` component's one host. They are built for arm64 (devices,
-/// Apple silicon's simulator, Mac Catalyst), which an Intel Mac's simulator
-/// and Mac Catalyst do not run.
-const WITH_IOS: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+const IOS_SIM: &str = if cfg!(target_arch = "x86_64") {
+    "x86_64-apple-ios"
+} else {
+    "aarch64-apple-ios-sim"
+};
+const CATALYST: &str = if cfg!(target_arch = "x86_64") {
+    "x86_64-apple-ios-macabi"
+} else {
+    "aarch64-apple-ios-macabi"
+};
+/// Whether the distribution has the iOS runtimes: on every Mac. Each is built
+/// for this Mac's own simulator and Mac Catalyst, which run its processor.
+const WITH_IOS: bool = cfg!(target_os = "macos");
+/// Whether it also has the iOS device runner and the embedding SDK: on Apple
+/// silicon only. Both are built with the iOS 26 SDK (Xcode 26), which does not
+/// run on Intel Macs, so an Intel one's `nsh package --target ios` has no
+/// runner.
+const WITH_IOS_DEVICES: bool = cfg!(all(target_os = "macos", target_arch = "aarch64"));
 
 pub(crate) fn dist() -> anyhow::Result<()> {
     let root = android::root();
@@ -259,14 +272,14 @@ pub(crate) fn dist() -> anyhow::Result<()> {
         let aar = out
             .join("embed/android")
             .join(if dev { "nsh-dev.aar" } else { "nsh.aar" });
-        make_aar(&built, &abis, dev, &aar)?;
+        android::make_aar(&built, &abis, dev, &aar)?;
         term::done(format!(
             "packed {}",
             aar.strip_prefix(&root).unwrap_or(&aar).display()
         ));
     }
 
-    if WITH_IOS {
+    if WITH_IOS_DEVICES {
         // iOS embedding: a static framework per platform (Rust + the Swift
         // module) in an XCFramework.
         crate::ios::xcframeworks(
@@ -433,7 +446,12 @@ fn web_runtimes(root: &Path, out: &Path, release: &Path) -> anyhow::Result<()> {
 
 /// The iOS runtimes: release runners, development hosts.
 fn ios_runtimes(release: &Path, out: &Path) -> anyhow::Result<()> {
-    for (triple, dir) in [(IOS, "iphoneos"), (IOS_SIM, "iphonesimulator")] {
+    let release_runners: &[(&str, &str)] = if WITH_IOS_DEVICES {
+        &[(IOS, "iphoneos"), (IOS_SIM, "iphonesimulator")]
+    } else {
+        &[(IOS_SIM, "iphonesimulator")]
+    };
+    for &(triple, dir) in release_runners {
         cargo(
             &[
                 "build",
@@ -467,104 +485,6 @@ fn ios_runtimes(release: &Path, out: &Path) -> anyhow::Result<()> {
             &out.join("runtime/ios").join(dir).join("nsh-ios-host"),
         )?;
     }
-    Ok(())
-}
-
-/// R8 rules the archive carries (`proguard.txt`), which an app's Gradle
-/// build applies when it shrinks the app: `libnsh.so` finds the runtime's
-/// classes, methods and fields by name over JNI (`TextLayouts` in
-/// `JNI_OnLoad`) and binds `native` methods by their Java names, which R8
-/// would remove or rename, Java code never naming most of them.
-const AAR_KEEP_RULES: &str = "\
-# Native Shell: libnsh.so finds these classes and members by name over JNI
-# and binds native methods by their Java names.
--keep class com.longbridge.nsh.** { *; }
-# The WebSocket client's TLS verifier (rustls-platform-verifier) calls these
-# over JNI.
--keep class org.rustls.platformverifier.** { *; }
-";
-
-/// An Android library archive: the Java runtime and `libnsh.so` per ABI,
-/// with the R8 rules that keep the runtime ([`AAR_KEEP_RULES`]).
-///
-/// The development library allows cleartext HTTP (merged into the app's
-/// manifest): it loads assets from the `nsh dev` server over plain HTTP.
-fn make_aar(built: &Path, abis: &[String], dev: bool, aar: &Path) -> anyhow::Result<()> {
-    let work = aar.with_extension("aar-work");
-    if work.exists() {
-        fs::remove_dir_all(&work)?;
-    }
-    fs::create_dir_all(&work)?;
-    fs::write(
-        work.join("AndroidManifest.xml"),
-        format!(
-            r#"<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.longbridge.nsh">
-    <uses-sdk android:minSdkVersion="{}" />
-    <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Text actions (Translate and the like) the selection menu offers,
-        as TextView's: Android 11+ hides other apps' activities otherwise. -->
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT" />
-            <data android:mimeType="text/plain" />
-        </intent>
-    </queries>{}
-</manifest>
-"#,
-            android::MIN_SDK,
-            if dev {
-                "\n    <application android:usesCleartextTraffic=\"true\" />"
-            } else {
-                ""
-            }
-        ),
-    )?;
-    fs::write(work.join("R.txt"), "")?;
-    fs::write(work.join("proguard.txt"), AAR_KEEP_RULES)?;
-    copy(&built.join("classes.jar"), &work.join("classes.jar"))?;
-    // With their symbols: the app's Gradle build strips what it packages
-    // and keeps them for its crash reports.
-    for abi in abis {
-        copy(
-            &built.join("symbols").join(abi).join("libnsh.so"),
-            &work.join("jni").join(abi).join("libnsh.so"),
-        )?;
-    }
-    if let Some(dir) = aar.parent() {
-        fs::create_dir_all(dir)?;
-    }
-    let _ = fs::remove_file(aar);
-    zip_dir(&work, aar).with_context(|| format!("create {}", aar.display()))?;
-    fs::remove_dir_all(&work)?;
-    Ok(())
-}
-
-/// Zips the files under `dir` into `archive`, by their paths relative to
-/// `dir` (with `/`, whatever this machine's separator).
-fn zip_dir(dir: &Path, archive: &Path) -> anyhow::Result<()> {
-    use std::io::Write as _;
-
-    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
-
-    let mut zip = ZipWriter::new(fs::File::create(archive)?);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-    let mut pending = vec![(dir.to_path_buf(), String::new())];
-    while let Some((dir, prefix)) = pending.pop() {
-        let mut entries: Vec<_> = fs::read_dir(&dir)?.collect::<Result<_, _>>()?;
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
-            if entry.file_type()?.is_dir() {
-                zip.add_directory(format!("{name}/"), options)?;
-                pending.push((entry.path(), format!("{name}/")));
-            } else {
-                zip.start_file(name, options)?;
-                zip.write_all(&fs::read(entry.path())?)?;
-            }
-        }
-    }
-    zip.finish()?;
     Ok(())
 }
 
@@ -666,37 +586,9 @@ pub(crate) fn copy(from: &Path, to: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        ffi::{OsStr, OsString},
-        fs,
-        io::Read as _,
-    };
+    use std::ffi::{OsStr, OsString};
 
-    use super::{
-        AAR_KEEP_RULES, WebRuntimes, android_skip, make_aar, wasm_cc, wasm_compiles,
-        web_runtimes_plan,
-    };
-
-    #[test]
-    fn an_aar_carries_the_rules_that_keep_the_runtime() {
-        let dir = std::env::temp_dir().join(format!("nsh-aar-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let built = dir.join("built");
-        fs::create_dir_all(built.join("symbols/arm64-v8a")).unwrap();
-        fs::write(built.join("classes.jar"), b"jar").unwrap();
-        fs::write(built.join("symbols/arm64-v8a/libnsh.so"), b"so").unwrap();
-        let aar = dir.join("nsh.aar");
-        make_aar(&built, &["arm64-v8a".to_string()], false, &aar).unwrap();
-        let mut zip = zip::ZipArchive::new(fs::File::open(&aar).unwrap()).unwrap();
-        let mut rules = String::new();
-        zip.by_name("proguard.txt")
-            .unwrap()
-            .read_to_string(&mut rules)
-            .unwrap();
-        assert_eq!(rules, AAR_KEEP_RULES);
-        assert!(rules.contains("-keep class com.longbridge.nsh.** { *; }"));
-        fs::remove_dir_all(&dir).unwrap();
-    }
+    use super::{WebRuntimes, android_skip, wasm_cc, wasm_compiles, web_runtimes_plan};
 
     #[test]
     fn the_configured_wasm_compiler_is_probed_not_a_bare_clang() {
@@ -765,6 +657,8 @@ mod tests {
     #[test]
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn a_stripped_executable_still_runs() {
+        use std::fs;
+
         let dir = std::env::temp_dir().join(format!("nsh-strip-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let exe = std::env::current_exe().unwrap();

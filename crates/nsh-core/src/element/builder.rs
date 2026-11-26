@@ -12,9 +12,9 @@ use super::{
 use crate::{
     AccessibilityProp, AccessibilityRole, AccessibilityState, AccessibilityValue, Bounds,
     ContextMenuEvent, EdgeInsets, EventKind, EventPayload, Hsla, ImageSource, KeyCapture, KeyEvent,
-    ListContentStyle, MouseEvent, NativeProp, NodeId, PinchEvent, PointerEvents, Points,
-    PressEvent, Prop, Size, Tag, TouchEvent, WheelEvent,
-    geometry::{DevicePixels, Radians},
+    ListContentStyle, LiveRegion, MouseEvent, NativeProp, NodeId, PanActivation, PinchEvent,
+    PointerEvents, Points, PressEvent, Prop, Size, Tag, TouchEvent, WheelEvent,
+    geometry::{Axis, DevicePixels, Radians},
     style::Color,
 };
 
@@ -234,6 +234,9 @@ pub(crate) struct RareAttrs {
     pub(crate) selectable_view: bool,
     /// The text continues the one before it ([`Element::continues_text`]).
     pub(crate) continues_text: bool,
+    /// Its children take its position among its siblings
+    /// (`Element::__pass_position`).
+    pub(crate) pass_position: bool,
     /// The states it shows as its control's part
     /// ([`Interactive::project_checked`]).
     pub(crate) projected_states: u16,
@@ -249,6 +252,9 @@ pub(crate) struct RareAttrs {
     /// A window of the app's own: the dialog root it shows
     /// ([`super::desktop::window`]).
     pub(crate) window: Option<Box<crate::desktop::WindowOptions>>,
+    /// What its ref was asked for before it was mounted: sent after the
+    /// window opens.
+    pub(crate) window_commands: Vec<crate::desktop::DesktopCommand>,
 }
 
 impl RareAttrs {
@@ -266,6 +272,7 @@ impl RareAttrs {
             && self.bound.is_empty()
             && !self.selectable_view
             && !self.continues_text
+            && !self.pass_position
             && self.projected_states == 0
             && self.projected_data.is_empty()
             && self.projected_active.is_none()
@@ -438,6 +445,9 @@ impl Attrs {
             if sr.continues_text != or.continues_text {
                 out.push(Prop::ContinuesText(sr.continues_text));
             }
+            if sr.pass_position != or.pass_position {
+                out.push(Prop::PassPosition(sr.pass_position));
+            }
             if sr.projected_states != or.projected_states {
                 out.push(Prop::ProjectedStates(sr.projected_states));
             }
@@ -497,6 +507,10 @@ pub(crate) struct ComponentEl {
     pub(crate) props: Box<dyn AnyProps>,
     /// The handlers of its events in the view that has it, in order.
     pub(crate) on_event: Vec<Listener<dyn Any>>,
+    /// Made by its registered type, not by `make` and `spec`
+    /// ([`ComponentElement::by_name`]): the code of the component is only
+    /// what registers it (a web runtime's side module).
+    pub(crate) by_name: Option<std::any::TypeId>,
 }
 
 impl Clone for ComponentEl {
@@ -507,6 +521,7 @@ impl Clone for ComponentEl {
             spec: self.spec,
             props: self.props.clone_box(),
             on_event: self.on_event.clone(),
+            by_name: self.by_name,
         }
     }
 }
@@ -615,6 +630,7 @@ pub struct ListConfig {
     pub(crate) scrollbar_visible: Option<bool>,
     pub(crate) content: Option<ListContentStyle>,
     pub(crate) follow_end: Option<f32>,
+    pub(crate) follow_end_animated: Option<bool>,
     pub(crate) alignment: Option<crate::ListAlignment>,
     pub(crate) viewport: Option<crate::ListViewport>,
 }
@@ -644,8 +660,12 @@ impl ListConfig {
         if self.content != old.content {
             out.push(Prop::ListContent(self.content.unwrap_or_default()));
         }
-        if self.follow_end != old.follow_end {
-            out.push(Prop::FollowEnd(self.follow_end.map(Points)));
+        if self.follow_end != old.follow_end || self.follow_end_animated != old.follow_end_animated
+        {
+            out.push(Prop::FollowEnd(
+                self.follow_end.map(Points),
+                self.follow_end_animated.unwrap_or(false),
+            ));
         }
         if self.alignment != old.alignment {
             out.push(Prop::ListAlignment(self.alignment.unwrap_or_default()));
@@ -1145,6 +1165,54 @@ pub trait Element: IntoElement + Sized {
         self
     }
 
+    /// Hands the view's position among its siblings to its children: their
+    /// `first:`, `last:`, `odd:`, `even:` and `only:` classes read the
+    /// view's place, not theirs among its children. For a view that only
+    /// wraps its content, as the root an [`each`](super::each) row needs
+    /// around a [`dynamic`](super::dynamic): the content then styles as
+    /// though it were the row. Off by default. Internal: only the base
+    /// components (`TextView`) use it; not part of the public API.
+    #[doc(hidden)]
+    fn __pass_position(mut self, pass: impl IntoReactive<bool>) -> Self {
+        self.node().bind_attr(pass, |a, pass| {
+            if pass || a.rare.is_some() {
+                a.rare_mut().pass_position = pass;
+            }
+        });
+        self
+    }
+
+    /// What a copy of the text around the view gives in its place, when
+    /// the view is inside a text (`copyText`): an inline formula's source
+    /// (`$x^2$`), an emoji image's character. Selecting across the view
+    /// and copying puts this where it is, as a browser copies an inline
+    /// image's `alt`. Unset, the view adds nothing to the copy; a view
+    /// outside a text and a nested text span (whose characters are copied
+    /// themselves) ignore it. Screen readers keep reading the view's
+    /// [`Accessible::label`].
+    ///
+    /// ```ignore
+    /// text("Area is ")
+    ///     .child(view().copy_text("$x^2$").child(formula))
+    ///     .child(" here.")
+    /// ```
+    fn copy_text(mut self, text: impl IntoReactive<SharedString>) -> Self {
+        super::host::bind_prop(self.node(), text, |text: SharedString| {
+            Prop::CopyText(Some(text.to_arc()))
+        });
+        self
+    }
+
+    /// Internal (components): the view already stands clear of the
+    /// software keyboard (a bottom sheet the keyboard lifts), so
+    /// `env(keyboard-inset-height)` reads 0 in it and in its subtree, and
+    /// content padded by it is not lifted a second time.
+    #[doc(hidden)]
+    fn clears_keyboard(mut self, clears: impl IntoReactive<bool>) -> Self {
+        super::host::bind_prop(self.node(), clears, Prop::ClearsKeyboard);
+        self
+    }
+
     /// Tailwind classes the app passed (a prop naming the classes of one
     /// of the component's parts: `classes={{ heading: "text-2xl" }}`),
     /// after the element's own styles, as the app's `class` on a
@@ -1250,9 +1318,46 @@ impl Style {
             .filter(|c| *c != crate::element::AdaptiveColor::from(crate::Color::TRANSPARENT))
     }
 
+    /// Internal (components): this style with its `maxHeight` at most
+    /// `cap`. A length or a percentage of `basis` (the height its view's
+    /// percentages are of) taller than `cap`, or none, gives way to `cap`;
+    /// a shorter one stays. A bottom sheet the keyboard lifts keeps its
+    /// top below the status bar so, whatever height the app gives it.
+    #[doc(hidden)]
+    pub fn max_height_at_most(&self, cap: Points, basis: Points) -> Self {
+        use taffy::CompactLength;
+        let declared = self.decls().iter().rev().find_map(|decl| match decl {
+            crate::StyleDecl::Set(crate::StyleKey::MaxHeight, crate::PropertyValue::Lpa(v)) => {
+                let raw = v.into_raw();
+                Some(match raw.tag() {
+                    CompactLength::LENGTH_TAG => Some(raw.value()),
+                    CompactLength::PERCENT_TAG => Some(basis.0 * raw.value()),
+                    _ => None,
+                })
+            }
+            _ => None,
+        });
+        if declared.flatten().is_some_and(|height| height <= cap.0) {
+            return self.clone();
+        }
+        self.clone().with(
+            crate::StyleKey::MaxHeight,
+            crate::PropertyValue::Lpa(taffy::LengthPercentageAuto::length(cap.0.max(0.0))),
+        )
+    }
+
     /// Its declarations, in order (not its typed styles').
     pub fn decls(&self) -> &[crate::StyleDecl] {
         self.0.as_deref().map_or(&[], crate::StylePatch::decls)
+    }
+
+    /// Whether it has typed styles (Rust's [`StyleRefinement`], static or
+    /// bound): a style JS gives has none. A component that applies a style
+    /// it is given after its own bound styles reads it to bind only the
+    /// styles that need it ([`Element::inline_style`] of a closure binds
+    /// the typed styles after the element's own).
+    pub fn is_typed(&self) -> bool {
+        !self.1.is_empty()
     }
 
     /// Applies it to `node` in `variant`: the declarations with `attr`, the
@@ -1515,6 +1620,17 @@ pub trait Accessible: Element {
         self
     }
 
+    /// [`Accessible::hint`] while it is set (`None`: none), for a
+    /// component that hands the app's optional hint on to its element.
+    fn optional_hint(mut self, hint: impl IntoReactive<Option<SharedString>>) -> Self {
+        self.node().bind_attr(hint, |a, hint| {
+            if hint.is_some() || a.rare.is_some() {
+                a.rare_mut().hint = hint;
+            }
+        });
+        self
+    }
+
     /// More about it than its name, which screen readers read after it
     /// (TS: `accessibilityDescription`; `gpui-base`'s `aria_description`):
     /// a dialog's message, what a field expects.
@@ -1571,6 +1687,34 @@ pub trait Accessible: Element {
         self
     }
 
+    /// The list's orientation for screen readers (ARIA's
+    /// `aria-orientation`, reported on the web): `"horizontal"` or
+    /// `"vertical"`, for a tab list or toolbar laid out along that axis;
+    /// `None` has none.
+    fn accessibility_orientation(mut self, orientation: impl IntoReactive<Option<Axis>>) -> Self {
+        self.node().bind_attr(orientation, |a, orientation| {
+            super::host::set_in(
+                &mut a.props,
+                Prop::Accessibility(AccessibilityProp::Orientation(orientation)),
+            )
+        });
+        self
+    }
+
+    /// How changes of it the screen reader announces by itself (TS:
+    /// `accessibilityLiveRegion`): TalkBack on Android, VoiceOver on macOS,
+    /// the web's `aria-live`, a live region on Windows; `"polite"` when the
+    /// user is idle, `"assertive"` right away.
+    fn accessibility_live_region(mut self, region: impl IntoReactive<LiveRegion>) -> Self {
+        self.node().bind_attr(region, |a, region| {
+            super::host::set_in(
+                &mut a.props,
+                Prop::Accessibility(AccessibilityProp::LiveRegion(region)),
+            )
+        });
+        self
+    }
+
     /// The element that is the active one while it keeps the keyboard
     /// focus, which screen readers read as it changes (TS:
     /// `accessibilityActiveDescendant`; ARIA's `aria-activedescendant`):
@@ -1620,16 +1764,28 @@ pub trait Accessible: Element {
     /// [`Accessible::accessibility_description`], whose place it takes
     /// while it names a rendered element with text. `None` names none.
     fn accessibility_described_by(
-        mut self,
+        self,
         target: impl IntoReactive<Option<super::ElementRef>>,
     ) -> Self {
+        let target = target.into_reactive();
+        self.accessibility_described_by_target(move || {
+            target.get().and_then(|t| t.element_target())
+        })
+    }
+
+    /// [`Accessible::accessibility_described_by`] with the element as a
+    /// component's prop holds it (a ref from JS or from Rust): what
+    /// `nsh-base`'s components pass to the view screen readers reach.
+    #[doc(hidden)]
+    fn accessibility_described_by_target(
+        mut self,
+        target: impl IntoReactive<Option<super::ElementTarget>>,
+    ) -> Self {
         self.node()
-            .bind_attr(target, |a, target: Option<super::ElementRef>| {
+            .bind_attr(target, |a, target: Option<super::ElementTarget>| {
                 super::host::set_in(
                     &mut a.props,
-                    Prop::Accessibility(AccessibilityProp::DescribedBy(
-                        target.and_then(|t| t.element_target()),
-                    )),
+                    Prop::Accessibility(AccessibilityProp::DescribedBy(target)),
                 )
             });
         self
@@ -1666,11 +1822,19 @@ pub trait Accessible: Element {
     /// `accessibilityActions`): `increment` and `decrement` for an
     /// adjustable element, `activate`, `longpress`, or the app's own with
     /// a label; [`Interactive::on_accessibility_action`] hears them.
-    fn accessibility_actions(mut self, actions: Vec<crate::AccessibilityActionDef>) -> Self {
-        super::host::set(
-            self.node(),
-            Prop::Accessibility(AccessibilityProp::Actions(actions)),
-        );
+    /// Bound to signals, the labels follow them in place (the interface's
+    /// language): the element and the screen reader's focus on it stay,
+    /// and the names its handler hears do not change.
+    fn accessibility_actions(
+        mut self,
+        actions: impl IntoReactive<Vec<crate::AccessibilityActionDef>>,
+    ) -> Self {
+        self.node().bind_attr(actions, |a, actions| {
+            super::host::set_in(
+                &mut a.props,
+                Prop::Accessibility(AccessibilityProp::Actions(actions)),
+            )
+        });
         self
     }
 }
@@ -1978,6 +2142,19 @@ pub trait Interactive: Element {
         self
     }
 
+    /// When its pans activate (TS: `panActivation`), decided on the main
+    /// thread as the finger moves: its native pan (`pan_values`,
+    /// `on_pan_start`) starts then, and only then, so a drawer's pan that
+    /// opens it to the right leaves the drags to the left to its content
+    /// (`PanActivation::default().direction(PanDirection::Right)`), and
+    /// one from the screen's edge takes only those
+    /// (`PanActivation::default().edge(PanEdge::Left)`). A claim on the pan
+    /// ([`TouchClaim::on_pan`](super::TouchClaim::on_pan)) sets it too.
+    fn pan_activation(mut self, activation: PanActivation) -> Self {
+        super::host::set(self.node(), Prop::PanActivation(Some(activation)));
+        self
+    }
+
     /// As the responder, refuses to hand the touches over to an element
     /// around it that claims them (TS: `onResponderTerminationRequest`
     /// returning false); a native scroll view that started dragging first
@@ -2184,8 +2361,8 @@ pub trait Interactive: Element {
     }
 
     /// Where the view goes as a link, carried to the platform as data
-    /// ([`Prop::Href`]). `nsh-base`'s `Link` sets it from its `href`;
-    /// apps use `Link`.
+    /// ([`Prop::Href`]). `nsh-base`'s `Link` sets it from its `href`, and
+    /// `TextView` on the span of each of its links; apps use those.
     #[doc(hidden)]
     fn __link_href(mut self, href: impl IntoReactive<Option<SharedString>>) -> Self {
         super::host::bind_prop(self.node(), href, |href: Option<SharedString>| {
@@ -2608,15 +2785,20 @@ impl View {
     /// indicator on the selected tab): along the main axis of its parent
     /// (vertical in a flex column, else horizontal) it spans that element's
     /// frame, inside its own margins on that axis, wherever the element is
-    /// inside its parent; across it, its style places it (`bottom(px(0.))`
-    /// and a height for an underline, top and bottom insets for a pill),
-    /// so its style makes it [`Styled::absolute`]. The core places it after
-    /// each layout, with no layout of its own and no JS: following another
-    /// element changes its frame alone, and a layout that moves the element
-    /// moves it in the same batch. While `target` is `None`, or no laid
-    /// out element carries it, its style alone places it; hidden
-    /// (`display: none`) and shown again, it is placed at once. A view
-    /// that follows nothing costs no work after layout.
+    /// inside its parent, in a list's row too; across it, its style places
+    /// it (`bottom(px(0.))` and a height for an underline, top and bottom
+    /// insets for a pill), so its style makes it [`Styled::absolute`]. The
+    /// core places it after each layout, with no layout of its own and no
+    /// JS: following another element changes its frame alone, and a layout
+    /// that moves the element moves it in the same batch. Scroll views and
+    /// lists in between count where they are scrolled, and it spans only
+    /// the part of the element they show: outside them, it follows their
+    /// scrolling a frame or so behind; in the same scroll view's content as the
+    /// element, it moves with it natively. While `target` is `None`, or no
+    /// laid out element carries it (a list's row gone, or scrolled out of
+    /// view), its style alone places it; hidden (`display: none`) and shown
+    /// again, it is placed at once. A view that follows nothing costs no
+    /// work after layout.
     pub fn follow(mut self, target: impl IntoReactive<Option<super::ElementRef>>) -> Self {
         let target = (target.into_reactive()).map(|t: Option<super::ElementRef>| {
             t.and_then(|t| t.target()).map(super::FollowTarget)
@@ -2682,6 +2864,25 @@ fn span(mut el: ElNode) -> ElNode {
 }
 
 impl Text {
+    /// Its final layout, each time it is laid out anew: the platform text
+    /// engine's own hit testing, caret and range boxes
+    /// ([`crate::TextGeometry`]), where `onTextLayout`'s lines only allow
+    /// an estimate. Rust-only, on a Rust component's text; JS keeps
+    /// `onTextLayout`.
+    pub fn on_text_layout(mut self, listener: impl Fn(&crate::TextGeometry) + 'static) -> Self {
+        self.0.handlers.push((
+            EventKind::TextLayout,
+            super::Listener::from(move |payload: &EventPayload| {
+                if let EventPayload::TextLayout(_) = payload
+                    && let Some(geometry) = crate::text::GeometryScope::current()
+                {
+                    listener(&geometry);
+                }
+            }),
+        ));
+        self
+    }
+
     /// The highlight of its selection, when it is selectable.
     pub fn selection_color(mut self, color: impl IntoReactive<Hsla>) -> Self {
         super::host::bind_prop(&mut self.0, color, |c: Hsla| {
@@ -2979,6 +3180,39 @@ impl<C: Component> ComponentElement<C> {
             spec: ComponentSpec::of::<C>,
             props: Box::new(props),
             on_event: Vec::new(),
+            by_name: None,
+        });
+        Self {
+            node,
+            _component: PhantomData,
+        }
+    }
+
+    /// The element of `C` given `props`, made by the component its UI set
+    /// registered, as a TSX app's `<RichEditor>`: this code does not name
+    /// `C`'s own code, so a web runtime keeps it in the side module of the
+    /// part that registers it and loads that module when the element is
+    /// first mounted. Until the part is registered it shows nothing; it
+    /// then becomes the component, with the props and handlers set here.
+    /// Off WebAssembly, where nothing is loaded later, it is made by type,
+    /// as [`Self::__new`] makes it.
+    pub fn by_name(props: C::Props) -> Self {
+        if cfg!(not(target_arch = "wasm32")) {
+            return Self::new(props);
+        }
+        Self::named(props)
+    }
+
+    /// [`Self::by_name`] on every target (its tests).
+    pub(crate) fn named(props: C::Props) -> Self {
+        let mut node = ElNode::new(Tag::View);
+        node.kind = ElKind::Component(ComponentEl {
+            name: super::component::name_of::<C>(),
+            make: super::component::missing_instance,
+            spec: super::component::missing_spec,
+            props: Box::new(props),
+            on_event: Vec::new(),
+            by_name: Some(std::any::TypeId::of::<C>()),
         });
         Self {
             node,
@@ -3386,5 +3620,39 @@ mod file_listener_tests {
             listener.1.call(&payload);
         }
         assert_eq!(calls.get(), 4);
+    }
+}
+
+#[cfg(test)]
+mod style_tests {
+    use super::*;
+    use crate::{PropertyValue, StyleKey, prelude::*};
+
+    fn red() -> PropertyValue {
+        PropertyValue::Color(Some(rgb(0xff0000).into()))
+    }
+
+    #[test]
+    fn a_style_is_typed_only_with_typed_styles() {
+        let declared = Style::default().with(StyleKey::Color, red());
+        let typed = Style::from(StyleRefinement::default().text_color(rgb(0xff0000)));
+        let bound = Style::from(StyleRefinement::default().text_color(move || rgb(0xff0000)));
+        assert!(!Style::default().is_typed());
+        assert!(!Style::from(StyleRefinement::default()).is_typed());
+        assert!(!Style::from_decls([]).is_typed());
+        assert!(!declared.is_typed());
+        assert!(typed.is_typed());
+        // Bound values alone, no static ones.
+        assert!(bound.is_typed());
+        // Kept by `with` and by `then` on either side.
+        assert!(
+            typed
+                .clone()
+                .with(StyleKey::Opacity, PropertyValue::Number(0.5.into()))
+                .is_typed()
+        );
+        assert!(declared.then(&typed).is_typed());
+        assert!(typed.then(&declared).is_typed());
+        assert!(!declared.then(&declared).is_typed());
     }
 }

@@ -280,7 +280,7 @@ fn a_focused_slider_s_thumb_is_the_accent_with_no_band() {
     view.handle(key("Tab"));
     wait_for_thumb_focus(&mut view, &mut terminal, &rx, idle);
     let thumb = thumb(&terminal);
-    assert_eq!(thumb.fg, Color::Blue, "in the accent");
+    assert_eq!(thumb.fg, crate::ACCENT, "in the accent");
     assert_eq!(thumb.bg, ground, "no band under it");
     assert!(thumb.modifier.contains(Modifier::BOLD));
     assert!(!thumb.modifier.contains(Modifier::REVERSED));
@@ -343,7 +343,7 @@ fn a_focused_mark_s_slot_recolors_its_mark_and_lays_no_band() {
         terminal
             .draw(|frame| view.render(frame, frame.area()))
             .unwrap();
-        if mark(&terminal).1.fg == Color::Blue {
+        if mark(&terminal).1.fg == crate::ACCENT {
             break;
         }
         assert!(rx.recv_deadline(deadline).is_ok(), "the mark's focus");
@@ -857,5 +857,55 @@ fn a_line_that_stops_short_of_its_box_s_other_side_joins_no_line() {
         "─",
         "the frame's line is not joined with the thumb\n{}",
         super::dock::dump(&terminal)
+    );
+}
+
+/// A button that counts its presses.
+#[component]
+fn Counted() -> impl IntoElement {
+    let count = signal(0);
+    view()
+        .flex_1()
+        .child(
+            nsh_base::button()
+                .h(px(16.0))
+                .on_press(move |_: &()| count.set(count.get() + 1))
+                .child(text("Go")),
+        )
+        .child(text(move || format!("pressed {}", count.get())))
+}
+
+#[test]
+fn a_control_the_pointer_focused_shows_no_focus_until_a_key() {
+    let (mut view, rx) = banded_surface();
+    let mut terminal = Terminal::new(TestBackend::new(20, 4)).unwrap();
+    view.load(App::Rust(Root::new::<Counted>(|| ()))).unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "pressed 0");
+    super::app::draw_until_still(&mut view, &mut terminal, &rx);
+    let (x, y) = super::dock::find(&terminal, "Go").unwrap();
+    let rest = terminal.backend().buffer()[(x, y)].bg;
+    press_at(&mut view, x, y);
+    // Off the button, so no hover band is left on it.
+    view.handle(super::app::mouse(nsh_platform_tui::MouseKind::Move, 19, 3));
+    draw_until(&mut view, &mut terminal, &rx, "pressed 1");
+    super::app::draw_until_still(&mut view, &mut terminal, &rx);
+    assert_eq!(
+        terminal.backend().buffer()[(x, y)].bg,
+        rest,
+        "clicked, it has the focus but shows none\n{}",
+        super::dock::dump(&terminal)
+    );
+    // A key shows the focus where it is.
+    view.handle(Input::Key {
+        key: "Shift".into(),
+        modifiers: Default::default(),
+        release: false,
+    });
+    draw_until_true(
+        &mut view,
+        &mut terminal,
+        &rx,
+        "the focus shows",
+        |terminal| terminal.backend().buffer()[(x, y)].bg != rest,
     );
 }

@@ -404,7 +404,10 @@ impl Decor {
         });
         let corners = corner_mask(&raw);
         let outside = crate::visual::draws_outside(style);
-        let content = kind == Kind::View && style.overflow_hidden && outside;
+        // A clip path's mask takes the view's own layer, so the children
+        // clip in the content view.
+        let content =
+            kind == Kind::View && style.overflow_hidden && (outside || style.clip_path().is_some());
 
         // Text draws into the layer's own contents, below every sublayer: it
         // cannot have a fill layer, so its odd corners clip it instead.
@@ -733,6 +736,51 @@ pub(crate) fn quiet<R>(f: impl FnOnce() -> R) -> R {
     let result = f();
     CATransaction::commit();
     result
+}
+
+/// Frames `layer` over a box of `bounds` shown at `scale` and clips it to
+/// the rounded box of `style`, as a background is: the layer a shader
+/// ([`crate::shader`]) or a GPU view ([`crate::gpu`]) shows its frames in
+/// under the children. `mask` holds the shape of corners of different
+/// radii.
+pub(crate) fn clip_to_box(
+    layer: &CALayer,
+    mask: &mut Option<Retained<CAShapeLayer>>,
+    bounds: CGSize,
+    style: &ViewStyle,
+    scale: CGFloat,
+) {
+    let local = CGRect::new(CGPoint::ZERO, bounds);
+    let (w, h) = (bounds.width as f32, bounds.height as f32);
+    let raw = style.radii();
+    quiet(|| {
+        layer.setFrame(local);
+        layer.setContentsScale(scale);
+        match raw.shared() {
+            // One radius: the layer's own corners clip it.
+            Some(r) => {
+                let half = w.min(h).max(0.0) / 2.0;
+                let r = if w > 0.0 && h > 0.0 {
+                    r.0.min(half)
+                } else {
+                    r.0
+                };
+                set_corners(layer, r as CGFloat, corner_mask(&raw), raw.continuous);
+                layer.setMasksToBounds(true);
+                // SAFETY: clearing the mask.
+                unsafe { layer.setMask(None) };
+                *mask = None;
+            }
+            // Different radii: a shape of them.
+            None => {
+                set_corners(layer, 0.0, corner_mask(&raw), raw.continuous);
+                layer.setMasksToBounds(false);
+                let shape = shape_mask(mask, local, raw.fit(size(px(w), px(h))));
+                // SAFETY: a mask layer owned by the caller's `mask`.
+                unsafe { layer.setMask(Some(&shape)) };
+            }
+        }
+    });
 }
 
 fn shape_mask(

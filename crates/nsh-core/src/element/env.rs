@@ -3,7 +3,7 @@
 
 use crate::{
     EdgeInsets, Points, Size,
-    platform::{Idiom, Lifecycle, Locale, LocaleSettings, Os},
+    platform::{Idiom, Lifecycle, Locale, LocaleSettings, Network, Os},
 };
 
 /// The environment of a surface, as the platform reports it.
@@ -17,6 +17,9 @@ pub struct Environment {
     pub vertical_size_class: Option<crate::platform::SizeClass>,
     /// The edges system UI covers.
     pub safe_area: EdgeInsets,
+    /// The parts of the surface the device reserves
+    /// ([`crate::platform::Environment::reserved_regions`]).
+    pub reserved_regions: crate::platform::ReservedRegions,
     /// Space reserved for system controls in a custom desktop title bar.
     pub title_bar: crate::geometry::Edges<crate::geometry::Points>,
     /// The app's window: its bounds, mode and display (desktops).
@@ -70,24 +73,34 @@ pub struct Environment {
     /// How many times the system woke from sleep while the surface ran
     /// ([`crate::platform::Environment::wake_count`]).
     pub wake_count: u32,
+    /// How the device reaches the network
+    /// ([`crate::platform::Environment::network`]).
+    pub network: Network,
     /// The platform picks colors from the screen
     /// ([`crate::platform::Environment::screen_color`]).
     pub screen_color: bool,
+    /// The platform reports clipboard writes' results
+    /// ([`crate::platform::Environment::clipboard_write_result`]).
+    pub clipboard_write_result: bool,
     /// The platform renders canvas drawings offscreen into images
     /// ([`crate::platform::Environment::canvas_render`]).
     pub canvas_render: bool,
     /// The platform shows the system's share sheet
     /// ([`crate::platform::Environment::share`]).
     pub share: bool,
+    /// The platform opens the app's page in the system's settings
+    /// ([`crate::platform::Environment::app_settings`]).
+    pub app_settings: bool,
     /// The platform shows web sign-in sessions
     /// ([`crate::platform::Environment::auth_session`]).
     pub auth_session: bool,
+    /// Links of the schemes the app claims reach it
+    /// ([`field@crate::platform::Environment::scheme_links`], resolved: `true`
+    /// on every OS but the web unless the platform says otherwise).
+    pub scheme_links: bool,
     /// The platform shows file dialogs and opens, reveals and trashes local
     /// paths ([`crate::platform::Environment::file_requests`]).
     pub file_requests: bool,
-    /// The platform recognizes speech
-    /// ([`crate::platform::Environment::speech`]).
-    pub speech: bool,
     /// The platform shows notifications
     /// ([`crate::platform::Environment::notifications`]).
     pub notifications: bool,
@@ -132,6 +145,7 @@ impl Default for Environment {
             horizontal_size_class: None,
             vertical_size_class: None,
             safe_area: EdgeInsets::default(),
+            reserved_regions: crate::platform::ReservedRegions::NONE,
             title_bar: crate::geometry::Edges::default(),
             window_state: None,
             keyboard_height: Points(0.0),
@@ -154,12 +168,15 @@ impl Default for Environment {
             host: false,
             lifecycle: Lifecycle::Active,
             wake_count: 0,
+            network: Network::default(),
             screen_color: false,
+            clipboard_write_result: false,
             canvas_render: false,
             share: false,
+            app_settings: false,
             auth_session: false,
+            scheme_links: true,
             file_requests: false,
-            speech: false,
             notifications: false,
             audio: false,
             tab_bar: true,

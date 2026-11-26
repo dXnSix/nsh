@@ -1,6 +1,6 @@
 ---
 title: Dev Server and Debugging
-description: Run Rust and TSX apps with nsh run and nsh dev, connect simulators, emulators and devices, and use rebuilds, hot module replacement, logs, the error overlay and source-mapped stacks.
+description: Run TSX and Rust apps with nsh run and nsh dev, connect simulators, emulators and devices, and use rebuilds, hot module replacement, logs, the error overlay and source-mapped stacks.
 order: 60
 group: tools
 ---
@@ -11,7 +11,7 @@ During development, NSH builds your app on every save. A Rust app (`nsh.json` na
 own runner, which `nsh run` starts; a change to its crate builds it again and restarts the app. A TSX app is pushed to
 every connected host, which updates in place. Two commands do this:
 
-- `nsh run` builds the app **and** launches it: a Mac Catalyst or AppKit window, a GTK window on Linux, a Win32 window
+- `nsh run` builds the app **and** launches it: an AppKit window on macOS, a GTK window on Linux, a Win32 window
   on Windows, an iOS simulator, an Android device or emulator, or a browser page. For TSX it also starts the dev
   server, which the development host connects to.
 - `nsh dev --server-only` starts the dev server for TSX, for hosts you start yourself: your own app with the
@@ -37,18 +37,17 @@ nsh dev App.tsx --server-only       # server only
 
 | Flag | Description |
 |---|---|
-| `--target <catalyst \| ios \| android \| macos \| linux \| windows \| gpui \| web>` | Where to run. Default `macos` on macOS (AppKit), `linux` on Linux, `windows` on Windows. A Rust app runs on all of them but `gpui`, which embeds its root in a GPUI app ([GPUI](./gpui.md)). |
-| `--device <name or UDID>` | The iOS simulator to use. Default: a booted one, else the newest iPhone (booted for you). |
+| `--target <macos \| linux \| windows \| ios \| android \| gpui \| web \| catalyst>` | Where to run. Default `macos` on macOS (AppKit), `linux` on Linux, `windows` on Windows. A Rust app runs on all of them but `gpui`, which embeds its root in a GPUI app ([GPUI](./gpui.md)). |
+| `--device <name, UDID or serial>` | The iOS simulator to use, by name or UDID. Default: a booted one, else the newest iPhone (booted for you). With `--target android`: the device or emulator, by its serial (as `adb devices` lists it). Default: the one `ANDROID_SERIAL` names, else the first one. |
 | `--port <port>` | Dev server port, replacing the previous NSH session on it. Default: the port this app had last, replacing its previous session, else the first free one from 8790. |
 | `--release` | Serve release builds of TSX (minified, no debug info, no hot updates). |
 | `--trace` | Log the time of every commit on the host (TSX apps). |
 
 What each target does:
 
-- **`catalyst`** (macOS) runs the development host as a Mac app. Stopping `nsh run` (Ctrl-C, or `kill`) closes it, and
-  closing the window ends `nsh run`.
-- **`macos`** (macOS) runs the AppKit development host, a desktop app in a 1200×800 window, the same way; Cmd+R
-  reloads the latest build. Requires macOS 14 or later ([macOS](./macos.md)).
+- **`macos`** (macOS) runs the AppKit development host, a desktop app in a 1200×800 window. Stopping `nsh run`
+  (Ctrl-C, or `kill`) closes it, and closing the window ends `nsh run`; Cmd+R reloads the latest build. Requires
+  macOS 14 or later ([macOS](./macos.md)).
 - **`linux`** (Linux) runs the GTK development host in a 390×844 window, the same way: stopping `nsh run` closes
   it, closing the window ends `nsh run`. Requires GTK 4.14 or later ([Linux](./linux.md)).
 - **`windows`** (Windows) runs the Win32 development host in a 1200×800 window, the same way; the host never outlives
@@ -61,8 +60,10 @@ What each target does:
   emulator or a USB device. Requires the Android SDK (`ANDROID_HOME`). When `nsh run` ends (Ctrl-C too), it stops the
   host and removes that port forwarding, so the host does not join the next session.
 
-When `nsh run` ends, however it ends, it stops the host it started: it quits the Catalyst app or closes the macOS, Linux or Windows host, terminates the
-development host in the simulator, or force-stops it on the device.
+**Development tool:** `catalyst` (macOS) runs the iOS development host as a Mac Catalyst app, only when you need it: to check behavior specific to Catalyst, or an app that embeds NSH in a Mac Catalyst app. It starts and stops with `nsh run` as `macos` does.
+
+When `nsh run` ends, however it ends, it stops the host it started: it closes the macOS, Linux or Windows host, terminates the
+development host in the simulator, force-stops it on the device, or quits the Catalyst app.
 
 For a Rust app each target runs the app's own runner, built with its crate: the desktops a debug build in place, with
 its output in the terminal; iOS and Android a package of it, installed. For TSX the hosts are generic: they run any
@@ -84,11 +85,12 @@ nsh dev App.tsx --server-only
 | Flag | Description |
 |---|---|
 | `--port <port>` | Dev server port. As for `nsh run`; with `--server-only`, the default is 8790, replacing the previous NSH session on it. |
+| `--host <ipv4>` | IPv4 address to bind. Defaults to `0.0.0.0` for `--server-only` and `--target ios`, `android` or `web`, and `127.0.0.1` for local targets. With `--target android`, only `127.0.0.1` and `0.0.0.0` are supported (`adb reverse` forwards to this machine's `127.0.0.1`). |
 | `--release` | Serve release builds. |
 
-`nsh dev --server-only` listens on every address of this computer, so phones and other machines on the network can
-connect. `nsh run` and `nsh dev` with a host on this computer (a window, the terminal, Catalyst) listen on `127.0.0.1`;
-with `--target ios`, `android` or `web` they listen on every address, as `--server-only` does.
+By default, `nsh dev --server-only` listens on every address of this computer (`0.0.0.0`), so phones and other machines on the network can
+connect. `nsh run` and `nsh dev` with a host on this computer (a window, the terminal, Catalyst) default to `127.0.0.1`;
+with `--target ios`, `android` or `web` they default to every address, as `--server-only` does. Pass `--host <ipv4>` to override the bind address—for example, `nsh dev App.tsx --server-only --host 127.0.0.1` keeps a server-only session on loopback only.
 
 Connect hosts to the printed URL:
 
@@ -113,7 +115,7 @@ installs the app's host.
 Rust is compiled: a change to an app's crate, or to a crate it depends on by path, builds the app again, and `nsh run`
 restarts it with the new code. The app's state starts afresh; keep what must survive a restart in
 [storage](../modules/nsh.md#storage). A build error is printed in the terminal, and the next save that compiles runs
-again. In an app with Rust and TSX, TSX edits stay hot updates (below) and Rust edits restart the app.
+again. In an app with TSX and Rust, TSX edits stay hot updates (below) and Rust edits restart the app.
 
 ## Hot module replacement
 
@@ -234,7 +236,8 @@ DebugView and Visual Studio show) and Linux apps to their standard error.
 #### Log files and levels on the desktop
 
 A packaged macOS, Windows or Linux app also writes its log lines to a file in its data directory, `logs/app.log`,
-beside the platform's log:
+beside the platform's log. An app can choose another directory for the files with `nsh.json` `logDir`
+([Project structure](./project-structure.md)); the table is the default:
 
 | Platform | Log file |
 |---|---|
@@ -250,6 +253,12 @@ three files before it are kept (`app.1.log` to `app.3.log`). The app runs on as 
 report or offer to open its folder; it is `None` (`null`) where the lines go to the platform's log only (development
 hosts, embedding apps, mobile, the web).
 
+```tsx tabs
+import process from "process";
+
+const report = { logFile: process.logFile, version: "1.4.0" };
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -259,12 +268,6 @@ if let Some(file) = log_file() {
         let _ = reveal_path(file).await;
     });
 }
-```
-
-```tsx tabs
-import process from "process";
-
-const report = { logFile: process.logFile, version: "1.4.0" };
 ```
 
 By default a packaged app logs its warnings, errors and `js` lines (every line from info up under `nsh run`). The

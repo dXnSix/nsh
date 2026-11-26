@@ -6,7 +6,7 @@ use crate::{
     geometry::{Bounds, DevicePixels, Percentage, Point, Points, Size},
     js::host::HostProps,
     overlay::{Align, OverlayAnchor, Placement, TooltipContent},
-    props::{AccessibilityProp, EdgeInsets, LayoutAnimation, PointerEvents},
+    props::{AccessibilityProp, EdgeInsets, LayoutAnimation, PanEdge, PointerEvents},
     style::{Color, Style, StylePatch},
 };
 
@@ -81,6 +81,10 @@ pub enum Tag {
     /// TS: `ScreenTransition` of `nsh`), as a transition does for its
     /// children. It takes no space and has no children.
     ScreenTransition,
+    /// A view whose box a renderer of the app's own draws with the GPU,
+    /// under its children (`<gpuview>`, TS: `gpuView` of `nsh`;
+    /// [`crate::gpu`]).
+    GpuView,
 }
 
 impl Tag {
@@ -110,6 +114,7 @@ impl Tag {
             "shadertransition" => Tag::ShaderTransition,
             "screeneffect" => Tag::ScreenEffect,
             "screentransition" => Tag::ScreenTransition,
+            "gpuview" => Tag::GpuView,
             _ => return None,
         })
     }
@@ -233,9 +238,9 @@ events! {
     Menu = "onMenu": "A menu item was chosen: the application menu's or a context menu's (root only; desktops; payload: `id`), or a context menu closed (`closed`: true, after its item).",
     MouseEnter = "onMouseEnter": "The mouse came over the view or a view inside it (never on touches; payload: [`EventPayload::Mouse`]).",
     MouseLeave = "onMouseLeave": "The mouse left the view and the views inside it, or the window (payload: [`EventPayload::Mouse`], where it was last).",
-    FileDragEnter = "onFileDragEnter": "A local file drag entered an eligible desktop drop destination (payload: [`EventPayload::FileDrop`]).",
-    FileDragLeave = "onFileDragLeave": "A local file drag left its desktop drop destination.",
-    FileDrop = "onFileDrop": "Local files were dropped (payload: [`EventPayload::FileDrop`]).",
+    FileDragEnter = "onFileDragEnter": "A local file drag entered an eligible drop destination, on desktops, iOS and Android (payload: [`EventPayload::FileDrop`]).",
+    FileDragLeave = "onFileDragLeave": "A local file drag left its drop destination, on desktops, iOS and Android.",
+    FileDrop = "onFileDrop": "Local files were dropped (payload: [`EventPayload::FileDropAt`] with where they were let go, or [`EventPayload::FileDrop`] where the backend gives no point).",
     MouseMove = "onMouseMove": "The mouse moved over the view or a view inside it, with or without a button down, or a modifier key changed while it rests there with none down (payload: [`EventPayload::Mouse`]; at most one per frame).",
     ContextMenu = "onContextMenu": "The secondary button was pressed over the view (payload: [`EventPayload::ContextMenu`]): the nearest listener around the view under the pointer hears it, unless a text input or selectable text is nearer.",
     CompositionChange = "onCompositionChange": "An input method's composition in an input started, changed or ended (payload: `composing`, `text`: the text being composed, empty once it ends; after the `onChangeText` of the committed text).",
@@ -248,9 +253,9 @@ events! {
     OpenUrl = "onOpenUrl": "A [`Command::OpenUrl`] request finished (root only; payload: `id`, `opened`: whether the platform opened the URL).",
     CaretMove = "onCaretMove": "An input's caret moved: with its selection, or as its text scrolled or wrapped again (payload: `bounds`, the caret in the input; the core adds `pageBounds`, in the root view).",
     Paste = "onPaste": "The user pasted into an input (payload: [`EventPayload::Paste`]: the text, files with their bytes such as a screenshot, local files' URLs), before the `onChangeText` of the text it inserts.",
+    ClipboardWrite = "onClipboardWrite": "A [`Command::SetClipboard`] or [`Command::SetClipboardItem`] finished, in the order of the writes (root only, platforms with [`crate::platform::Environment::clipboard_write_result`]; payload: `written`: whether the system clipboard took it).",
     ScreenColor = "onScreenColor": "A [`Command::PickScreenColor`] request finished (root only; payload: `id`, `color`: the color picked, packed `0xRRGGBBAA`, absent when cancelled).",
     FileRequest = "onFileRequest": "A [`Command::FileRequest`] finished (root only; payload: [`EventPayload::FileRequest`]).",
-    Speech = "onSpeech": "A speech recognition session reported (root only; payload: [`EventPayload::Speech`]).",
     Download = "onDownload": "A web view's download started, finished, failed or was cancelled (payload: `state`, `id`, `url`, `filename`, `path`, `source`; `bytes` once finished, `code` and `message` when it failed, `reason` when it was cancelled).",
     Notification = "onNotification": "The platform answered a [`Command::Notification`], or the user pressed a notification (root only; payload: the fields of [`crate::notifications::NotificationEvent`]).",
     UrlScheme = "onUrlScheme": "The system handed the app a URL that opens it (root only; payload: `url`, [`crate::url_scheme::URL`]); the core keeps those of the schemes the app claims ([`crate::url_scheme`]).",
@@ -274,6 +279,11 @@ events! {
     Share = "onShare": "A [`Command::Share`] request finished (root only; payload: `id`, then `action` (`\"shared\"` with the `target` where the platform names it, or `\"dismissed\"`), or `error` with its `code`; [`crate::share`]).",
     DetentChange = "onDetentChange": "The user moved an iOS sheet dialog to another of its `detents` (dragging it, its grabber, a scroll at its edge, a screen reader; payload: [`EventPayload::Json`], `{ detent }`, [`SheetDetent::change_payload`]).",
     AuthSession = "onAuthSession" as "": "A [`Command::AuthSession`] request finished (root only; payload: `id`, then the callback `url`, `action` `\"cancelled\"`, or `error` with its `code`; [`crate::auth_session`]; never reaches a listener).",
+    FocusIn = "onFocusIn": "The keyboard focus came into the view: onto it or a view inside it, from outside (it entered `focus-within`; raised by the core). Moving between views inside it is no new coming in.",
+    FocusOut = "onFocusOut": "The keyboard focus left the view: from it or a view inside it to one outside, or to none (it left `focus-within`; raised by the core).",
+    TextDrop = "onTextDrop" as "": "Text dragged from another app or view was dropped on the view (payload: [`EventPayload::TextDrop`]): a Rust component's, such as `RichEditor`'s, which inserts it where it was let go (iOS).",
+    OpenAppSettings = "onOpenAppSettings" as "": "A [`Command::OpenAppSettings`] request finished (root only; payload: `id`, `opened`: whether the system opened the app's page in its settings; [`crate::mobile::open_app_settings`]; never reaches a listener).",
+    BackProgress = "onBackProgress" as "": "A step of the system's back gesture that no modal takes, while the app listens (root only; Android 14 and later; payload: [`BackProgressEvent::payload`], `phase`, `progress` and `edge`).",
 }
 
 /// What an input holds, for the system's autofill and suggestions
@@ -423,9 +433,66 @@ pub struct TouchPoint {
     /// The pen's tilt toward the bottom of the surface, in degrees from
     /// -90 to 90 (the DOM's `tiltY`).
     pub tilt_y: f32,
+    /// The samples the platform merged into this event, oldest first, as
+    /// the DOM's `getCoalescedEvents()` without the last one: a pen moves
+    /// at 120-240 Hz, and when a frame is slow the system hands over only
+    /// its latest position (this point), with the ones before it here.
+    /// Empty when nothing was merged, and for points that did not move.
+    pub coalesced: Vec<CoalescedSample>,
+    /// The pen is used with its eraser end (or the platform's eraser
+    /// mode), as the DOM's eraser button (`buttons & 32`); `pointer_type`
+    /// stays [`PointerType::Pen`].
+    pub eraser: bool,
+    /// The pen's barrel (side) button is held, as the DOM's `buttons & 2`
+    /// for a pen.
+    pub barrel: bool,
+}
+
+/// A pointer sample merged into a [`TouchPoint`] (its
+/// [`coalesced`](TouchPoint::coalesced) list), in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoalescedSample {
+    /// Position in the surface.
+    pub page: Point<Points>,
+    /// Position in the point's `target`.
+    pub location: Point<Points>,
+    /// How hard the pointer pressed, as [`TouchPoint::pressure`].
+    pub pressure: f32,
+    /// The pen's tilt, as [`TouchPoint::tilt_x`].
+    pub tilt_x: f32,
+    /// The pen's tilt, as [`TouchPoint::tilt_y`].
+    pub tilt_y: f32,
+    /// When the device took the sample, in the clock of
+    /// [`TouchEvent::timestamp`].
+    pub timestamp: f64,
 }
 
 impl TouchPoint {
+    /// Appends a merged sample at `page` (surface points) to
+    /// [`coalesced`](Self::coalesced), its `location` placed as this
+    /// point's (the target's offset from the surface is the same).
+    pub fn push_coalesced(
+        &mut self,
+        page: Point<Points>,
+        pressure: f32,
+        tilt_x: f32,
+        tilt_y: f32,
+        timestamp: f64,
+    ) {
+        let location = Point {
+            x: Points(page.x.0 + self.location.x.0 - self.page.x.0),
+            y: Points(page.y.0 + self.location.y.0 - self.page.y.0),
+        };
+        self.coalesced.push(CoalescedSample {
+            page,
+            location,
+            pressure,
+            tilt_x,
+            tilt_y,
+            timestamp,
+        });
+    }
+
     /// The pressure of a pointer without pressure sensing in a `phase`
     /// event, `changed` telling whether the point is the one the event is
     /// about: 0.5 while down, 0 once lifted (the DOM's default).
@@ -610,6 +677,119 @@ impl PinchPhase {
             "start" => PinchPhase::Start,
             "move" => PinchPhase::Move,
             "end" => PinchPhase::End,
+            _ => return None,
+        })
+    }
+}
+
+/// A step of the system's back gesture that the app follows
+/// ([`crate::element::on_back_progress`]; TS: `BackHandler.on("progress",
+/// l)`), as AndroidX's `BackEventCompat`: Android 14 and later (predictive
+/// back) report it while the finger moves ([`EventKind::BackProgress`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[non_exhaustive]
+pub struct BackProgressEvent {
+    /// Where it is in the gesture.
+    pub phase: BackPhase,
+    /// How far the gesture went, from 0 to 1 (all the way), as the system
+    /// reports it.
+    pub progress: Percentage,
+    /// The screen edge the swipe started at ([`PanEdge::Left`] or
+    /// [`PanEdge::Right`]); none when the system names no edge.
+    pub edge: Option<PanEdge>,
+}
+
+impl BackProgressEvent {
+    /// A step in `phase` at `progress` (0 to 1) of a swipe from `edge`.
+    pub fn new(phase: BackPhase, progress: Percentage, edge: Option<PanEdge>) -> Self {
+        Self {
+            phase,
+            progress,
+            edge,
+        }
+    }
+
+    /// The payload of [`EventKind::BackProgress`] (`{ phase, progress,
+    /// edge? }`, the object JS listeners get).
+    pub fn payload(&self) -> EventPayload {
+        let mut fields = vec![
+            ("phase", PayloadValue::Str(self.phase.name().into())),
+            ("progress", PayloadValue::Number(f64::from(self.progress.0))),
+        ];
+        let edge = match self.edge {
+            Some(PanEdge::Left) => Some("left"),
+            Some(PanEdge::Right) => Some("right"),
+            _ => None,
+        };
+        if let Some(edge) = edge {
+            fields.push(("edge", PayloadValue::Str(edge.into())));
+        }
+        EventPayload::Map(fields)
+    }
+
+    /// The step a [`Self::payload`] carries.
+    pub(crate) fn from_payload(payload: &EventPayload) -> Option<Self> {
+        let EventPayload::Map(fields) = payload else {
+            return None;
+        };
+        let mut event = Self::default();
+        let mut phase = None;
+        for (key, value) in fields {
+            match (*key, value) {
+                ("phase", PayloadValue::Str(name)) => phase = BackPhase::from_name(name),
+                ("progress", PayloadValue::Number(n)) => event.progress = Percentage(*n as f32),
+                ("edge", PayloadValue::Str(edge)) => {
+                    event.edge = match edge.as_str() {
+                        "left" => Some(PanEdge::Left),
+                        "right" => Some(PanEdge::Right),
+                        _ => None,
+                    }
+                }
+                _ => {}
+            }
+        }
+        event.phase = phase?;
+        Some(event)
+    }
+}
+
+/// Where the back gesture is ([`BackProgressEvent::phase`]; TS: `"start"`,
+/// `"move"`, `"end"`, `"cancel"`), as AndroidX's `OnBackPressedCallback`'s
+/// started, progressed, pressed and cancelled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BackPhase {
+    /// The finger started the gesture.
+    Start,
+    /// The finger moved.
+    #[default]
+    Move,
+    /// The finger let go and the gesture goes back: the back press
+    /// follows.
+    End,
+    /// The finger let go without going back, or the system cancelled the
+    /// gesture.
+    Cancel,
+}
+
+impl BackPhase {
+    /// Its TS name.
+    pub fn name(self) -> &'static str {
+        match self {
+            BackPhase::Start => "start",
+            BackPhase::Move => "move",
+            BackPhase::End => "end",
+            BackPhase::Cancel => "cancel",
+        }
+    }
+
+    /// The phase named `name` (its TS name).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "start" => BackPhase::Start,
+            "move" => BackPhase::Move,
+            "end" => BackPhase::End,
+            "cancel" => BackPhase::Cancel,
             _ => return None,
         })
     }
@@ -860,9 +1040,36 @@ pub struct PasteEvent {
     /// Files with their bytes: images (a screenshot, an image copied from a
     /// page or an app), in the platform's order.
     pub files: Vec<PastedFile>,
+    /// Files larger than the input's `pasteMaxSize`, whose bytes were not
+    /// read: each with its name, type and size ([`PastedFile::len`]) only,
+    /// in the platform's order.
+    pub too_large: Vec<PastedFile>,
     /// Absolute `file:` URLs of local files copied in a file manager, in the
     /// platform's order (as [`EventPayload::FileDrop`]'s).
     pub uris: Vec<String>,
+}
+
+/// Text dropped on a view ([`EventKind::TextDrop`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct TextDrop {
+    /// The plain text, empty when the drag held none.
+    pub text: String,
+    /// The same content as HTML, empty when the drag held none.
+    pub html: String,
+    /// The drop point in the window's coordinates.
+    pub page_position: Point<Points>,
+}
+
+impl TextDrop {
+    /// A drop of `text` (and `html`) at `page_position`.
+    pub fn new(text: String, html: String, page_position: Point<Points>) -> Self {
+        TextDrop {
+            text,
+            html,
+            page_position,
+        }
+    }
 }
 
 impl EventPayload {
@@ -902,11 +1109,29 @@ impl PasteEvent {
         self.text.is_empty()
             && self.html.is_empty()
             && self.files.is_empty()
+            && self.too_large.is_empty()
             && self.uris.is_empty()
+    }
+
+    /// Moves the files larger than `max_size` bytes to
+    /// [`Self::too_large`], without their bytes.
+    pub(crate) fn limit_files(&mut self, max_size: u64) {
+        if self.files.iter().all(|file| file.len <= max_size) {
+            return;
+        }
+        let (read, over): (Vec<_>, Vec<_>) = std::mem::take(&mut self.files)
+            .into_iter()
+            .partition(|file| file.len <= max_size);
+        self.files = read;
+        self.too_large.extend(
+            over.into_iter()
+                .map(|file| PastedFile::too_large(file.name, file.mime, file.len)),
+        );
     }
 }
 
 /// A file pasted with its bytes ([`PasteEvent::files`]): JS gets a `File`.
+/// One too large to read ([`PasteEvent::too_large`]) has no bytes.
 #[derive(Debug, Clone, Default, PartialEq)]
 #[non_exhaustive]
 pub struct PastedFile {
@@ -916,6 +1141,9 @@ pub struct PastedFile {
     pub mime: String,
     /// Its bytes.
     pub data: Vec<u8>,
+    /// Its size in bytes: its bytes' length, or for one not read, the size
+    /// its platform gave.
+    pub len: u64,
 }
 
 impl PastedFile {
@@ -924,7 +1152,19 @@ impl PastedFile {
         PastedFile {
             name: name.into(),
             mime: mime.into(),
+            len: data.len() as u64,
             data,
+        }
+    }
+
+    /// The file `name` of type `mime` and `len` bytes, too large to read
+    /// ([`PasteEvent::too_large`]): no bytes.
+    pub fn too_large(name: impl Into<String>, mime: impl Into<String>, len: u64) -> PastedFile {
+        PastedFile {
+            name: name.into(),
+            mime: mime.into(),
+            data: Vec::new(),
+            len,
         }
     }
 
@@ -1046,6 +1286,34 @@ pub enum PayloadValue {
     Bounds(Bounds<Points>),
 }
 
+/// Files dragged in with their contents ([`EventPayload::FileContents`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct FileContents {
+    /// The regular files, in the drag's order: read ones with their bytes,
+    /// ones over the limit `tooLarge`; on drag entry, none are read yet.
+    pub files: Vec<crate::picker::PickedFile>,
+    /// The MIME type of each offered item, as the platform reports them.
+    pub mime_types: Vec<String>,
+    /// Where the files were let go, in the window's coordinates.
+    pub page_position: Option<Point<Points>>,
+}
+
+impl FileContents {
+    /// Contents of `files`, typed `mime_types`, let go at `page_position`.
+    pub fn new(
+        files: Vec<crate::picker::PickedFile>,
+        mime_types: Vec<String>,
+        page_position: Option<Point<Points>>,
+    ) -> Self {
+        Self {
+            files,
+            mime_types,
+            page_position,
+        }
+    }
+}
+
 /// Data delivered with an event.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventPayload {
@@ -1059,6 +1327,8 @@ pub enum EventPayload {
     Layout(Bounds<Points>),
     /// A drag: translation since the start and velocity (points / second).
     Pan {
+        /// Where the finger went down, in the surface.
+        origin: Point<Points>,
         /// The translation.
         translation: Point<Points>,
         /// Horizontal velocity.
@@ -1072,6 +1342,8 @@ pub enum EventPayload {
     },
     /// A system-cancelled drag, with the same last values as `Pan`.
     PanCancelled {
+        /// Where the finger went down, in the surface.
+        origin: Point<Points>,
         /// The translation.
         translation: Point<Points>,
         /// Horizontal velocity.
@@ -1129,8 +1401,16 @@ pub enum EventPayload {
         /// The drop point in the window's coordinates.
         page_position: Point<Points>,
     },
+    /// Files a drag offers or drops where the platform hands over their
+    /// contents rather than local paths (the Web): `files` in the drag's
+    /// order, unread on drag entry (types only), and where they were let
+    /// go. Boxed, as [`Self::Paste`], to keep every payload small.
+    FileContents(Box<FileContents>),
     /// What the user pasted into an input.
     Paste(Box<PasteEvent>),
+    /// Text dropped on a view ([`EventKind::TextDrop`]); boxed, as
+    /// [`Self::Paste`], to keep every payload small.
+    TextDrop(Box<TextDrop>),
     /// The lines of a text block.
     TextLayout(Vec<crate::text::TextLine>),
     /// The files the user picked ([`EventKind::Pick`]), with their bytes.
@@ -1139,14 +1419,6 @@ pub enum EventPayload {
         id: u32,
         /// The files, in the order picked; none when cancelled.
         files: Vec<crate::picker::PickedFile>,
-    },
-    /// What a speech recognition session reported ([`EventKind::Speech`],
-    /// [`crate::speech`]).
-    Speech {
-        /// The session ([`crate::speech::SpeechCommand::Start`]).
-        id: u32,
-        /// What it reported.
-        event: crate::speech::SpeechEvent,
     },
     /// What a sound or a player reported ([`EventKind::Audio`],
     /// [`crate::audio`]).
@@ -1202,12 +1474,27 @@ impl EventPayload {
 
 impl TouchEvent {
     /// Folds a later move into this pending one: the later positions,
-    /// changed if either moved them, and either's activated pan.
+    /// changed if either moved them, and either's activated pan. A point
+    /// this one moved keeps its samples: they go before the later ones in
+    /// [`TouchPoint::coalesced`], with this event's own position.
     pub fn merge_move(&mut self, later: TouchEvent) {
         let mut later = later;
         for p in &mut later.points {
-            if let Some(old) = self.points.iter().find(|o| o.id == p.id) {
+            if let Some(old) = self.points.iter_mut().find(|o| o.id == p.id) {
                 p.changed |= old.changed;
+                if old.changed {
+                    let mut samples = std::mem::take(&mut old.coalesced);
+                    samples.push(CoalescedSample {
+                        page: old.page,
+                        location: old.location,
+                        pressure: old.pressure,
+                        tilt_x: old.tilt_x,
+                        tilt_y: old.tilt_y,
+                        timestamp: self.timestamp,
+                    });
+                    samples.append(&mut p.coalesced);
+                    p.coalesced = samples;
+                }
             }
         }
         later.activated = later.activated.or(self.activated);
@@ -1739,6 +2026,10 @@ pub enum ScrollbarSetting {
     /// The app's built-in bar drawn as this theme says (an object): the
     /// `ScrollbarTheme` of `nsh/base`, which reads it.
     Themed(Arc<crate::JsonValue>),
+    /// The app's built-in bar drawn as this theme says, as Rust gave it: a
+    /// value of the theme type of the UI set that makes bars, with its
+    /// maker (`nsh_base::ScrollbarTheme` converts into this).
+    ThemeValue(crate::element::ScrollbarThemeValue),
 }
 
 impl From<bool> for ScrollbarSetting {
@@ -1746,6 +2037,8 @@ impl From<bool> for ScrollbarSetting {
         if shows { Self::Shown } else { Self::Hidden }
     }
 }
+
+crate::static_reactive!(ScrollbarSetting: ScrollbarSetting, bool);
 
 /// How an `<image>` is shown, besides its source.
 #[derive(Debug, Clone, PartialEq, HostProps)]
@@ -1798,6 +2091,23 @@ pub enum ScrollProp {
     /// UIKit does it: elsewhere ignored).
     #[prop(js = "scrollsToTop", default = true, on = SCROLLING)]
     ScrollsToTop(bool),
+    /// `smoothWheel`: a mouse wheel's notches glide to where they point,
+    /// eased in and out over 100–200 ms as Chromium's do, a run of notches
+    /// one motion (default false: the platform's own, which lands at once
+    /// on macOS and Linux and glides briefly on Windows). The desktops
+    /// (macOS, Windows, Linux, GPUI); iOS and Android scroll with the
+    /// system's views, the web with the browser's (both ignore it), as
+    /// they do when the system reduces motion.
+    #[prop(js = "smoothWheel", on = SCROLLING)]
+    SmoothWheel(bool),
+    /// `wheelLineHeight`: how far a mouse wheel's line scrolls, in points (0,
+    /// the default: the platform's own, 10 on macOS, 16 on Windows, a
+    /// notch's length after the view's on Linux). A line is the platform's:
+    /// a notch on Linux, a third of one on Windows (the system's default),
+    /// about one per notch on macOS, which accelerates quick runs. The
+    /// desktops; ignored where `smoothWheel` is.
+    #[prop(js = "wheelLineHeight", min = 0, on = SCROLLING)]
+    WheelLineHeight(Points),
     /// `contentInset`: room around the content.
     #[prop(js = "contentInset", on = SCROLLING)]
     ContentInset(EdgeInsets),
@@ -1837,7 +2147,7 @@ pub enum ScrollProp {
     #[prop(js = "bouncesZoom", default = true, on = SCROLL)]
     BouncesZoom(bool),
     /// `zoomable`: the user can pinch to zoom (default true).
-    #[prop(js = "zoomable", default = true, on = SCROLL)]
+    #[prop(js = "zoomable", default = true, on = SCROLL, shared)]
     Pinch(bool),
     /// `centerContent`: content smaller than the viewport (zoomed out) is centered.
     #[prop(js = "centerContent", on = SCROLL)]
@@ -1863,8 +2173,8 @@ pub enum CellSlot {
     Empty,
 }
 
-/// A list's `contentStyle` (or `contentClass`): padding around the content and gaps
-/// between rows and columns.
+/// A list's `contentStyle` (or `contentClass`): padding around the content, gaps
+/// between rows and columns, and cell alignment on the cross axis.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ListContentStyle {
     /// Padding around the content.
@@ -1873,6 +2183,9 @@ pub struct ListContentStyle {
     pub row_gap: Points,
     /// Gap between columns (`numColumns`) of vertical lists.
     pub column_gap: Points,
+    /// Cell alignment on the cross axis: stretch (default), flex-start, center
+    /// or flex-end.
+    pub align_items: Option<taffy::AlignItems>,
 }
 
 /// Where a list rests (`alignment`), as GPUI's `ListAlignment`.
@@ -2510,6 +2823,9 @@ pub enum Command {
     Focus,
     /// Unfocus an input; on the root view, unfocus whatever is focused.
     Blur,
+    /// Clear the selection of a selectable view (`ViewProps::selectable_view`)
+    /// the view is, is inside or holds.
+    ClearSelection,
     /// Scroll a scroll view to an offset.
     ScrollTo {
         /// Horizontal offset.
@@ -2613,6 +2929,12 @@ pub enum Command {
     /// sheets) take their colors from, by the tokens' names (`popover`,
     /// `accent`, `border`, ...).
     Tokens(std::sync::Arc<crate::element::Tokens>),
+    /// The language the app's text shows in ([`crate::i18n`]: its selected
+    /// language, `setLocale`'s or the embedding app's included), on the
+    /// root of an iOS or Android surface, sent when it changes: the words
+    /// the platform speaks for states it has no system words for
+    /// (checked, expanded, invalid...) follow it.
+    TextLocale(crate::platform::Locale),
     /// Change what functions set for the status bar (on the root): the
     /// core merges it under the settings components render and sends
     /// [`Command::StatusBar`] when the result changes.
@@ -2762,6 +3084,17 @@ pub enum Command {
         /// The URL ([`crate::open_url::check_url`] passed it).
         url: String,
     },
+    /// Open the app's own page in the system's settings (on the root;
+    /// `nsh/mobile`'s `AppSettings.open`,
+    /// [`crate::mobile::open_app_settings`]): iOS's
+    /// `UIApplication.openSettingsURLString`, Android's application
+    /// details. Report whether the system opened it as
+    /// [`EventKind::OpenAppSettings`] `id`. Sent only on platforms whose
+    /// [`crate::platform::Environment::app_settings`] is set.
+    OpenAppSettings {
+        /// The request.
+        id: u32,
+    },
     /// Show the system's share sheet for `sheet` (on the root;
     /// `Share.show`, [`crate::share`]) and report how it ended as
     /// [`EventKind::Share`] `id` ([`crate::share::ShareOutcome::payload`],
@@ -2847,11 +3180,6 @@ pub enum Command {
         /// What to do.
         request: Box<crate::file_dialog::FileRequest>,
     },
-    /// Start, stop or abort a speech recognition session (on the root;
-    /// `Speech` of `nsh`, [`crate::speech`]) and report it as
-    /// [`EventKind::Speech`] ([`EventPayload::Speech`]). Sent only on
-    /// platforms whose [`crate::platform::Environment::speech`] is set.
-    Speech(crate::speech::SpeechCommand),
     /// Load, play and free sounds, open and drive players (on the root;
     /// `Sound` and `AudioPlayer` of `nsh`, [`crate::audio`]) and report
     /// what happens as [`EventKind::Audio`] ([`EventPayload::Audio`]). Sent
@@ -3270,6 +3598,9 @@ pub enum Prop {
     ShaderSource(Option<Arc<str>>),
     /// A compiled shader, as Rust sets it (TS sets `source`).
     Shader(Option<crate::shader::Shader>),
+    /// A GPU view's renderer, as Rust sets it (`gpu_view().renderer(…)`;
+    /// TS names a registered one, [`Prop::Component`]); `None`: none.
+    GpuRenderer(Option<crate::gpu::GpuSource>),
     /// The element whose frame the view's follows along its parent's main
     /// axis, as Rust sets it (`View::follow`, `core/follow.rs`); `None`
     /// follows nothing.
@@ -3358,8 +3689,12 @@ pub enum Prop {
     /// stays at the end as the content grows or the viewport shrinks (a reply
     /// streaming into its last item); scrolled further up, it keeps the visible
     /// content where it is. Items inserted above the visible ones never move them.
-    #[prop(js = "maintainVisibleContentPosition", with = crate::js::host_values::visible_content, reset = Prop::FollowEnd(None), ts = "{ autoscrollToBottomThreshold?: number }", on = LIST)]
-    FollowEnd(Option<Points>),
+    /// With `animated`, an end that moves away by a large step at once (a card or
+    /// chart appearing in the last item) is followed by an animated scroll whose
+    /// target keeps up with the end; small steps (text streaming in) follow at
+    /// once as without it.
+    #[prop(js = "maintainVisibleContentPosition", with = crate::js::host_values::visible_content, reset = Prop::FollowEnd(None, false), ts = "{ autoscrollToBottomThreshold?: number; animated?: boolean }", on = LIST)]
+    FollowEnd(Option<Points>, bool),
     /// `alignment`: where the list rests; `bottom` for a chat in reading order
     /// (an inverted list ignores it).
     #[prop(js = "alignment", on = LIST)]
@@ -3475,6 +3810,13 @@ pub enum Prop {
     /// either way. Decided natively when the user pastes.
     #[prop(js = "pasteBehavior", on = INPUT)]
     PasteBehavior(PasteBehavior),
+    /// `pasteMaxSize`: the largest pasted file read, in bytes; a larger
+    /// one reaches `onPaste` in `tooLarge`, its name, type and size only,
+    /// so the app can tell the user. Decided natively when the user
+    /// pastes, before the file is read where the platform says its size.
+    /// Default: every file is read.
+    #[prop(js = "pasteMaxSize", on = INPUT)]
+    PasteMaxSize(Option<u64>),
     /// `autoFocus`: focused when it appears.
     #[prop(js = "autoFocus", on = INPUT)]
     AutoFocus(bool),
@@ -3523,9 +3865,12 @@ pub enum Prop {
     /// `hitSlop`: extends the touch area beyond the bounds.
     #[prop(js = "hitSlop", with = crate::js::host_values::hit_slop, reset = Prop::HitSlop(EdgeInsets::default()), ts = "number | Partial<Edges>")]
     HitSlop(EdgeInsets),
-    /// Where a link goes (`nsh/base`'s `Link` sets its `href`), carried
-    /// to the platform as data: a terminal draws the text inside the view
-    /// as a hyperlink to it. Set by the link component, never by JS.
+    /// Where a link goes (`nsh/base`'s `Link` sets its `href`, `TextView`
+    /// its links' URL on their span), carried to the platform as data: a
+    /// terminal draws the text inside the view as a hyperlink to it, and a
+    /// span's is recorded in its block's text
+    /// (`AttributedText::link_hrefs`).
+    /// Set by the link components, never by JS.
     Href(Option<Arc<str>>),
     /// `panActivation`: the view's touch responder waits for a pan that the
     /// platform activates past an offset on one axis (and fails past one on
@@ -3675,6 +4020,20 @@ pub enum Prop {
     /// `testID`: an identifier for UI tests.
     #[prop(js = "testID")]
     TestId(Option<Arc<str>>),
+    /// Internal: the view already stands clear of the software keyboard
+    /// (a bottom sheet the keyboard lifts), so `env(keyboard-inset-height)`
+    /// reads 0 in it and in its subtree: padding by it there would lift
+    /// the content a second time.
+    #[doc(hidden)]
+    #[prop(reset = Prop::ClearsKeyboard(false))]
+    ClearsKeyboard(bool),
+    /// `copyText`: what a copy of the text around the view gives in its
+    /// place, when the view (or image) is inside a text (an inline
+    /// formula's source, an emoji image's character): selecting across it
+    /// and copying puts this there. Unset, the view adds nothing to the
+    /// copy. A view outside a text and a nested text span ignore it.
+    #[prop(js = "copyText")]
+    CopyText(Option<Arc<str>>),
     /// `web={{ element }}`: the HTML element the web draws the view or text
     /// as (`"p"`, `"nav"`, `"article"`, ...), for what `role` cannot say;
     /// the other platforms keep the view as it is.
@@ -3741,6 +4100,11 @@ pub enum Prop {
     /// them ([`crate::selection`]). Set by components
     /// (`Element::continues_text`), never by JS.
     ContinuesText(bool),
+    /// The view's children take its own position among its siblings
+    /// (`first:`, `last:`, `odd:`, `even:`, `only:`), not theirs among
+    /// its children: a node that only wraps its content. Set by
+    /// components (`Element::__pass_position`), never by JS.
+    PassPosition(bool),
     /// `allowFontScaling`: follow the system text size (default true).
     #[prop(js = "allowFontScaling", default = true, on = TEXT | INPUT)]
     AllowFontScaling(bool),
@@ -3807,6 +4171,9 @@ pub enum NativeProp {
     /// `src` of a web view or video: the URL it loads.
     #[prop(js = "src", on = WEBVIEW | VIDEO, shared)]
     Src(Option<Arc<str>>),
+    /// `poster` (videos): an image shown until the video's first frame is ready.
+    #[prop(js = "poster", on = VIDEO)]
+    Poster(Option<Arc<str>>),
     /// `html` (web views): the page to show instead of loading `src`.
     #[prop(js = "html", on = WEBVIEW)]
     Html(Option<Arc<str>>),
@@ -3814,6 +4181,17 @@ pub enum NativeProp {
     /// resolve against.
     #[prop(js = "baseUrl", on = WEBVIEW)]
     BaseUrl(Option<Arc<str>>),
+    /// `allowOrigin` (web views): one more origin this web view may show and
+    /// navigate to besides `webview.hosts`, for an origin known only while
+    /// the app runs: `scheme://host[:port]`, `http` or `https`, matched
+    /// exactly ([`crate::access::WebOrigin`]). It needs
+    /// `"runtimeOrigin": true` in `capabilities.webview`; another value or
+    /// no grant is refused with a message and the web view has none. Set
+    /// with `src` in the same render, it applies to that `src`; changed
+    /// later, it applies from the next navigation. Other web views and
+    /// the windows a page opens do not have it.
+    #[prop(js = "allowOrigin", on = WEBVIEW)]
+    AllowOrigin(Option<Arc<str>>),
     /// `injectedJavaScript` (web views): runs after each page loads.
     #[prop(js = "injectedJavaScript", on = WEBVIEW)]
     InjectedJavaScript(Option<Arc<str>>),
@@ -3846,6 +4224,15 @@ pub enum NativeProp {
     /// (with a warning): render a new element to change it.
     #[prop(js = "incognito", on = WEBVIEW)]
     Incognito(bool),
+    /// `zoomable` (web views): the person can pinch to zoom the page, also
+    /// past the scale limits of its viewport (Android's built-in zoom with
+    /// no on-screen buttons, WebKit ignoring the viewport's scale limits on
+    /// iOS, magnification on macOS). False keeps each platform's own
+    /// behavior: Android and macOS do not zoom, iOS zooms as far as the
+    /// page's viewport allows, WebView2 (Windows) zooms by default. Read
+    /// when the web view is made, as `incognito`.
+    #[prop(js = "zoomable", on = WEBVIEW, shared)]
+    Zoomable(bool),
     /// The URL schemes a web view serves from the app (Rust's
     /// `WebView::url_scheme`). Read when the web view is made, as
     /// `incognito`.
@@ -4021,6 +4408,68 @@ pub enum Op {
 #[cfg(test)]
 mod tests {
     use super::EventKind;
+    use super::{TouchEvent, TouchPhase, TouchPoint};
+    use crate::geometry::{Point, Points};
+
+    fn pen_move(x: f32, pressure: f32, timestamp: f64) -> TouchEvent {
+        let page = Point {
+            x: Points(x),
+            y: Points(10.0),
+        };
+        let mut point = TouchPoint {
+            id: 1,
+            target: 2,
+            path: Vec::new(),
+            page,
+            location: Point {
+                x: Points(x - 5.0),
+                y: Points(0.0),
+            },
+            changed: true,
+            pointer_type: super::PointerType::Pen,
+            pressure,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            coalesced: Vec::new(),
+            eraser: false,
+            barrel: false,
+        };
+        // A sample the platform merged in, half a step back.
+        point.push_coalesced(
+            Point {
+                x: Points(x - 0.5),
+                y: Points(10.0),
+            },
+            pressure,
+            0.0,
+            0.0,
+            timestamp - 4.0,
+        );
+        TouchEvent {
+            phase: TouchPhase::Move,
+            timestamp,
+            points: vec![point],
+            activated: None,
+            modifiers: Default::default(),
+        }
+    }
+
+    /// Moves merged in one engine turn keep the pen's samples in order:
+    /// the earlier event's (its own position last), then the later one's.
+    #[test]
+    fn merged_moves_keep_their_samples() {
+        let mut pending = pen_move(20.0, 0.25, 100.0);
+        pending.merge_move(pen_move(30.0, 0.75, 108.0));
+        let point = &pending.points[0];
+        assert_eq!(point.page.x.0, 30.0);
+        let xs: Vec<f32> = point.coalesced.iter().map(|c| c.page.x.0).collect();
+        assert_eq!(xs, [19.5, 20.0, 29.5]);
+        let times: Vec<f64> = point.coalesced.iter().map(|c| c.timestamp).collect();
+        assert_eq!(times, [96.0, 100.0, 104.0]);
+        // `location` keeps the target's offset from the surface.
+        assert_eq!(point.coalesced[0].location.x.0, 14.5);
+        assert_eq!(point.coalesced[1].pressure, 0.25);
+    }
 
     /// Android reads an event's kind by its index in [`EventKind::ALL`], so
     /// `Native.java`'s codes must follow this order: a kind inserted here

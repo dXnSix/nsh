@@ -40,10 +40,13 @@
 //! - **Scroll bars** ([`crate::scrollbar`]): a dim track `│` with a thumb
 //!   `┃` in the default color over the inner right (bottom) edge, only when
 //!   the content overflows.
-//! - **Unsupported** content is left out: images, video, web views,
-//!   native components without a terminal rendering and icon-sized
-//!   canvases take no Cells in the layout (the mounter logs each content
-//!   kind once). A control whose content is all left out (an icon button)
+//! - **Unsupported** content is left out: icon-sized videos, web views
+//!   and canvases take no Cells in the layout; larger videos, web views
+//!   and native components without a terminal rendering show a dim
+//!   `[Video: …]` / `[Web page: …]` / `[name: not available in the
+//!   terminal]` line in their box, and a picture on a terminal of 16
+//!   colors or fewer its `[label]` (the mounter logs each content kind
+//!   once). A control whose content is all left out (an icon button)
 //!   draws its accessibility label as its label.
 //! - **Clipping**: a text draws inside its own view's box; a view that
 //!   clips, scrolls or has a border keeps its children inside its content
@@ -380,6 +383,7 @@ impl Painter<'_> {
             .get(id)
             .and_then(|view| icon_label(self.tree, view))
             .map(str::to_owned);
+        let stand_in = self.tree.get(id).and_then(|view| stand_in(self.tree, view));
         // Only an overlay's box takes a title, so only there is it asked
         // whether its label is already its text.
         let label_shown = self.tree.get(id).is_some_and(|view| {
@@ -465,6 +469,16 @@ impl Painter<'_> {
                 .unwrap_or(view.style.opacity)
                 .clamp(0.0, 1.0);
         if view.concealed || view.style.hidden || opacity < INVISIBLE_OPACITY {
+            // A transparent picture still loads once it has Cells, as it
+            // does once it has a frame elsewhere: an avatar's waits,
+            // transparent, for its own `onLoad` before it shows.
+            if !view.concealed && view.image.is_some() {
+                let at = origin + view.frame.origin + translation(view);
+                let bounds = CellBounds::new(Bounds::new(at, view.frame.size), cells, area);
+                if let Some(image) = &mut view.image {
+                    crate::image::prepare(image, &mut self.tree.images, id, bounds, cells);
+                }
+            }
             return;
         }
         let at = origin + view.frame.origin + translation(view);
@@ -476,6 +490,16 @@ impl Painter<'_> {
             CellBounds::new(scaled(view, frame), cells, area)
         } else {
             CellBounds::new(frame, cells, area)
+        };
+        // `clipPath`: what shows of the view and its children, and where it
+        // is hit, are the Cells of its rectangle (Cells have no rounded
+        // corners).
+        let clip = match view.style.clip_path() {
+            Some(c) => {
+                let (r, _) = c.resolve(view.frame.size);
+                CellBounds::new(Bounds::new(at + r.origin, r.size), cells, area).clipped(clip)
+            }
+            None => clip,
         };
         let visible = bounds.clipped(clip);
         let cell_origin = bounds.origin(cells, area);
@@ -632,8 +656,16 @@ impl Painter<'_> {
             && bounds.bottom - bounds.top == 1
             && fill.0 & 255 == 255
             && holds_field;
+        // A select's trigger (a combobox holding no field) is a field the
+        // user picks from: the same raised band, so it reads as one to
+        // press, as a combobox's does.
+        let picker = view.props.accessibility.role == AccessibilityRole::Combobox
+            && view.input.is_none()
+            && !layer.field_group
+            && !page
+            && bounds.bottom - bounds.top == 1;
         if let Some(ramp) = parent.ramp
-            && (view.input.is_some() && !layer.field_group || group)
+            && (view.input.is_some() && !layer.field_group || group || picker)
             && filled == Surface::None
             && !edges.any()
             && !hidden
@@ -784,8 +816,9 @@ impl Painter<'_> {
         // overlay's own box is its frame instead, and a field keeps its
         // underline. A swatch is its color at any size.
         let small = bounds.bottom - bounds.top < i32::from(CONTAINER_ROWS);
+        let picture = view.props.accessibility.role == AccessibilityRole::Image;
         let bandless = parent.ramp.is_none()
-            && (small || swatch.is_some())
+            && (small || picture)
             && !page
             && !dot
             && !hidden
@@ -793,7 +826,14 @@ impl Painter<'_> {
             && !edges.any()
             && !(layer.overlay && !layer.boxed);
         let bandless_fill = bandless
-            .then(|| palette::bandless_fill(fill, parent))
+            .then(|| {
+                // A swatch's Cells keep their own colors, as with surfaces.
+                if picture {
+                    palette::bandless_swatch(fill, parent)
+                } else {
+                    palette::bandless_fill(fill, parent)
+                }
+            })
             .flatten();
         let bandless_reversed = bandless
             && small
@@ -816,6 +856,14 @@ impl Painter<'_> {
         let docked = layer.overlay
             && !layer.boxed
             && view.props.accessibility.role == AccessibilityRole::Summary;
+        // A floating box (a "back to bottom" pill, a composer over the
+        // timeline) that casts a shadow stands off what scrolls under it:
+        // its shadow is a Cell left blank each side, and the row below it
+        // when the shadow falls down, so no word behind it runs into its
+        // label or shows in the gap under it.
+        if !layer.overlay && !visible.is_empty() && floats_with_shadow(view) {
+            clear_shadow(self.buffer, visible, clip, view);
+        }
         if layer.overlay && surface && !visible.is_empty() {
             dialog::clear(self.buffer, visible);
             // A word behind it that the box cuts at its sides (or the
@@ -1171,6 +1219,19 @@ impl Painter<'_> {
             if let Some(component) = &mut view.component {
                 component.render(inner_visible, self.buffer);
             }
+            if let Some(text) = &stand_in
+                && !inner_visible.is_empty()
+            {
+                // What the terminal cannot show says so in its box, dim,
+                // instead of leaving a blank the reader takes for a gap.
+                let (x, y) = (inner_visible.x, inner_visible.y);
+                let room = inner_visible.right() - x;
+                let drawn = dialog::put(self.buffer, x, y, text, room, Color::Reset, Modifier::DIM);
+                if drawn > 0 && unicode_width::UnicodeWidthStr::width(text.as_str()) > room as usize
+                {
+                    self.buffer[(x + drawn - 1, y)].set_symbol("…");
+                }
+            }
             if control && let Some(label) = &icon {
                 let (x, y) = (inner_visible.x, inner_visible.y);
                 let room = (inner.right - inner.left).max(0);
@@ -1207,20 +1268,19 @@ impl Painter<'_> {
                     } else {
                         x
                     };
+                    // A row short of room shrinks an icon button below its
+                    // label: the label is cut on a character's edge (never
+                    // half of a wide one), its last Cell `…`.
+                    let cut = cut_label(label, room.max(0) as usize);
                     let drawn = dialog::put(
                         self.buffer,
                         x,
                         y,
-                        label,
+                        &cut,
                         inner_visible.right() - x,
                         Color::Reset,
                         Modifier::empty(),
                     );
-                    // A row short of room shrinks an icon button below its
-                    // label: the label is cut, its last Cell `…`.
-                    if drawn > 0 && unicode_width::UnicodeWidthStr::width(label) > room as usize {
-                        self.buffer[(x + drawn - 1, y)].set_symbol("…");
-                    }
                     let width = usize::from(self.buffer.area.width);
                     let start = usize::from(y) * width + usize::from(x);
                     for cell in &mut self.text_cells[start..start + usize::from(drawn)] {
@@ -1462,6 +1522,7 @@ impl Painter<'_> {
                 ),
                 popup: popup_item,
                 lined_group: layer.lined_group,
+                pointer_focus: self.tree.pointer_focus,
             };
             match ground.ramp {
                 Some(ramp) => mark_surface(
@@ -1477,6 +1538,7 @@ impl Painter<'_> {
                     popup_item,
                     layer.modal,
                     layer.pane,
+                    self.tree.pointer_focus,
                 ),
                 None => mark_state(
                     self.buffer,
@@ -1626,7 +1688,8 @@ fn focus_pane(tree: &Mounter) -> Option<NodeId> {
 
 /// Whether the box `pane` holds rows the keys move through: a scroll view
 /// (a list) or a selected item, in its own content (not inside a framed
-/// box within it, a pane of its own).
+/// box within it, a pane of its own). A chosen tab (a segmented control's)
+/// is a control's value, not a row: a card around one keeps its line.
 fn holds_rows(tree: &Mounter, pane: NodeId) -> bool {
     let mut stack: Vec<NodeId> = tree
         .get(pane)
@@ -1635,7 +1698,9 @@ fn holds_rows(tree: &Mounter, pane: NodeId) -> bool {
         let Some(view) = tree.get(id) else {
             continue;
         };
-        if view.kind == ViewKind::Scroll || view.props.accessibility.state.selected {
+        let row = view.props.accessibility.state.selected
+            && view.props.accessibility.role != AccessibilityRole::Tab;
+        if view.kind == ViewKind::Scroll || row {
             return true;
         }
         let lined = view
@@ -1700,6 +1765,44 @@ enum Focus {
     Shown,
 }
 
+/// `label` as it fits `room` columns: whole; its first word whole when a
+/// cut would fall inside it (`Edit` of `Edit folder`); else cut on a
+/// character's edge with `…` in the column after the last one that fits.
+fn cut_label(label: &str, room: usize) -> std::borrow::Cow<'_, str> {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+    if label.width() <= room {
+        return label.into();
+    }
+    // A cut inside the first word would leave a stub (`Sc…` of `Scan
+    // folder`): the first word whole reads better, when it fits.
+    let first = label.split_whitespace().next().unwrap_or("");
+    let first_width = first.width();
+    if first != label && first_width <= room && room <= first_width + 1 {
+        let mut cut = first.to_string();
+        if first_width < room {
+            cut.push('…');
+        }
+        return cut.into();
+    }
+    let mut cut = String::new();
+    let mut width = 0;
+    for grapheme in label.graphemes(true) {
+        let w = grapheme.width();
+        if width + w + 1 > room {
+            break;
+        }
+        cut.push_str(grapheme);
+        width += w;
+    }
+    // Not `Edit …`: the ellipsis follows the last character.
+    cut.truncate(cut.trim_end().len());
+    if room > 0 {
+        cut.push('…');
+    }
+    cut.into()
+}
+
 /// The label an icon button shows: its accessibility label, trimmed, when
 /// all its content is left out (every child laid out empty or hidden), as
 /// the layout then gives it a row as wide as that label.
@@ -1710,6 +1813,43 @@ fn icon_label<'a>(tree: &Mounter, view: &'a NshView) -> Option<&'a str> {
     let label = view.props.accessibility.label.as_deref()?.trim();
     let empty = !view.children.iter().any(|&child| draws(tree, child));
     (empty && !label.is_empty()).then_some(label)
+}
+
+/// The line that stands in for content the terminal cannot show: a video,
+/// a web view, a native component without a terminal rendering, or a
+/// picture on a terminal of 16 colors or fewer (its accessibility label).
+fn stand_in(tree: &Mounter, view: &NshView) -> Option<String> {
+    if view.frame.size.width <= Points::ZERO || view.frame.size.height <= Points::ZERO {
+        return None;
+    }
+    let label = view
+        .props
+        .accessibility
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty());
+    let what = match view.kind {
+        ViewKind::Video => "Video",
+        ViewKind::WebView => "Web page",
+        ViewKind::Image => {
+            let image = view.image.as_ref()?;
+            if !tree.images.hides(image) {
+                return None;
+            }
+            return Some(format!("[{}]", label.unwrap_or("Image")));
+        }
+        _ => match (&view.component, &view.component_name) {
+            (None, Some(name)) => {
+                return Some(format!("[{name}: not available in the terminal]"));
+            }
+            _ => return None,
+        },
+    };
+    Some(match label {
+        Some(label) => format!("[{what}: {label}]"),
+        None => format!("[{what}: not available in the terminal]"),
+    })
 }
 
 /// Whether `id` or a view inside it draws anything of its own in the
@@ -2638,6 +2778,7 @@ fn control(view: &NshView) -> bool {
                 | AccessibilityRole::Adjustable
                 | AccessibilityRole::Combobox
                 | AccessibilityRole::Spinbutton
+                | AccessibilityRole::Textbox
         )
 }
 
@@ -2694,6 +2835,21 @@ struct Marks {
     /// The view is inside an input group that draws its line
     /// ([`Layer::lined_group`]).
     lined_group: bool,
+    /// The pointer moved the focus (`Mounter::pointer_focus`).
+    pointer_focus: bool,
+}
+
+/// The states a view's marks show: its own and those projected on it as
+/// a part of its control. A control the pointer focused shows no focus of
+/// its own (a paragraph pressed for one of its links, a button clicked),
+/// as CSS's `:focus-visible`; a field, which edits, does.
+fn shown_states(view: &NshView, pointer_focus: bool) -> u16 {
+    let own = if pointer_focus && view.input.is_none() {
+        view.states & !state::FOCUSED
+    } else {
+        view.states
+    };
+    own | view.projected
 }
 
 /// Draws the view's state over its drawn Cells (its subtree's included):
@@ -2709,7 +2865,7 @@ fn mark_state(
 ) {
     // A part shows its control's states as its own (a list's highlighted
     // option is focused while the keys stay in the search field).
-    let flags = view.states | view.projected;
+    let flags = shown_states(view, marks.pointer_focus);
     let disabled = view.props.accessibility.state.disabled || flags & state::DISABLED != 0;
     let selected = banded(view);
     let field = view.input.is_some();
@@ -2875,10 +3031,11 @@ fn mark_surface(
     popup: bool,
     dialog: bool,
     pane: bool,
+    pointer_focus: bool,
 ) {
     // A part shows its control's states as its own (a list's highlighted
     // option is focused while the keys stay in the search field).
-    let flags = view.states | view.projected;
+    let flags = shown_states(view, pointer_focus);
     let disabled = view.props.accessibility.state.disabled || flags & state::DISABLED != 0;
     let selected = banded(view);
     let field = view.input.is_some();
@@ -2983,9 +3140,17 @@ fn mark_surface(
     let covered = !(visible.y..visible.bottom())
         .any(|y| (visible.x..visible.right()).any(|x| buffer[(x, y)].bg == own));
     let active = (popup && (focused || hovered || pressed) && pressable(view))
-        || ((dialog || pane) && !popup && highlighted)
-        || (pane && !popup && selected && !tab && !covered && (item || !pressable(view)));
-    if active {
+        || ((dialog || pane) && !popup && highlighted);
+    // The selected row of a list in the focused pane, the keys not on it
+    // (a sidebar's current page): an accent rail down its leading column
+    // and its label in the accent, bold (Bubbles' list), no band, which
+    // would read as where the keys are. Without a free leading column it
+    // is the accent band.
+    let chosen = pane && !popup && selected && !tab && !covered && (item || !pressable(view));
+    if chosen && !active && selection_rail(buffer, visible, inner) {
+        return;
+    }
+    if active || chosen {
         accent_band(buffer, visible, inner, ramp, selected);
         return;
     }
@@ -3073,6 +3238,19 @@ fn mark_surface(
     } else if marked {
         focus_underline(buffer, visible, covered);
     }
+    // A list's selected row out of the focused pane keeps the same rail as
+    // in it, so the current page of a sidebar reads alike either way.
+    let nav = view.props.accessibility.state.current.is_some();
+    if selected
+        && (item || nav)
+        && !popup
+        && !covered
+        && !hued_label
+        && !focused
+        && selection_rail(buffer, visible, inner)
+    {
+        return;
+    }
     if selected {
         if !hued_label {
             band(buffer, visible, step(SELECT), own);
@@ -3107,13 +3285,17 @@ fn mark_surface(
     if framed {
         // The line shows it.
     } else if focused && container {
-        // A step up alone reads as one more raised surface: an accent
-        // rail down its leading column marks it, as a focused pane's
-        // line does, or its label without a free column for one.
-        if !selected {
-            band(buffer, visible, step(HOVER), own);
-        }
-        if !focus_rail(buffer, visible, inner) {
+        // A pane the keys move within (a sidebar's list, an editor) shows
+        // its focus by what is focused in it (its highlighted item, the
+        // caret), no mark of its own: a band and a rail over a whole pane
+        // only weigh it down. A container that takes presses itself (a
+        // card that is a button) has nothing else to show it: an accent
+        // rail down its leading column, or its label without a free
+        // column for one, never a band, which would read as one more
+        // raised surface.
+        if (pressable(view) || nsh_core::input::has_tap(view.events))
+            && !focus_rail(buffer, visible, inner)
+        {
             drawn(buffer, inner, |cell| {
                 cell.modifier.insert(Modifier::BOLD | Modifier::UNDERLINED)
             });
@@ -3152,6 +3334,33 @@ fn focus_rail(buffer: &mut Buffer, visible: Rect, inner: Rect) -> bool {
         }
     }
     any
+}
+
+/// Marks the selected row of a list (Bubbles' list): `▌` in the accent on
+/// its leading column when that column is blank on every row in sight, its
+/// text in the accent and bold. Whether it could (else nothing changes).
+fn selection_rail(buffer: &mut Buffer, visible: Rect, inner: Rect) -> bool {
+    let rows = inner.intersection(visible);
+    if rows.is_empty() || visible.width < 3 {
+        return false;
+    }
+    let x = visible.x;
+    if (rows.y..rows.bottom()).any(|y| buffer[(x, y)].symbol() != " ") {
+        return false;
+    }
+    for y in rows.y..rows.bottom() {
+        let cell = &mut buffer[(x, y)];
+        cell.set_symbol("▌");
+        cell.fg = ACCENT;
+        cell.modifier -= Modifier::DIM;
+    }
+    drawn(buffer, inner, |cell| {
+        if cell.symbol() != "▌" {
+            cell.fg = ACCENT;
+            cell.modifier = (cell.modifier | Modifier::BOLD) - Modifier::DIM;
+        }
+    });
+    true
 }
 
 /// The accent band of what the keys act on (a focused control, the
@@ -3520,14 +3729,40 @@ fn gradient(
     if layers.is_empty() {
         return None;
     }
+    // The surface the terminal actually shows under the box: a step of
+    // its ramp, not the app's page color (which the terminal's background
+    // stands for, and may be far darker or lighter than it).
+    let base = parent.ramp.map_or(parent.rgb, |ramp| {
+        ramp.mix(palette::LADDER[parent.level.min(palette::LADDER.len() - 1)])
+    });
     let [red, green, blue, alpha] = fill.0.to_be_bytes();
     let alpha = f32::from(alpha) / 255.0;
     let under: palette::Rgb = std::array::from_fn(|i| {
         let top = f32::from([red, green, blue][i]);
-        (top * alpha + f32::from(parent.rgb[i]) * (1.0 - alpha)).round() as u8
+        (top * alpha + f32::from(base[i]) * (1.0 - alpha)).round() as u8
     });
-    let color_at =
-        |point: (f32, f32)| crate::gradient::over(under, layers.iter().map(|l| l.at(point)));
+    // The hue a too-faint wash is lifted toward: the box's own fill, else
+    // its gradient's first visible stop.
+    let toward: palette::Rgb = if fill.0 & 255 != 0 {
+        [red, green, blue]
+    } else {
+        effects
+            .background_images
+            .iter()
+            .flat_map(|g| g.stops.iter())
+            .find(|stop| stop.color.0 & 255 != 0)
+            .map_or(base, |stop| {
+                let [r, g, b, _] = stop.color.0.to_be_bytes();
+                [r, g, b]
+            })
+    };
+    let color_at = |point: (f32, f32)| {
+        palette::apart(
+            crate::gradient::over(under, layers.iter().map(|l| l.at(point))),
+            base,
+            toward,
+        )
+    };
     for y in visible.y..visible.bottom() {
         let py = (i32::from(y) - bounds.top) as f32 * ch + ch / 2.0;
         for x in visible.x..visible.right() {
@@ -3652,6 +3887,57 @@ fn emphasize_border(buffer: &mut Buffer, bounds: CellBounds, visible: Rect) {
             if edge {
                 let cell = &mut buffer[(x, y)];
                 cell.modifier = (cell.modifier | Modifier::BOLD) - Modifier::DIM;
+            }
+        }
+    }
+}
+
+/// Whether `view` casts an outer shadow: on a screen, it floats over what
+/// is around it.
+fn floats_with_shadow(view: &NshView) -> bool {
+    view.style
+        .effects
+        .as_deref()
+        .is_some_and(|effects| effects.box_shadows.iter().any(|shadow| !shadow.inset))
+}
+
+/// Blanks the Cells a floating box's shadow covers around `visible`
+/// (inside `clip`): a Cell each side, and the row below or above as the
+/// shadow falls. What is drawn after it (the box itself, a later
+/// sibling) paints over.
+fn clear_shadow(buffer: &mut Buffer, visible: Rect, clip: Rect, view: &NshView) {
+    let (mut down, mut up) = (false, false);
+    if let Some(effects) = view.style.effects.as_deref() {
+        for shadow in effects.box_shadows.iter().filter(|shadow| !shadow.inset) {
+            down |= shadow.offset_y.0 > 0.0;
+            up |= shadow.offset_y.0 < 0.0;
+        }
+    }
+    let x = visible.x.saturating_sub(1);
+    let right = visible.right().saturating_add(1);
+    let y = if up {
+        visible.y.saturating_sub(1)
+    } else {
+        visible.y
+    };
+    let bottom = if down {
+        visible.bottom().saturating_add(1)
+    } else {
+        visible.bottom()
+    };
+    let ring = Rect::new(x, y, right - x, bottom - y).intersection(clip);
+    let area = ring.intersection(buffer.area);
+    for row in area.y..area.bottom() {
+        for column in area.x..area.right() {
+            let inside = row >= visible.y
+                && row < visible.bottom()
+                && column >= visible.x
+                && column < visible.right();
+            // The scroll bar on the clip's right edge stays.
+            let bar = column + 1 == clip.right()
+                && matches!(buffer[(column, row)].symbol(), "│" | "┃" | "╹" | "╻");
+            if !inside && !bar {
+                buffer[(column, row)].reset();
             }
         }
     }

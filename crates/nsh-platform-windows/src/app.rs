@@ -328,6 +328,9 @@ impl AppView {
         let hwnd = crate::window::create(&surface, &options.title, options.size, parent, composed)?;
         if parent.is_none() {
             crate::window::set_icon(hwnd, options.icon.as_deref());
+            // The app's own windows ([`crate::app_window`]) show it too: the
+            // visible window of a `mount(App)` or `<Window>` app is one.
+            surface.icon.replace(options.icon.clone());
             // The main window's attributes: a normal window's, with the
             // options'.
             if let Some(shell) = crate::window::shell(hwnd) {
@@ -476,7 +479,6 @@ impl AppView {
             clipboard: None,
             host: options.host.clone(),
             picker: None,
-            speech: None,
             audio: None,
             windows: None,
             login_item: self.login_item(&options),
@@ -569,6 +571,8 @@ fn initial_environment() -> Environment {
         color_scheme: ColorScheme::Light,
         os: Os::Windows,
         idiom: Idiom::Desktop,
+        // `SetClipboardData` says whether it took the write.
+        clipboard_write_result: true,
         canvas_render: true,
         file_requests: true,
         notifications: true,

@@ -17,24 +17,6 @@ labels, and a cell or a title can be drawn by the app.
 colors, borders and selection feedback through `classes` and `styles`. Rust makes one with
 `nsh_base::data_table()`, TSX with `<DataTable>` from `nsh/base`.
 
-```rust tabs
-use nsh_base::{DataTableColumn, data_table};
-use nsh_core::prelude::*;
-
-fn column(key: &str, title: &str) -> DataTableColumn {
-    let mut column = DataTableColumn::default();
-    column.key = key.into();
-    column.title = Some(title.into());
-    column
-}
-
-fn table() -> impl IntoElement {
-    data_table()
-        .columns(vec![column("name", "Name"), column("city", "City")])
-        .flex_1()
-}
-```
-
 ```tsx tabs
 import { mount } from "nsh";
 import { DataTable, type DataTableColumn } from "nsh/base";
@@ -63,6 +45,24 @@ mount(() => (
 ));
 ```
 
+```rust tabs
+use nsh_base::{DataTableColumn, data_table};
+use nsh_core::prelude::*;
+
+fn column(key: &str, title: &str) -> DataTableColumn {
+    let mut column = DataTableColumn::default();
+    column.key = key.into();
+    column.title = Some(title.into());
+    column
+}
+
+fn table() -> impl IntoElement {
+    data_table()
+        .columns(vec![column("name", "Name"), column("city", "City")])
+        .flex_1()
+}
+```
+
 The table fills the box the app gives it (`flex-1`, a height) and scrolls inside: vertically through the rows and
 sideways through the columns, with scroll bars (`scrollbar={false}` hides them, `bounces={false}` stops the bounce at the ends where a platform has one).
 
@@ -80,6 +80,8 @@ booleans and strings show as text. Rust gives the rows a field at a time, each o
 | `width` | Its width, in points. Default `120`. |
 | `minWidth`, `maxWidth` | The narrowest and widest a drag or a fit makes it. Default `20` and `1200`. |
 | `fitPadding` | Extra room for the app's padding, icons or badges, added to the widest title or cell text when fitting the column. |
+| `grow` | Its share of the width the columns leave free in the table, added to its width (see [Filling the width](#filling-the-width)). Default none. |
+| `autoFit` | Fits it to its widest text and title once the table first has text for it (see [Filling the width](#filling-the-width)). Default `false`. |
 | `align` | `"start"` (the default), `"center"` or `"end"`, for numbers. Cells and title alike. |
 | `sortable` | Its title has a sort button that asks for a sort (see [Sorting](#sorting)). |
 | `fixed` | Where it stays while the other columns scroll under it: `true` or `"left"` at the left, leading the others; `"right"` at the right, after them (right after the scrolling columns while they fit, at the table's right edge once they overflow it). Fixed columns keep their order. |
@@ -201,6 +203,21 @@ select.
 Screen readers get a grid (named by `accessibilityLabel`) of column headers and cells, the selected ones said to be
 selected.
 
+### Dragging a range of cells
+
+Enable both `cellSelectable` and `cellRangeSelectable` to drag a rectangle with the mouse. Hold Shift to extend
+from the previous anchor. The table scrolls when the pointer reaches an edge during a drag.
+`selectOnModifierPress={false}` still leaves modified presses to the app.
+
+`onSelectionChange` and the ref's `selection()` report `{ row, column, range: { start, end, active? } }`.
+The range includes both endpoints, each a zero-based data row and column definition index. The columns between
+them follow their order on screen. `active` defaults to `start`, and the outer `row` and `column` name that
+active cell. Set a range through `selection` or `select()`. Arrow keys move from the active cell, and the copy
+shortcut copies that cell.
+
+Style the range with `selectionFill` and `selectionOutline`. The table uses `rowHeaderHighlighted` and
+`headerCellSelected` on the row and column headers within the range.
+
 ## Keyboard
 
 Pressing the table, or reaching it with Tab (macOS, the web), gives it the keyboard until another press, the focus
@@ -213,6 +230,7 @@ selection, and Escape gives the keyboard back. Its columns' resize handles take 
 | Tab, Shift+Tab | Move to the next or the previous column. |
 | Page Up, Page Down | Move by a page of rows. |
 | Home, End | Move to the first or the last. |
+| Enter, Return | Activates the focused row (`onRowActivate({ row })`), unless an input or a control inside the table takes the key. |
 | Escape | Clears the selection, then gives the keyboard back. |
 | Copy shortcut | Puts the selection's text on the clipboard (`copy()`). |
 
@@ -245,6 +263,33 @@ reports every step. Pressing the edge twice in a row fits the column to its wide
 `{ key, from, to, order }`, `order` being the `key`s of all the columns in the order shown. Fixed columns stay among
 the ones fixed at their side. `resizableColumns` and `movableColumns` turn both off for the table, and a column's `resizable` and
 `movable` win over them.
+
+## Filling the width
+
+Columns whose content the app does not know in advance (a query's results, a file's fields) take their width from it
+and from the table. A column with `autoFit` fits its widest text and title, as `fitColumn` does, once the table first
+holds rows with text in it; until then it has its `width`. It fits once per `key`: later data leaves the width as it is, so live
+rows do not move the columns, and a column of a new key fits when its rows come.
+
+While the columns are narrower than the table, the width they leave free goes to the columns with a `grow`, in
+proportion to it, as CSS's `flex-grow`: on top of their width (or the width they fitted), each up to its `maxWidth`.
+The shares follow the table's width; once the columns are wider than the table, none grows and the table scrolls. A
+column the user resizes, or whose width the app sets (`setColumnWidth`, `fitColumn`), keeps that width and no longer
+grows. Growing and fitting by themselves report no `onColumnResize`; `columnWidths()` gives the widths shown.
+
+```tsx
+<DataTable
+  columns={result.columns.map((name, i) => ({
+    key: `${result.id}:${i}`,
+    title: name,
+    align: numeric[i] ? "end" : "start",
+    autoFit: true,
+    grow: numeric[i] ? 0 : 1,
+  }))}
+  data={result.rows}
+  class="flex-1"
+/>
+```
 
 ## Live data
 
@@ -353,7 +398,7 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `headerContent` | The label and sort button's layout row; set their gap here |
 | `headerCellDragging` | The dragged title, after `headerCell` |
 | `headerCellSorted` | The title of the column the table is sorted by, after `headerCell` |
-| `headerCellSelected` | The title of the selected column, after `headerCell` |
+| `headerCellSelected` | The title of the selected column or one within the selected range, after `headerCell` |
 | `sortIndicator` | The sort button of a sortable column |
 | `sortAscending`, `sortDescending` | Its two chevrons; `selected:` applies to the sorted direction |
 | `resizeHandle` | The line at a column's trailing edge that a drag resizes |
@@ -369,6 +414,9 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `cellColumnSelected` | The cells of the selected column, after `cell` |
 | `rowHeader` | The row header cells, the row numbers |
 | `rowHeaderCorner` | The corner above the row headers |
+| `rowHeaderHighlighted` | A row number within the selected range, after `rowHeader` |
+| `selectionFill` | The fill of the selected range, excluding the active cell |
+| `selectionOutline` | The outline of the selected range |
 | `fixedEdge` | The line between the fixed columns and the columns that scroll under them: at the trailing edge of those at the left, the leading edge of those at the right |
 | `empty` | The box of the `empty` slot |
 
@@ -389,6 +437,7 @@ parts provide the table's structure and alignment; their classes supply the appe
 | `rowSelectable` | `.row_selectable(..)` | `boolean` | `true` | Presses and keys select rows. |
 | `columnSelectable` | `.column_selectable(..)` | `boolean` | `true` | A title's press selects its column, and the horizontal keys move between columns. |
 | `cellSelectable` | `.cell_selectable(..)` | `boolean` | `false` | Presses and keys select cells. |
+| `cellRangeSelectable` | `.cell_range_selectable(..)` | `boolean` | `false` | With `cellSelectable`, enables mouse range drags and Shift extension. |
 | `selectOnModifierPress` | `.select_on_modifier_press(..)` | `boolean` | `true` | A press with Shift or the command key held selects the row, cell or title. |
 | `selection` | `.selection(..)` | `DataTableSelection` | | What is selected, when the app sets it. |
 | `loopSelection` | `.loop_selection(..)` | `boolean` | `true` | The arrow keys go around the ends. |
@@ -417,10 +466,11 @@ parts provide the table's structure and alignment; their classes supply the appe
 
 | Event | Rust | Description |
 |---|---|---|
-| `onSelectionChange` | `.on_selection_change(\|selection: &Option<DataTableSelection>\| ..)` | The user changed the selection: `{ selection }`, a `{ row?, column? }` or `null`. |
+| `onSelectionChange` | `.on_selection_change(\|selection: &Option<DataTableSelection>\| ..)` | The user changed the selection: `{ selection }`, a `{ row?, column?, range? }` or `null`. |
 | `onRowPress` | `.on_row_press(\|event: &DataTablePress\| ..)` | A row or cell was pressed: `{ row, column?, clicks, shift, control, alt, platform }`. |
 | `onColumnPress` | `.on_column_press(\|event: &DataTableColumnPress\| ..)` | A title was pressed: `{ column, clicks, shift, control, alt, platform }`. |
 | `onDoublePress` | `.on_double_press(\|target: &DataTableTarget\| ..)` | A row, cell or title was pressed twice: `{ target }`, a `{ row?, column? }`. |
+| `onRowActivate` | `.on_row_activate(\|row: &u32\| ..)` | The focused row was activated (Enter / Return): `{ row }`, the number `onRowPress` reports. |
 | `onContextMenu` | `.on_context_menu(\|event: &DataTableContextMenu\| ..)` | A context menu was asked for: `{ row?, column?, x, y }`, the point in the root view. |
 | `onSortChange` | `.on_sort_change(\|sort: &Option<DataTableSort>\| ..)` | A sort button was pressed: `{ sort }`, the next sort `{ key, direction }` or `null`. |
 | `onColumnResize` | `.on_column_resize(\|key: &SharedString, width: &Points\| ..)` | A column was resized (`{ key, width }`), at every step of a drag and once more when a fit sets it. |

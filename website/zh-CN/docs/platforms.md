@@ -1,6 +1,6 @@
 ---
 title: 平台概览
-description: "NSH 在哪些平台上运行：iOS、Android、macOS、Windows、Linux、GPUI、终端和 Web，每个平台都有自己的后端；在各平台上如何运行、打包和嵌入 Rust 或 TSX 应用，以及各自需要什么。"
+description: "NSH 在哪些平台上运行：iOS、Android、macOS、Windows、Linux、GPUI、终端和 Web，每个平台都有自己的后端；在各平台上如何运行、打包和嵌入 TSX 或 Rust 应用，以及各自需要什么。"
 order: 10
 group: platforms
 ---
@@ -27,9 +27,10 @@ NSH 运行在手机、桌面、终端和网页上：iOS、Android、macOS、Wind
 - **[GPUI](./gpui.md)** 用姊妹项目 GPUI Kit 所基于的 [GPUI](https://gpui-kit.com) 绘制应用，在 macOS、Windows 和 Linux 上表现一致：它是嵌入 GPUI 和 GPUI Kit 应用的后端，这些应用把 `AppView` 放进自己的元素树。独立的桌面应用用各操作系统自己的后端（AppKit、Win32、GTK 4）运行和打包。
 - **[TUI](./tui.md)** 把应用绘制在终端的字符 Cell 网格上，使用终端自己的颜色，以键盘为主，也支持鼠标：`nsh run --target tui` 在当前终端中运行应用，ratatui 应用用 `AppView` 嵌入应用。
 - **[Web](./web.md)** 把应用渲染成浏览器页面里的 HTML：`nsh package --target web` 发布一个静态网站，可部署到任意 Web 服务器或 CDN，Rust 应用的引擎和 crate 编译为 WebAssembly；你自己的网页可以用 `createPlayer` 或 iframe 嵌入应用。本站的在线示例和 [Playground](/playground) 也由它运行。
-- **Mac Catalyst** 在 Mac 上用 iPhone 尺寸的窗口（390×844）运行 iOS 后端，用于开发。用 `--target catalyst` 选择它，快速查看应用在手机上的样子。
 
 社区还在同一个引擎上构建了更多平台，每个平台有自己的仓库，`nsh` 命令行按名字运行它们：[`nsh-platform-miniprogram`](https://github.com/huacnlee/nsh-platform-miniprogram) 在微信小程序中运行应用（`--target miniprogram`）。[构建平台](./platform-extensions.md)介绍了如何构建一个平台。
+
+**开发工具：**Mac Catalyst 在 Mac 上用 iPhone 尺寸的窗口（390×844）运行 iOS 后端（`--target catalyst`），仅在确有需要时使用：检查 Catalyst 特有的行为，或在 Mac Catalyst 应用中嵌入 NSH。Mac 应用请用默认的 `macos`；要看应用在手机上的效果，请用 `--target ios`。
 
 ## 开发与打包
 
@@ -50,6 +51,8 @@ nsh package App.tsx --target macos
 每个桌面操作系统用自己的后端打包应用，后端只为运行它的机器构建：Mac 应用在 Mac 上打包，Windows 应用在 Windows 上打包，Linux 应用在 Linux 上打包。各目标的输出、签名和图标见[打包](./packaging.md)。
 
 ## 嵌入原生应用
+
+各平台的分步指引见[嵌入现有应用](./embedding.md)。
 
 | 平台 | 宿主视图 | 运行 | 发布形式 | 宿主语言 |
 |---|---|---|---|---|
@@ -110,6 +113,24 @@ extern "system" fn Java_com_example_app_RuntimeBridge_configure(
 
 应用的组件用 NSH 的基础元素绘制，所以在桌面上和在手机上一样运行，样子也相同。桌面布局用基础元素（`view`、`text`、`scroll`、`virtual_list` 等；TSX 里是 `View`、`Text`、`Scroll`、`List` 等）加上对桌面的判断搭建，示例应用 gallery 的桌面布局就是这样做的：
 
+```tsx tabs
+import { View } from "nsh";
+import { platform } from "nsh";
+
+export function Shell() {
+  // macOS、Windows、Linux 和桌面浏览器用侧边栏；手机用标签页。
+  return <View class="flex-1">{platform.desktop ? <SidebarLayout /> : <TabLayout />}</View>;
+}
+
+function SidebarLayout() {
+  return <View class="flex-1 flex-row" />;
+}
+
+function TabLayout() {
+  return <View class="flex-1 flex-col" />;
+}
+```
+
 ```rust tabs
 use nsh_core::prelude::*;
 
@@ -130,25 +151,22 @@ fn tab_layout() -> AnyElement {
 }
 ```
 
-```tsx tabs
-import { View } from "nsh";
-import { platform } from "nsh";
-
-export function Shell() {
-  // macOS、Windows、Linux 和桌面浏览器用侧边栏；手机用标签页。
-  return <View class="flex-1">{platform.desktop ? <SidebarLayout /> : <TabLayout />}</View>;
-}
-
-function SidebarLayout() {
-  return <View class="flex-1 flex-row" />;
-}
-
-function TabLayout() {
-  return <View class="flex-1 flex-col" />;
-}
-```
-
 每个后端都列出了它以自己的方式处理的内容：[macOS](./macos.md#macos-上的差异)、[Windows](./windows.md#windows-上的差异)、[Linux](./linux.md#linux-上的差异)、[GPUI](./gpui.md#差异)、[TUI](./tui.md)。
+
+## 平台不支持的调用
+
+有几个调用在桌面端或浏览器里还没有对应实现。在这些平台上调用不会生效，应用会为每类调用打一次警告，例如 `linux: Share is not supported on this platform and is ignored`，开发时就能发现缺口，而不是悄悄没有反应。
+
+| 调用 | macOS | Windows | Linux | GPUI | Web |
+|---|---|---|---|---|---|
+| 分享面板 | 支持 | 不支持 | 不支持 | 不支持 | 支持 |
+| WebView `evaluate` | 支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| 从屏幕取色 | 支持 | 不支持 | 不支持 | 不支持 | 支持 |
+| 认证会话（系统登录面板） | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| 打开应用的系统设置 | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+| 触感反馈、方向锁定、编辑菜单 | 不支持 | 不支持 | 不支持 | 不支持 | 不支持 |
+
+表里只列桌面端和 Web；最后三行是只在 [iOS](./ios.md) 和 [Android](./android.md) 上提供的调用。提供某个功能前，先检查 `platform.os`（TSX）或 `os()`（Rust），例如在 Linux 上隐藏分享按钮。
 
 ## 另请参阅
 

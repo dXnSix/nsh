@@ -22,8 +22,9 @@ use nsh_core::{
     Checked, Color, Command, DialogButtonStyle, EditAction, HeaderTitleAlign, InputConfig,
     KeyCapture, KeyboardDismissMode, KeyboardTaps, KeyboardType, LayoutCurve, LayoutProperty,
     LayoutTransition, LiveRegion, ModalAnimation, ModalPresentation, MountBatch, MountItem,
-    NativeProps, PointerEvents, ResizeMode, ReturnKeyType, ScreenAnimation, ScreenConfig,
-    SnapAlignment, StatusBarStyle, SubmitBehavior, ViewKind, ViewProps, ViewStyle, WebSource,
+    NativeProps, PanDirection, PanEdge, PointerEvents, ResizeMode, ReturnKeyType, ScreenAnimation,
+    ScreenConfig, SnapAlignment, StatusBarStyle, SubmitBehavior, ViewKind, ViewProps, ViewStyle,
+    WebSource,
     audio::AudioCommand,
     geometry::{DefiniteLength, REM_SIZE},
 };
@@ -234,6 +235,13 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                 // The one color all of it is drawn in, if there is one: a
                 // change of it transitions (`transition-colors`, `TextBox`).
                 opt_color(&mut e, text.uniform_color());
+                // What attachments copy as: offset, then the string's
+                // object (`TextBox.copied`).
+                e.int(text.copy_texts.len() as i32);
+                for copy in &text.copy_texts {
+                    e.int(copy.index as i32);
+                    e.string(copy.text.to_string());
+                }
             }
             MountItem::Events { id, events } => {
                 e.int(EVENTS);
@@ -337,6 +345,9 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                 e.int(id as i32);
                 canvas(&mut e, &drawing);
             }
+            // GPU views draw nothing on this backend yet
+            // (`docs/dev/gpu-views.md`).
+            MountItem::GpuView { .. } => {}
             MountItem::Shader { id, layer } => {
                 // Java learns what the view shows (whether a shader, its
                 // role, how far it overflows, which pictures it reads); the
@@ -559,6 +570,7 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                 match command {
                     Command::Focus => e.int(0),
                     Command::Blur => e.int(1),
+                    Command::ClearSelection => e.int(62),
                     Command::ScrollTo { x, y, animated } => {
                         e.int(2);
                         e.float(x.0);
@@ -666,6 +678,11 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                         e.int(17);
                         e.string(text);
                     }
+                    // `Mounter.textLocale`: the language tag.
+                    Command::TextLocale(locale) => {
+                        e.int(64);
+                        e.string(locale.as_str().to_owned());
+                    }
                     Command::AccessibilityFocus => e.int(18),
                     // `InputBox.openEditMenu`: the bounds in the root view,
                     // then the actions' bits (cut 1, copy 2, paste 4,
@@ -762,6 +779,11 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                         e.int(id as i32);
                         e.string(url);
                     }
+                    // `SystemUi.java` `openAppSettings`: the request.
+                    Command::OpenAppSettings { id } => {
+                        e.int(63);
+                        e.int(id as i32);
+                    }
                     // `Share.java`: the request, the title and the text
                     // (the text and the URL on lines of their own), each
                     // after whether it is there, then the files. Android's
@@ -793,11 +815,26 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                         e.int(61);
                         e.int(id as i32);
                     }
-                    // Answered by the sink (`host::answer_clipboard_reads`);
-                    // images are not written to Android's clipboard.
-                    Command::ReadClipboardImage { .. }
-                    | Command::ReadClipboardFiles { .. }
-                    | Command::SetClipboardImage(_) => e.int(-1),
+                    // `ClipboardReads.java`: the clip's first image
+                    // (`content:` URI) as a `data:` URI and its size, read
+                    // off the main thread.
+                    Command::ReadClipboardImage { id, has_only } => {
+                        e.int(67);
+                        e.int(id as i32);
+                        e.bool(has_only);
+                    }
+                    // `ClipboardReads.java`: the clip's `content:` URIs,
+                    // copied into the app's cache, as `file:` URLs.
+                    Command::ReadClipboardFiles { id } => {
+                        e.int(66);
+                        e.int(id as i32);
+                    }
+                    // `ClipboardReads.writeImage`: the image, saved to the
+                    // cache, as a `content:` URI the app's FilesProvider serves.
+                    Command::SetClipboardImage(uri) => {
+                        e.int(68);
+                        e.string(uri);
+                    }
                     // `Picker.java`: the request, the limit, the longest
                     // side (0: any), the quality (-1: none), the format.
                     Command::PickImages { id, request } => {
@@ -843,11 +880,12 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                     // No eyedropper (`Environment::screen_color`): the core
                     // answers no color first.
                     | Command::PickScreenColor { .. } => e.int(-1),
-                    // Not carried out on Android yet: the app's paste is
-                    // lost, so say so.
-                    Command::InsertText(_) => {
-                        log::warn!("insertText is not supported on Android yet; nothing inserted");
-                        e.int(-1);
+                    // `InputBox.insertText`: the text, in place of the
+                    // selection as the user's edit (the input's line rules,
+                    // `maxLength` and undo history apply there).
+                    Command::InsertText(text) => {
+                        e.int(65);
+                        e.string(text);
                     }
                     // `SystemUi.openPath`: the file at the path, a `content:`
                     // URI the app's FilesProvider serves, to the system's
@@ -899,9 +937,6 @@ pub(crate) fn encode(batch: MountBatch, web_generation: u64) -> Encoded {
                         });
                         canvas(&mut e, &drawing);
                     }
-                    // No speech recognizer (`Environment::speech`): the core
-                    // ends the sessions first.
-                    | Command::Speech(_)
                     // Trusted web view input is macOS's for now.
                     | Command::SendInput(_)
                     // No performance monitor on Android yet.
@@ -1136,6 +1171,21 @@ fn view_style(e: &mut Encoded, s: &ViewStyle) {
         }
     }
     e.bool(s.backface_hidden);
+    // `clipPath`: whether there is one, then each edge's offset (points)
+    // and fraction (top, right, bottom, left), then the radii from the top
+    // left (`Mounter.style`).
+    let clip = s.clip_path();
+    e.bool(clip.is_some());
+    let clip = clip.copied().unwrap_or_default();
+    for v in clip.offsets.to_array() {
+        e.float(v.0);
+    }
+    for v in clip.fractions.to_array() {
+        e.float(v.0);
+    }
+    for v in clip.radii.to_array() {
+        e.float(v.0);
+    }
     effects(e, s);
 }
 
@@ -1403,10 +1453,15 @@ fn native_props(e: &mut Encoded, p: &NativeProps) {
             e.bool(w.scrollable);
             e.bool(w.javascript_enabled);
             e.bool(w.incognito);
+            e.bool(w.zoomable);
+            // Its one written form, which `Native.allowsWebview` reads back.
+            let origin = w.allow_origin.as_ref().map(ToString::to_string);
+            e.opt_string(origin.as_deref());
         }
         NativeProps::Video(v) => {
             e.int(4);
             e.opt_string(v.source.as_deref());
+            e.opt_string(v.poster.as_deref());
             e.bool(v.paused);
             e.bool(v.muted);
             e.float(v.volume);
@@ -1453,6 +1508,7 @@ fn screen_config(e: &mut Encoded, c: &ScreenConfig) {
         HeaderTitleAlign::Left => 0,
         HeaderTitleAlign::Center => 1,
     });
+    e.bool(c.hides_bottom_bar_when_pushed);
 }
 
 fn view_props(e: &mut Encoded, p: &ViewProps) {
@@ -1563,6 +1619,22 @@ fn view_props(e: &mut Encoded, p: &ViewProps) {
             ] {
                 e.float(v.map_or(f32::NAN, |v| v.0));
             }
+            // The way it activates in and its edge (Mounter.java
+            // `panActivation`): -1 none.
+            e.int(match a.way() {
+                Some(PanDirection::Left) => 0,
+                Some(PanDirection::Right) => 1,
+                Some(PanDirection::Up) => 2,
+                Some(PanDirection::Down) => 3,
+                _ => -1,
+            });
+            e.int(match a.edge {
+                Some(PanEdge::Left) => 0,
+                Some(PanEdge::Right) => 1,
+                Some(PanEdge::Top) => 2,
+                Some(PanEdge::Bottom) => 3,
+                _ => -1,
+            });
         }
         None => e.int(0),
     }
@@ -1651,6 +1723,8 @@ fn role_index(role: AccessibilityRole) -> i32 {
         MenuItemRadio => 42,
         Dialog => 43,
         AlertDialog => 44,
+        Textbox => 45,
+        TabPanel => 46,
     }
 }
 
@@ -1792,10 +1866,16 @@ fn input(e: &mut Encoded, c: &InputConfig) {
     e.bool(c.caret_hidden);
     // `pasteBehavior`: whether a paste inserts its text.
     e.bool(c.paste_behavior == nsh_core::PasteBehavior::Insert);
-    // A multiline input's own scroll bar shows; a built-in bar replaces it
-    // (the input then reports how far its text scrolled).
+    // `pasteMaxSize` in bytes (-1: none); a Java array holds at most
+    // `i32::MAX` bytes, so a larger limit reads what the heap holds.
+    e.int(
+        c.paste_max_size
+            .map_or(-1, |max| max.min(i32::MAX as u64) as i32),
+    );
+    // A multiline input's own scroll bar shows; whether it reports how far
+    // its text scrolled (a bar of the app's follows it).
     e.bool(c.scrollbar_visible);
-    e.bool(c.replaced);
+    e.bool(c.report_scroll);
     e.int(s.font_variant.0 as i32);
 }
 
@@ -2132,6 +2212,16 @@ mod tests {
     use nsh_core::file_dialog::{self, FileRequest};
 
     use super::*;
+
+    /// A text box is the edit text class, after the roles `A11y.java`
+    /// already names.
+    #[test]
+    fn a_textbox_follows_the_roles_a11y_java_names() {
+        assert_eq!(
+            role_index(AccessibilityRole::Textbox),
+            role_index(AccessibilityRole::AlertDialog) + 1
+        );
+    }
 
     /// `drawImage(uri, 1, 2)` encoded for `CanvasPainter.java`: the URI,
     /// no source, the source's four floats, the file name's density, then

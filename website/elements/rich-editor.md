@@ -61,6 +61,16 @@ observes the session's updated `composing` value and any committed text, so an a
 while composition is active and release it when it ends. Starting or canceling composition can keep the document
 and its revision unchanged; `onChange` reports document edits.
 
+`onReadonlyInput()` fires when someone types into an editor that cannot be edited (`editable={false}`,
+the editor's `editable: false` / `setEditable(false)`, or a plugin's `editable`), which stays out of the document: a hardware keyboard's characters, a software keyboard's
+typing and an input method's commit, once per change. An app can use it to offer editing, as a
+reading view that turns to editing when someone starts typing. Text the app inserts itself, deleting and pasting are not reported. A keyboard that replaces a word it typed
+(autocorrect, a picked suggestion) fires again, so treat it as a sign of typing, not a character count.
+
+```tsx
+<RichEditor editor={editor} editable={false} onReadonlyInput={() => showEditHint()} />
+```
+
 ## Styling
 
 The editor draws the document with the app's look: `classes` and `styles` style its parts (`root`, `content`, `caret`,
@@ -115,6 +125,34 @@ once everything is selected, and a read-only editor offers Copy and Select All. 
 toolbar's `isActive` follows the selection, `toggleMark` formats it, and undo takes a cut or a paste back. Taps,
 keys, input methods and the mouse select as before.
 
+### A bar over the keyboard
+
+`inputAccessoryViewID` (Rust `.input_accessory(id)`) shows the
+[`InputAccessoryView`](../docs/forms-and-keyboard.md#a-bar-over-the-keyboard-ios-inputaccessoryview) with that
+`nativeID` on top of the keyboard while the editor has the focus, as an `Input`'s `ios={{ inputAccessoryViewID }}`
+does: it comes and goes with the keyboard and moves with it natively. Formatting buttons there run on the session and
+leave the focus in the editor:
+
+```tsx
+import { Text, View } from "nsh";
+import { Button, RichEditor, command } from "nsh/base";
+import { InputAccessoryView } from "nsh/mobile";
+
+<RichEditor editor={editor} inputAccessoryViewID="format" />
+<InputAccessoryView nativeID="format">
+  <View style={{ flexDirection: "row", padding: 8, gap: 8 }}>
+    <Button onPress={() => editor.run(command("toggleBold"))}>
+      <Text>Bold</Text>
+    </Button>
+    <Button onPress={() => editor.blur()}>
+      <Text>Done</Text>
+    </Button>
+  </View>
+</InputAccessoryView>
+```
+
+Input accessories are iOS's; elsewhere the editor shows none.
+
 ### Bubble menu
 
 `bubbleMenu` is Tiptap's bubble menu: the app's content shown next to the selection, above it by default
@@ -168,6 +206,10 @@ their bytes, `uris` the copied files' `file:` URLs. On the desktops, files dragg
 the editor call its `onFileDrop` with `{ uris, mimeTypes }`, as a [view's file drops](./view.md#desktop-file-drops)
 do, and `onFileDragEnter` / `onFileDragLeave` follow the drag, for a hint such as "Release to attach". Without
 `onFileDrop` the editor leaves dropped files to the view around it that listens.
+
+Text dragged onto the editor from another app or another view goes in where it is let go: the caret moves there and
+the text goes in as a paste of it would (with its HTML when the drag has some, through `transformPasted` and
+`handlePaste`), as one undo step. iOS delivers text drops; the desktops and Android leave text drags to the platform.
 
 ```tsx
 <RichEditor
@@ -250,6 +292,11 @@ const canIndent = editor.can(sinkListItem("listItem"));
 | `on(event, listener)` | Calls `listener` with the payload of every `event`, in JS's next turn: `revision` (`{ revision }`, after every change, from any source), `update`, `selectionUpdate`, `transaction`, `focus`, `blur`, `delete`. Returns a function that stops it; a listener added while a component renders stops with the component |
 | `focus()`, `blur()` | Moves the keyboard focus to or from the views showing the editor |
 
+When `insertContent` receives text, Markdown or JSON, the content opens at its edges and fits where it goes: at a
+caret in text, one paragraph joins the text around it, while lists, tables and other blocks that cannot fit inline
+remain blocks. An HTML string follows Tiptap's `insertContent`: bare text or inline markup joins the text, and
+explicit block elements insert as blocks.
+
 Positions count as ProseMirror's do: a text counts its UTF-16 code units, a leaf node one, a node with content its
 two boundaries. Anything that must outlive edits keeps an id in a node's attributes or a mark. A position query
 (`resolve(pos)`, `nodeAt(pos)`, `coordsAtPos(pos)`, `findParentNode(name, pos)`, ...) throws a `RangeError` for a
@@ -284,13 +331,22 @@ editor.run(command("toggleBold"));
 ```
 
 `StarterKit` brings `Document`, `Paragraph`, the text node, `Heading`, `Blockquote`, `BulletList`, `OrderedList`,
-`ListItem`, `TaskList`, `TaskItem`, `CodeBlock`, `HardBreak`, `HorizontalRule`, `RichImage` (Tiptap's `Image`),
+`ListItem`, `TaskList`, `TaskItem`, `CodeBlock`, `CodeBlockHighlight`, `HardBreak`, `HorizontalRule`, `RichImage` (Tiptap's `Image`),
 `Bold`, `Italic`, `Strike`, `Code`, `Underline`, `RichLink` (Tiptap's `Link`), `Highlight`, `Subscript`, `Superscript`, `RichTextStyle` (Tiptap's `TextStyle`),
 `TextAlign`, `History`, `TrailingNode`, `Typography` and `ListKeymap`. An option named as one set to `false` leaves
 it out, an object configures it (`heading: { levels }`, `history: { depth }`, `textAlign: { types }`,
 `codeBlock: { enableTabIndentation }`). Each class's `configure(options)` and `extend({...})` make a
 `RichExtension`, which has `name`, `type`, `priority` and `options`. Every editor also gets the core keymap (Enter,
 Backspace, Delete, select all).
+
+Code blocks that name a language (` ```rust `, `toggleCodeBlock({ language: "rust" })`) are colored as `TextView`
+colors fenced code, with the same syntaxes and palette: that is `CodeBlockHighlight`, which plays the part of Tiptap's
+`CodeBlockLowlight` without a highlighter to pass in. `StarterKit.configure({ codeBlockHighlight: false })` leaves
+code plain. Typing in a long block does not wait for the colors: they are worked out off the engine thread and arrive
+a moment later. On the web the syntaxes come from the page once, the first time a block needs them, shared with
+`TextView`; they are not in the first download. Without the platform's feature `highlight` code stays plain.
+
+In Rust it is `kit::code_block_highlight()`, part of `kit::starter_kit()` and of `starter::plugins`.
 
 Each extension adds Tiptap's commands, which `command(name, args)` runs: `toggleBold`, `setItalic`,
 `unsetStrike`, `toggleHeading({ level })`, `setParagraph`, `toggleBlockquote`, `toggleBulletList`,
@@ -336,8 +392,10 @@ to other types; `addProseMirrorPlugins` returns plugins, `RichEditorPlugin`s inc
 ### Node views
 
 `addNodeView` returns the component that renders every node of the extension's node type: a stock tag in the text, a
-card between paragraphs, a mention, an embed. The node type must be an atom (`atom: true`, or a leaf): the caret steps
-over it as one character or one block and Backspace deletes it. A node with content is refused.
+card between paragraphs, a mention, an embed. The node type must be an atom (`atom: true`, or a leaf): an arrow key
+that reaches it selects it as a node and the next one moves past it, as in ProseMirror and Tiptap (a node with
+`selectable: false`, such as a mention, is stepped over as one character), and Backspace deletes it. A node with
+content is refused.
 
 ```tsx
 import { RichEditor, StarterKit, createRichEditor, defineExtension, type RichNodeViewProps } from "nsh/base";
@@ -456,9 +514,10 @@ const paste = new RichEditorPlugin("paste")
 An app that cleans up the clipboard's HTML itself (Word's lists, Google Docs' wrapper, Markdown turned into HTML)
 hands the result on with `editor.pasteHTML(html)` and returns `true`; plain text goes on with `editor.pasteText(text)`.
 They are ProseMirror's `pasteHTML` and `pasteText`: the content is read as a paste is, by the schema's parse rules and
-fitted to the selection, so a node marked `isolating` (a figure with its caption) stays whole where
-`insertContent(html, "html")` would open it, and the editor's own paste steps (links, character limits, paste rules)
-apply. The plugins' `transformPasted` and `handlePaste` are not asked again. They return whether something was pasted.
+fitted to the selection, so a node marked `isolating` (a figure with its caption) stays whole where JSON or Markdown
+given to `insertContent` opens even through such a node at the content's edges. The editor's own paste steps (links,
+character limits, paste rules) apply. The plugins' `transformPasted` and `handlePaste` are not asked again. They
+return whether something was pasted.
 
 ```tsx
 const paste = new RichEditorPlugin("paste").handlePaste((_slice, clipboard) => {
@@ -510,6 +569,9 @@ editor.run(insertMention(editor.suggestion("mention")!.range, "u1", "Joan"));
   addresses), and the protocol a bare host gets is `defaultProtocol` (`http`). Links take the protocols `http`,
   `https`, `ftp`, `ftps`, `mailto`, `tel`, `callto`, `sms`, `cid`, `xmpp` and those in `protocols`, so
   `setLink({ href })`, `toggleLink(attrs?)` and autolinking keep scripts (`javascript:`) and data URLs out.
+  The link mark keeps `javascript:`, `vbscript:` and `data:` URLs out of the HTML it reads and writes, in any case and
+  with white space or control characters inside the scheme: such an `<a>` is read as plain text, and such an `href`
+  is not written. Other URLs, an app's own schemes included, are read and written as they are.
   `unsetLink()` removes the link around the selection.
   On the desktops and the web in the desktop idiom, the pointer resting on linked text shows the link's `title` and
   destination below the pointer, as [TextView's links](./text-view.md) do; pressing and typing in the link work as
@@ -596,8 +658,9 @@ next cell; Shift with an arrow, or a drag across cells, selects a rectangle of c
 `"cell"`, whose `anchor` and `head` are the positions before its first and last cells). Backspace and Delete empty
 the selected cells, and delete the table when all its cells are selected.
 
-In the editor a table is a grid of its cells: each column as wide as its cells' `colwidth`, columns without one
-sharing the room (at least `cellMinWidth` wide), each row at least its `height`. Its look starts from the theme: a
+Columns fit the text and components in their cells. Long paragraphs wrap, and a table wider than the editor
+scrolls horizontally inside the document. A saved or dragged column width takes precedence. Each column is at
+least `cellMinWidth` wide and each row is at least its saved `height`. Its look starts from the theme: a
 1-point `border` grid, header cells on `muted`, padded cells, and each selected cell under the `selectedCell` part in
 the selection color. `classes.nodes` (`table`, `tableCell`, `tableHeader`) and the parts restyle
 all of it. Up and Down on a cell's first or last line go to the cell above or below.
@@ -611,6 +674,20 @@ While the document can be edited:
 - The table the selection is in shows grips (`tableGrip`) on its top border over each column and on its left border
   beside each row. Pressing one selects that column or row; dragging it on desktops shows where it drops
   (`tableDropIndicator`) and moves it there on release.
+- A grip pressed and let go without dragging (a tap on touch screens) calls `onTableMenu` after it selected its
+  column or row, with `{ table, row, column, bounds }`: `table` is the position before the table, `row` is set for a
+  row's grip and `column` for a column's, and `bounds` is the grip's box in the root view, where the app opens its own
+  menu for that row or column. A drag moves the row or column and does not call it, nor does a
+  release after the grip's table or line went away.
+
+```tsx
+<RichEditor
+  editor={editor}
+  onTableMenu={({ table, row, column, bounds }) =>
+    openLineMenu({ table, row, column, anchor: bounds })
+  }
+/>
+```
 
 ```tsx
 <RichEditor

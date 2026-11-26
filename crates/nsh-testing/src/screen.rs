@@ -164,7 +164,8 @@ pub struct Screen {
     /// Inputs configured to take the focus when they mount (`autoFocus`)
     /// that are not in a window yet, in the order they were configured.
     auto_focus: Vec<NodeId>,
-    /// Scroll views a command moved, whose offset the engine is told
+    /// Scroll views the core's items moved (`ScrollBy`, `ScrollTo`, a
+    /// content's new end), whose offset the engine is told
     /// ([`Screen::take_scrolled`]), as a platform reports it.
     scrolled: Vec<NodeId>,
     /// Screens a back popped natively, until the app removes them.
@@ -347,6 +348,9 @@ struct View {
     level: Option<u32>,
     /// Its `accessibilityDescription`.
     description: Option<Arc<str>>,
+    /// The orientation it reports to assistive technologies (a tab list's),
+    /// ARIA's `aria-orientation`.
+    orientation: Option<nsh_core::geometry::Axis>,
     /// The view its `accessibilityActiveDescendant` names.
     active_descendant: Option<NodeId>,
     /// The view its `accessibilityControls` names.
@@ -371,6 +375,8 @@ struct View {
     hidden: bool,
     /// It clips what it holds to its bounds (`overflow: hidden`).
     clips: bool,
+    /// `clipPath`: outside it, neither it nor what it holds is hit.
+    clip_path: Option<nsh_core::ClipInset>,
     /// Its own `opacity`, `None` until its style arrives (fully opaque).
     opacity: Option<f32>,
     /// Its `backgroundColor`, `0xRRGGBBAA`; transparent is `0`.
@@ -405,6 +411,55 @@ pub struct ViewStyle {
     pub opacity: f32,
     /// The opacity it shows with: its own times every view's around it.
     pub effective_opacity: f32,
+}
+
+/// Where layout placed the view [`Screen::layout`] names, in the root's
+/// points (transforms aside, as [`LayoutNode`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct ViewLayout {
+    /// Its bounds.
+    pub bounds: Bounds<Points>,
+    /// It or a view around it is hidden (`visibility: hidden`).
+    pub hidden: bool,
+    /// A view around it that clips (`overflow: hidden`, a scroll view's
+    /// viewport) cuts part or all of it.
+    pub clipped: bool,
+}
+
+/// A view as assistive technologies read it ([`Screen::accessibility`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct AccessibilityNode {
+    /// Its `role`, `None` for a view without one.
+    pub role: Option<AccessibilityRole>,
+    /// Its `accessibilityLabel`.
+    pub label: Option<String>,
+    /// Its accessible name, the one `role:<role>[<name>]` matches: its
+    /// `accessibilityLabel`, else the texts inside it joined by spaces;
+    /// empty for the root and for a view with neither.
+    pub name: String,
+    /// It takes no presses.
+    pub disabled: bool,
+    /// It is selected.
+    pub selected: bool,
+    /// Its `accessibilityState.checked`.
+    pub checked: Option<nsh_core::Checked>,
+    /// Its `accessibilityState.expanded`.
+    pub expanded: Option<bool>,
+    /// Its `accessibilityState.pressed`, for a toggle button; `None` when
+    /// it is unset.
+    pub pressed: Option<nsh_core::Checked>,
+    /// Its `accessibilityState.busy`: it is loading.
+    pub busy: bool,
+    /// Its `accessibilityValue.text`.
+    pub value: Option<String>,
+    /// Its `accessibilityLevel`.
+    pub level: Option<u32>,
+    /// Its `accessibilityDescription`.
+    pub description: Option<String>,
+    /// The views inside it that have a role or a label, in tree order.
+    pub children: Vec<AccessibilityNode>,
 }
 
 /// A link of a text view's text ([`nsh_core::TextLink`]): a span that takes
@@ -700,6 +755,7 @@ impl Screen {
                 let view = self.nodes.entry(*id).or_default();
                 view.hidden = style.hidden;
                 view.clips = style.overflow_hidden;
+                view.clip_path = style.clip_path().copied();
                 view.opacity = Some(style.opacity);
                 view.background = style.background_color.0;
             }
@@ -729,6 +785,7 @@ impl Screen {
                     .and_then(|v| v.text.clone());
                 view.level = props.accessibility.level;
                 view.description = props.accessibility.description.clone();
+                view.orientation = props.accessibility.orientation;
                 view.active_descendant = props.accessibility.active_descendant;
                 view.controls = props.accessibility.controls;
                 view.described_by = props.accessibility.described_by;
@@ -799,7 +856,11 @@ impl Screen {
                 self.pull_back(*id);
             }
             MountItem::ScrollBy { id, dx, dy } => {
-                // Not clamped: the core knows its content.
+                // Not clamped: the core knows its content. Reported, as
+                // the platforms report the offset it moves a view to: the
+                // core's offset (`ref.measure()`, a list's window) takes in
+                // the scrolls that keep rows in place as rows above them
+                // change size.
                 if let Some(scroll) = self.scroll_mut(*id) {
                     scroll.applied = scroll.applied.wrapping_add(1);
                     if scroll.horizontal {
@@ -807,6 +868,7 @@ impl Screen {
                     } else {
                         scroll.y += *dy;
                     }
+                    self.moved(*id);
                 }
             }
             MountItem::Command { id, command } => {
@@ -949,7 +1011,7 @@ impl Screen {
                         scroll.y = y.clamp(Points::ZERO, end);
                     }
                     scroll.applied = scroll.applied.wrapping_add(1);
-                    self.scrolled.push(id);
+                    self.moved(id);
                 }
             }
             Command::ScrollToEnd { .. } => {
@@ -961,7 +1023,7 @@ impl Screen {
                         scroll.y = end;
                     }
                     scroll.applied = scroll.applied.wrapping_add(1);
-                    self.scrolled.push(id);
+                    self.moved(id);
                 }
             }
             _ => {}
@@ -1139,6 +1201,109 @@ impl Screen {
             opacity,
             effective_opacity: effective,
         }))
+    }
+
+    /// Where layout placed the view `selector` names: its bounds in the
+    /// root's points, whether it is hidden, and whether a view around it
+    /// clips part of it. `None` when no view on screen matches; an error
+    /// when several do.
+    pub fn layout(&self, selector: &str) -> Result<Option<ViewLayout>, String> {
+        let parsed = Selector::parse(selector)?;
+        let id = match self.resolve(&parsed)[..] {
+            [id] => id,
+            [] => return Ok(None),
+            ref all => return Err(format!("`{selector}` matches {} views", all.len())),
+        };
+        let nodes = self.layout_nodes();
+        let by_id: HashMap<NodeId, &LayoutNode> = nodes.iter().map(|n| (n.id, n)).collect();
+        let Some(node) = by_id.get(&id) else {
+            return Ok(None);
+        };
+        let mut clipped = false;
+        let mut parent = node.parent;
+        while let Some(p) = by_id.get(&parent) {
+            if (p.clips || p.scroll.is_some()) && p.bounds.intersect(&node.bounds) != node.bounds {
+                clipped = true;
+                break;
+            }
+            parent = p.parent;
+        }
+        Ok(Some(ViewLayout {
+            bounds: node.bounds,
+            hidden: node.hidden,
+            clipped,
+        }))
+    }
+
+    /// The accessibility tree: the views on screen with a role or a label,
+    /// each holding those inside it, in tree order. With a selector, the
+    /// node of the view it names (whatever its role) and those inside it,
+    /// `None` when no view on screen matches; without, the top nodes under
+    /// a root without role. An error when several views match.
+    pub fn accessibility(
+        &self,
+        selector: Option<&str>,
+    ) -> Result<Option<AccessibilityNode>, String> {
+        let target = match selector {
+            Some(selector) => {
+                let parsed = Selector::parse(selector)?;
+                match self.resolve(&parsed)[..] {
+                    [id] => Some(id),
+                    [] => return Ok(None),
+                    ref all => return Err(format!("`{selector}` matches {} views", all.len())),
+                }
+            }
+            None => None,
+        };
+        let nodes = self.layout_nodes();
+        if target.is_some_and(|id| !nodes.iter().any(|n| n.id == id)) {
+            return Ok(None);
+        }
+        let mut children: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for n in &nodes {
+            children.entry(n.parent).or_default().push(n.id);
+        }
+        Ok(Some(
+            self.accessibility_node(target.unwrap_or(ROOT), &children),
+        ))
+    }
+
+    fn accessibility_node(
+        &self,
+        id: NodeId,
+        children: &HashMap<NodeId, Vec<NodeId>>,
+    ) -> AccessibilityNode {
+        let mut node = match self.nodes.get(&id).filter(|_| id != ROOT) {
+            Some(v) => AccessibilityNode {
+                role: Some(v.role).filter(|r| *r != AccessibilityRole::None),
+                label: v.label.as_deref().map(str::to_owned),
+                name: self.name(id),
+                disabled: v.disabled,
+                selected: v.selected,
+                checked: v.accessibility_state.checked,
+                expanded: v.accessibility_state.expanded,
+                pressed: v.accessibility_state.pressed,
+                busy: v.accessibility_state.busy,
+                value: v.value_text.as_deref().map(str::to_owned),
+                level: v.level,
+                description: v.description.as_deref().map(str::to_owned),
+                children: Vec::new(),
+            },
+            None => AccessibilityNode::default(),
+        };
+        let mut stack: Vec<NodeId> = children.get(&id).cloned().unwrap_or_default();
+        stack.reverse();
+        while let Some(c) = stack.pop() {
+            let Some(v) = self.nodes.get(&c) else {
+                continue;
+            };
+            if v.role != AccessibilityRole::None || v.label.is_some() {
+                node.children.push(self.accessibility_node(c, children));
+            } else if let Some(inner) = children.get(&c) {
+                stack.extend(inner.iter().rev());
+            }
+        }
+        node
     }
 
     /// View `id` leaves the tree with what it holds: none of it is under
@@ -1756,6 +1921,20 @@ impl Screen {
         }
     }
 
+    /// Where the window that view `id` is in lies, in the root's points: the
+    /// edges an edge pan starts at. `None` before the window has a size.
+    pub(crate) fn window_area(&self, id: NodeId) -> Option<Bounds<Points>> {
+        let window = self.window_of(id);
+        let size = self.window_sizes.get(&window).copied().or(self.viewport)?;
+        let origin = match window {
+            ROOT => Point::default(),
+            own => self
+                .bounds_in_root(own)
+                .map_or(Point::default(), |b| b.origin),
+        };
+        Some(Bounds::new(origin, size))
+    }
+
     /// The ids of the app's open windows, in opening order.
     #[cfg(feature = "agent")]
     pub(crate) fn window_ids(&self) -> Vec<String> {
@@ -2193,14 +2372,13 @@ impl Screen {
     /// in document order: each text view, its text and its content box in
     /// `area`'s points. Hidden views and texts kept out
     /// (`selectable={false}`) are left out.
-    pub(crate) fn area_texts(
-        &self,
-        area: NodeId,
-    ) -> Vec<(NodeId, Arc<nsh_core::AttributedText>, Bounds<Points>)> {
+    pub(crate) fn area_texts(&self, area: NodeId) -> Vec<AreaText> {
         let mut out = Vec::new();
         let Some(origin) = self.bounds_in_root(area).map(|b| b.origin) else {
             return out;
         };
+        // The last text selection leaves out: a list marker, maybe.
+        let mut chrome = None;
         let mut stack = vec![area];
         while let Some(id) = stack.pop() {
             let Some(view) = self.nodes.get(&id) else {
@@ -2210,15 +2388,16 @@ impl Screen {
                 continue;
             }
             if let Some(text) = &view.attributed
-                && text.selectable != Some(false)
                 && let Some(bounds) = self.bounds_in_root(id)
             {
                 let content = view.text_content;
-                out.push((
-                    id,
-                    Arc::clone(text),
-                    Bounds::new(bounds.origin - origin + content.origin, content.size),
-                ));
+                let frame = Bounds::new(bounds.origin - origin + content.origin, content.size);
+                if text.selectable == Some(false) {
+                    chrome = Some((text.text.clone(), frame));
+                } else {
+                    let marker = nsh_core::selection::marker_of(chrome.take().as_ref(), frame);
+                    out.push((id, Arc::clone(text), frame, marker));
+                }
             }
             if let Some(children) = self.children.get(&id) {
                 stack.extend(children.iter().rev());
@@ -2280,6 +2459,17 @@ impl Screen {
             [] => Err(crate::failure::not_found("view", selector)),
             ref all => Err(format!("`{selector}` matches {} views", all.len())),
         }
+    }
+
+    /// The orientation the view `selector` names reports to assistive
+    /// technologies (a tab list's, ARIA's `aria-orientation`); `None` for a
+    /// view without one. An error when none or several match.
+    pub fn accessibility_orientation(
+        &self,
+        selector: &str,
+    ) -> Result<Option<nsh_core::geometry::Axis>, String> {
+        let id = self.id(selector)?;
+        Ok(self.nodes.get(&id).and_then(|v| v.orientation))
     }
 
     /// The detent the dialog `selector` names rests at as an iOS sheet
@@ -2583,6 +2773,13 @@ impl Screen {
         let inside = id == ROOT
             || self.is_window(id)
             || self.bounds_in_root(id).is_some_and(|b| b.contains(&at));
+        // Outside its clip path, neither it nor what it holds.
+        if let Some(clip) = view.and_then(|v| v.clip_path)
+            && let Some(b) = self.bounds_in_root(id)
+            && !clip.contains(b.size, at - b.origin)
+        {
+            return None;
+        }
         // Unclipped children can receive a pointer outside their parent's box.
         if !inside
             && (receives == PointerEvents::BoxOnly
@@ -3238,7 +3435,9 @@ impl Screen {
                 return false;
             };
             if let Some(input) = &v.input {
-                return input.config.editable && !self.disabled_from(id, None);
+                return input.config.editable
+                    && v.focusable != Some(false)
+                    && !self.disabled_from(id, None);
             }
             // A link in a text view is a stop after it, in text order
             // (`TextLink::focus_stop`).
@@ -3293,7 +3492,7 @@ impl Screen {
             return false;
         }
         if let Some(input) = &v.input {
-            return input.config.editable;
+            return input.config.editable && v.focusable != Some(false);
         }
         // A link in a text view is a stop after it, in text order
         // (`TextLink::focus_stop`).
@@ -3507,15 +3706,74 @@ impl Screen {
         };
         if *at > end {
             *at = end;
+            self.moved(id);
+        }
+    }
+
+    /// Scroll view `id` moved by what the core sent (a scroll, or its
+    /// content's new end): reported once after the batch, however many
+    /// items of it moved the view.
+    fn moved(&mut self, id: NodeId) {
+        if !self.scrolled.contains(&id) {
             self.scrolled.push(id);
         }
     }
 
-    /// The scroll views a command moved since the last call.
+    /// The scroll views the core's items moved since the last call.
     pub(crate) fn take_scrolled(&mut self) -> Vec<NodeId> {
         std::mem::take(&mut self.scrolled)
     }
 }
+
+/// A [`ViewLayout`] as the test protocol carries it.
+#[cfg(any(feature = "agent", feature = "js"))]
+pub(crate) fn protocol_layout(l: ViewLayout) -> nsh_dev::protocol::ViewLayout {
+    let mut out = nsh_dev::protocol::ViewLayout::default();
+    out.x = l.bounds.origin.x.0;
+    out.y = l.bounds.origin.y.0;
+    out.width = l.bounds.size.width.0;
+    out.height = l.bounds.size.height.0;
+    out.hidden = l.hidden;
+    out.clipped = l.clipped;
+    out
+}
+
+/// An [`AccessibilityNode`] as the test protocol carries it.
+#[cfg(any(feature = "agent", feature = "js"))]
+pub(crate) fn protocol_accessibility(n: AccessibilityNode) -> nsh_dev::protocol::AccessibilityNode {
+    let mut out = nsh_dev::protocol::AccessibilityNode::default();
+    out.role = n.role.map(|r| r.js_name().to_owned());
+    out.label = n.label;
+    out.name = n.name;
+    out.disabled = n.disabled;
+    out.selected = n.selected;
+    let name = |c: nsh_core::Checked| {
+        match c {
+            nsh_core::Checked::True => "true",
+            nsh_core::Checked::False => "false",
+            nsh_core::Checked::Mixed => "mixed",
+        }
+        .to_owned()
+    };
+    out.checked = n.checked.map(name);
+    out.expanded = n.expanded;
+    out.pressed = n.pressed.map(name);
+    out.busy = n.busy;
+    out.value = n.value;
+    out.level = n.level;
+    out.description = n.description;
+    out.children = n.children.into_iter().map(protocol_accessibility).collect();
+    out
+}
+
+/// One text of a selectable area: its view, text, content box in the
+/// area's points and the list marker it carries, if any.
+pub(crate) type AreaText = (
+    NodeId,
+    Arc<nsh_core::AttributedText>,
+    Bounds<Points>,
+    Option<String>,
+);
 
 #[cfg(test)]
 mod tests {
@@ -3832,7 +4090,8 @@ mod tests {
         ]));
         // Rows arrive above the one row: the core keeps it in place with a
         // scroll it sends before the new content size, and the view goes
-        // as far as that size lets it.
+        // as far as that size lets it. The scroll and the pull back move
+        // it once: one report.
         screen.apply(&batch(vec![by(1176.0), content(1232.0)]));
         assert_eq!(screen.scroll(2).unwrap().y, Points(432.0));
         assert_eq!(screen.take_scrolled(), [2]);
@@ -3841,9 +4100,10 @@ mod tests {
         screen.apply(&batch(vec![content(56.0)]));
         assert_eq!(screen.scroll(2).unwrap().y, Points::ZERO);
         assert_eq!(screen.take_scrolled(), [2]);
-        // So does a viewport growing past the content's end.
+        // So does a viewport growing past the content's end, from where the
+        // core's scroll put the view (reported, as any scroll of the core's).
         screen.apply(&batch(vec![by(432.0), content(1232.0)]));
-        assert!(screen.take_scrolled().is_empty());
+        assert_eq!(screen.take_scrolled(), [2]);
         screen.apply(&batch(vec![frame(2, 0.0, 0.0, 390.0, 1000.0)]));
         assert_eq!(screen.scroll(2).unwrap().y, Points(232.0));
         assert_eq!(screen.take_scrolled(), [2]);

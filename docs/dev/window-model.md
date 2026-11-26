@@ -24,8 +24,12 @@ so an app that needs a visible menu bar uses its own controls and shortcuts.
 **Menu roles** (Close, Minimize, Zoom) on Windows and Linux still act on the
 host's window rather than the focused window; macOS's responder chain acts on
 the key window. **GPUI** is not migrated: its host and Linux window behavior
-follow the old model. **`windowSize()`/`pixelRatio()`** still report the host
-surface and the host display, not the calling window's. **`defaultVisible`**
+follow the old model. **`windowSize()`/`pixelRatio()`** report the host
+surface and the host display, not the calling window's, except on Windows,
+Linux and macOS, where they follow the app's primary window (the first of
+its own windows still open) as the user resizes or moves it, and the host's
+only while it shows none. On Linux the FPS panel (`--fps`) shows in that
+window too, and counts its frames, as it does on macOS (#2866). **`defaultVisible`**
 no longer applies: the host never shows, and an app that starts without a
 window opens none; the key is still parsed but has no effect.
 
@@ -258,8 +262,11 @@ the registry's app windows. This avoids a second rendering model.
 }
 ```
 
-- `"platform"` (the default): macOS keeps the app running with no windows;
-  Windows and Linux quit when the last window closes.
+- `"platform"` (the default for explicit `<Window>` apps): macOS keeps the
+  app running with no windows; Windows and Linux quit when the last window
+  closes. A plain root's implicit first window quits on every platform
+  (including macOS) when it closes unless the app explicitly configures
+  `application.quitMode` or calls `Application.setQuitMode`.
 - `"lastWindowClosed"`: every platform quits when the last window closes.
 - `"explicit"`: the app decides. The app host stays alive with no windows; the
   app opens a window, shows a tray menu, or calls `Application.quit()`.
@@ -390,6 +397,10 @@ current default (the window the component renders in) stays.
   and examples say so; a per-window module singleton is an app bug, not a
   framework feature.
 - `currentWindow()` inside a window returns that window's `WindowRef`.
+  A Rust component inside a JS `<Window>` (one the app's TSX uses) gets that window too: with no Rust
+  component above it, the core renders it under an owner per window that provides a `WindowRef` for that window's
+  node, whose state and title bar area follow what the platform reports of it (`Core::js_window_owner`), so
+  `current_window().title_bar()` there is the window's, not the hidden host's.
   `focusedWindow()` and `windows()` work in the app root and in any window.
 - A `<Window>` unmount disposes its owner, its effects and its bindings; the
   app root is not disposed.
@@ -494,10 +505,14 @@ Window model v2 is a major-version break for apps that declare windows, but
 released apps keep running: `mount` gives a plain root the implicit first
 window, `currentWindow()` in the app root is its ref, and root keymap
 bindings stay app-wide as they were. Apps that declare `<Window>` scenes do
-not get it (the runtime drops it unshown). The first window inherits the
-`"window"` launch defaults; its `<Window>` attributes override them. An app
-that needs the old "quit when the first window closes" behavior sets
-`quitMode: "lastWindowClosed"`.
+not get it (the runtime drops it unshown). The first window inherits the `"window"` launch defaults; its `<Window>`
+attributes override them. Closing the implicit first window quits on every
+platform (as `"lastWindowClosed"`) unless the app explicitly configures
+`application.quitMode` in `nsh.json` or calls `Application.setQuitMode`, so
+a plain `mount(App)` app on macOS does not stay running in the Dock with no
+way to reopen its window. Explicit `<Window>` apps default to `"platform"`
+and set `quitMode: "lastWindowClosed"` when they want every platform to quit
+with the last window.
 
 ## Compatibility and migration
 

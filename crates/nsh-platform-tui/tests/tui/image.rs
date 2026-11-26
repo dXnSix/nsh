@@ -88,6 +88,39 @@ fn a_picture_is_drawn_in_half_blocks_and_reports_its_size() {
     assert_eq!(buffer[(10, 0)].symbol(), " ", "only its box");
 }
 
+/// A picture transparent until it has loaded, as an avatar's is.
+#[component]
+fn Hidden() -> impl IntoElement {
+    let loaded = signal(false);
+    view().flex_1().child(
+        image(PNG)
+            .object_fit(ResizeMode::Stretch)
+            .w(px(80.0))
+            .h(px(16.0))
+            .opacity(move || if loaded.get() { 1.0_f32 } else { 0.0 })
+            .on_load(move |_: &nsh_core::Size<nsh_core::geometry::DevicePixels>| loaded.set(true)),
+    )
+}
+
+#[test]
+fn a_transparent_picture_loads_and_shows_once_it_has_loaded() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(12, 4)).unwrap();
+    view.load(App::Rust(Root::new::<Hidden>(|| ()))).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        terminal
+            .draw(|frame| view.render(frame, frame.area()))
+            .unwrap();
+        if terminal.backend().buffer()[(0, 0)].symbol() == "▀" {
+            break;
+        }
+        assert!(rx.recv_deadline(deadline).is_ok(), "never loaded");
+    }
+    let cell = &terminal.backend().buffer()[(0, 0)];
+    assert_eq!((cell.fg, cell.bg), (RED, BLUE));
+}
+
 fn kitty() -> (AppView, crossbeam_channel::Receiver<()>) {
     let (tx, rx) = crossbeam_channel::unbounded();
     let mut options = AppOptions::default();
@@ -231,4 +264,45 @@ fn an_image_of_one_side_takes_the_other_from_its_aspect_ratio() {
     // 80pt wide is 10 columns; half of it, 40pt, is 2 rows of 16pt.
     assert_eq!(line(2), "decoded");
     assert_eq!(line(5), "remote ");
+}
+
+/// A list row led by a glyph-sized icon, then an avatar a little larger.
+#[component]
+fn IconRow() -> impl IntoElement {
+    view()
+        .flex_1()
+        .child(
+            view()
+                .flex_row()
+                .gap(px(8.0))
+                .child(image(PNG).w(px(16.0)).h(px(16.0)))
+                .child(text("Inbox")),
+        )
+        .child(
+            view()
+                .flex_row()
+                .gap(px(8.0))
+                .child(
+                    image(PNG)
+                        .object_fit(ResizeMode::Stretch)
+                        .w(px(24.0))
+                        .h(px(24.0)),
+                )
+                .child(text("Jason")),
+        )
+}
+
+#[test]
+fn an_icon_sized_picture_is_left_out_and_its_label_closes_up() {
+    let (mut view, rx) = surface();
+    let mut terminal = Terminal::new(TestBackend::new(12, 3)).unwrap();
+    view.load(App::Rust(Root::new::<IconRow>(|| ()))).unwrap();
+    draw_until(&mut view, &mut terminal, &rx, "Jason");
+    let buffer = terminal.backend().buffer();
+    let row = |y: u16| -> String { (0..12).map(|x| buffer[(x, y)].symbol()).collect() };
+    // Half blocks would show the icon only as a blot of color.
+    assert_eq!(row(0), "Inbox       ");
+    // The avatar keeps its picture, in front of its label.
+    assert_eq!(buffer[(0, 1)].symbol(), "▀", "{:?}", row(1));
+    assert!(row(1).contains("Jason"), "{:?}", row(1));
 }

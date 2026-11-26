@@ -7,21 +7,25 @@ use std::{
 
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, MainThreadBound};
-use nsh_core::{MountBatch, Points, Size};
+use nsh_core::{
+    Bounds, MountBatch, Points, Size,
+    platform::{ReservedRegion, ReservedRegionKind, ReservedRegions},
+};
 use nsh_engine::{
     App, ColorScheme, Edges, Engine, EngineConfig, Environment, Idiom, Lifecycle, MainThreadTask,
     MountSink, Policy,
 };
 use objc2::{
     DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
-    rc::{Retained, Weak},
-    runtime::ProtocolObject,
+    rc::{Allocated, Retained, Weak},
+    runtime::{AnyClass, AnyObject, ProtocolObject},
+    sel,
 };
 use objc2_core_foundation::{CGRect, CGSize};
 use objc2_foundation::{
-    NSCurrentLocaleDidChangeNotification, NSNotification, NSNotificationCenter, NSNumber, NSObject,
-    NSObjectProtocol, NSOperationQueue, NSSet, NSSystemTimeZoneDidChangeNotification, NSTimeZone,
-    NSValue,
+    NSArray, NSCurrentLocaleDidChangeNotification, NSNotification, NSNotificationCenter, NSNumber,
+    NSObject, NSObjectProtocol, NSOperationQueue, NSSet, NSSystemTimeZoneDidChangeNotification,
+    NSTimeZone, NSValue,
 };
 use objc2_ui_kit::{
     NSValueUIGeometryExtensions, UIApplication, UIApplicationDidBecomeActiveNotification,
@@ -57,6 +61,7 @@ struct MainThreadSink {
     mounter: SharedMounter,
     on_error: SharedErrorHandler,
     on_hot_failed: SharedHandler,
+    standalone: bool,
     #[cfg(feature = "dev")]
     test_model: TestModel,
 }
@@ -76,6 +81,19 @@ impl MountSink for MainThreadSink {
         });
     }
 
+    fn resized(&self, size: Size<Points>) {
+        if self.standalone {
+            // A resize can settle without emitting any new frames.
+            let mounter = self.mounter.clone();
+            DispatchQueue::main().exec_async(move || {
+                let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+                if let Some(mounter) = mounter.get(mtm).borrow_mut().as_mut() {
+                    mounter.resized(size);
+                }
+            });
+        }
+    }
+
     fn request_frame(&self) {
         let mounter = self.mounter.clone();
         DispatchQueue::main().exec_async(move || {
@@ -87,8 +105,17 @@ impl MountSink for MainThreadSink {
     }
 
     fn run_on_main_thread(&self, task: MainThreadTask) {
+        let mounter = self.mounter.clone();
         // The main queue is serial: after the batches submitted before it.
-        DispatchQueue::main().exec_async(move || task.run());
+        DispatchQueue::main().exec_async(move || {
+            let mtm = MainThreadMarker::new().expect("main queue runs on the main thread");
+            let root = mounter
+                .get(mtm)
+                .borrow()
+                .as_ref()
+                .and_then(|mounter| mounter.ui_view(nsh_core::ROOT_ID));
+            crate::presenting::run_for(root, || task.run());
+        });
     }
 
     fn hot_update_failed(&self) {
@@ -179,8 +206,15 @@ define_class!(
                 // UIKit updates the layout regions as it lays the view
                 // out: publish when they moved the safe area without a
                 // resize.
-                let published = self.ivars().environment.get().map(|env| env.safe_area);
-                if published.is_some_and(|safe| safe != self.safe_area()) {
+                // The reserved regions (a fold) move the same way.
+                let published = self
+                    .ivars()
+                    .environment
+                    .get()
+                    .map(|env| (env.safe_area, env.reserved_regions));
+                if published.is_some_and(|(safe, reserved)| {
+                    safe != self.safe_area() || reserved != self.reserved_regions()
+                }) {
                     self.publish_environment();
                 }
                 return;
@@ -427,6 +461,90 @@ impl RootView {
         }
     }
 
+    /// The regions the device reserves in the surface (`reservedRegions()`),
+    /// in the root's points: UIKit's reserved regions (iOS 27.1 on,
+    /// `reservedRegionsOfKind:`) of both kinds, the active ones. None before
+    /// iOS 27.1.
+    fn reserved_regions(&self) -> ReservedRegions {
+        if !self.respondsToSelector(sel!(reservedRegionsOfKind:)) {
+            return ReservedRegions::NONE;
+        }
+        let Some(kinds) = AnyClass::get(c"UIViewReservedRegionKind") else {
+            return ReservedRegions::NONE;
+        };
+        // SAFETY: the class methods of `UIViewReservedRegionKind`, which
+        // exists from iOS 27.1 on, as `reservedRegionsOfKind:` does.
+        let (occlusion, division): (Retained<AnyObject>, Retained<AnyObject>) = unsafe {
+            (
+                msg_send![kinds, occlusionRegionKind],
+                msg_send![kinds, divisionRegionKind],
+            )
+        };
+        let mut regions = Vec::new();
+        for (kind, object) in [
+            (ReservedRegionKind::Occlusion, &occlusion),
+            (ReservedRegionKind::Division, &division),
+        ] {
+            // SAFETY: `reservedRegionsOfKind:` answers an array of
+            // `UIViewReservedRegion`, whose `frame` is a `CGRect` in this
+            // view's coordinates.
+            let found: Retained<NSArray<AnyObject>> =
+                unsafe { msg_send![self, reservedRegionsOfKind: &**object] };
+            for region in found.iter() {
+                // SAFETY: as above.
+                let frame: CGRect = unsafe { msg_send![&*region, frame] };
+                regions.push(ReservedRegion::new(
+                    kind,
+                    Bounds::new(
+                        nsh_core::geometry::point(
+                            Points(frame.origin.x as f32),
+                            Points(frame.origin.y as f32),
+                        ),
+                        Size::new(
+                            Points(frame.size.width as f32),
+                            Points(frame.size.height as f32),
+                        ),
+                    ),
+                ));
+            }
+        }
+        ReservedRegions::new(regions)
+    }
+
+    /// The reserved regions follow the hinge: a display that folds or
+    /// opens keeps its size, so no layout pass reports the fold coming or
+    /// going. A `UIHingeInteraction` (iOS 27.1 on) hears each change of the
+    /// hinge's status; the regions are read again then.
+    fn observe_hinge(this: &Retained<Self>) {
+        let Some(class) = AnyClass::get(c"UIHingeInteraction") else {
+            return;
+        };
+        let weak = Weak::from_retained(this);
+        let status = Cell::new(None::<isize>);
+        let block = RcBlock::new(move |_: NonNull<AnyObject>, update: NonNull<AnyObject>| {
+            let Some(view) = weak.load() else { return };
+            // SAFETY: `UIHingeInteractionUpdate.hinge` (nullable) and
+            // `UIHinge.status` (an `NSInteger` enum).
+            let now: Option<isize> = unsafe {
+                let hinge: Option<Retained<AnyObject>> = msg_send![update.as_ref(), hinge];
+                hinge.map(|h| msg_send![&*h, status])
+            };
+            // The angle changes as the user moves the display: only a new
+            // status (closed, partly or fully open) can move the regions.
+            if status.replace(now) != now {
+                view.publish_environment();
+            }
+        });
+        // SAFETY: `initWithUpdateHandler:` copies the block; the handler
+        // runs on the main thread, where it touches the view.
+        let interaction: Retained<AnyObject> = unsafe {
+            let allocated: Allocated<AnyObject> = msg_send![class, alloc];
+            msg_send![allocated, initWithUpdateHandler: &*block]
+        };
+        // SAFETY: a `UIInteraction`, which the view keeps.
+        let () = unsafe { msg_send![&**this, addInteraction: &*interaction] };
+    }
+
     /// What JS sees through `windowSize()`, `safeArea()`, `keyboard()`...
     fn environment(&self) -> Environment {
         let size = self.bounds().size;
@@ -456,6 +574,7 @@ impl RootView {
             vertical_size_class: size_class(vertical),
             window: Size::new(Points(size.width as f32), Points(size.height as f32)),
             safe_area: self.safe_area(),
+            reserved_regions: self.reserved_regions(),
             // UIKit draws no title bar an app could hide.
             title_bar: Edges::default(),
             keyboard_height: Points(keyboard_height),
@@ -482,6 +601,9 @@ impl RootView {
             locale: current_locale(),
             locale_settings: locale_settings(),
             lifecycle: self.ivars().lifecycle.get(),
+            // The system's path monitor and `CTCellularData`, the
+            // process's (`observe_network`).
+            network: nsh_platform_apple::network::network(self.mtm()),
             // Only read for the web: iOS keys are always Apple's.
             apple_keyboard: true,
             file_requests: true,
@@ -495,10 +617,13 @@ impl RootView {
             canvas_render: true,
             // `UIActivityViewController` (`crate::share`).
             share: true,
+            // `UIApplication.openSettingsURLString`. A Mac has no settings
+            // page of an iPhone or iPad app's own: Mac Catalyst and an iOS
+            // app running on a Mac ("Designed for iPad") report none.
+            app_settings: !cfg!(target_abi = "macabi")
+                && !objc2_foundation::NSProcessInfo::processInfo().isiOSAppOnMac(),
             // `ASWebAuthenticationSession` (`crate::auth_session`).
             auth_session: true,
-            // The Speech framework fed by the microphone.
-            speech: true,
             // The notification center.
             notifications: true,
             // AVAudioEngine and AVPlayer.
@@ -547,6 +672,29 @@ impl RootView {
         let observer = unsafe {
             center.addObserverForName_object_queue_usingBlock(
                 Some(NSSystemTimeZoneDidChangeNotification),
+                None,
+                Some(&NSOperationQueue::mainQueue()),
+                &block,
+            )
+        };
+        this.ivars().observers.borrow_mut().push(observer);
+    }
+
+    /// The environment follows the route to the network and whether the
+    /// user lets the app use cellular data (`network()`): the shared
+    /// monitor posts its change once for the process, each surface reports
+    /// it.
+    fn observe_network(this: &Retained<Self>) {
+        let center = NSNotificationCenter::defaultCenter();
+        let weak = Weak::from_retained(this);
+        let block = RcBlock::new(move |_: NonNull<NSNotification>| {
+            let Some(view) = weak.load() else { return };
+            view.publish_environment();
+        });
+        // SAFETY: as in `observe_time_zone`.
+        let observer = unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(&nsh_platform_apple::network::changed_name()),
                 None,
                 Some(&NSOperationQueue::mainQueue()),
                 &block,
@@ -886,7 +1034,6 @@ impl RootView {
             clipboard: None,
             host: self.ivars().options.host.clone(),
             picker: None,
-            speech: None,
             audio: None,
             windows: None,
             login_item: None,
@@ -905,6 +1052,7 @@ impl RootView {
             mounter: mounter.clone(),
             on_error: self.ivars().on_error.clone(),
             on_hot_failed: self.ivars().on_hot_failed.clone(),
+            standalone: crate::app::RootController::for_surface(self).is_some(),
             #[cfg(feature = "dev")]
             test_model: self.ivars().test_model.clone(),
         };
@@ -1123,6 +1271,8 @@ impl Surface {
         RootView::observe_lifecycle(&view);
         RootView::observe_time_zone(&view);
         RootView::observe_locale(&view);
+        RootView::observe_network(&view);
+        RootView::observe_hinge(&view);
         Ok(Surface { view })
     }
 
@@ -1311,12 +1461,11 @@ fn preferred_languages() -> nsh_engine::Languages {
 /// languages, the time zone, and Settings' time format (the hours of
 /// `NSDateFormatter`'s format for the `j` template, which 24-hour time
 /// changes), `NSCalendar`'s first weekday, `NSLocale`'s measurement system
-/// and the `AppleTemperatureUnit` default, over the region's.
+/// and the locale identifier's temperature unit override.
 fn locale_settings() -> nsh_engine::LocaleSettings {
-    use nsh_engine::{HourCycle, MeasurementSystem, TemperatureUnit, Weekday};
+    use nsh_engine::{HourCycle, MeasurementSystem, Weekday};
     use objc2_foundation::{
-        NSCalendar, NSDateFormatter, NSLocale, NSLocaleMeasurementSystem, NSString, NSUserDefaults,
-        ns_string,
+        NSCalendar, NSDateFormatter, NSLocale, NSLocaleMeasurementSystem, NSString, ns_string,
     };
     let locale = NSLocale::currentLocale();
     let mut preferences = nsh_engine::LocaleSettings::parse(&locale.localeIdentifier().to_string());
@@ -1350,14 +1499,6 @@ fn locale_settings() -> nsh_engine::LocaleSettings {
         Some("U.K.") => preferences.measurement_system = MeasurementSystem::Uk,
         _ => {}
     }
-    // Set once the user picks one.
-    let unit =
-        NSUserDefaults::standardUserDefaults().stringForKey(ns_string!("AppleTemperatureUnit"));
-    match unit.map(|u| u.to_string()).as_deref() {
-        Some("Celsius") => preferences.temperature_unit = TemperatureUnit::Celsius,
-        Some("Fahrenheit") => preferences.temperature_unit = TemperatureUnit::Fahrenheit,
-        _ => {}
-    }
     preferences
 }
 
@@ -1388,7 +1529,7 @@ fn lifecycle(mtm: MainThreadMarker) -> Lifecycle {
 
 /// The iOS version (`UIDevice.systemVersion`, the iOS version Catalyst
 /// apps run as), read once.
-fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
+pub(crate) fn os_version(mtm: MainThreadMarker) -> (u16, u16) {
     static VERSION: std::sync::OnceLock<(u16, u16)> = std::sync::OnceLock::new();
     *VERSION.get_or_init(|| {
         let version = UIDevice::currentDevice(mtm).systemVersion().to_string();

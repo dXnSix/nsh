@@ -1,11 +1,11 @@
 # Cargo features of the runtimes
 
 The large optional parts of a native runtime are Cargo features of the platform crates (`nsh-platform-linux`,
-`-macos`, `-windows`, `-ios`, `-android`, `-gpui`) and the app runners (`nsh-*-app`). `websocket` and `updater` are also features of `nsh-core`, `nsh-engine` and `nsh-platform-tui`. All are on by default, and `dev` turns all on.
+`-macos`, `-windows`, `-ios`, `-android`, `-gpui`) and the app runners (`nsh-*-app`). `websocket` and `updater` are also features of `nsh-core`, `nsh-engine` and `nsh-platform-tui`. All are on by default, and `dev` turns all on. `nsh-platform-gpui`'s `dev` is the exception: it connects to a dev server and leaves the parts as they are, so an embedding app's development build has its release's parts.
 
 | Feature | What it links | Off |
 | --- | --- | --- |
-| `shader` | naga, wgpu | Shader views draw nothing, shader transitions end at once ([shaders.md](shaders.md)); a warning naming the feature is logged once |
+| `shader` | naga, wgpu | Shader views and GPU views draw nothing, shader transitions end at once ([shaders.md](shaders.md), [gpu-views.md](gpu-views.md)); a warning naming the feature is logged once |
 | `editor` | `Editor`, `DiffView`, ropey, imara-diff | Importing them fails |
 | `rich-editor` | `RichEditor` and its classes | Importing them fails |
 | `plot` | `nsh/base/plot` | Importing it fails |
@@ -15,7 +15,7 @@ The large optional parts of a native runtime are Cargo features of the platform 
 | `zlib` | the JS module `zlib` (implies `js`) | Importing it fails |
 | `crypto` | the JS module `crypto`, Web Crypto's globals (implies `js`) | Importing it fails |
 | `websocket` | the native WebSocket client: tokio-tungstenite, rustls, the platform verifier (webpki-roots on Android) | `connect` of `websocket` rejects with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` |
-| `updater` | `nsh/updater`'s checks, downloads and installs (nsh-updater) | On native platforms `checkForUpdate` and `checkForPackage` reject with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`, naming the feature; downloads and installs reject |
+| `updater` | `nsh/updater`'s checks, downloads and installs (nsh-updater) | On native platforms `checkForUpdate` and `checkForPackage` reject with `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`, naming the feature, when the app ships an `"updater"` configuration, and find none without one (as with the feature); downloads and installs reject |
 | `svg` | resvg, usvg, tiny-skia (SVG images) | `asset!`/`assets!` of an SVG file fails the build naming the feature; an SVG loaded at run time (URL, bytes) shows nothing and its load fails naming the feature |
 | `net` | ureq and rustls: `fetch` and remote images (Linux, Windows, TUI, GPUI; macOS, iOS and Android use the system's HTTP) | `fetch` rejects; `<Image>` shows files, assets and inline data only |
 | `sound` | GStreamer (Linux only: `nsh-platform-linux`, `nsh-linux-app`; the other platforms play sounds with the system's audio) | `Sound.load` rejects with `not-supported`, naming the feature; `AudioPlayer` and `Video` play as before, through GTK |
@@ -40,12 +40,22 @@ What is kept:
 - `shader`, `editor`, `rich-editor`, `plot`, `term`, `emoji-picker`: kept when a reachable import links their part;
   `highlight` and `math` also by `TextView` (Markdown shows code and formulas);
 - `zlib`, `crypto`, `websocket`, `updater`: kept when the bundle imports their module;
-- `js`, `net`, `svg` (and Linux's `sound` and `webview`, Windows' `webview` and `media`): always kept, since a URL or an image's format comes from data;
+- `webview`: kept when the app may make a `WebView` (the bundle spells its tag, `webview`, or the app's Rust code
+  spells `WebView` or `web_view`);
+- `sound` (Linux's GStreamer): kept when the bundle imports `Sound` from `nsh`, or the app's Rust code names
+  `load_sound`; GTK plays `AudioPlayer` and `Video` without it;
+- `media` (Windows' Media Foundation and XAudio2): kept when the bundle imports `Sound`, `AudioPlayer` or `Video` from
+  `nsh` or spells the tag `video` (the compiled `<Video>`), or the app's Rust code names `load_sound`, `audio_player` or
+  `video` (whole names, so `Win32_SoundDevice` or an icon's `Icon::Video` keeps nothing);
+- `js`, `net`, `svg`: always kept, since a URL or an image's format comes from data;
 - everything is kept when the bundle computes an import (`import(name)`), or when it could not be analyzed.
 
 What only the app's Rust code or a dynamic access needs, it keeps in `nsh.json`: `"features": ["plot"]`. Rust code that
 depends on `nsh-base` with its default features keeps them through Cargo's feature unification anyway. Development
-hosts and `nsh run` always have everything. The web links per app by what it imports (`docs/dev/browser-js-size.md`).
+hosts and `nsh run` always have everything, except Linux's `webview` for an app with Rust crates of its own, whose
+development host is built on this machine: it builds WebKitGTK only when the bundle spells `webview`, the app's Rust
+code spells `WebView` or `web_view`, or `nsh.json` keeps it (`rust_app.rs` `dev_host_web_view`). A `WebView` added
+while `nsh run` is running shows a placeholder, with a warning, until `nsh run` starts again. The web links per app by what it imports (`docs/dev/browser-js-size.md`).
 
 A part that is off leaves `nsh_base` altogether, so Rust using it does not compile. JS fails at load: `Could not find
 export 'Editor' in module 'nsh/base'`. Nothing checks at build time that an app's imports match its runtime's features,

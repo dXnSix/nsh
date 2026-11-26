@@ -1,6 +1,6 @@
 ---
 title: Web
-description: Build web apps in Rust or TSX with Native Shell components rendered as HTML and CSS, develop in the browser, and publish to any static host or CDN.
+description: Build web apps in TSX or Rust with Native Shell components rendered as HTML and CSS, develop in the browser, and publish to any static host or CDN.
 order: 16
 group: platforms
 demo: counter
@@ -39,7 +39,7 @@ requestAnimationFrame ──────────────┘             
 
 Published apps behave as desktop apps in desktop browsers and as phone apps in phone browsers:
 
-- **Wheels and touchpads** scroll the innermost scroll view along their axis that can still move (a vertical wheel scrolls a horizontal list when nothing vertical can), and stay on it until the scroll ends; wheel notches glide, paging and snapping views move one page per scroll. Ctrl + wheel and touchpad pinches pinch views with native pinch values instead of zooming the page. Dragging with the mouse does not scroll, as on the desktop platforms: mouse drags go to pans, the responder system and text selection. Scroll views report `onScrollDragStart` / `onScrollDragEnd`, `onMomentumStart` / `End` and `onScrollEnd` as on the desktop platforms.
+- **Wheels and touchpads** scroll the innermost scroll view along their axis that can still move (a vertical wheel scrolls a horizontal list when nothing vertical can), and stay on it until the scroll ends; where the browser would scroll that same view it does, with its own smooth wheel and the touchpad's momentum, so a mouse feels as on any page; paging and snapping views move one page per scroll. Ctrl + wheel and touchpad pinches pinch views with native pinch values instead of zooming the page. Dragging with the mouse does not scroll, as on the desktop platforms: mouse drags go to pans, the responder system and text selection. Scroll views report `onScrollDragStart` / `onScrollDragEnd`, `onMomentumStart` / `End` and `onScrollEnd` as on the desktop platforms.
 - **Keyboard**: Tab and Shift+Tab move between pressables and inputs (the app's `focus-visible:` styles show the keyboard focus); Return presses the focused pressable, Space presses it when released; arrows, Page Up / Page Down, Space, Home and End scroll the scroll view around the focus or under the mouse; Escape leaves a field, closes the dialog, then goes back. `keymap` shortcuts work in the browser, matched on the spot (`mod` is Command in Safari and Chrome on a Mac, Control elsewhere).
 - **Going back**: Escape, Alt+Left (Cmd+[ on a Mac) and the mouse's back button close the newest dialog or pop the innermost shown stack (a stack in a tab that is not selected keeps its pages), as the Android back button does; `popOnBack` and `onBackPress` work as there. When the app is the whole page, every page pushed on a shown stack and every open dialog is a browser history entry, so the browser's back button goes back in the app. `nsh.json` `web.history` decides it for the packaged page and the dev server's: `false` keeps the browser's history to the page's own entries, `true` adds the app's in an iframe too.
 - **Addresses**: when the app is the whole page, [`UrlScheme.setUrl(url)`](../modules/nsh.md#urlscheme) sets the address of the current history entry, resolved against the page's address (or the site's `web.base`), and `UrlScheme.url()` reads it. The browser's back button goes back in the app: the stack's pages go back and the address becomes the entry's. An address the user types (a `#fragment`) is an entry of the app's at the pages shown, and a back or forward to an entry of the same pages tells the app the entry's address with [`UrlScheme.on("change")`](../modules/nsh.md#urlschemeonchange). `setUrl(url, { history: "push" })` makes such an entry for an address of the app's own, a tab or a filter.
@@ -210,6 +210,22 @@ gets the whole runtime, its crates included, in its `nsh.<digest>.wasm`. Measure
 |---|---|---|---|---|
 | `examples/counter` | The core components | 3.96 MB | 1.32 MB | 0.97 MB |
 | `examples/gallery` | Every component, `zlib` and shaders | 4.13 MB | 1.36 MB | 1.01 MB |
+
+#### One runtime for several apps
+
+Several apps on one site can share one runtime. Package each of them with `--shared-runtime` (web only; other targets ignore it):
+
+```sh
+nsh package --target web --shared-runtime --asset-url https://cdn.example.com/nsh/
+```
+
+`nsh.<digest>.wasm` then holds only the engine, and each `nsh/base` part, standard module and shader is a side
+module of its own (`nsh-<part>.<digest>.wasm`). These files are the same for every app packaged with the same
+version of NSH, wherever and in whatever order they are packaged, so each app can be built in its own CI job.
+Serve them from one place (`--asset-url`) and the browser downloads them once for the whole site.
+
+Without the flag each app gets its own runtime, trimmed to what it uses, which is smaller for a site with one app.
+An app with Rust components of its own has its own runtime, and `--shared-runtime` fails for it.
 
 ### Deploy it
 
@@ -593,6 +609,7 @@ The player and the dev server run apps with development settings; published apps
 
 ## See also
 
+- [Host the site](./packaging.md#host-the-site)
 - [Packaging](./packaging.md): the other targets of `nsh package`.
 - [Architecture](./architecture.md): the engine, the core and the mount batches the web build reuses.
 - [Testing](./testing-and-trace.md): `nsh test` runs the same engine headless, with an approximate text engine.

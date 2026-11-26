@@ -89,6 +89,7 @@ fn modifiers(key: &UIKey) -> Modifiers {
         alt: flags.contains(UIKeyModifierFlags::Alternate),
         shift: flags.contains(UIKeyModifierFlags::Shift),
         cmd: flags.contains(UIKeyModifierFlags::Command),
+        alt_graph: false,
     }
 }
 
@@ -321,6 +322,14 @@ pub(crate) fn root_began(target: &EventTarget, presses: &NSSet<UIPress>) -> bool
         Some(r)
             if r.downcast_ref::<crate::native_view::NshView>()
                 .is_some_and(|view| view.keyboard_target().is_some()) =>
+        {
+            return false;
+        }
+        // So did a selectable view's responder, on its area's raw key path.
+        Some(r)
+            if r.downcast_ref::<crate::selectable_view::AreaResponder>()
+                .and_then(|responder| responder.superview())
+                .is_some_and(|area| crate::keyboard::area_reports(&area)) =>
         {
             return false;
         }

@@ -248,10 +248,26 @@ pub(crate) fn doc_of(
     content: &Content,
     format: Option<RichFormat>,
 ) -> Result<Node, String> {
-    let content = fragment_of(schema, content, format)?;
+    if let (Content::Text(text), Some(RichFormat::Json)) = (content, format) {
+        let json: JsonValue = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        return doc_of(schema, &Content::Json(json), None);
+    }
+    // A whole document keeps its own attributes, as Tiptap's
+    // `createDocument` does; other content fills a new one.
+    let (attrs, content) = match content {
+        Content::Json(json @ JsonValue::Object(_)) => {
+            let node = Node::from_json(schema, json).map_err(|e| e.to_string())?;
+            if node.ty() == &schema.top_node_type() {
+                (Some(node.attrs().clone()), node.content().clone())
+            } else {
+                (None, Fragment::from(vec![node]))
+            }
+        }
+        _ => (None, fragment_of(schema, content, format)?),
+    };
     let doc = schema
         .top_node_type()
-        .create_and_fill(None, content, vec![])
+        .create_and_fill(attrs, content, vec![])
         .ok_or_else(|| "the content does not fit the schema's top node".to_owned())?;
     doc.check().map_err(|e| e.to_string())?;
     Ok(doc)
@@ -309,10 +325,7 @@ pub(crate) fn resolve_with(
     let plain = |f: fn(&EditorState, Dispatch<'_>) -> bool| -> BoxCommand { Arc::new(f) };
     Ok(match command.command {
         N::ToggleMark => cmd::toggle_mark(mark()?, attrs()?, true),
-        N::SetMark => {
-            let mark = mark()?.create(attrs()?).map_err(|e| e.to_string())?;
-            command_fn(move |state, dispatch| set_mark(state, dispatch, &mark))
-        }
+        N::SetMark => cmd::tiptap::set_mark(mark()?, attrs()?.unwrap_or_default()),
         N::UnsetMark => {
             let ty = mark()?;
             command_fn(move |state, dispatch| {
@@ -380,25 +393,38 @@ pub(crate) fn resolve_with(
                 .ok_or("insertContent needs `content`")?;
             let format = command.format;
             let schema = schema.clone();
-            command_fn(move |state, dispatch| {
-                let slice = match &content {
-                    Content::Text(text) if format.unwrap_or_default() == RichFormat::Text => {
-                        slice_from_text(&schema, text, state.selection().resolved_from())
+            command_fn(move |state, dispatch| match &content {
+                Content::Text(text) if format.unwrap_or_default() == RichFormat::Text => {
+                    let slice = slice_from_text(&schema, text, state.selection().resolved_from());
+                    if let Some(dispatch) = dispatch {
+                        let mut tr = state.tr();
+                        tr.replace_selection(slice);
+                        dispatch(tr);
                     }
-                    _ => match fragment_of(&schema, &content, format) {
-                        Ok(fragment) => Slice::max_open(fragment, true),
-                        Err(error) => {
-                            log::warn!("insertContent: {error}");
-                            return false;
-                        }
-                    },
-                };
-                if let Some(dispatch) = dispatch {
-                    let mut tr = state.tr();
-                    tr.replace_selection(slice);
-                    dispatch(tr);
+                    true
                 }
-                true
+                Content::Text(html) if format == Some(RichFormat::Html) => {
+                    let fragment = DomParser::from_schema(&schema).parse_insert_fragment(html);
+                    cmd::tiptap::insert_content_raw(
+                        fragment,
+                        Some(html.clone()),
+                        cmd::tiptap::InsertContentOptions::default(),
+                    )(state, dispatch)
+                }
+                _ => match fragment_of(&schema, &content, format) {
+                    Ok(fragment) => {
+                        if let Some(dispatch) = dispatch {
+                            let mut tr = state.tr();
+                            tr.replace_selection(Slice::max_open(fragment, true));
+                            dispatch(tr);
+                        }
+                        true
+                    }
+                    Err(error) => {
+                        log::warn!("insertContent: {error}");
+                        false
+                    }
+                },
             })
         }
         N::SetNodeAttribute => {
@@ -485,28 +511,79 @@ fn resolve_all(
         .collect()
 }
 
-/// Adds `mark` to the selection, or to the stored marks at a cursor.
-fn set_mark(
-    state: &EditorState,
-    dispatch: Dispatch<'_>,
-    mark: &crate::rich_editor::model::Mark,
-) -> bool {
-    let selection = state.selection();
-    let mut tr = state.tr();
-    if selection.empty() {
-        tr.add_stored_mark(mark);
-    } else {
-        for range in selection.ranges() {
-            if tr
-                .add_mark(range.from.pos, range.to.pos, mark.clone())
-                .is_err()
-            {
-                return false;
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::rich_editor::commands::test_util::{apply, n, p, schema, state};
+
+    fn inserted(content: Content, format: Option<RichFormat>, anchor: usize, head: usize) -> Node {
+        let s = schema();
+        let command = resolve(
+            &RichCommand {
+                command: RichCommandName::InsertContent,
+                content: Some(content),
+                format,
+                ..RichCommand::default()
+            },
+            &s,
+        )
+        .unwrap();
+        let doc = n(&s, "doc", vec![p(&s, "abc")]);
+        apply(&state(doc, anchor, head), command.as_ref())
+            .unwrap()
+            .doc()
+            .clone()
     }
-    if let Some(dispatch) = dispatch {
-        dispatch(tr);
+
+    #[test]
+    fn insert_content_opens_markdown_and_json_at_the_selection() {
+        let markdown = inserted(Content::Text("X".into()), Some(RichFormat::Markdown), 2, 2);
+        assert_eq!(markdown.child_count(), 1);
+        assert_eq!(markdown.child(0).text_content(), "aXbc");
+
+        let markdown = inserted(
+            Content::Text("X\n\nY".into()),
+            Some(RichFormat::Markdown),
+            2,
+            2,
+        );
+        assert_eq!(markdown.child_count(), 2);
+        assert_eq!(markdown.child(0).text_content(), "aX");
+        assert_eq!(markdown.child(1).text_content(), "Ybc");
+
+        let json = inserted(
+            Content::Json(json!({
+                "type": "doc",
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": "X"}]}],
+            })),
+            None,
+            2,
+            2,
+        );
+        assert_eq!(json.child_count(), 1);
+        assert_eq!(json.child(0).text_content(), "aXbc");
     }
-    true
+
+    #[test]
+    fn insert_content_replaces_a_text_selection_with_markdown_inline() {
+        let markdown = inserted(Content::Text("X".into()), Some(RichFormat::Markdown), 2, 3);
+        assert_eq!(markdown.child_count(), 1);
+        assert_eq!(markdown.child(0).text_content(), "aXc");
+    }
+
+    #[test]
+    fn insert_content_keeps_html_blocks_as_tiptap_inserts_them() {
+        let html = inserted(
+            Content::Text("<p>X</p>".into()),
+            Some(RichFormat::Html),
+            2,
+            2,
+        );
+        assert_eq!(html.child_count(), 3);
+        assert_eq!(html.child(0).text_content(), "a");
+        assert_eq!(html.child(1).text_content(), "X");
+        assert_eq!(html.child(2).text_content(), "bc");
+    }
 }

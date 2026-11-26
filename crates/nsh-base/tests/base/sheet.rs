@@ -9,7 +9,7 @@
 use nsh_base::sheet;
 use nsh_core::{Size, prelude::*};
 use nsh_engine::EngineConfig;
-use nsh_testing::Headless;
+use nsh_testing::{DragOptions, Headless};
 
 fn start<C: Component<Props = ()>>() -> Headless {
     let mut app = Headless::start(EngineConfig {
@@ -74,7 +74,12 @@ fn SwipeScreen() -> impl IntoElement {
 fn a_bottom_sheet_can_be_swiped_closed() {
     let mut app = start::<SwipeScreen>();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
-    app.drag("id:handle", point(px(0.0), px(100.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(100.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for_gone("Sheet body", std::time::Duration::from_secs(2))
         .unwrap();
     app.wait_for("text:requests:1").unwrap();
@@ -84,7 +89,12 @@ fn a_bottom_sheet_can_be_swiped_closed() {
 fn a_short_drag_returns_without_a_close_request() {
     let mut app = start::<SwipeScreen>();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
-    app.drag("id:handle", point(px(0.0), px(20.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(20.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     app.wait_for("text:requests:0").unwrap();
     app.press("id:close").unwrap();
@@ -124,6 +134,7 @@ fn a_cancelled_drag_does_not_close_even_past_the_release_threshold() {
         id,
         EventKind::PanEnd,
         EventPayload::PanCancelled {
+            origin: point(px(180.0), px(500.0)),
             translation: point(px(0.0), px(150.0)),
             velocity_x: 0.0,
             velocity_y: 2000.0,
@@ -143,7 +154,12 @@ fn a_permission_change_keeps_the_existing_content_and_stops_swiping() {
     let mut app = start::<SwipeScreen>();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     app.press("id:lock").unwrap();
-    app.drag("id:handle", point(px(0.0), px(100.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(100.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("text:requests:0").unwrap();
     app.wait_for("Sheet body").unwrap();
 }
@@ -153,7 +169,12 @@ fn declining_a_controlled_request_returns_the_sheet() {
     let mut app = start::<SwipeScreen>();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     app.press("id:decline").unwrap();
-    app.drag("id:handle", point(px(0.0), px(100.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(100.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     app.wait_for("text:requests:1").unwrap();
     app.press("id:close").unwrap();
@@ -191,7 +212,12 @@ fn dragging_a_sheet_ends_editing_in_it() {
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     app.type_text("id:field", "hi").unwrap();
     app.wait_for("text:editing:true").unwrap();
-    app.drag("id:handle", point(px(0.0), px(20.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(20.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("text:editing:false").unwrap();
     app.wait_for("Sheet body").unwrap();
 }
@@ -201,7 +227,12 @@ fn swiping_is_opt_in() {
     let mut app = start::<Screen>();
     app.press("id:toggle").unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
-    app.drag("Sheet body", point(px(0.0), px(120.0))).unwrap();
+    app.drag(
+        "Sheet body",
+        point(px(0.0), px(120.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("Sheet body").unwrap();
     app.press("id:toggle").unwrap();
     app.wait_for_gone("Sheet body", std::time::Duration::from_secs(2))
@@ -535,6 +566,7 @@ fn a_long_swipe_exit_keeps_fading_the_backdrop() {
         panel,
         EventKind::PanEnd,
         EventPayload::Pan {
+            origin: point(px(180.0), px(500.0)),
             translation: point(px(0.0), px(200.0)),
             velocity_x: 0.0,
             velocity_y: 0.0,
@@ -622,14 +654,19 @@ fn a_web_sheet_uses_the_presented_surface_size_and_keeps_its_close_lifecycle() {
 /// A phone's surface (390 × 844, 47 points of safe area at the top and 34
 /// at the bottom) on a manual clock showing `C`.
 fn start_on_a_phone<C: Component<Props = ()>>() -> Headless {
-    use nsh_core::platform::{Idiom, Os};
+    start_on_a_phone_of::<C>(nsh_core::platform::Os::Ios)
+}
+
+/// [`start_on_a_phone`] on `os`.
+fn start_on_a_phone_of<C: Component<Props = ()>>(os: nsh_core::platform::Os) -> Headless {
+    use nsh_core::platform::Idiom;
 
     let mut config = EngineConfig {
         viewport: Size::new(px(390.0), px(844.0)),
         clock: nsh_engine::Clock::manual(std::time::SystemTime::now()),
         ..EngineConfig::new(nsh_testing::windowed_root::<C>())
     };
-    config.environment.os = Os::Ios;
+    config.environment.os = os;
     config.environment.idiom = Idiom::Phone;
     config.environment.safe_area.top = px(47.0);
     config.environment.safe_area.bottom = px(34.0);
@@ -763,6 +800,140 @@ fn a_bottom_sheet_above_the_keyboard_stays_below_the_status_bar() {
         px(47.0),
         "held below the status bar: {panel:?}"
     );
+}
+
+/// The sheets of #3288: a header with Close at the top, an input and the
+/// rows under it; tall (more rows than fit above the keyboard) with the
+/// app's `maxHeight: "92%"`, or padded by `env(keyboard-inset-height)`.
+fn form_sheet(tall: bool) -> impl IntoElement {
+    let rows = if tall { 14 } else { 2 };
+    sheet()
+        .default_open(true)
+        .popup_class(if tall {
+            ""
+        } else {
+            "pb-[env(keyboard-inset-height)]"
+        })
+        .popup_style(|s| s.max_h(relative(0.92)))
+        .child(
+            view()
+                .max_h(relative(1.0))
+                .pb_safe_area()
+                .child(view().test_id("header").h(px(56.0)).child(text("Close")))
+                .child(
+                    scroll().flex_shrink(1.0).child(
+                        view()
+                            .child(view().h(px(48.0)).child(text("Title")))
+                            .children(
+                                (0..rows)
+                                    .map(|i| view().h(px(48.0)).child(text(format!("Row {i}")))),
+                            )
+                            .child(view().test_id("submit").h(px(48.0)).child(text("Submit"))),
+                    ),
+                ),
+        )
+}
+
+#[test]
+fn a_declared_max_height_gives_way_to_the_room_above_the_keyboard() {
+    // What JS's `popupStyle={{ maxHeight: … }}` gives a sheet.
+    use nsh_core::{PropertyValue, StyleDecl, StyleKey, StyleValue, element::Style};
+
+    let declared = |value: StyleValue<'_>| {
+        Style::default().with(
+            StyleKey::MaxHeight,
+            StyleKey::MaxHeight.parse_value(value).unwrap(),
+        )
+    };
+    let max_height = |style: &Style| {
+        style.decls().iter().rev().find_map(|decl| match decl {
+            StyleDecl::Set(StyleKey::MaxHeight, PropertyValue::Lpa(v)) => Some(*v),
+            _ => None,
+        })
+    };
+    let room = px(495.0);
+    let screen = px(844.0);
+    let length = |points: f32| max_height(&declared(StyleValue::Number(points)));
+    // 92% of the screen is taller than the room: the room.
+    let tall = declared(StyleValue::Str("92%")).max_height_at_most(room, screen);
+    assert_eq!(max_height(&tall), length(495.0));
+    // A shorter one stays.
+    let short = declared(StyleValue::Number(300.0));
+    assert_eq!(
+        max_height(&short.max_height_at_most(room, screen)),
+        length(300.0)
+    );
+    // None: the room.
+    assert_eq!(
+        max_height(&Style::default().max_height_at_most(room, screen)),
+        length(495.0)
+    );
+}
+
+#[component]
+fn TallFormSheet() -> impl IntoElement {
+    form_sheet(true)
+}
+
+#[component]
+fn PaddedFormSheet() -> impl IntoElement {
+    form_sheet(false)
+}
+
+#[test]
+fn a_tall_sheet_with_the_apps_max_height_keeps_its_header_on_screen() {
+    use nsh_core::platform::Os;
+
+    for os in [Os::Ios, Os::Android] {
+        let mut app = start_on_a_phone_of::<TallFormSheet>(os);
+        app.run_for(std::time::Duration::from_millis(400)).unwrap();
+        app.wait_for("Close").unwrap();
+        let resting = bounds_of(&app, "header");
+        assert!(resting.origin.y >= px(47.0), "{os:?}: {resting:?}");
+        keyboard(&mut app, 336.0);
+        let header = bounds_of(&app, "header");
+        assert_eq!(
+            header.origin.y,
+            px(47.0),
+            "{os:?}: the header right below the status bar, not above the screen"
+        );
+        keyboard(&mut app, 0.0);
+        assert_eq!(
+            bounds_of(&app, "header"),
+            resting,
+            "{os:?}: back where it was with the keyboard gone"
+        );
+    }
+}
+
+#[test]
+fn a_sheet_padded_by_the_keyboard_inset_is_lifted_once() {
+    use nsh_core::platform::Os;
+
+    for os in [Os::Ios, Os::Android] {
+        let mut app = start_on_a_phone_of::<PaddedFormSheet>(os);
+        app.run_for(std::time::Duration::from_millis(400)).unwrap();
+        app.wait_for("Submit").unwrap();
+        let resting = bounds_of(&app, "submit");
+        assert_eq!(resting.bottom(), px(844.0 - 34.0), "{os:?}");
+        keyboard(&mut app, 336.0);
+        assert_eq!(
+            bounds_of(&app, "submit").bottom(),
+            px(844.0 - 336.0),
+            "{os:?}: right above the keyboard, not a keyboard higher"
+        );
+        keyboard(&mut app, 0.0);
+        assert_eq!(bounds_of(&app, "submit"), resting, "{os:?}");
+    }
+}
+
+#[test]
+fn a_bottom_sheet_stays_above_the_keyboard_on_android_too() {
+    let mut app = start_on_a_phone_of::<KeyboardSheet>(nsh_core::platform::Os::Android);
+    app.run_for(std::time::Duration::from_millis(400)).unwrap();
+    app.wait_for("Last").unwrap();
+    keyboard(&mut app, 336.0);
+    assert_eq!(bounds_of(&app, "last").bottom(), px(844.0 - 336.0));
 }
 
 /// A menu, which a phone shows as a sheet at the bottom, padded by the
@@ -1111,7 +1282,12 @@ fn a_sheet_with_detents_rests_at_the_smallest_as_tall_as_the_largest() {
 #[test]
 fn a_drag_up_moves_the_sheet_to_the_larger_detent() {
     let (mut app, replica) = detent_app(MEDIUM);
-    app.drag("id:handle", point(px(0.0), px(-300.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(-300.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("text:picked:Large").unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     assert_rests(&replica, 0.0);
@@ -1124,7 +1300,12 @@ fn a_drag_down_moves_the_sheet_to_the_smaller_detent() {
         ..MEDIUM
     });
     assert_rests(&replica, 0.0);
-    app.drag("id:handle", point(px(0.0), px(250.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(250.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("text:picked:Medium").unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     assert_rests(&replica, 422.0);
@@ -1133,7 +1314,12 @@ fn a_drag_down_moves_the_sheet_to_the_smaller_detent() {
 #[test]
 fn a_drag_below_the_smallest_detent_closes_only_when_allowed() {
     let (mut app, replica) = detent_app(MEDIUM);
-    app.drag("id:handle", point(px(0.0), px(300.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(300.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     app.wait_for("Sheet body").unwrap();
     app.wait_for("text:picked:none").unwrap();
@@ -1143,7 +1329,12 @@ fn a_drag_below_the_smallest_detent_closes_only_when_allowed() {
         swipe: true,
         ..MEDIUM
     });
-    app.drag("id:handle", point(px(0.0), px(300.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(300.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for_gone("Sheet body", std::time::Duration::from_secs(2))
         .unwrap();
     app.wait_for("text:picked:none").unwrap();
@@ -1155,7 +1346,12 @@ fn a_controlled_detent_the_app_keeps_brings_the_sheet_back() {
         controlled: true,
         ..MEDIUM
     });
-    app.drag("id:handle", point(px(0.0), px(-300.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(-300.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("text:picked:Large").unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     assert_rests(&replica, 422.0);
@@ -1374,7 +1570,12 @@ fn the_footer_stays_at_the_bottom_of_what_shows() {
     });
     assert_rests(&replica, 422.0);
     assert_footer_at(&app, &replica, 844.0);
-    app.drag("id:handle", point(px(0.0), px(-300.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(-300.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     // On its way to the large detent, frame by frame, the footer stays at
     // the bottom of the screen.
     for _ in 0..30 {
@@ -1385,7 +1586,12 @@ fn the_footer_stays_at_the_bottom_of_what_shows() {
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     assert_rests(&replica, 0.0);
     assert_footer_at(&app, &replica, 844.0);
-    app.drag("id:handle", point(px(0.0), px(250.0))).unwrap();
+    app.drag(
+        "id:handle",
+        point(px(0.0), px(250.0)),
+        DragOptions::default(),
+    )
+    .unwrap();
     app.wait_for("text:picked:Medium").unwrap();
     app.wait(std::time::Duration::from_millis(400)).unwrap();
     assert_rests(&replica, 422.0);

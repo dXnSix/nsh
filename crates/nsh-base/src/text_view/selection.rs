@@ -7,9 +7,11 @@
 //! document's own text ([`Document::plain_text`]): the two differ only in
 //! their whitespace (a copy breaks blocks with one line break, the document
 //! with a blank line), so they are compared without it, the start telling
-//! repeated text apart. A copy also leaves formulas and images out, so
-//! their own text may be missing from it: they are skipped where it is,
-//! and kept when inside the range. The document is then cut to the found range, node
+//! repeated text apart. A copy gives a formula in text as its source
+//! (`$tex$`, a typeset formula's `copyText`) or leaves it out, and leaves
+//! formula blocks and images out, so their own text may be missing from
+//! it: they are matched in the form the copy has, and kept when inside the
+//! range. The document is then cut to the found range, node
 //! by node, and written out; a selection of all of it gives the source as
 //! it came, when it came in that format.
 
@@ -80,14 +82,38 @@ pub(crate) fn selected(
     let plain = doc.plain_text();
     // The same text with each formula's and image's own text masked: a
     // copy leaves those out, so they may be missing from `text`.
-    let masked = mask_atoms(doc).plain_text();
+    let masked = mask_atoms(doc, &mut |_, s| mask(s, ATOM)).plain_text();
     debug_assert_eq!(masked.len(), plain.len());
-    let found = locate(&plain, &plain, text, reported.start)
-        .or_else(|| locate(&plain, &masked, text, reported.start))
-        .map(|(from, to)| widen(&masked, text, from, to));
+    // A copy has the list items' markers, which the document's text has not.
+    let unmarked = without_list_markers(text);
+    // A typeset formula in text copies as its source (`$tex$`, its
+    // `copyText`), as an app's formula may.
+    let mut next = 0;
+    let formulas = mask_atoms(doc, &mut |atom, s| {
+        if atom == Atom::InlineMath {
+            next = 1 - next;
+            mask(s, FORMULA[next]);
+        }
+    })
+    .plain_text();
+    debug_assert_eq!(formulas.len(), plain.len());
+    let find = |text: &str| {
+        locate(&plain, &shown(&plain), text, reported.start)
+            .or_else(|| locate(&plain, &sourced(&plain, &formulas), text, reported.start))
+            .or_else(|| locate(&plain, &shown(&masked), text, reported.start))
+            .map(|(from, to)| widen(&masked, text, from, to))
+    };
+    // The text as copied first: a paragraph of the document may itself
+    // start with what reads as a marker (`2. place`, #3284).
+    let found = if unmarked == text {
+        find(text)
+    } else {
+        find(text).or_else(|| find(&unmarked))
+    };
     let Some((from, to)) = found else {
-        // Not found (text the document does not have, as a list's
-        // markers): the text itself, in the format.
+        // Not found (text the document does not have, such as custom
+        // rendered content or a marker made selectable by the app): the
+        // text itself, in the format.
         return match format {
             TextSelectionFormat::Html => {
                 let mut out = String::from("<p>");
@@ -112,71 +138,156 @@ pub(crate) fn selected(
     }
 }
 
+/// `text` (a copy) without the markers of its list items: a bullet, a
+/// number or a task's box, its own text before the item's text on its line
+/// and a tab after it, as a copy joins the texts of a line
+/// (`view.rs` puts the marker first in the item).
+fn without_list_markers(text: &str) -> std::borrow::Cow<'_, str> {
+    fn marker(line: &str) -> Option<usize> {
+        // `•\tItem` (a marker cell) or `• Item` (a copy's marker, #3284).
+        let (cell, _) = line.split_once('\t').or_else(|| line.split_once(' '))?;
+        let cell_trimmed = cell.trim_end();
+        let is_marker = matches!(cell_trimmed, "•" | "◦" | "▪" | "☐" | "☑")
+            || cell_trimmed
+                .strip_suffix('.')
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        is_marker.then_some(cell.len() + 1)
+    }
+    if !text.split('\n').any(|line| marker(line).is_some()) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| marker(line).map_or(line, |len| &line[len..]))
+        .collect();
+    std::borrow::Cow::Owned(lines.join("\n"))
+}
+
 /// What [`mask_atoms`] writes in place of each byte of an atom's text.
 const ATOM: char = '\u{1}';
 
-/// `doc` with the text of its formulas and images (atoms, which a copy
-/// leaves out) replaced by as many [`ATOM`]s, so its plain text keeps the
-/// same byte offsets.
-fn mask_atoms(doc: &Document) -> Document {
-    fn mask(s: &mut String) {
-        *s = ATOM.to_string().repeat(s.len());
-    }
-    fn inlines(list: &mut [Inline]) {
+/// What marks each byte of an inline formula's TeX for [`sourced`], one
+/// formula's in the first, the next one's in the second, and so on, so
+/// that two formulas side by side stay apart.
+const FORMULA: [char; 2] = ['\u{2}', '\u{3}'];
+
+/// The kinds of atoms: what a copy gives otherwise than their text in the
+/// document ([`Document::plain_text`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Atom {
+    /// A formula in text.
+    InlineMath,
+    /// A formula block.
+    BlockMath,
+    /// An image (its `alt`).
+    Image,
+}
+
+/// `s` replaced by as many `c`s as it has bytes.
+fn mask(s: &mut String, c: char) {
+    *s = c.to_string().repeat(s.len());
+}
+
+/// `doc` with the text of its formulas and images (atoms) passed to `f`,
+/// which may mask it (keeping its byte length, so the plain text keeps
+/// its byte offsets).
+fn mask_atoms(doc: &Document, f: &mut dyn FnMut(Atom, &mut String)) -> Document {
+    fn inlines(list: &mut [Inline], f: &mut dyn FnMut(Atom, &mut String)) {
         for inline in list {
             match inline {
-                Inline::Math { tex } => mask(tex),
-                Inline::Image(image) => mask(&mut image.alt),
+                Inline::Math { tex } => f(Atom::InlineMath, tex),
+                Inline::Image(image) => f(Atom::Image, &mut image.alt),
                 Inline::Custom(node) => {
-                    inlines(&mut node.content);
-                    blocks(&mut node.children);
+                    inlines(&mut node.content, f);
+                    blocks(&mut node.children, f);
                 }
                 other => {
                     if let Some(content) = content_mut(other) {
-                        inlines(content);
+                        inlines(content, f);
                     }
                 }
             }
         }
     }
-    fn blocks(list: &mut [Block]) {
+    fn blocks(list: &mut [Block], f: &mut dyn FnMut(Atom, &mut String)) {
         for block in list {
             match block {
-                Block::Paragraph { content } | Block::Heading { content, .. } => inlines(content),
-                Block::Blockquote { children, .. } => blocks(children),
+                Block::Paragraph { content } | Block::Heading { content, .. } => {
+                    inlines(content, f)
+                }
+                Block::Blockquote { children, .. } => blocks(children, f),
                 Block::List { items, .. } => {
                     for item in items {
-                        blocks(&mut item.children);
+                        blocks(&mut item.children, f);
                     }
                 }
-                Block::Math { tex } => mask(tex),
+                Block::Math { tex } => f(Atom::BlockMath, tex),
                 Block::Table(table) => {
                     for row in std::iter::once(&mut table.head).chain(table.rows.iter_mut()) {
                         for cell in row {
-                            inlines(&mut cell.content);
+                            inlines(&mut cell.content, f);
                         }
                     }
                 }
                 Block::Details {
                     summary, children, ..
                 } => {
-                    inlines(summary);
-                    blocks(children);
+                    inlines(summary, f);
+                    blocks(children, f);
                 }
                 Block::Custom(node) => {
-                    inlines(&mut node.content);
-                    blocks(&mut node.children);
+                    inlines(&mut node.content, f);
+                    blocks(&mut node.children, f);
                 }
                 _ => {}
             }
         }
     }
     let mut doc = doc.clone();
-    blocks(&mut doc.blocks);
+    blocks(&mut doc.blocks, f);
     for note in &mut doc.footnotes {
-        blocks(&mut note.children);
+        blocks(&mut note.children, f);
     }
     doc
+}
+
+/// The characters of `text` (the document's plain text, or it masked by
+/// [`mask_atoms`]) that a copy is compared by, with their byte offsets:
+/// all but whitespace and masked atoms.
+fn shown(text: &str) -> Vec<(usize, char)> {
+    text.char_indices()
+        .filter(|(_, c)| !c.is_whitespace() && *c != ATOM)
+        .collect()
+}
+
+/// [`shown`] of `plain` as a copy gives it when each formula in text
+/// copies as its source (`$tex$`): its TeX between two `$`s, the opening
+/// one at the TeX's first byte, the closing one ending where it ends, so
+/// a match maps back to `plain`. `formulas` is `plain` with the formulas
+/// marked by [`FORMULA`].
+fn sourced(plain: &str, formulas: &str) -> Vec<(usize, char)> {
+    let marks = formulas.as_bytes();
+    let formula = |at: usize| {
+        marks
+            .get(at)
+            .copied()
+            .filter(|b| FORMULA.contains(&char::from(*b)))
+    };
+    let mut out = Vec::with_capacity(plain.len());
+    for (at, c) in plain.char_indices() {
+        let mark = formula(at);
+        let end = at + c.len_utf8();
+        if mark.is_some() && (at == 0 || formula(at - 1) != mark) {
+            out.push((at, '$'));
+        }
+        if !c.is_whitespace() {
+            out.push((at, c));
+        }
+        if mark.is_some() && formula(end) != mark {
+            out.push((end - 1, '$'));
+        }
+    }
+    out
 }
 
 /// `from..to` widened over the atoms just before or after it when `text`
@@ -209,14 +320,16 @@ fn widen(masked: &str, text: &str, mut from: usize, mut to: usize) -> (usize, us
 }
 
 /// The byte range of `text` in `plain`, compared without whitespace and
-/// without the [`ATOM`]s of `masked` (`plain` itself, or it masked by
-/// [`mask_atoms`]): of the matches, the one starting nearest to `start`
-/// (UTF-16 units of the view's copy). Atoms inside the range are in it.
-fn locate(plain: &str, masked: &str, text: &str, start: Option<u32>) -> Option<(usize, usize)> {
-    let hay: Vec<(usize, char)> = masked
-        .char_indices()
-        .filter(|(_, c)| !c.is_whitespace() && *c != ATOM)
-        .collect();
+/// masked atoms by `hay` (`plain`'s characters as a copy may give them,
+/// with their byte offsets: [`shown`], [`sourced`]): of the matches, the
+/// one starting nearest to `start` (UTF-16 units of the view's copy).
+/// Atoms inside the range are in it.
+fn locate(
+    plain: &str,
+    hay: &[(usize, char)],
+    text: &str,
+    start: Option<u32>,
+) -> Option<(usize, usize)> {
     let needle: Vec<char> = text
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '\u{FFFC}')
@@ -300,6 +413,7 @@ impl Cut {
                 | Inline::Strikethrough { content }
                 | Inline::Underline { content }
                 | Inline::Highlight { content, .. }
+                | Inline::TextStyle { content, .. }
                 | Inline::Superscript { content }
                 | Inline::Subscript { content }
                 | Inline::Small { content }
@@ -397,8 +511,8 @@ impl Cut {
                 })
             }
             Block::Table(table) => {
-                let rows: Vec<&Vec<TableCell>> =
-                    std::iter::once(&table.head).chain(&table.rows).collect();
+                let has_head = !table.head.is_empty();
+                let rows: Vec<&Vec<TableCell>> = table.all_rows().collect();
                 let mut kept = Vec::new();
                 for (i, row) in rows.iter().enumerate() {
                     if i > 0 {
@@ -427,7 +541,7 @@ impl Cut {
                 // The header stays a header; rows without it keep the
                 // table's own header.
                 let mut kept = kept.into_iter();
-                let head = if kept.as_slice()[0].0 == 0 {
+                let head = if has_head && kept.as_slice()[0].0 == 0 {
                     kept.next().map(|(_, c)| c).unwrap_or_default()
                 } else {
                     table.head.clone()
@@ -479,12 +593,18 @@ fn content_mut(inline: &mut Inline) -> Option<&mut Vec<Inline>> {
         | Inline::Strikethrough { content }
         | Inline::Underline { content }
         | Inline::Highlight { content, .. }
+        | Inline::TextStyle { content, .. }
         | Inline::Superscript { content }
         | Inline::Subscript { content }
         | Inline::Small { content }
         | Inline::Link { content, .. } => Some(content),
         _ => None,
     }
+}
+
+/// `color` when it is a CSS color, so a `style` attribute can carry it.
+fn style_color(color: Option<&str>) -> Option<&str> {
+    color.map(str::trim).filter(|c| c.parse::<Hsla>().is_ok())
 }
 
 fn floor(s: &str, mut i: usize) -> usize {
@@ -547,7 +667,11 @@ fn md_blocks(blocks: &[Block], indent: &str, out: &mut String) {
 
 fn md_block(block: &Block, indent: &str, out: &mut String) {
     match block {
-        Block::Paragraph { content } => md_inlines(content, out),
+        Block::Paragraph { content } => {
+            let from = out.len();
+            md_inlines(content, out);
+            escape_block_start(out, from);
+        }
         Block::Heading { level, content, .. } => {
             out.push_str(&"#".repeat((*level).clamp(1, 6) as usize));
             out.push(' ');
@@ -636,7 +760,16 @@ fn md_block(block: &Block, indent: &str, out: &mut String) {
                     out.push_str(" |");
                 }
             };
-            row(&table.head, out);
+            // Markdown has no table without a header: a table with none
+            // takes its first row as one.
+            let (head, body) = match table.head.is_empty() {
+                true => table
+                    .rows
+                    .split_first()
+                    .map_or((&[][..], &[][..]), |(h, b)| (h.as_slice(), b)),
+                false => (table.head.as_slice(), table.rows.as_slice()),
+            };
+            row(head, out);
             out.push('\n');
             out.push_str(indent);
             out.push('|');
@@ -648,7 +781,7 @@ fn md_block(block: &Block, indent: &str, out: &mut String) {
                     ColumnAlign::Right => " --: |",
                 });
             }
-            for r in &table.rows {
+            for r in body {
                 out.push('\n');
                 out.push_str(indent);
                 row(r, out);
@@ -701,6 +834,18 @@ fn md_inline(inline: &Inline, out: &mut String) {
         Inline::Strikethrough { content } => wrap("~~", content, out),
         Inline::Underline { content } => tag("u", content, out),
         Inline::Highlight { content, .. } => tag("mark", content, out),
+        // Markdown has no colors: a colored run is written as the HTML
+        // span that carries its color, its content Markdown.
+        Inline::TextStyle { content, color } => match style_color(color.as_deref()) {
+            Some(color) => {
+                out.push_str("<span style=\"color: ");
+                escape(color, out);
+                out.push_str("\">");
+                md_inlines(content, out);
+                out.push_str("</span>");
+            }
+            None => md_inlines(content, out),
+        },
         Inline::Superscript { content } => tag("sup", content, out),
         Inline::Subscript { content } => tag("sub", content, out),
         Inline::Small { content } => tag("small", content, out),
@@ -769,6 +914,23 @@ fn md_url(url: &str) -> String {
 }
 
 /// `text` with Markdown's markup characters escaped.
+/// Escapes what would make the paragraph written from `from` in `out` a
+/// list item: a number and `.` or `)` (`2. place`), or `-` or `+`, then a
+/// space or the end (#3284). Other marks are escaped where they are
+/// written ([`escape_markdown`]).
+fn escape_block_start(out: &mut String, from: usize) {
+    let line = &out[from..];
+    let digits = line.bytes().take_while(u8::is_ascii_digit).count();
+    let at = match line.as_bytes().get(digits) {
+        Some(b'.' | b')') if (1..=9).contains(&digits) => digits,
+        Some(b'-' | b'+') if digits == 0 => 0,
+        _ => return,
+    };
+    if matches!(line.as_bytes().get(at + 1), None | Some(b' ' | b'\t')) {
+        out.insert(from + at, '\\');
+    }
+}
+
 fn escape_markdown(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
@@ -899,9 +1061,12 @@ fn html_block(block: &Block, out: &mut String) {
                 }
                 out.push_str("</tr>");
             };
-            out.push_str("<table><thead>");
-            row(&table.head, "th", out);
-            out.push_str("</thead>");
+            out.push_str("<table>");
+            if !table.head.is_empty() {
+                out.push_str("<thead>");
+                row(&table.head, "th", out);
+                out.push_str("</thead>");
+            }
             if !table.rows.is_empty() {
                 out.push_str("<tbody>");
                 for r in &table.rows {
@@ -955,6 +1120,16 @@ fn html_inline(inline: &Inline, out: &mut String) {
         Inline::Strikethrough { content } => tag("del", content, out),
         Inline::Underline { content } => tag("u", content, out),
         Inline::Highlight { content, .. } => tag("mark", content, out),
+        Inline::TextStyle { content, color } => match style_color(color.as_deref()) {
+            Some(color) => {
+                out.push_str("<span style=\"color: ");
+                escape(color, out);
+                out.push_str("\">");
+                html_inlines(content, out);
+                out.push_str("</span>");
+            }
+            None => html_inlines(content, out),
+        },
         Inline::Superscript { content } => tag("sup", content, out),
         Inline::Subscript { content } => tag("sub", content, out),
         Inline::Small { content } => tag("small", content, out),
@@ -1090,6 +1265,37 @@ mod tests {
     }
 
     #[test]
+    fn a_part_keeps_its_colors() {
+        let md = r#"Quote <span style="color: #e54545">this **red**</span> part"#;
+        assert_eq!(
+            sel(md, "is red pa", TextSelectionFormat::Markdown),
+            r#"<span style="color: #e54545">is **red**</span> pa"#
+        );
+        assert_eq!(
+            sel(md, "is red pa", TextSelectionFormat::Html),
+            r#"<p><span style="color: #e54545">is <strong>red</strong></span> pa</p>"#
+        );
+    }
+
+    #[test]
+    fn a_color_that_is_no_css_color_is_not_written() {
+        // The app's document may carry anything; a style carries colors only.
+        let doc = Document::new(vec![Block::paragraph(vec![Inline::TextStyle {
+            content: vec![Inline::text("x")],
+            color: Some("red; background: url(a.png)".into()),
+        }])]);
+        let reported = Reported {
+            text: "x".into(),
+            start: None,
+        };
+        for format in [TextSelectionFormat::Markdown, TextSelectionFormat::Html] {
+            let out = selected(&doc, &Source::None, &reported, format);
+            assert!(!out.contains("style"), "{out}");
+            assert!(out.contains('x'), "{out}");
+        }
+    }
+
+    #[test]
     fn across_blocks() {
         let md = "# Head\n\n- one\n- two *x*\n- three\n\n```rust\nlet a = 1;\nlet b = 2;\n```";
         assert_eq!(
@@ -1108,6 +1314,70 @@ mod tests {
         assert_eq!(sel(md, "b\nc", TextSelectionFormat::Markdown), "2. b\n3. c");
     }
 
+    // Platforms report a list item's marker before its text, a tab between.
+    #[test]
+    fn list_markers_in_the_copy_are_left_out() {
+        let md = "- one\n- two\n\n1. first\n2. second\n\n- [ ] task";
+        assert_eq!(
+            sel(md, "e\n•\ttw", TextSelectionFormat::Markdown),
+            "- e\n- tw"
+        );
+        assert_eq!(
+            sel(md, "•\tone\n•\ttwo", TextSelectionFormat::Markdown),
+            "- one\n- two"
+        );
+        assert_eq!(
+            sel(md, "rst\n2.\tsec", TextSelectionFormat::Markdown),
+            "1. rst\n2. sec"
+        );
+        assert_eq!(
+            sel(md, "two\n1.\tfirst", TextSelectionFormat::Html),
+            "<ul><li>two</li></ul>\n<ol><li>first</li></ol>"
+        );
+        // A copy's marker before the text, a space between (#3284).
+        assert_eq!(
+            sel(md, "• one\n• two", TextSelectionFormat::Markdown),
+            "- one\n- two"
+        );
+        assert_eq!(
+            sel(md, "rst\n2. sec", TextSelectionFormat::Markdown),
+            "1. rst\n2. sec"
+        );
+        // A cell of a table row is no marker.
+        assert_eq!(without_list_markers("1\t2"), "1\t2");
+        assert_eq!(without_list_markers("1.5\tx"), "1.5\tx");
+    }
+
+    // A paragraph that starts as a list item would: its number is its
+    // text, not a marker (#3284).
+    #[test]
+    fn a_paragraph_starting_with_a_number_keeps_it() {
+        let md = "2\\. place\n\nNext • point";
+        assert_eq!(
+            sel(
+                md,
+                "2. place\n\nNext • point",
+                TextSelectionFormat::Markdown
+            ),
+            md
+        );
+        assert_eq!(sel(md, "2. pla", TextSelectionFormat::Markdown), "2\\. pla");
+        assert_eq!(
+            sel(md, "2. place\n\nNe", TextSelectionFormat::Html),
+            "<p>2. place</p>\n<p>Ne</p>"
+        );
+        assert_eq!(sel(md, "• point", TextSelectionFormat::Markdown), "• point");
+        assert_eq!(
+            sel("\\- dash\n\nx", "- da", TextSelectionFormat::Markdown),
+            "\\- da"
+        );
+        // A number that starts no list item stays as it is.
+        assert_eq!(
+            sel("2.5 kg\n\nx", "2.5 k", TextSelectionFormat::Markdown),
+            "2.5 k"
+        );
+    }
+
     #[test]
     fn repeated_text_by_start() {
         let md = "same\n\nsame";
@@ -1120,8 +1390,14 @@ mod tests {
         let out = selected(&d, &source, &reported, TextSelectionFormat::Html);
         assert_eq!(out, "<p>same</p>");
         let plain = d.plain_text();
-        assert_eq!(locate(&plain, &plain, "same", Some(5)), Some((6, 10)));
-        assert_eq!(locate(&plain, &plain, "same", Some(0)), Some((0, 4)));
+        assert_eq!(
+            locate(&plain, &shown(&plain), "same", Some(5)),
+            Some((6, 10))
+        );
+        assert_eq!(
+            locate(&plain, &shown(&plain), "same", Some(0)),
+            Some((0, 4))
+        );
     }
 
     // #2121: a copy leaves formulas out, so the reported text lacks them.
@@ -1162,10 +1438,39 @@ mod tests {
 
     #[test]
     fn a_reported_formula_still_matches() {
+        // A typeset formula copies as its source (`copyText`).
         let md = "Alpha $x^2$ omega";
+        assert_eq!(
+            sel(md, "pha $x^2$ om", TextSelectionFormat::Markdown),
+            "pha $x^2$ om"
+        );
+        // One shown as its TeX (not typeset) reads as that.
         assert_eq!(
             sel(md, "pha x^2 om", TextSelectionFormat::Markdown),
             "pha $x^2$ om"
+        );
+    }
+
+    #[test]
+    fn a_formula_copied_as_its_source_keeps_the_markup_around_it() {
+        let md = "First two\n\nAlpha **bold** $x^2$ omega\n\nLast two";
+        assert_eq!(
+            sel(
+                md,
+                "Alpha bold $x^2$ omega\nLast two",
+                TextSelectionFormat::Markdown
+            ),
+            "Alpha **bold** $x^2$ omega\n\nLast two"
+        );
+        // All of it selected: the source as written.
+        let md = "Alpha **bold** $x^2$ omega";
+        assert_eq!(
+            sel(md, "Alpha bold $x^2$ omega", TextSelectionFormat::Markdown),
+            md
+        );
+        assert!(
+            sel(md, "Alpha bold $x^2$ omega", TextSelectionFormat::Html)
+                .contains("<strong>bold</strong>"),
         );
     }
 
@@ -1175,6 +1480,34 @@ mod tests {
         assert_eq!(
             sel(md, "3\t4", TextSelectionFormat::Markdown),
             "| a | b |\n| --- | --- |\n| 3 | 4 |"
+        );
+    }
+
+    /// A table without a header copies without one: no empty header row
+    /// in its HTML, its first row as Markdown's (which needs one), and
+    /// its plain text has no blank line first.
+    #[test]
+    fn headless_table_copies() {
+        let html = "<table><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr></table>";
+        let doc = Parser::new().html(html);
+        assert_eq!(doc.plain_text(), "a\tb\n1\t2");
+        assert_eq!(
+            to_html(&doc),
+            "<table><tbody><tr><td>a</td><td>b</td></tr><tr><td>1</td><td>2</td></tr></tbody></table>"
+        );
+        assert_eq!(to_markdown(&doc), "| a | b |\n| --- | --- |\n| 1 | 2 |");
+        let reported = Reported {
+            text: "1\t2".to_owned(),
+            start: None,
+        };
+        assert_eq!(
+            selected(
+                &doc,
+                &Source::Html(html.to_owned()),
+                &reported,
+                TextSelectionFormat::Markdown
+            ),
+            "| 1 | 2 |\n| --- | --- |"
         );
     }
 

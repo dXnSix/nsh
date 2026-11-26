@@ -50,7 +50,7 @@ crypto = ["js", "nsh-engine/crypto"]
 
 # The native WebSocket client (tokio-tungstenite, rustls). Without it
 # `connect` of `websocket` rejects with ERR_FEATURE_UNAVAILABLE_ON_PLATFORM.
-websocket = ["nsh-core/websocket", "dep:rustls-platform-verifier", "dep:jni-verifier"]
+websocket = ["nsh-engine/websocket", "dep:rustls-platform-verifier", "dep:jni-verifier"]
 # App self-updates (`nsh/updater`). Without it a check finds no update.
 updater = ["nsh-core/updater"]
 
@@ -65,6 +65,8 @@ log.workspace = true
 # `sync`: the answers of `permissions::request`.
 tokio = { workspace = true, features = ["sync"] }
 jni.workspace = true
+# The VM and application for Rust crates (`context.rs`).
+ndk-context.workspace = true
 # The WebSocket client's system trust store (feature `websocket`), which
 # needs the app's Context over JNI; the verifier speaks jni 0.22.
 rustls-platform-verifier = { workspace = true, optional = true }
