@@ -53,10 +53,9 @@ fn main() {}
 
 /// The app's script.
 #[cfg(windows)]
-const APP: &str = r##"import { Animated, createAnimatedValue, mount, nativeComponent, signal, Text, View, type KeyEvent, type NativeComponentRef, type ViewRef } from "nsh";
+const APP: &str = r##"import { Animated, createAnimatedValue, mount, nativeComponent, reduceMotion, signal, Text, View, type KeyEvent, type NativeComponentRef, type ViewRef } from "nsh";
 import { Input } from "nsh/base";
 import { Window } from "nsh/desktop";
-import { reduceMotion } from "nsh/accessibility";
 import { design } from "nsh/design";
 
 const WINDOW = { frame: "none", taskbar: false, activate: false, shadow: false, transparent: true, sizeToContent: true } as const;
