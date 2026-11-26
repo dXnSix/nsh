@@ -479,7 +479,22 @@ impl Native for GpuiNative {
         // the same router real keys do.
         let stroke = nsh_core::keymap::Keystroke::parse(keys, os).map_err(|e| e.to_string())?;
         self.press_in_focus(
-            move |surface| synth::press_keys(surface, &stroke),
+            move |surface| {
+                let taken = synth::press_keys(surface, &stroke);
+                let m = stroke.modifiers;
+                wrap_tab(
+                    surface,
+                    taken,
+                    stroke.key == nsh_core::keymap::Key::Tab,
+                    Modifiers {
+                        shift: m.shift,
+                        ctrl: m.ctrl,
+                        alt: m.alt,
+                        meta: m.cmd,
+                    },
+                );
+                taken
+            },
             stroke.key == nsh_core::keymap::Key::Escape,
         )
         .ok_or_else(|| "the window is gone".to_owned())
@@ -643,4 +658,111 @@ fn mapped_bounds(
         point(Points(x0), Points(y0)),
         Size::new(Points(x1 - x0), Points(y1 - y0)),
     ))
+}
+
+/// A Tab the surface did not take: in a real window it is GPUI's
+/// `FocusNext` (`AppView::tab`); a test's window has no other tab stop, so
+/// the focus wraps around (`taken`: the surface took the key; `tab`: it is
+/// Tab).
+fn wrap_tab(surface: &Rc<Surface>, taken: bool, tab: bool, modifiers: Modifiers) {
+    if !taken
+        && tab
+        && !(modifiers.ctrl || modifiers.alt || modifiers.meta)
+        && !crate::input::tab_to_edge(surface, modifiers.shift)
+    {
+        crate::text_input::blur_all(surface);
+        crate::key_focus::clear(surface);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    mod tab_wrap {
+        use std::rc::Rc;
+
+        use nsh_core::{EventKind, NodeId, ViewKind};
+
+        use super::super::wrap_tab;
+        use crate::{geom::rect, input::Modifiers, surface::Surface, view::NshView};
+
+        fn pressable(parent: &NshView, id: NodeId, y: f32) -> NshView {
+            let v = NshView::new(id, ViewKind::View);
+            {
+                let mut s = v.state_mut();
+                s.frame = rect(0.0, y, 100.0, 30.0);
+                s.events.set(EventKind::Press, true);
+            }
+            v.insert_before(parent, None);
+            v
+        }
+
+        fn two_stops() -> (Rc<Surface>, NshView, NshView) {
+            let surface = Surface::new(nsh_engine::Environment::default());
+            surface.root.state_mut().frame = rect(0.0, 0.0, 400.0, 400.0);
+            let first = pressable(&surface.root, 2, 0.0);
+            let second = pressable(&surface.root, 3, 40.0);
+            (surface, first, second)
+        }
+
+        #[test]
+        fn wraps_to_first_on_tab_and_last_on_shift_tab() {
+            let (surface, first, second) = two_stops();
+            crate::key_focus::focus(&surface, &second);
+
+            wrap_tab(&surface, false, true, Modifiers::default());
+            assert_eq!(crate::key_focus::focused(&surface), Some(first.clone()));
+
+            wrap_tab(
+                &surface,
+                false,
+                true,
+                Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(crate::key_focus::focused(&surface), Some(second));
+        }
+
+        #[test]
+        fn ignores_taken_non_tab_and_modified_tab() {
+            let (surface, _first, second) = two_stops();
+            crate::key_focus::focus(&surface, &second);
+
+            wrap_tab(&surface, true, true, Modifiers::default());
+            assert_eq!(crate::key_focus::focused(&surface), Some(second.clone()));
+
+            wrap_tab(&surface, false, false, Modifiers::default());
+            assert_eq!(crate::key_focus::focused(&surface), Some(second.clone()));
+
+            for modifiers in [
+                Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+                Modifiers {
+                    alt: true,
+                    ..Default::default()
+                },
+                Modifiers {
+                    meta: true,
+                    ..Default::default()
+                },
+            ] {
+                wrap_tab(&surface, false, true, modifiers);
+                assert_eq!(crate::key_focus::focused(&surface), Some(second.clone()));
+            }
+        }
+
+        #[test]
+        fn clears_focus_when_no_stops_remain() {
+            let (surface, first, second) = two_stops();
+            crate::key_focus::focus(&surface, &first);
+            first.state_mut().style.hidden = true;
+            second.state_mut().style.hidden = true;
+
+            wrap_tab(&surface, false, true, Modifiers::default());
+            assert_eq!(crate::key_focus::focused(&surface), None);
+        }
+    }
 }

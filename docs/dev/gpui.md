@@ -363,7 +363,8 @@ the mouse's back button (it goes back from wherever the focus is), a dialog's an
 middle (`system::dialog_point`), a screenshot `synth::frame` as a PNG. A key step (`app.press("mod+k")`,
 `app.press("shift+/")`) is a source key as GPUI's own are (`synth::press_keys`): the requested keystroke builds the
 raw key (`code` is empty) and the press and release go through the window's key router
-(`input::window_key`), so `onKeyDown`/`onKeyUp` and `captureKeys` are exercised; the agent's programmatic keys
+(`input::window_key`), so `onKeyDown`/`onKeyUp` and `captureKeys` are exercised (a Tab the surface does not take wraps
+around, `input::tab_to_edge`, as GPUI's `FocusNext` does in a window with no other tab stop); the agent's programmatic keys
 (select all, a typed line's Return, clear) are the platform's action and send no raw event. A view's bounds are its frame's corners through
 `NshView::to_root`. `dev.rs` hands the test session's model to the surface through the session's own messages, so it
 comes before the first bundle.
