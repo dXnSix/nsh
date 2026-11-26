@@ -267,9 +267,14 @@ impl Composition {
     }
 
     /// Stacks the web views' visuals (bottom to top) with the layers drawn
-    /// this frame: `layers[i]` is how many web views are below layer `i`.
-    /// Commits the frame's changes (the visuals' placements too).
-    pub(crate) fn arrange(&self, portals: &[IDCompositionVisual2], layers: &[usize]) {
+    /// this frame (`layers[i]` is how many web views are below layer `i`),
+    /// presents the drawn composition layers, and commits the device's
+    /// changes (visual placements and layer presentation together).
+    pub(crate) fn present_and_arrange(
+        &self,
+        portals: &[IDCompositionVisual2],
+        layers: &[usize],
+    ) -> Result<()> {
         let order: Vec<IDCompositionVisual2> = {
             let made = self.layers.borrow();
             let mut out = Vec::with_capacity(portals.len() + layers.len());
@@ -319,10 +324,18 @@ impl Composition {
                 }
                 *self.order.borrow_mut() = order;
             }
+        }
+        // Present overlay layers right before `Commit()` so visual transforms
+        // applied by `compose_at` and the overlay swap chains latch together
+        // without an intervening `chain.present` or Win32 `SetWindowPos`.
+        self.present(layers.len())?;
+        // SAFETY: plain call on the live device, on its thread.
+        unsafe {
             if let Err(err) = self.device.Commit() {
                 log::warn!("compose: commit failed: {err}");
             }
         }
+        Ok(())
     }
 
     /// Shows `swap` (a transparent window's own swap chain, made again

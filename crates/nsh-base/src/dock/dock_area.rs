@@ -1146,28 +1146,42 @@ fn regular_view(a: AreaCx) -> impl IntoElement {
             // The layout stays placed while a group is zoomed, so what it
             // shows keeps its state; the zoomed group's own view places
             // that group's panels last, which shows them there.
+            //
+            // Outer docks (Right, Left, Bottom) are painted before Center
+            // while keeping the exact same visual layout via `flex_row_reverse`
+            // / `flex_col_reverse`: when Center hosts a composed native view
+            // (such as a DirectComposition canvas on Windows), Right and Bottom
+            // docks stay in the opaque base swap chain alongside Left instead
+            // of being pushed into a transparent overlay layer above Center.
             view()
                 .flex_1()
-                .flex_row()
+                .flex_row_reverse()
                 .min_w(px(0.0))
                 .min_h(px(0.0))
                 .style_when(move || zoomed().is_some(), |s| s.hidden())
-                .child(dock_frame(a, DockPlacement::Left))
+                .child(dock_frame(a, DockPlacement::Right))
                 .child(
                     view()
                         .flex_1()
-                        .flex_col()
+                        .flex_row()
                         .min_w(px(0.0))
                         .min_h(px(0.0))
+                        .child(dock_frame(a, DockPlacement::Left))
                         .child(
                             view()
                                 .flex_1()
+                                .flex_col_reverse()
+                                .min_w(px(0.0))
                                 .min_h(px(0.0))
-                                .child(region(a, DockPlacement::Center)),
-                        )
-                        .child(dock_frame(a, DockPlacement::Bottom)),
-                )
-                .child(dock_frame(a, DockPlacement::Right)),
+                                .child(dock_frame(a, DockPlacement::Bottom))
+                                .child(
+                                    view()
+                                        .flex_1()
+                                        .min_h(px(0.0))
+                                        .child(region(a, DockPlacement::Center)),
+                                ),
+                        ),
+                ),
         )
         .child(dynamic(move || {
             zoomed().map(|node| {
