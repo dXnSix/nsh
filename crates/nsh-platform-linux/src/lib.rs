@@ -33,6 +33,7 @@ mod file_drop;
 mod file_requests;
 mod fps;
 mod global_shortcut;
+mod gpu;
 #[cfg(test)]
 mod gtk_test;
 mod image;

@@ -40,7 +40,7 @@ thread_local! {
     /// The status bar the app asked for (one per process, like the bar).
     static STATUS_BAR: Cell<StatusBarConfig> = Cell::new(StatusBarConfig::default());
     /// The appearance the app asked for last (`setColorScheme`), for what
-    /// is not a subview of a surface: the status bar, alerts, modals.
+    /// is not a subview of a surface: the standalone window, status bar, alerts and modals.
     static APPEARANCE: Cell<UIUserInterfaceStyle> = const { Cell::new(UIUserInterfaceStyle::Unspecified) };
     /// The orientations the page shown asked for (`supportedOrientations`;
     /// empty: the app's), one per process like the status bar.
@@ -121,24 +121,21 @@ pub(crate) fn interface_style(appearance: Appearance) -> UIUserInterfaceStyle {
 }
 
 /// Applies the app's appearance to the surface `root` and to what is
-/// shown outside of it (the status bar's default style, alerts and modals
-/// shown from now on).
+/// shown outside of it (the standalone window, status bar, alerts and modals).
 pub(crate) fn set_appearance(appearance: Appearance, root: &UIView) {
     let style = interface_style(appearance);
     APPEARANCE.set(style);
     root.setOverrideUserInterfaceStyle(style);
-    if let Some(window) = root.window() {
-        let mut controller = window.rootViewController();
-        while let Some(c) = controller {
-            if c.isViewLoaded()
-                && c.view()
-                    .is_some_and(|v| !v.isDescendantOfView(root) && !root.isDescendantOfView(&v))
-            {
-                // Modals the surface presented.
-                style_presented(&c, style);
-            }
+    if let Some((standalone, window)) = crate::app::RootController::for_surface(root) {
+        standalone.apply_appearance(&window, style);
+    }
+    if let Some(owner) = crate::navigation::controller_of(root) {
+        owner.setNeedsStatusBarAppearanceUpdate();
+        let mut presented = owner.presentedViewController();
+        while let Some(c) = presented {
+            style_presented(&c, style);
             c.setNeedsStatusBarAppearanceUpdate();
-            controller = c.presentedViewController();
+            presented = c.presentedViewController();
         }
     }
 }

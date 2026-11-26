@@ -81,7 +81,7 @@ nsh component remove gpui
 |---|---|---|
 | `android` | Android 运行时（`--target android`） | 所有平台 |
 | `android-symbols` | Android 运行时的符号，用于崩溃报告和 `ndk-stack` | 所有平台 |
-| `ios` | iOS 和 Mac Catalyst 运行时（`--target ios`、`catalyst`） | Apple silicon 的 macOS |
+| `ios` | iOS 和 Mac Catalyst 运行时（`--target ios`、`catalyst`、`nsh package --target ios`）。Intel Mac 上只有模拟器和 Mac Catalyst 的运行时（`--target ios`、`catalyst`、`nsh package --target ios-simulator`），用 Intel 上最后能运行的 Xcode 16.4 的 iOS 18 SDK 构建；没有真机运行器，因此不能 `nsh package --target ios` | macOS（Apple silicon 和 Intel） |
 | `tizen` | 三星电视运行时（`--target tizen`），带有应用的 Rust crate 构建所用的 Tizen 目标规格 | 所有平台 |
 | `web` | Web 运行时（`--target web`） | 所有平台 |
 | `gpui` | [GPUI](./gpui.md) 开发宿主（`--target gpui`） | 所有平台，各自构建 |

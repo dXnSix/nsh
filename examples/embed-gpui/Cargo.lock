@@ -6085,7 +6085,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-base"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "chrono",
  "html5ever 0.27.0",
@@ -6116,7 +6116,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-bundler"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "dunce",
@@ -6141,7 +6141,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-core"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "cap-std",
  "chrono",
@@ -6184,7 +6184,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-engine"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "block2 0.6.2",
  "crossbeam-channel",
@@ -6192,6 +6192,7 @@ dependencies = [
  "libc",
  "log",
  "nsh-core",
+ "nsh-gpu",
  "nsh-js",
  "nsh-package",
  "nsh-updater",
@@ -6211,8 +6212,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "nsh-gpu"
+version = "0.7.2"
+dependencies = [
+ "nsh-core",
+ "serde_json",
+ "wgpu 29.0.4",
+]
+
+[[package]]
 name = "nsh-i18n"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "jiff-tzdb",
  "rust-i18n-support",
@@ -6221,9 +6231,8 @@ dependencies = [
 
 [[package]]
 name = "nsh-js"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
- "futures-util",
  "getrandom 0.4.3",
  "libc",
  "log",
@@ -6234,19 +6243,16 @@ dependencies = [
  "quickjs-jit",
  "quickjs-jit-stdlib",
  "rustc-hash 2.1.3",
- "rustls",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "tokio-tungstenite",
  "url",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
 name = "nsh-macros"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "imagesize 0.15.0",
  "nsh-theme",
@@ -6260,7 +6266,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-package"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
@@ -6273,7 +6279,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-platform-gpui"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -6317,7 +6323,7 @@ dependencies = [
 
 [[package]]
 name = "nsh-updater"
-version = "0.7.0"
+version = "0.7.2"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",

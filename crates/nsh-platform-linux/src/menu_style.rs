@@ -39,14 +39,17 @@ use nsh_core::{
     element::{Role, Tokens, role},
 };
 
-/// `nsh-base`'s `background` role: the root surfaces' color. Not one of
-/// the core's roles, so named here.
+/// `nsh-base`'s `background` and `foreground` roles: the root surfaces'
+/// and hidden-title-bar window buttons' colors. Not core roles, so named
+/// here.
 const BACKGROUND: Role = Role::new("background");
+const FOREGROUND: Role = Role::new("foreground");
 
 /// The default theme's light colors (`nsh-base`'s, neutral): what a role
 /// that resolves to nothing is drawn in, light and dark.
-const DEFAULTS: [(Role, u32); 7] = [
+const DEFAULTS: [(Role, u32); 8] = [
     (BACKGROUND, 0xffffff),
+    (FOREGROUND, 0x0a0a0a),
     (role::POPOVER, 0xffffff),
     (role::POPOVER_FOREGROUND, 0x0a0a0a),
     (role::ACCENT, 0xf5f5f5),
@@ -75,6 +78,15 @@ pub(crate) fn css(tokens: &Tokens) -> String {
     for dark in [false, true] {
         let scope = if dark { ".nsh-dark " } else { "" };
         let root_class = if dark { ".nsh-dark" } else { ".nsh-light" };
+        let text = tokens
+            .role(FOREGROUND)
+            .map(css_color)
+            .unwrap_or_else(|| String::from(if dark { "#fafafa" } else { "#0a0a0a" }));
+        let controls = if dark {
+            "windowcontrols.nsh-on-dark"
+        } else {
+            "windowcontrols.nsh-on-light"
+        };
         out.push_str(&format!(
             "
 {root_class} {{ background-color: {background}; }}
@@ -85,6 +97,8 @@ pub(crate) fn css(tokens: &Tokens) -> String {
 {root_class} text popover modelbutton:hover, {root_class} text popover modelbutton:selected, {root_class} textview popover modelbutton:hover, {root_class} textview popover modelbutton:selected {{ background-color: {accent}; color: {accent_foreground}; }}
 {scope}popover.menu modelbutton accelerator, {scope}popover.menu modelbutton:disabled, {root_class} text popover modelbutton accelerator, {root_class} text popover modelbutton:disabled, {root_class} textview popover modelbutton accelerator, {root_class} textview popover modelbutton:disabled {{ color: {muted}; }}
 {scope}popover.menu separator, {root_class} text popover separator, {root_class} textview popover separator {{ background-color: {border}; }}
+{controls} button {{ color: {text}; }}
+{controls} button:hover {{ background-color: {accent}; color: {accent_foreground}; }}
 "
         ));
     }
@@ -234,6 +248,49 @@ mod tests {
             });
             provider.load_from_string(&sheet);
             assert!(errors.borrow().is_empty(), "{:?}", errors.borrow());
+        });
+    }
+
+    /// The window buttons over a hidden title bar take the surface's
+    /// foreground, not a theme's title bar one: Yaru gives them white
+    /// glyphs, invisible on a light app (#3381).
+    #[test]
+    fn window_controls_follow_the_surface() {
+        crate::gtk_test::run(|| {
+            let display = gdk::Display::default().expect("a display");
+            let theme = gtk::CssProvider::new();
+            theme.load_from_string("windowcontrols button { color: #ffffff; }");
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &theme,
+                gtk::STYLE_PROVIDER_PRIORITY_THEME,
+            );
+            let provider = gtk::CssProvider::new();
+            provider.load_from_string(&css(&Tokens::default()));
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let controls = gtk::WindowControls::new(gtk::PackType::End);
+            controls.set_decoration_layout(Some(":close"));
+            let window = gtk::Window::new();
+            window.set_child(Some(&controls));
+            let color = |dark: bool| {
+                crate::window::controls_scheme(&controls, dark);
+                let button = controls.first_child().expect("the close button");
+                let c = button.color();
+                (c.red(), c.green(), c.blue())
+            };
+            let light = color(false);
+            let dark = color(true);
+            gtk::style_context_remove_provider_for_display(&display, &provider);
+            gtk::style_context_remove_provider_for_display(&display, &theme);
+            let near = |a: (f32, f32, f32), b: f32| {
+                (a.0 - b).abs() < 0.01 && (a.1 - b).abs() < 0.01 && (a.2 - b).abs() < 0.01
+            };
+            assert!(near(light, 10.0 / 255.0), "{light:?}");
+            assert!(near(dark, 250.0 / 255.0), "{dark:?}");
         });
     }
 
