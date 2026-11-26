@@ -28,6 +28,7 @@ const DEBOUNCE: Duration = Duration::from_millis(30);
 pub(crate) struct DevSession {
     entry: PathBuf,
     src_dir: PathBuf,
+    app_dir: PathBuf,
     /// Directories `nsh.json`'s `"watch"` skips: events inside them are
     /// not the app's.
     watch_ignored: Vec<PathBuf>,
@@ -40,6 +41,8 @@ pub(crate) struct DevSession {
     hot: std::cell::RefCell<Option<nsh_bundler::HotBundle>>,
     /// Files read by the last good build (imports may be outside the app).
     watch_files: std::cell::RefCell<Vec<PathBuf>>,
+    /// The last build failed: which files it would read is not known.
+    last_failed: Cell<bool>,
     /// Good builds so far: the first one is "built", the next "rebuilt".
     builds: Cell<u32>,
     /// A Rust app (`nsh.json` `"root"`): nothing to bundle, the hosts run
@@ -106,12 +109,14 @@ impl DevSession {
         let session = DevSession {
             entry,
             src_dir,
+            app_dir,
             watch_ignored,
             release,
             server,
             devices,
             hot: Default::default(),
             watch_files: Default::default(),
+            last_failed: Cell::new(false),
             builds: Cell::new(0),
             rust_root,
         };
@@ -239,7 +244,12 @@ impl DevSession {
             {
                 return Err(crate::rust_app::Restart.into());
             }
-            if !is_source(&event, &self.src_dir, &self.watch_ignored) {
+            if !is_source(
+                &event,
+                &self.src_dir,
+                &|path| self.takes_json(path),
+                &self.watch_ignored,
+            ) {
                 continue;
             }
             // A Rust change saved with this one (a checkout, a formatter)
@@ -277,6 +287,18 @@ impl DevSession {
             }
         }
         Ok(())
+    }
+
+    /// Whether the app takes the JSON file `path` ([`uses_json`]), as its
+    /// last good build says; every one, before a good build or after a
+    /// failed one.
+    fn takes_json(&self, path: &Path) -> bool {
+        uses_json(
+            path,
+            &self.app_dir,
+            &self.watch_files.borrow(),
+            self.builds.get() == 0 || self.last_failed.get(),
+        )
     }
 
     /// Serves the assets `built` imports by name, whatever their type: the
@@ -395,6 +417,7 @@ impl DevSession {
 
     /// `✓ built App.tsx (...)`, then `✓ rebuilt App.tsx (18ms), 2 devices`.
     fn published(&self, summary: String) {
+        self.last_failed.set(false);
         let entry = ui::path(&self.entry);
         let builds = self.builds.get();
         self.builds.set(builds + 1);
@@ -410,6 +433,7 @@ impl DevSession {
     }
 
     fn failed(&self, err: build::BuildError) {
+        self.last_failed.set(true);
         let plain = err.plain.clone();
         ui::report(&err.into_error(&self.entry));
         self.server.publish_error(plain);
@@ -574,17 +598,52 @@ fn rust_changed_until(
     false
 }
 
-fn is_source(event: &notify::Event, root: &Path, ignored: &[PathBuf]) -> bool {
+/// Whether `event` changed what a build of the app in `root` takes: a module
+/// (`.ts`, `.tsx`, `.js`, `.jsx`), or a `.json` file the app takes
+/// (`takes_json`, [`uses_json`]), not in `.nsh/`, `node_modules/` or another
+/// checkout kept in the app, nor in a directory `nsh.json`'s
+/// `"watch.ignore"` names (`ignored`). A JSON file the app keeps beside its
+/// code without importing it (data a tool writes there) starts no build.
+fn is_source(
+    event: &notify::Event,
+    root: &Path,
+    takes_json: &dyn Fn(&Path) -> bool,
+    ignored: &[PathBuf],
+) -> bool {
     event.paths.iter().any(|p| {
         !p.components()
             .any(|c| c.as_os_str() == ".nsh" || c.as_os_str() == "node_modules")
             && !in_nested_checkout(root, p)
             && !ignored.iter().any(|dir| p.starts_with(dir))
-            && matches!(
-                p.extension().and_then(|e| e.to_str()),
-                Some("ts" | "tsx" | "js" | "jsx" | "json")
-            )
+            && match p.extension().and_then(|e| e.to_str()) {
+                Some("ts" | "tsx" | "js" | "jsx") => true,
+                Some("json") => takes_json(p),
+                _ => false,
+            }
     })
+}
+
+/// Whether the app in `app` takes the JSON file `path`: the last good build
+/// read it (`read`: an imported JSON module, the theme, its overrides, the
+/// translations), it is the app's `nsh.json`, or it is in the app's
+/// translations folder (`locales/`, whose files the build reads all of: a
+/// new one too).
+/// `unknown`: there is no good build to tell (none yet, or the last
+/// failed), and every one is taken.
+fn uses_json(path: &Path, app: &Path, read: &[PathBuf], unknown: bool) -> bool {
+    if unknown {
+        return true;
+    }
+    // Events name a file as the system does; the build, as it resolved it.
+    let canonical = dunce::canonicalize(path).ok();
+    let named = |file: &Path| file == path || canonical.as_deref() == Some(file);
+    let locales = app.join(nsh_i18n::LOCALES_DIR);
+    named(&app.join("nsh.json"))
+        || path.starts_with(&locales)
+        || canonical
+            .as_deref()
+            .is_some_and(|c| c.starts_with(&locales))
+        || read.iter().any(|file| named(file))
 }
 
 /// The absolute directories `ignore` names (`nsh.json`'s `"watch.ignore"`):
@@ -873,24 +932,29 @@ mod tests {
             Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(path)
         };
         let no_ignored: Vec<std::path::PathBuf> = Vec::new();
+        let any_json = |_: &std::path::Path| true;
         assert!(super::is_source(
             &saved(dir.join("App.tsx")),
             &dir,
+            &any_json,
             &no_ignored
         ));
         assert!(super::is_source(
             &saved(dir.join("src/view.tsx")),
             &dir,
+            &any_json,
             &no_ignored
         ));
         assert!(!super::is_source(
             &saved(nested.join("App.tsx")),
             &dir,
+            &any_json,
             &no_ignored
         ));
         assert!(!super::is_source(
             &saved(nested.join("src/view.tsx")),
             &dir,
+            &any_json,
             &no_ignored
         ));
         // The app's own `.git` is not a checkout below it.
@@ -898,6 +962,7 @@ mod tests {
         assert!(super::is_source(
             &saved(dir.join("App.tsx")),
             &dir,
+            &any_json,
             &no_ignored
         ));
         // What `watch.ignore` names is skipped, however it is spelled.
@@ -920,17 +985,96 @@ mod tests {
         assert!(!super::is_source(
             &saved(dir.join("vendor/lib.ts")),
             &dir,
+            &any_json,
             &ignored
         ));
         assert!(!super::is_source(
             &saved(dir.join("third/jpeg/turbo.ts")),
             &dir,
+            &any_json,
             &ignored
         ));
         assert!(super::is_source(
             &saved(dir.join("third/png.ts")),
             &dir,
+            &any_json,
             &ignored
+        ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_json_file_rebuilds_only_when_the_app_takes_it() {
+        use notify::{
+            Event, EventKind,
+            event::{DataChange, ModifyKind},
+        };
+
+        let made = std::env::temp_dir().join(format!("nsh-json-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&made);
+        for dir in ["data", "design/pages", "tools", "locales"] {
+            std::fs::create_dir_all(made.join(dir)).unwrap();
+        }
+        let dir = dunce::canonicalize(&made).unwrap();
+        for file in [
+            "nsh.json",
+            "App.tsx",
+            "data/strings.json",
+            "design/pages/a.json",
+            "tools/nsh.json",
+        ] {
+            std::fs::write(dir.join(file), "{}").unwrap();
+        }
+        let saved = |path: std::path::PathBuf| {
+            Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content))).add_path(path)
+        };
+        let no_ignored: Vec<std::path::PathBuf> = Vec::new();
+        // The last good build read the app and its strings.
+        let read = [dir.join("App.tsx"), dir.join("data/strings.json")];
+        let takes = |path: &std::path::Path| super::uses_json(path, &dir, &read, false);
+        let rebuilds =
+            |file: &str| super::is_source(&saved(dir.join(file)), &dir, &takes, &no_ignored);
+        // A module, as before; the app's nsh.json, and a JSON module it imports.
+        assert!(rebuilds("App.tsx"));
+        assert!(rebuilds("src/New.tsx"));
+        assert!(rebuilds("nsh.json"));
+        assert!(rebuilds("data/strings.json"));
+        // A translation added: the build reads every file of `locales/`.
+        assert!(rebuilds("locales/new.json"));
+        assert!(rebuilds("locales/fr/app.json"));
+        // Data a tool keeps in the app, which nothing imports, and another
+        // folder's nsh.json: nothing to build.
+        assert!(!rebuilds("design/pages/a.json"));
+        assert!(!rebuilds("design/pages/b.json"));
+        assert!(!rebuilds("tools/nsh.json"));
+        // Named as the system names it (a link to the app), it is the same.
+        #[cfg(unix)]
+        {
+            let link = std::env::temp_dir().join(format!("nsh-json-link-{}", std::process::id()));
+            let _ = std::fs::remove_file(&link);
+            std::os::unix::fs::symlink(&dir, &link).unwrap();
+            assert!(super::is_source(
+                &saved(link.join("data/strings.json")),
+                &dir,
+                &takes,
+                &no_ignored
+            ));
+            assert!(!super::is_source(
+                &saved(link.join("design/pages/a.json")),
+                &dir,
+                &takes,
+                &no_ignored
+            ));
+            std::fs::remove_file(&link).unwrap();
+        }
+        // No good build to tell (none yet, or the last failed): every JSON
+        // file builds.
+        let unknown = |path: &std::path::Path| super::uses_json(path, &dir, &read, true);
+        assert!(super::is_source(
+            &saved(dir.join("design/pages/a.json")),
+            &dir,
+            &unknown,
+            &no_ignored
         ));
         std::fs::remove_dir_all(&dir).unwrap();
     }
