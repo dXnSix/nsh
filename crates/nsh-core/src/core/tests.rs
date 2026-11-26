@@ -57887,9 +57887,13 @@ mod resolved_style_cache {
         let env_off = crate::element::Environment::default();
         cached.set_environment(env_off);
         uncached.set_environment(env_off);
-        let (tokens, _) = test_tokens(Some(r##"{"primary": "#123456"}"##)).unwrap();
-        cached.set_tokens(tokens.clone());
-        uncached.set_tokens(tokens);
+        let tokens = {
+            let mut tokens = crate::element::tokens::sample();
+            tokens.set_color("primary", Color::parse("#123456").unwrap());
+            tokens
+        };
+        cached.set_test_tokens(tokens.clone());
+        uncached.set_test_tokens(tokens);
         assert_cores_match(&mut cached, &mut uncached, &ids);
 
         cached.set_tailwind_theme("{}");
@@ -57959,8 +57963,12 @@ mod resolved_style_cache {
 
         // Value-only token change evicts only token-dependent cache entries (`bg-primary`),
         // restyling those nodes with a fresh `Rc` while keeping non-token entries shared.
-        let (tokens, _) = test_tokens(Some(r##"{"primary": "#abcdef"}"##)).unwrap();
-        c.set_tokens(tokens);
+        let tokens = {
+            let mut tokens = crate::element::tokens::sample();
+            tokens.set_color("primary", Color::parse("#abcdef").unwrap());
+            tokens
+        };
+        c.set_test_tokens(tokens);
         assert_eq!(c.resolved_styles.len(), classes.len());
         let token_view_after = c.nodes[token_node as usize].view_style.0.as_ref().unwrap();
         let plain_view_after = c.nodes[plain_node as usize].view_style.0.as_ref().unwrap();

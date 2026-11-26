@@ -82,7 +82,8 @@ impl Target {
             Target::Linux => Os::Linux,
             Target::Macos => Os::MacOs,
             Target::Windows => Os::Windows,
-            Target::Web => Os::Web,
+            Target::Web | Target::TizenWeb => Os::Web,
+            Target::Tizen => Os::Tizen,
             Target::Gpui | Target::Tui => Target::native().os(),
         }
     }

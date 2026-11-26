@@ -23,8 +23,8 @@ use crate::{
     props::PointerEvents,
     style::{Color, PaintStyle, Style, StylePatch, TextStyle, VerticalAlign, ViewStyle},
     tailwind::{
-        ClassEnvironment, ClassList, ClassProps, ClassTokens, Context, Pointer, Rule, Theme, TokenChange,
-        deps, position, rank, state,
+        ClassEnvironment, ClassList, ClassProps, ClassTokens, Context, Pointer, Rule, Theme,
+        TokenChange, deps, position, rank, state,
     },
     text::TextEngine,
 };
@@ -1435,9 +1435,9 @@ impl<M: TextEngine> Core<M> {
         } else {
             self.resolved_styles
                 .retain(|_, entry| !reads_list(&entry.classes));
-            self.components
-                .merges
-                .retain(|_, [a, b, merged]| !(reads_list(a) || reads_list(b) || reads_list(merged)));
+            self.components.merges.retain(|_, [a, b, merged]| {
+                !(reads_list(a) || reads_list(b) || reads_list(merged))
+            });
         }
         let reads = |c: &Option<std::rc::Rc<ClassList>>| {
             c.as_ref()

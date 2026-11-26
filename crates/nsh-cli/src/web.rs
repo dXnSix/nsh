@@ -2696,6 +2696,7 @@ mod tests {
             style: "nsh-page.1.css",
             prefetch: "nsh-prefetch.1.js",
             start: "nsh-start.1.js",
+            scripts: &[],
         });
         let fetches = html
             .lines()
