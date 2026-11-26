@@ -33,7 +33,7 @@ instead of a debug `describe` and a `release` host built apart. What packages sh
 | From | Message | What |
 |---|---|---|
 | host | `{"hello":{}}` | Once connected; `{"hello":{"token":…}}` when the tool gave the run a token (`NSH_DESIGN_TOKEN`). |
-| host | `{"surface":{"id","width","height", <handle>}}` | A window of the app's own (named by `Window.open`'s `id`), whenever it is new or its handle or size changed. The handle is what the tool draws it with: `"context"`, its layer's `CAContext` id, on macOS (`CALayerHost`); `"hwnd"` on Windows, together with its shared DirectComposition surface handle `"surface"` and owning process id `"pid"` once its swap chain is made; `"xid"` under X11 (Composite). |
+| host | `{"surface":{"id","width","height", <handle>}}` | A window of the app's own (named by `Window.open`'s `id`), whenever it is new or its handle or size changed. The handle is what the tool draws it with: `"context"`, its layer's `CAContext` id, on macOS (`CALayerHost`); `"hwnd"` on Windows, together with its shared DirectComposition surface handle `"surface"` and owning process id `"pid"` once its swap chain is made; `"wayland"`, the window's monotonic tag (`n` matching its Wayland toplevel title `"nsh-design:<n>"`), on Linux. |
 | host | `{"surface":{"id","gone":true}}` | The window closed. |
 | tool | `{"pointer":{"id","kind":"down\|drag\|up\|move","x","y"}}` | Input, delivered by the platform to window `id`, in points from its content's top left. |
 | tool | `{"wheel":{"id","x","y","dx","dy"}}`, `{"key":{"id","down","key",…}}`, `{"resize":{"id","width","height"}}` | The same; a key as the DOM names it. |
@@ -98,16 +98,19 @@ app's own windows for `report`, which tells the tool what changed:
   Delete, Escape, the arrows, Home, End, PageUp, PageDown and F1 to F12; any other value of one
   character (any Unicode) arrives as that character, with no virtual key; any other name is logged at
   debug level and dropped. When the tool closes the connection the host exits.
-- **Linux**: under X11 the handle is the window's X11 id (`"xid"`), which a tool draws with the
-  Composite extension; Wayland lets no other process draw a window, so nothing is reported there
-  (logged once). The main window stays hidden; the app's own windows are moved off every display
-  (`XMoveWindow`) and out of the taskbar and pager, still mapped so the compositor keeps their
-  pictures. GDK's X11 functions and libX11's are looked up at run time, as `xtest.rs` does. Pointer
-  and wheel input go through `crate::input::simulate` in the window's root; keys type text, Enter
-  and Backspace into the focused widget (`crate::synth`).
+- **Linux**: the tool runs its own Wayland compositor and starts the app against it with `NSH_DESIGN_WAYLAND=1`,
+  `GDK_BACKEND=wayland`, and `WAYLAND_DISPLAY` pointing to the tool's socket. Each window of the app's own gets a
+  monotonic number `n` (`1, 2, …`), sets its Wayland toplevel title to `"nsh-design:<n>"` (kept across attribute
+  updates), stays undecorated and shadowless so its toplevel geometry matches its content size, and is reported with
+  handle `"wayland": n`. Its windows are neither moved nor hidden (the tool's compositor owns their display), and the
+  main window never shows; the host's Ctrl+R reload shortcut is not installed. Pointer, wheel, and keyboard input
+  arrive directly over the Wayland seat rather than through the design socket (`resize` resizes the window; `pointer`,
+  `wheel`, `key`, and `viewport` socket messages are ignored). Without `NSH_DESIGN_WAYLAND=1` (or without a Wayland
+  display), Linux design mode logs once and reports no windows. When the tool closes the connection, the app stops with
+  its process group.
 
 Pictures (`design.settled`, `design.picture`, below) are a platform's to draw
-(`nsh_core::runtime::design::PictureHooks`, given with `set_picture_hooks` after `connect`); macOS and Windows
+(`nsh_core::runtime::design::PictureHooks`, given with `set_picture_hooks` after `connect`); macOS, Windows, and Linux
 draw them, and the other platforms answer `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`:
 
 - **Settling** follows the core's rule (`Settling`): quiet for 50 ms since the question (no batch applied, no
@@ -143,6 +146,17 @@ draw them, and the other platforms answer `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`:
   other rule of the contract holds as on macOS, the codes included (a drawing Direct2D fails is
   `ERR_NSH_DESIGN_NO_WINDOW`, as a window macOS cannot draw is). Tests: `cargo test -p nsh-platform-windows
   --features dev --test design_windows` (below).
+- **Linux** settles on a count of the batches its surface applied (`Surface::applied`) and on whether a finite
+  animation or platform transition runs (`Surface::animating`: the graph's finishing animations, navigation
+  transitions, and `frame_callbacks` with a finite deadline `Next::At`, leaving endless `Next::Frame` keyframes out),
+  looked at every 5 ms on the GLib main loop. It draws in process (`crate::picture`): after draining pending batches
+  and waiting a frame, endless animations stand at their first frame (`UiAnimation::at_loop_starts` and recursive
+  `Live::stand_at_loop_start`), the window is allocated at its size, the window's root `NshView` is snapshotted into a
+  `gtk::Snapshot` at the requested scale and region (bypassing `GtkWidgetPaintable`, which drops render nodes on queued
+  draws), rendered offscreen via GSK's renderer (tiled past 4,096 px a side), and downloaded via
+  `gdk::TextureDownloader` as premultiplied sRGB RGBA (`R8g8b8a8Premultiplied`) over transparent pixels. Outer box
+  shadows are drawn directly by `decor` in GSK. Tests: `cargo test -p nsh-platform-linux --features dev --test
+  design_wayland` (below).
 
 ## `nsh/design`
 
@@ -360,7 +374,12 @@ printable
 ASCII key and a non-ASCII character typed into a field, Control and Alt chords typing nothing, each named key at a
 key-logging view and an unlisted one dropped; a composed component placed whatever its own box; and a design
 window's shared DirectComposition surface handle (`surface`, `pid`) duplicated into the tool's process and
-opened with `IDCompositionDesktopDevice::CreateSurfaceFromHandle`.
+opened with `IDCompositionDesktopDevice::CreateSurfaceFromHandle`; on Linux `cargo test -p nsh-platform-linux
+--features dev --test design_wayland`, which runs a minimal Smithay Wayland compositor in process and starts the app
+against it (`NSH_DESIGN_WAYLAND=1`, `GDK_BACKEND=wayland`): hello with and without a token (log free of the token),
+no surfaces reported without `NSH_DESIGN_WAYLAND=1`, `"wayland"` handles matching `"nsh-design:<n>"` toplevel titles
+and `wl_shm` frames, main window unmapped, `gone` on close, `resize` and ignored `viewport`, pictures at scale 1 and 2
+with `rect`/`hide`/shadows/loops/keyframes, settling, all error codes, and real Wayland pointer input reaching the app.
 
 ### Composed components on Windows
 

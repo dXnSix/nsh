@@ -1,25 +1,28 @@
 //! Design mode on Linux (dev hosts): the platform's part of `nsh/design`
 //! (`nsh_core::runtime::design`, which keeps the connection to the tool
-//! and its protocol, `docs/dev/design-mode.md`). Under X11 a tool draws the
-//! app's windows in its own with the Composite extension, so each window's
-//! surface handle is its X11 window (`"xid"`). Wayland lets no other
-//! process draw a window: there the windows are not reported, and the host
-//! says so once.
+//! and its protocol, `docs/dev/design-mode.md`).
 //!
-//! The app's main window stays hidden. Its own windows are moved off every
-//! display and out of the taskbar and pager: still mapped, so the
-//! compositor keeps their pictures and their frames keep coming. Input from
-//! the tool goes through the handlers real input goes through
-//! ([`crate::input::simulate`], as the test agent's does), in the window it
-//! names. GDK's X11 functions and libX11's are looked up at run time
-//! (`dlsym`, `dlopen`), as `crate::xtest` does, so the crate links no X11
-//! library. When the tool's connection closes, the app stops with the dev
-//! session that runs it (its process group).
+//! Under Wayland a design tool runs its own compositor and starts the app
+//! against it with `NSH_DESIGN_WAYLAND=1`, `GDK_BACKEND=wayland` and
+//! `WAYLAND_DISPLAY` set. Each window of the app's own (`Window.open`) gets a
+//! monotonic number `n` (`1, 2, …`), sets its toplevel title to
+//! `"nsh-design:<n>"` (kept across attribute updates), stays undecorated and
+//! shadowless so its toplevel geometry matches its content size, and is
+//! reported with handle `("wayland", n)`. The app's windows are neither moved
+//! nor hidden (the tool's compositor owns their display), and pointer, wheel
+//! and keyboard input arrive over Wayland directly rather than through the
+//! design socket. The main window stays hidden.
+//!
+//! Without `NSH_DESIGN_WAYLAND=1` (or without a Wayland display), Linux design
+//! mode logs once and reports no windows.
+//!
+//! Pictures (`design.settled`, `design.picture`): [`crate::picture`]. When
+//! the tool's connection closes, the app stops with the dev session that runs
+//! it (its process group).
 
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    ffi::{CStr, c_char, c_int, c_ulong, c_void},
     rc::Rc,
     time::Duration,
 };
@@ -31,15 +34,15 @@ use nsh_core::{
 };
 use serde_json::Value;
 
-use crate::{input::Simulated, surface::Surface};
+use crate::{surface::Surface, view::NshView};
 
-const RTLD_NOW: c_int = 2;
+/// The environment variable enabling Wayland design mode inside a tool's
+/// compositor (`"1"`).
+const WAYLAND: &str = "NSH_DESIGN_WAYLAND";
 
-#[link(name = "dl")]
-unsafe extern "C" {
-    fn dlopen(filename: *const c_char, flags: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-}
+/// The prefix on each design window's Wayland toplevel title
+/// (`"nsh-design:<n>"`).
+const TITLE_PREFIX: &str = "nsh-design:";
 
 unsafe extern "C" {
     fn kill(pid: i32, signal: i32) -> i32;
@@ -48,12 +51,13 @@ unsafe extern "C" {
 thread_local! {
     /// Whether the host is in design mode (the main thread's).
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
-    /// The app's own windows by the id they opened with: their root node.
-    static NAMED: RefCell<HashMap<String, NodeId>> = RefCell::new(HashMap::new());
-    /// The X11 windows already moved out of sight.
-    static TREATED: RefCell<Vec<c_ulong>> = const { RefCell::new(Vec::new()) };
-    /// The display is not X11's: said once.
-    static NOT_X11: Cell<bool> = const { Cell::new(false) };
+    /// Next monotonic window number for Wayland design mode (`1, 2, …`).
+    static NEXT_TAG: Cell<u64> = const { Cell::new(1) };
+    /// The app's own windows by the id they opened with: their root node and
+    /// Wayland window number.
+    static NAMED: RefCell<HashMap<String, (NodeId, u64)>> = RefCell::new(HashMap::new());
+    /// Missing `NSH_DESIGN_WAYLAND=1` or non-Wayland display: logged once.
+    static NOT_WAYLAND: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Whether the app runs in a design tool ([`start`] connected).
@@ -61,21 +65,57 @@ pub(crate) fn active() -> bool {
     ACTIVE.get()
 }
 
-/// Window `root` opened as `id`, by which the tool names it.
-pub(crate) fn name_window(id: &str, root: NodeId) {
-    NAMED.with_borrow_mut(|named| named.insert(id.to_owned(), root));
+/// The toplevel title identifying design window `tag`.
+fn title_for(tag: u64) -> String {
+    format!("{TITLE_PREFIX}{tag}")
+}
+
+/// Whether Wayland design mode is enabled by the environment
+/// (`NSH_DESIGN_WAYLAND=1` and a non-empty `WAYLAND_DISPLAY`).
+fn wayland_env(flag: Option<&str>, display: Option<&str>) -> bool {
+    flag == Some("1") && display.is_some_and(|d| !d.is_empty())
+}
+
+fn wayland_enabled() -> bool {
+    let flag = std::env::var(WAYLAND).ok();
+    let display = std::env::var("WAYLAND_DISPLAY").ok();
+    wayland_env(flag.as_deref(), display.as_deref())
+}
+
+fn warn_not_wayland_once(reason: &str) {
+    if !NOT_WAYLAND.replace(true) {
+        log::warn!(target: "nsh::design", "{reason}");
+    }
+}
+
+/// Window `root` opened as `id`, by which the tool names it: assigns its
+/// Wayland tag, sets its toplevel title to `"nsh-design:<n>"`, and strips
+/// client-side decorations and shadow margins so toplevel pixels match the
+/// window's content.
+pub(crate) fn name_window(id: &str, root: NodeId, window: &gtk::Window) {
+    let tag = NEXT_TAG.with(|n| {
+        let current = n.get();
+        n.set(current.saturating_add(1));
+        current
+    });
+    NAMED.with_borrow_mut(|named| named.insert(id.to_owned(), (root, tag)));
+    window.set_title(Some(&title_for(tag)));
+    window.set_decorated(false);
+    window.add_css_class("nsh-no-shadow");
 }
 
 /// Starts design mode when a tool started the app (`NSH_DESIGN_SOCKET`):
-/// the connection and the windows' watch. Called once on the main thread
-/// before the app runs.
+/// the connection, pictures, and the windows' watch. Called once on the main
+/// thread before the app runs.
 pub(crate) fn start() {
     let Some(endpoint) = core::endpoint() else {
         return;
     };
     let hooks = core::DesignHooks {
         input: Box::new(|message| {
-            glib::MainContext::default().invoke(move || input(&message));
+            glib::MainContext::default().invoke_with_priority(glib::Priority::DEFAULT, move || {
+                input(&message);
+            });
         }),
         // The tool went: nothing shows the app any more, so it stops with
         // the dev session that runs it.
@@ -88,96 +128,11 @@ pub(crate) fn start() {
         return;
     }
     ACTIVE.set(true);
+    crate::picture::install();
     glib::timeout_add_local(Duration::from_millis(50), || {
         tick();
         glib::ControlFlow::Continue
     });
-}
-
-/// A symbol from `lib` (or the process' own, with a null `lib`).
-///
-/// # Safety
-///
-/// `T` must be the function type of `name`.
-unsafe fn sym<T: Copy>(lib: *mut c_void, name: &CStr) -> Option<T> {
-    // SAFETY: the caller names a function of type `T`.
-    unsafe {
-        let p = dlsym(lib, name.as_ptr());
-        (!p.is_null()).then(|| std::mem::transmute_copy::<*mut c_void, T>(&p))
-    }
-}
-
-/// libX11, loaded once.
-fn x11() -> *mut c_void {
-    thread_local! {
-        static LIB: Cell<usize> = const { Cell::new(0) };
-    }
-    if LIB.get() == 0 {
-        // SAFETY: a plain dlopen; the library stays loaded.
-        let lib = unsafe { dlopen(c"libX11.so.6".as_ptr(), RTLD_NOW) };
-        LIB.set(lib as usize);
-    }
-    LIB.get() as *mut c_void
-}
-
-/// The X11 window of `window`, under X11.
-fn xid(window: &gtk::Window) -> Option<c_ulong> {
-    let surface = window.surface()?;
-    if surface.display().type_().name() != "GdkX11Display" {
-        if !NOT_X11.replace(true) {
-            log::warn!(target: "nsh::design", "design mode draws windows under X11 only; this display is not X11's");
-        }
-        return None;
-    }
-    // SAFETY: GDK's X11 function, looked up in the GTK already loaded, on
-    // an X11 surface.
-    unsafe {
-        let get: unsafe extern "C" fn(*mut c_void) -> c_ulong =
-            sym(std::ptr::null_mut(), c"gdk_x11_surface_get_xid")?;
-        Some(get(surface.as_ptr().cast()))
-    }
-}
-
-/// Moves `window` (X11 window `xid`) off every display, out of the taskbar
-/// and the pager.
-fn unseen(window: &gtk::Window, xid: c_ulong) {
-    let Some(surface) = window.surface() else {
-        return;
-    };
-    // SAFETY: GDK's and libX11's functions, looked up by name, called on
-    // GDK's own connection on the main thread.
-    unsafe {
-        type Hint = unsafe extern "C" fn(*mut c_void, glib::ffi::gboolean);
-        for name in [
-            c"gdk_x11_surface_set_skip_taskbar_hint",
-            c"gdk_x11_surface_set_skip_pager_hint",
-        ] {
-            if let Some(hint) = sym::<Hint>(std::ptr::null_mut(), name) {
-                hint(surface.as_ptr().cast(), glib::ffi::GTRUE);
-            }
-        }
-        let Some(get_display): Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void> =
-            sym(std::ptr::null_mut(), c"gdk_x11_display_get_xdisplay")
-        else {
-            return;
-        };
-        let lib = x11();
-        if lib.is_null() {
-            return;
-        }
-        type MoveWindow = unsafe extern "C" fn(*mut c_void, c_ulong, c_int, c_int) -> c_int;
-        type Flush = unsafe extern "C" fn(*mut c_void) -> c_int;
-        let (Some(move_window), Some(flush)) = (
-            sym::<MoveWindow>(lib, c"XMoveWindow"),
-            sym::<Flush>(lib, c"XFlush"),
-        ) else {
-            return;
-        };
-        let display = get_display(surface.display().as_ptr().cast());
-        let width = window.width().max(1);
-        move_window(display, xid, -width - 200, 0);
-        flush(display);
-    }
 }
 
 /// The app's surfaces, by the windows it has.
@@ -185,69 +140,89 @@ fn surfaces() -> Vec<Rc<Surface>> {
     Surface::all()
 }
 
-/// The surface that has window `id`, and its root.
-fn find(id: &str) -> Option<(Rc<Surface>, NodeId, gtk::Window)> {
-    let root = NAMED.with_borrow(|named| named.get(id).copied())?;
+/// The window the tool calls `id`: the surface showing it, its root view, and
+/// its `gtk::Window`.
+pub(crate) fn window(id: &str) -> Option<(Rc<Surface>, NshView, gtk::Window)> {
+    let (root, _) = NAMED.with_borrow(|named| named.get(id).copied())?;
     surfaces().into_iter().find_map(|s| {
         let window = crate::window::window_of(&s, root)?;
-        Some((s, root, window))
+        let view = crate::window::root_view(&s, root)?;
+        Some((s, view, window))
     })
 }
 
-/// Keeps the main window hidden and the others unseen, and tells the tool
-/// what it draws.
+/// Keeps the main window hidden and tells the tool what visible Wayland
+/// design windows exist.
 fn tick() {
-    let mut shown = Vec::new();
-    let named: Vec<(String, NodeId)> =
-        NAMED.with_borrow(|named| named.iter().map(|(k, v)| (k.clone(), *v)).collect());
-    for surface in surfaces() {
-        if let Some(main) = crate::window::window_of(&surface, nsh_core::ROOT_ID)
+    let surfaces = surfaces();
+    for surface in &surfaces {
+        if let Some(main) = crate::window::window_of(surface, nsh_core::ROOT_ID)
             && main.is_visible()
         {
             main.set_visible(false);
         }
-        for (id, root) in &named {
-            let Some(window) = crate::window::window_of(&surface, *root) else {
+    }
+    if !wayland_enabled() {
+        warn_not_wayland_once(
+            "design mode on Linux requires NSH_DESIGN_WAYLAND=1 and WAYLAND_DISPLAY; reporting no windows",
+        );
+        prune_named(&surfaces);
+        return;
+    }
+    let mut shown = Vec::new();
+    let named: Vec<(String, NodeId, u64)> =
+        NAMED.with_borrow(|named| named.iter().map(|(k, &(r, t))| (k.clone(), r, t)).collect());
+    for surface in &surfaces {
+        for (id, root, tag) in &named {
+            let Some(window) = crate::window::window_of(surface, *root) else {
                 continue;
             };
             if !window.is_visible() {
                 continue;
             }
-            let Some(xid) = xid(&window) else {
+            let Some(gdk_surface) = window.surface() else {
                 continue;
             };
-            if TREATED.with_borrow_mut(|t| {
-                let new = !t.contains(&xid);
-                if new {
-                    t.push(xid);
-                }
-                new
-            }) {
-                unseen(&window, xid);
+            if gdk_surface.display().type_().name() != "GdkWaylandDisplay" {
+                warn_not_wayland_once(
+                    "design mode on Linux requires a Wayland display (GdkWaylandDisplay); reporting no windows",
+                );
+                continue;
             }
-            // An X11 window id is 32 bits wide on some targets.
-            #[allow(clippy::useless_conversion)]
-            let xid = u64::from(xid);
+            let (width, height) = if window.width() > 0 && window.height() > 0 {
+                (window.width() as f32, window.height() as f32)
+            } else if let Some(view) = crate::window::root_view(surface, *root) {
+                let size = view.state().frame.size;
+                (size.width.0, size.height.0)
+            } else {
+                continue;
+            };
+            if width <= 0.0 || height <= 0.0 {
+                continue;
+            }
             shown.push(DesignWindow {
                 id: id.clone(),
-                handle: ("xid", xid),
+                handle: ("wayland", *tag),
                 size: nsh_core::geometry::size(
-                    nsh_core::geometry::Points(window.width() as f32),
-                    nsh_core::geometry::Points(window.height() as f32),
+                    nsh_core::geometry::Points(width),
+                    nsh_core::geometry::Points(height),
                 ),
             });
         }
     }
-    // Windows that went: forgotten.
-    NAMED.with_borrow_mut(|named| named.retain(|_, root| find_root(*root)));
+    prune_named(&surfaces);
     core::report(&shown);
 }
 
-/// Whether a window with root `root` is still open (it may be hidden).
-fn find_root(root: NodeId) -> bool {
-    surfaces()
-        .iter()
-        .any(|s| crate::window::window_of(s, root).is_some())
+/// Forgets windows that have closed.
+fn prune_named(surfaces: &[Rc<Surface>]) {
+    NAMED.with_borrow_mut(|named| {
+        named.retain(|_, (root, _)| {
+            surfaces
+                .iter()
+                .any(|s| crate::window::window_of(s, *root).is_some())
+        });
+    });
 }
 
 fn input(message: &Value) {
@@ -257,46 +232,45 @@ fn input(message: &Value) {
     else {
         return;
     };
-    let Some((surface, root, window)) = find(body["id"].as_str().unwrap_or("")) else {
+    // Under Wayland design mode, pointer, wheel and keyboard input arrive
+    // through the tool's Wayland seat; viewport sharpening is a no-op here.
+    if kind != "resize" {
+        return;
+    }
+    let Some((_, _, window)) = window(body["id"].as_str().unwrap_or("")) else {
         return;
     };
-    let n = |name: &str| body[name].as_f64().unwrap_or(0.0) as f32;
-    // Pointer input aims at that window's root.
-    crate::input::set_event_root(&surface, crate::window::root_view(&surface, root));
-    match kind {
-        "pointer" => {
-            let (x, y) = (n("x"), n("y"));
-            let action = match body["kind"].as_str().unwrap_or("") {
-                "down" => Simulated::Down(x, y),
-                "up" => Simulated::Up(x, y),
-                "drag" => Simulated::Move(x, y),
-                _ => Simulated::Hover(x, y),
-            };
-            crate::input::simulate(&surface, action);
-        }
-        "wheel" => {
-            crate::input::simulate(&surface, Simulated::Wheel(n("x"), n("y"), n("dx"), n("dy")))
-        }
-        "key" => key(&window, body),
-        _ => window.set_default_size(n("width").max(1.0) as i32, n("height").max(1.0) as i32),
-    }
-    crate::input::set_event_root(&surface, None);
+    let width = body["width"]
+        .as_f64()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or_else(|| f64::from(window.width().max(1)));
+    let height = body["height"]
+        .as_f64()
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or_else(|| f64::from(window.height().max(1)));
+    window.set_default_size(
+        width.round().max(1.0) as i32,
+        height.round().max(1.0) as i32,
+    );
 }
 
-/// A key as the DOM names it, typed into `window`'s focused widget when it
-/// goes down: text, Enter and Backspace.
-fn key(window: &gtk::Window, k: &Value) {
-    if !k["down"].as_bool().unwrap_or(true) {
-        return;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wayland_env_requires_flag_and_display() {
+        assert!(wayland_env(Some("1"), Some("wayland-0")));
+        assert!(!wayland_env(None, Some("wayland-0")));
+        assert!(!wayland_env(Some("0"), Some("wayland-0")));
+        assert!(!wayland_env(Some("true"), Some("wayland-0")));
+        assert!(!wayland_env(Some("1"), None));
+        assert!(!wayland_env(Some("1"), Some("")));
     }
-    let held = |name: &str| k[name].as_bool().unwrap_or(false);
-    if held("control") || held("alt") || held("meta") {
-        return;
-    }
-    match k["key"].as_str().unwrap_or("") {
-        "Enter" => crate::synth::enter(window),
-        "Backspace" => crate::synth::backspace(window),
-        text if text.chars().count() == 1 => crate::synth::type_text(window, text),
-        _ => {}
+
+    #[test]
+    fn title_format_matches_protocol() {
+        assert_eq!(title_for(1), "nsh-design:1");
+        assert_eq!(title_for(42), "nsh-design:42");
     }
 }

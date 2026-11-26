@@ -296,6 +296,14 @@ jobs:
       - name: Check without optional features
         working-directory: crates/gpui
         run: cargo clippy -p nsh-platform-gpui --no-default-features --features js -- -D warnings
+      # An embedding app's development build: the dev server client without
+      # the optional parts (upstream's gpui.yml). With GPUI's platform, which
+      # only the fork makes optional (gpui-platform-optional) and upstream's
+      # build always has: without it Linux's `synth.rs` lacks
+      # raw-window-handle's `std` errors.
+      - name: Check dev without optional features
+        working-directory: crates/gpui
+        run: cargo clippy -p nsh-platform-gpui --no-default-features --features platform,js,dev -- -D warnings
       - name: Test
         working-directory: crates/gpui
         run: bash ../../.github/fork/retry.sh cargo test

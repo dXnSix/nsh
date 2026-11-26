@@ -2160,18 +2160,15 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
     match drawn {
         Ok(drawn) => {
             // In design mode, the tool reads only the single shared base swap
-            // chain (`shared_surface_of`); do not bind or arrange composed
-            // visuals on the hidden design window.
-            let needs_commit = if !design {
-                crate::surface::prepare_composed_placed(
-                    composed,
-                    composition,
-                    drawn.composed,
-                    &drawn.layers,
-                )
-            } else {
-                false
-            };
+            // chain (`shared_surface_of`): composed items are still told where
+            // they are, but their visuals are not stacked in the hidden design
+            // window's composition.
+            let needs_commit = crate::surface::prepare_composed_placed(
+                composed,
+                composition.filter(|_| !design),
+                drawn.composed,
+                &drawn.layers,
+            );
             if needs_commit
                 && let Some(c) = composition
                 && let Err(err) = c.present(drawn.layers.len(), changed.as_deref(), &drawn.layers)

@@ -31,7 +31,6 @@ use gtk4::{self as gtk, glib, prelude::*};
 use nsh_core::{
     EventKind, EventPayload, NodeId, PayloadValue, ROOT_ID,
     keymap::{Key, KeyBinding, Keymap, Keystroke},
-    platform::Os,
 };
 
 use crate::{surface::Surface, view::NshView};
@@ -68,7 +67,7 @@ struct Claim {
     in_text: bool,
     /// Its window (`KeyBinding::window`).
     window: Option<NodeId>,
-    /// It gives way to a focused control ([`gives_way`]).
+    /// It gives way to a focused control ([`Keymap::gives_way`]).
     yields: bool,
 }
 
@@ -94,7 +93,7 @@ pub(crate) fn set(surface: &Rc<Surface>, keymap: Arc<Keymap>) {
                 binding: *binding,
                 in_text: binding.in_text,
                 window: binding.window,
-                yields: gives_way(binding),
+                yields: keymap.gives_way(binding),
             });
         }
     }
@@ -106,9 +105,18 @@ pub(crate) fn set(surface: &Rc<Surface>, keymap: Arc<Keymap>) {
     }
 }
 
-/// The dev host's Ctrl+R reloads, whatever the app binds.
+/// The dev host's Ctrl+R reloads, whatever the app binds (except in design
+/// mode, where the dev host does not install its reload key).
 fn skipped(binding: &nsh_core::keymap::KeyBinding) -> bool {
-    cfg!(feature = "dev") && binding.keystroke.reloads(Os::Linux)
+    #[cfg(feature = "dev")]
+    {
+        !crate::design::active() && binding.keystroke.reloads(nsh_core::platform::Os::Linux)
+    }
+    #[cfg(not(feature = "dev"))]
+    {
+        let _ = binding;
+        false
+    }
 }
 
 /// Gives the root view of a window (`root`) the app's shortcuts: a window
@@ -144,7 +152,7 @@ pub(crate) fn attach(surface: &Rc<Surface>, root: &NshView) {
         };
         let weak = Rc::downgrade(surface);
         let (id, in_text, repeat) = (binding.id, binding.in_text, binding.repeat);
-        let yields = gives_way(binding);
+        let yields = keymap.gives_way(binding);
         let pass_through = binding.pass_through;
         // The widget is the root view of the window the key is in.
         let action = gtk::CallbackAction::new(move |widget, _| match weak.upgrade() {
@@ -216,7 +224,7 @@ pub(crate) fn press(surface: &Surface, stroke: Keystroke) -> bool {
     let fired = keymap.bindings().iter().rev().find(|b| {
         b.keystroke == stroke
             && b.window.is_none_or(|w| w == root.id())
-            && fires(surface, root.upcast_ref(), b.in_text, gives_way(b))
+            && fires(surface, root.upcast_ref(), b.in_text, keymap.gives_way(b))
     });
     if let Some(binding) = fired {
         surface.event(
@@ -398,7 +406,7 @@ fn controller_acts(state: &KeymapState) -> bool {
 /// `root` is: never while it is in another surface, in a text field or
 /// hosted widget only when the binding may (`in_text`), on a control
 /// Return and Space press not when the binding `gives_way` to it
-/// ([`gives_way`]).
+/// ([`Keymap::gives_way`]).
 fn fires(surface: &Surface, root: &gtk::Widget, in_text: bool, gives_way: bool) -> bool {
     let Some(focus) = root.root().and_then(|r| r.focus()) else {
         return true;
@@ -412,17 +420,6 @@ fn fires(surface: &Surface, root: &gtk::Widget, in_text: bool, gives_way: bool) 
         return false;
     }
     in_text || !editing
-}
-
-/// Whether `binding` gives way to a focused control that its key presses:
-/// Return and Space, unless it is the focus' own
-/// ([`nsh_core::keymap::Keymap::find_at`]).
-fn gives_way(binding: &nsh_core::keymap::KeyBinding) -> bool {
-    !binding.for_focus
-        && nsh_core::input::presses_focused_control(
-            binding.keystroke.key,
-            binding.keystroke.modifiers,
-        )
 }
 
 /// The keyval that `key` types with Shift on the display's layout (`slash`
@@ -553,7 +550,7 @@ mod tests {
                 binding,
                 in_text: binding.in_text,
                 window: binding.window,
-                yields: super::gives_way(&binding),
+                yields: nsh_core::keymap::Keymap::default().gives_way(&binding),
             })
             .collect()
     }

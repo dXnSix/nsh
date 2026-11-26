@@ -68,13 +68,14 @@ describe("on a desktop", () => {
   test("dragging the handles resizes the split and the docks", async () => {
     expect(shown(app, "First group: ")).toBe(300);
     // Every handle is labelled "Resize", in tree order: the left dock's
-    // edge, the center's split, the bottom dock's edge.
+    // edge, the bottom dock's edge, the center's split (the docks come
+    // before the center in the tree, which places them by reversed flex).
     expect(app.count("label:Resize")).toBe(3);
-    await app.drag("label:Resize >> nth=1", { x: 60, y: 0 });
+    await app.drag("label:Resize >> nth=2", { x: 60, y: 0 });
     await waitForSize(app, "First group: ", 360);
     await app.drag("label:Resize >> nth=0", { x: 40, y: 0 });
     await waitForSize(app, "Left dock: Files, ", 240);
-    await app.drag("label:Resize >> nth=2", { x: 0, y: -40 });
+    await app.drag("label:Resize >> nth=1", { x: 0, y: -40 });
     await waitForSize(app, "Bottom dock: Terminal, ", 200);
     expect(app.shows("Left dock: Files, 240 pt, open")).toBe(true);
   });

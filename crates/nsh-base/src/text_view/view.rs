@@ -5,7 +5,7 @@ use std::rc::Rc;
 use nsh_core::{
     ResizeMode,
     color::Hsla,
-    element::{Reactive, Renderer, Style, StyleRefinement},
+    element::{Reactive, Renderer, StyleRefinement},
     geometry::{DefiniteLength, Length},
     keymap::Modifiers,
     prelude::*,
@@ -15,6 +15,7 @@ use super::{
     Alert, Block, CodeBlock, ColumnAlign, CustomNode, Document, Image, ImageLength, Inline,
     ListItem, MarkdownExtension, MarkdownOptions, MarkdownPlugins, Parser, Table,
     markdown::{Incremental, Parsed, SharedBlock},
+    merge_styles,
     parts::{TextViewClasses, TextViewPart as Part, TextViewParts, TextViewStyles},
     selection::{Reported, Source, TextSelectionOptions, selected},
 };
@@ -399,8 +400,9 @@ pub fn TextView(props: TextViewProps, cx: Scope<TextViewEvent>) -> impl IntoElem
             move |row, _| {
                 let plugins = row_plugins.clone();
                 // A node as the row's root: an `Each` keeps rows by their
-                // root's key, which a region has none of.
-                view().child(dynamic(move || {
+                // root's key, which a region has none of. The block takes
+                // the row's place among the blocks (`first:`, `last:`).
+                view().__pass_position(true).child(dynamic(move || {
                     let cx = Cx::read(&props, cx, plugins.clone(), math_loaded);
                     let row = row.get();
                     cx.task.set(row.tasks_before);
@@ -641,14 +643,20 @@ impl Cx {
         } else {
             el.app_class(Some(SharedString::from(classes)))
         };
-        let styles: Vec<&Style> = parts.iter().filter_map(|p| self.styles.get(*p)).collect();
-        match styles.as_slice() {
-            [] => el,
-            [style] => el.inline_style((*style).clone()),
-            // Later parts' declarations win, as later classes do.
-            _ => el.inline_style(Style::from_decls(
-                styles.iter().flat_map(|s| s.decls().iter().cloned()),
-            )),
+        let mut styles = parts.iter().filter_map(|p| self.styles.get(*p)).peekable();
+        if styles.peek().is_none() {
+            return el;
+        }
+        // Later parts win, as later classes do.
+        let style = merge_styles(styles);
+        // A static style's typed styles join the element's own static ones,
+        // which its bound ones (theme colors) come after; bound, they come
+        // after those, as the app's style is over the element's own. A style
+        // of declarations alone (JS's) stays static, costing no binding.
+        if style.is_typed() {
+            el.inline_style(move || style.clone())
+        } else {
+            el.inline_style(style)
         }
     }
 
@@ -703,9 +711,12 @@ impl Cx {
         // heading's included, takes one blank row before it, as a Markdown
         // source has. Not in a list (its items' blocks stay together).
         let after_block = !matches!(before, Before::Nothing);
+        // The wrappers below pass their place on: the block keeps its own
+        // among the blocks around it (`first:`, `last:`).
         let el = if is_terminal() && self.list_depth.get() == 0 && after_block {
             view()
                 .flex_col()
+                .__pass_position(true)
                 .child(view().h(crate::terminal::cell_height()))
                 .child(el)
                 .into_element()
@@ -717,6 +728,7 @@ impl Cx {
         if tail && self.caret.is_some() && !self.caret_placed.get() {
             view()
                 .flex_col()
+                .__pass_position(true)
                 .child(el)
                 .child(self.caret_after(self.chrome(text("")), true))
                 .into_element()
@@ -1817,16 +1829,17 @@ impl Cx {
                 self.link.replace(outer);
                 // Where it goes, shown while the pointer rests on it (an
                 // `#anchor` of the document and a path too: every
-                // destination shows; a terminal links the text to it).
-                let hint = (!is_terminal()).then(|| {
+                // destination shows, in a terminal too, where the keyboard's
+                // focus on the link shows it as well).
+                let hint = {
                     let href = url.clone();
                     let title = title.clone().map(SharedString::from);
-                    link_hint(
+                    Some(link_hint(
                         move || Some(href.clone()),
                         move || title.clone(),
                         HintAt::Pointer,
-                    )
-                });
+                    ))
+                };
                 let el = span
                     .text_color(move || theme().primary)
                     .underline()
@@ -1962,8 +1975,8 @@ impl Cx {
         let is_link = link.is_some();
         // Where the link goes, on the image that takes its press (below
         // it: the image's own title, a tooltip, shows above), as on a link
-        // of text; a terminal links the text it reads as instead.
-        let hint = link.clone().filter(|_| !is_terminal()).map(|(url, title)| {
+        // of text.
+        let hint = link.clone().map(|(url, title)| {
             LinkImageHint(link_hint(
                 move || Some(url.clone()),
                 move || title.clone(),
@@ -2001,22 +2014,9 @@ impl Cx {
                 None => el.into_element(),
             };
         }
-        // A terminal's block image reads as its alt text in brackets, as a
-        // text browser shows one: a line of text, pressable as the image
-        // (`block` leaves out a paragraph of images without alt text).
-        if is_terminal() && matches!(flow, ImageFlow::Block) {
-            if image.alt.trim().is_empty() {
-                return view().into_element();
-            }
-            let el = text(format!("[{}]", image.alt.trim()))
-                .text_color(move || theme().muted_foreground)
-                .label(SharedString::from(image.alt.clone()));
-            let el = match press {
-                Some(press) => el.role(role).on_press(press),
-                None => el.role(AccessibilityRole::Image),
-            };
-            return self.part(el, Part::Image).into_element();
-        }
+        // A terminal draws the picture as the desktops do (in half
+        // blocks or with kitty graphics); one that cannot shows its alt text
+        // in brackets in its box instead.
         let (width, height) = (image.width, image.height);
         // Its natural size (a pixel a point, as a browser takes it), once
         // known, for what its own size leaves to its aspect ratio.
@@ -2373,16 +2373,11 @@ fn shown_before<'a>(blocks: impl DoubleEndedIterator<Item = &'a Block>) -> Optio
 }
 
 /// Whether a terminal leaves `block` out, its row and the blank row
-/// before it with it: a rule (the blank row between the blocks around it
-/// is the break) and a paragraph of images with no alt text (a terminal
-/// draws no images; one with alt text reads as `[alt]`).
+/// before it with it: a rule, as the blank row between the blocks around
+/// it is the break. Images show, with alt text or without: the terminal
+/// draws the picture.
 fn blank_in_terminal(block: &Block) -> bool {
-    match block {
-        Block::Rule => true,
-        Block::Paragraph { content } => only_images(content)
-            .is_some_and(|images| images.iter().all(|(i, _)| i.alt.trim().is_empty())),
-        _ => false,
-    }
+    matches!(block, Block::Rule)
 }
 
 /// A browser's list markers by depth: disc, circle, square.

@@ -38,7 +38,10 @@ use windows::{
                 D2D1_FACTORY_OPTIONS, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1CreateFactory,
                 ID2D1Bitmap1, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
             },
-            Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP},
+            Direct3D::{
+                D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP,
+                D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_11_0,
+            },
             Direct3D11::{
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 D3D11_CREATE_DEVICE_PREVENT_INTERNAL_THREADING_OPTIMIZATIONS,
@@ -199,10 +202,21 @@ pub(crate) fn presentable(gfx: &Gfx, size: (u32, u32)) -> (u32, u32) {
     (size.0.min(largest), size.1.min(largest))
 }
 
-/// The largest texture, a side in pixels, `gfx`'s device makes.
+/// The largest texture, a side in pixels, `gfx`'s device makes: what
+/// Direct2D draws into, and no more than a Direct3D texture of the device's
+/// feature level, which a swap chain is (Direct2D on WARP, a machine
+/// without a GPU, says 8,388,608; its swap chains stop at 16,384).
 pub(crate) fn largest_texture(gfx: &Gfx) -> u32 {
-    // SAFETY: a query of the live context.
-    unsafe { gfx.dc.GetMaximumBitmapSize() }.max(1)
+    // SAFETY: queries of the live context and device.
+    let (bitmap, level) = unsafe { (gfx.dc.GetMaximumBitmapSize(), gfx.d3d.GetFeatureLevel()) };
+    let texture = if level.0 >= D3D_FEATURE_LEVEL_11_0.0 {
+        16_384
+    } else if level.0 >= D3D_FEATURE_LEVEL_10_0.0 {
+        8_192
+    } else {
+        4_096
+    };
+    bitmap.min(texture).max(1)
 }
 
 /// DirectWrite's shared factory (free-threaded: any thread may use it).

@@ -34,6 +34,8 @@ mod hover_cursor;
 mod image_placeholder;
 #[cfg(target_os = "macos")]
 mod ime;
+#[cfg(all(target_os = "macos", feature = "js"))]
+mod implicit_quit;
 #[cfg(target_os = "macos")]
 mod input_clip;
 #[cfg(target_os = "macos")]
@@ -67,6 +69,8 @@ mod navigation_unmount;
 #[cfg(target_os = "macos")]
 mod nested_bounce;
 #[cfg(target_os = "macos")]
+mod nested_run_loop;
+#[cfg(target_os = "macos")]
 mod press_momentum;
 #[cfg(target_os = "macos")]
 mod quit_requests;
@@ -74,6 +78,12 @@ mod quit_requests;
 mod removed_focus;
 #[cfg(target_os = "macos")]
 mod scaled_input;
+#[cfg(target_os = "macos")]
+mod scroll_indicator_layout;
+#[cfg(target_os = "macos")]
+mod selection_autoscroll;
+#[cfg(target_os = "macos")]
+mod selection_keys;
 #[cfg(all(target_os = "macos", feature = "shader"))]
 mod shader_content;
 #[cfg(target_os = "macos")]
@@ -112,6 +122,12 @@ fn main() {
                 quit_requests::run_case();
             } else if std::env::var_os("NSH_QUIT_CHECK_ONLY").is_some() {
                 quit_requests::run();
+            } else if std::env::var_os("NSH_IMPLICIT_QUIT_CASE").is_some() {
+                #[cfg(feature = "js")]
+                implicit_quit::run_case();
+            } else if std::env::var_os("NSH_IMPLICIT_QUIT_CHECK_ONLY").is_some() {
+                #[cfg(feature = "js")]
+                implicit_quit::run();
             } else if std::env::var_os("NSH_TITLE_BAR_CHECK_ONLY").is_some() {
                 title_bar::run();
             } else if std::env::var_os("NSH_MODAL_FADE_CHECK_ONLY").is_some() {
@@ -186,6 +202,12 @@ fn main() {
                 download_redirect::run();
             } else if std::env::var_os("NSH_INPUT_WHEEL_CHAIN_CHECK_ONLY").is_some() {
                 input_wheel_chain::run();
+            } else if std::env::var_os("NSH_SELECTION_AUTOSCROLL_CHECK_ONLY").is_some() {
+                selection_autoscroll::run();
+            } else if std::env::var_os("NSH_SCROLL_INDICATOR_CHECK_ONLY").is_some() {
+                scroll_indicator_layout::run();
+            } else if std::env::var_os("NSH_SELECTION_KEYS_CHECK_ONLY").is_some() {
+                selection_keys::run();
             } else if std::env::var_os("NSH_EMBEDDED_SCROLL_CHECK_ONLY").is_some() {
                 embedded_scroll::run();
             } else if std::env::var_os("NSH_VIEW_SCALE_CHECK_ONLY").is_some() {
@@ -200,8 +222,12 @@ fn main() {
                 nested_bounce::run();
             } else if std::env::var_os("NSH_PRESS_MOMENTUM_CHECK_ONLY").is_some() {
                 press_momentum::run();
+            } else if std::env::var_os("NSH_NESTED_RUN_LOOP_CHECK_ONLY").is_some() {
+                nested_run_loop::run();
             } else {
                 quit_requests::run();
+                #[cfg(feature = "js")]
+                implicit_quit::run();
                 window_press::run();
                 window_hover::run();
                 title_bar::run();
@@ -237,12 +263,16 @@ fn main() {
                 scaled_input::run();
                 zoom::run();
                 deleted_scroll::run();
+                scroll_indicator_layout::run();
                 download_redirect::run();
                 mount::run();
                 // Last: it makes the process an accessory app.
                 embedded_scroll::run();
                 input_wheel_chain::run();
+                selection_autoscroll::run();
+                selection_keys::run();
                 nested_bounce::run();
+                nested_run_loop::run();
                 // Last: it leaves the app an accessory, never activated.
                 press_momentum::run();
                 tap_feedback::run();

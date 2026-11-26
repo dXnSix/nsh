@@ -1,6 +1,7 @@
 //! Typed root parts reach the document's text before classes and styles;
 //! a table's grid takes the app's frame; inline links are stops of Tab,
-//! pressed with Return; a link's press reports the modifier keys held.
+//! pressed with Return; a link's press reports the modifier keys held;
+//! blocks' `first:` and `last:` read their place among the blocks.
 
 use std::sync::{Arc, Mutex};
 
@@ -200,6 +201,32 @@ fn text_takes_the_documents_colors_under_the_apps_text_style_part() {
     // The text around keeps the view's color; the part's classes win.
     assert_ne!(color("text:Plain"), Color(0xe545_45ff));
     assert_eq!(color("text:the app's color"), Color(0x0000_ffff));
+}
+
+/// Paragraphs whose `classes` read their place among the blocks:
+/// `first:` and `last:` match the first and last block, as each block
+/// is the one its row shows.
+#[component]
+fn PlacedParagraphs() -> impl IntoElement {
+    text_view()
+        .markdown("Alpha\n\nBravo\n\nCharlie")
+        .classes(TextViewClasses {
+            paragraph: Some("text-[#ff0000] first:text-[#00ff00] last:text-[#0000ff]".into()),
+            ..Default::default()
+        })
+}
+
+#[test]
+fn blocks_take_their_place_among_the_blocks() {
+    let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root::<
+        PlacedParagraphs,
+    >()))
+    .unwrap();
+    app.wait_for("Charlie").unwrap();
+    let color = |selector: &str| app.screen().span_style(selector).unwrap().color;
+    assert_eq!(color("text:Alpha"), Color(0x00ff_00ff));
+    assert_eq!(color("text:Bravo"), Color(0xff00_00ff));
+    assert_eq!(color("text:Charlie"), Color(0x0000_ffff));
 }
 
 /// A table whose grid the app frames by `classes`: a border on every
@@ -1743,5 +1770,78 @@ mod large_document {
                 ms(both.0),
             );
         }
+    }
+}
+
+/// Headings whose parts have typed styles (`StyleRefinement`, as a Rust
+/// app types them): every heading's, then its level's over it.
+#[component]
+fn TypedHeadings() -> impl IntoElement {
+    use nsh_base::text_view::PartStyle;
+    use nsh_core::element::StyleRefinement;
+
+    let color = |c: u32| PartStyle(StyleRefinement::default().text_color(rgb(c)).into());
+    let styles = TextViewStyles {
+        heading: Some(color(0xff0000)),
+        heading1: Some(color(0x0000ff)),
+        ..Default::default()
+    };
+    text_view().markdown("# Big\n\n## Small").styles(styles)
+}
+
+#[test]
+fn typed_part_styles_reach_headings_in_order() {
+    let mut app = Headless::start(EngineConfig::new(
+        nsh_testing::windowed_root::<TypedHeadings>(),
+    ))
+    .unwrap();
+    app.wait_for("Small").unwrap();
+    let color = |selector: &str| app.screen().span_style(selector).unwrap().color;
+    assert_eq!(color("text:Big"), Color(0x0000_ffff));
+    assert_eq!(color("text:Small"), Color(0xff00_00ff));
+}
+
+/// A quote whose part has a typed style (`StyleRefinement`, as a Rust app
+/// types it) or the same in declarations: either wins over the color the
+/// view gives quotes, which follows the theme.
+#[derive(Clone, PartialEq, Props)]
+struct QuoteProps {
+    typed: bool,
+}
+
+#[component]
+fn StyledQuote(props: QuoteProps) -> impl IntoElement {
+    use nsh_base::text_view::PartStyle;
+    use nsh_core::element::StyleRefinement;
+
+    let red = rgb(0xff0000);
+    let style = if props.typed {
+        StyleRefinement::default().text_color(red).into()
+    } else {
+        Style::default().with(
+            StyleKey::Color,
+            nsh_core::PropertyValue::Color(Some(red.into())),
+        )
+    };
+    let styles = TextViewStyles {
+        blockquote: Some(PartStyle(style)),
+        ..Default::default()
+    };
+    text_view().markdown("> quoted").styles(styles)
+}
+
+#[test]
+fn a_quotes_typed_part_style_wins_over_its_theme_color() {
+    for typed in [false, true] {
+        let mut app = Headless::start(EngineConfig::new(nsh_testing::windowed_root_with::<
+            StyledQuote,
+        >(move || QuoteProps { typed })))
+        .unwrap();
+        app.wait_for("quoted").unwrap();
+        assert_eq!(
+            app.screen().span_style("text:quoted").unwrap().color,
+            Color(0xff00_00ff),
+            "typed: {typed}"
+        );
     }
 }
