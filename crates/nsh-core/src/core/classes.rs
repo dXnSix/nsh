@@ -2132,6 +2132,11 @@ impl<M: TextEngine> Core<M> {
         {
             return false;
         }
+        // A dev tool's layer goes over what the classes resolve to.
+        #[cfg(feature = "inspect")]
+        if node.dev.is_some() {
+            return false;
+        }
         let Some(classes) = node.classes.clone() else {
             return false;
         };
@@ -2159,9 +2164,11 @@ impl<M: TextEngine> Core<M> {
         let positional = pos != 0 && node.parent != NO_KEY;
         let inherited_color = node.inherited_color;
         let rtl = self.resolved_rtl(key);
+        // A scope's appearance, not only the surface's.
+        let env = self.class_env_at(key);
         let cache_key = ResolvedKey::new(
             &classes,
-            &self.class_env,
+            &env,
             self.viewport,
             rtl,
             states,
@@ -2173,7 +2180,7 @@ impl<M: TextEngine> Core<M> {
         } else {
             let group = |_: &str| 0;
             let cx = Context {
-                env: self.class_env,
+                env,
                 window: self.viewport,
                 rtl,
                 states,

@@ -173,9 +173,12 @@ impl<M: TextEngine> Core<M> {
                 base: base.clone(),
             }));
         }
-        // Resolved again, with the layer or without.
+        // Resolved again, with the layer or without; styled again even when
+        // the classes come out the same (a layer of states or declarations
+        // only), which `set_class_list` would leave as they were.
         self.set_class_list(key, base);
         self.update_tracking(key);
+        self.restyle(key);
         true
     }
 
