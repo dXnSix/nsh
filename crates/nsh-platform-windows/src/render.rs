@@ -1684,7 +1684,7 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
         let readers = crate::shader::backdrop_areas(surface);
         with_backdrops(merged(rects), &pixel_rects(&readers, scale, chain.size))
     });
-    let areas: Option<Vec<D2D_RECT_F>> = redraw.as_ref().map(|rects| dip_rects(rects, scale));
+    let areas = redraw.as_deref().map(|rects| dip_rects(rects, scale));
     let expected_slice = expected_layers.as_deref().unwrap_or(&[]);
     let fps = surface.fps();
     let started = fps.as_ref().map(|_| std::time::Instant::now());
@@ -1761,7 +1761,11 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
                 c.commit();
             }
             if let (Some(fps), Some(painted)) = (&fps, painted) {
-                fps.painted(painted, shown.elapsed());
+                fps.painted(
+                    painted,
+                    shown.elapsed(),
+                    drawn_share(redraw.as_deref(), size),
+                );
             }
             drop(swap);
             surface.items_placed(drawn.items, redraw.as_deref());
@@ -1781,6 +1785,22 @@ pub(crate) fn frame(surface: &Rc<Surface>) -> bool {
         }
     }
     false
+}
+
+/// The share of the window's `size` (pixels) a frame drew: 1 for a whole
+/// frame (`None`), else the area of its rectangles (merged; overlaps, if
+/// any, counted twice, at most the whole).
+fn drawn_share(redraw: Option<&[RECT]>, size: (u32, u32)) -> f32 {
+    let Some(rects) = redraw else { return 1.0 };
+    let window = f64::from(size.0) * f64::from(size.1);
+    if window <= 0.0 {
+        return 0.0;
+    }
+    let drawn: f64 = rects
+        .iter()
+        .map(|r| f64::from(r.right - r.left) * f64::from(r.bottom - r.top))
+        .sum();
+    (drawn / window).min(1.0) as f32
 }
 
 /// Clears `areas` (DIPs, on pixels) of the target to `background`, each
@@ -1967,7 +1987,7 @@ fn device_lost(surface: &Rc<Surface>) {
 }
 
 /// What a pass drew besides pixels.
-struct Drawn {
+pub(crate) struct Drawn {
     /// The hosted items drawn and their window rectangles.
     items: Vec<(Rc<dyn Hosted>, RECT)>,
     /// The composed items (web views) and where they go.
@@ -2010,16 +2030,16 @@ pub(crate) struct WindowFrame<'a> {
     /// Top-left of the rendered slice in content points (`(0.0, 0.0)` for a
     /// full window).
     pub(crate) origin: (f32, f32),
-    /// Damage queued for this window's next frame.
-    pub(crate) damage: &'a crate::surface::Damage,
     /// The hosted items and the composed items its last frame drew.
     pub(crate) placed: &'a RefCell<Vec<(Rc<dyn Hosted>, RECT)>>,
     pub(crate) composed: &'a RefCell<Vec<Rc<dyn Hosted>>>,
+    /// What changed since its last frame.
+    pub(crate) damage: &'a crate::surface::Damage,
 }
 
-/// Draws a window of the app's own, then presents it: its web views and
-/// composed components between the layers of its composition, its hosted
-/// items' own windows placed where their views were drawn.
+/// Draws what changed in a window of the app's own, then presents it: its web
+/// views and composed components between the layers of its composition, its
+/// hosted items' own windows placed where their views were drawn.
 pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> WindowFrameOutcome {
     let WindowFrame {
         root,
@@ -2031,9 +2051,9 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         size,
         scale,
         origin,
-        damage,
         placed,
         composed,
+        damage,
     } = frame;
     let Ok(gfx) = gfx::get() else {
         return WindowFrameOutcome::Failed;
@@ -2100,13 +2120,17 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
     let design = false;
     let cropped = origin.0 != 0.0 || origin.1 != 0.0;
     let records = !design && !cropped;
-    let backdrops = base.is_some_and(|b| b.has_backdrops());
+    // What changed, in pixels (`None`: everything), as the main window's
+    // ([`frame`]): a window with backdrops draws whole, and a composed window
+    // draws partial frames once every overlay layer has a shown swap chain at
+    // this size and scale (`Composition::can_partial`).
+    let backdrops = base.is_some_and(Composition::has_backdrops);
     let expected_layers = match composition {
         Some(c) => c.can_partial(presented_size, scale),
         None => Some(Vec::new()),
     };
-    let raw_damage = damage.take();
-    let mut changed = raw_damage
+    let mut changed = damage
+        .take()
         .filter(|_| records && !backdrops && expected_layers.is_some())
         .map(|rects| merged(pixel_rects(&rects, scale, presented_size)));
     if changed.as_ref().is_some_and(Vec::is_empty) && chain.shows_a_frame() {
@@ -2117,9 +2141,11 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         let readers = crate::shader::backdrop_areas(surface);
         with_backdrops(merged(rects), &pixel_rects(&readers, scale, presented_size))
     });
-    let areas: Option<Vec<D2D_RECT_F>> = redraw.as_ref().map(|rects| dip_rects(rects, scale));
+    let areas = redraw.as_deref().map(|rects| dip_rects(rects, scale));
     let expected_slice = expected_layers.as_deref().unwrap_or(&[]);
     let window = Some((root, presented_size));
+    let fps = surface.fps();
+    let started = fps.as_ref().map(|_| std::time::Instant::now());
     let mut drawn = draw_into_at(
         surface,
         &gfx,
@@ -2157,6 +2183,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
             );
         }
     }
+    let painted = started.map(|s| s.elapsed());
     match drawn {
         Ok(drawn) => {
             // In design mode, the tool reads only the single shared base swap
@@ -2169,6 +2196,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
                 drawn.composed,
                 &drawn.layers,
             );
+            let shown = std::time::Instant::now();
             if needs_commit
                 && let Some(c) = composition
                 && let Err(err) = c.present(drawn.layers.len(), changed.as_deref(), &drawn.layers)
@@ -2199,6 +2227,13 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
             if needs_commit && let Some(c) = composition {
                 c.commit();
             }
+            if let (Some(fps), Some(painted)) = (&fps, painted) {
+                fps.painted(
+                    painted,
+                    shown.elapsed(),
+                    drawn_share(redraw.as_deref(), presented_size),
+                );
+            }
             drop(swap);
             crate::surface::items_placed(placed, drawn.items, redraw.as_deref());
             if let Some(base) = base {
@@ -2220,8 +2255,8 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         }
         Err(err) => {
             log::error!("drawing a window failed: {err}");
-            // The back buffer holds what is not known: draw whole next.
-            damage.invalidate();
+            // The back buffer holds what is not known: drawn whole next.
+            damage.whole();
             WindowFrameOutcome::Failed
         }
     }
@@ -2230,7 +2265,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
 /// Draws the tree into `target` (its DPI set for `scale`), and into the
 /// layers of `composition` above its web views.
 #[allow(clippy::too_many_arguments)]
-fn draw_into(
+pub(crate) fn draw_into(
     surface: &Rc<Surface>,
     gfx: &Gfx,
     target: &ID2D1Bitmap1,
@@ -2251,7 +2286,7 @@ fn draw_into(
         &[],
         window,
         (0.0, 0.0),
-        !offscreen && window.is_none(),
+        !offscreen,
     )
 }
 
@@ -2311,6 +2346,9 @@ fn draw_into_at(
     };
     cx.offscreen = offscreen;
     cx.opaque_target = opaque_target;
+    // Views record where the window's frame painted them (a window of the
+    // app's own draws its root alone, whose views are its own; design mode and
+    // cropped live viewports pass `records = false`).
     cx.records = records;
     // A see-through window (it clears to transparent) shows the system's
     // blur under its backdrop views.

@@ -39,6 +39,7 @@ mod first_poll;
 mod focus;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod fs;
+mod gc_bench;
 mod gradient_tokens;
 mod handle_bench;
 mod host;

@@ -27,6 +27,7 @@ For people working on NSH itself (`AGENTS.md` at the root is the short version a
 | [scrolling-and-lists.md](scrolling-and-lists.md) | Scroll views, zooming, `List` |
 | [animation.md](animation.md) | Animated values, composites, layout animation |
 | [canvas.md](canvas.md) | `Canvas` |
+| [gpu-views.md](gpu-views.md) | GPU views (`gpuView`, `nsh-gpu`): renderers apps write with wgpu, their render thread, how platforms show frames |
 | [images.md](images.md) | Loading, decoding, caching, animated images |
 | [sandbox.md](sandbox.md) | VM limits, hardening, capabilities |
 | [design-mode.md](design-mode.md) | Design mode (fork, dev hosts): an app shown and driven in a design tool, `NSH_DESIGN_SOCKET`, the line protocol, the platforms' parts, `nsh/design` |
