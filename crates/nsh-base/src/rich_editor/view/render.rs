@@ -1542,6 +1542,10 @@ fn placeholder_text(rv: &Rv, it: &BlockItem) -> Option<String> {
 /// The spans of textblock `id`'s pieces.
 fn spans(rv: &Rv, pieces: Vec<Piece>, id: u64) -> Vec<AnyElement> {
     let props = rv.props;
+    let palette = pieces
+        .iter()
+        .any(|p| matches!(p, Piece::Text { token: Some(_), .. }))
+        .then(crate::syntax::Palette::of_theme);
     // Inline leaves by their order in the block: a node view's key that
     // typing before it does not change.
     let mut leaves = 0usize;
@@ -1579,8 +1583,8 @@ fn spans(rv: &Rv, pieces: Vec<Piece>, id: u64) -> Vec<AnyElement> {
                         )
                     });
                 let mut span = text(t);
-                if let Some(token) = token {
-                    *span.style() = token.style();
+                if let (Some(token), Some(palette)) = (token, palette.as_ref()) {
+                    *span.style() = token.style(palette);
                 }
                 span.app_class(move || {
                     props.classes.with(|c| {
