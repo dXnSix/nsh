@@ -20,6 +20,8 @@ use rolldown::{
 
 use crate::compile::{NativeModules, compile_native};
 
+mod names;
+
 /// Compiles the app's modules with nsh's JSX compiler against the native
 /// modules (kept as imports) and loads its assets.
 #[derive(Debug)]
@@ -53,6 +55,8 @@ pub(crate) struct NshPlugin {
     /// A split bundle: dynamic imports of chunks call the runtime's chunk
     /// loader (`split.rs`).
     pub(crate) split: bool,
+    /// The names of the modules ([`NshPlugin::module_name`]).
+    pub(crate) names: names::ModuleNames,
 }
 
 /// The `"tailwind"`, `"theme"`, `"appearance"` and `"statusBar"` of the
@@ -397,6 +401,14 @@ impl NshPlugin {
             .replace('\\', "/")
     }
 
+    /// The name of the module at `path` in a development bundle, its hot
+    /// key (component instances, kept state): as [`NshPlugin::rel`] names
+    /// it in the entry's directory, else by its package
+    /// (`@acme-ui/src/Card.tsx`), the same on every machine ([`names`]).
+    fn module_name(&self, path: &Path) -> String {
+        self.names.name(path, &self.root)
+    }
+
     /// Ships the asset `path` with the app and names it (its `asset:/` URL
     /// without the scheme): its path in the app's directory, `/`-separated
     /// on every system. A file outside it fails the build: the files an app
@@ -727,7 +739,7 @@ impl Plugin for NshPlugin {
         if !(jsx_module || entry || self.hot && script || meta) {
             return Ok(None);
         }
-        let hot_key = self.hot.then(|| self.rel(path));
+        let hot_key = self.hot.then(|| self.module_name(path));
         // By module type, not file name: asset modules (`logo.png`) are JS.
         let source_type = match args.module_type {
             ModuleType::Tsx => SourceType::tsx(),

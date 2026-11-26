@@ -737,6 +737,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
             preloads: None,
             left_out: Arc::new(resolve.left_out(&modules)),
             modules,
+            names: Default::default(),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;
@@ -1140,6 +1141,7 @@ pub async fn bundle_hot_async(
             left_out: Arc::new(resolve.left_out(&modules)),
             modules,
             split: false,
+            names: Default::default(),
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;

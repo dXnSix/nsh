@@ -220,3 +220,12 @@ runtime (`crates/nsh-js/src/hot.rs`, see `tooling.md`). The script is an ES modu
 `__nsh_hot` global; only development bundles import it) and the namespaces of the native modules the app imports, which
 factories `require` by specifier; an edit that imports a native module the running script did not makes the host
 reload.
+
+A module's hot key (its components' instance keys and `__nsh_hot.keep()` keys) is the same on every machine and system
+(`crates/nsh-bundler/src/plugin/names.rs`): its path from the directory modules are named from (the entry's, or the
+app's for an entry kept outside it), `/`-separated (`src/Card.tsx`); a module outside it, a library's,
+`@<package>/<path in its package>` (`@acme-ui/src/Card.tsx`), as a package's files are published
+(`asset:/@<package>/<path>`), with no version, so an upgrade keeps the names of the files it leaves alone. Its package
+is the nearest directory above it with a `Cargo.toml` that has a `[package]` (its `name`), else a `package.json` with
+a `name` (a scoped one keeps its `@`: `@scope/ui/src/A.tsx`), each directory read once a build; a module in no package
+keeps its absolute path. `import.meta.url` and messages still name the file where it is.
