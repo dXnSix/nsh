@@ -15,7 +15,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use nsh_core::element::description::SetDescription;
+use nsh_core::element::{
+    AssetFilterManifest, BuildContext, ExclusionReason, WhenPredicate, description::SetDescription,
+    resolve_package_assets,
+};
 use rolldown::{
     ModuleType,
     plugin::{HookLoadOutput, HookResolveIdOutput},
@@ -35,22 +38,103 @@ pub(crate) const PREFIX: &str = "asset:/@";
 const ID: &str = "\0nsh-set-asset:";
 
 /// The files the UI sets ship, by their path among the app's assets
-/// (`@acme-ui/images/logo.png`): where each was built.
+/// (`@acme-ui/images/logo.png`): where each was built, plus any paths excluded
+/// by the active [`BuildContext`] for actionable error reporting.
 #[derive(Debug, Default)]
 pub(crate) struct SetAssets {
     files: BTreeMap<String, PathBuf>,
+    excluded: BTreeMap<String, ExclusionReason>,
+    context: Option<BuildContext>,
 }
 
 impl SetAssets {
-    /// The files `ui_sets` ship.
-    pub(crate) fn new(ui_sets: &[SetDescription]) -> Self {
-        Self {
-            files: ui_sets
-                .iter()
-                .flat_map(|set| &set.assets)
-                .map(|file| (file.path.clone(), PathBuf::from(&file.source)))
-                .collect(),
+    /// The files `ui_sets` ship, filtered and alias-resolved under `context`
+    /// when provided.
+    pub(crate) fn new_with_context(
+        ui_sets: &[SetDescription],
+        context: Option<&BuildContext>,
+    ) -> Result<Self, String> {
+        let Some(ctx) = context else {
+            return Ok(Self {
+                files: ui_sets
+                    .iter()
+                    .flat_map(|set| &set.assets)
+                    .map(|file| (file.path.clone(), PathBuf::from(&file.source)))
+                    .collect(),
+                excluded: BTreeMap::new(),
+                context: None,
+            });
+        };
+
+        let target_os = ctx.target_os();
+        // Group files by package name (`@pkg/rel` -> `pkg`, `rel`).
+        let mut by_package: BTreeMap<String, BTreeMap<String, PathBuf>> = BTreeMap::new();
+        let mut files = BTreeMap::new();
+        let mut excluded = BTreeMap::new();
+
+        for file in ui_sets.iter().flat_map(|set| &set.assets) {
+            if !file.targets.is_empty()
+                && let Some(os) = target_os
+                && !file.targets.contains(&os)
+            {
+                let mut pred = WhenPredicate::default();
+                pred.conditions.insert(
+                    "platform".to_owned(),
+                    file.targets.iter().map(|t| t.name().to_owned()).collect(),
+                );
+                excluded.insert(file.path.clone(), ExclusionReason::When(vec![pred]));
+                continue;
+            }
+            if let Some((pkg, rel)) = split_package_path(&file.path) {
+                by_package
+                    .entry(pkg.to_owned())
+                    .or_default()
+                    .insert(rel.to_owned(), PathBuf::from(&file.source));
+            } else {
+                files.insert(file.path.clone(), PathBuf::from(&file.source));
+            }
         }
+
+        for (pkg, pkg_files) in by_package {
+            let manifest_source = pkg_files.get("assets.toml").cloned();
+            let manifest = match &manifest_source {
+                Some(source) => match std::fs::read_to_string(source) {
+                    Ok(text) => Some(
+                        AssetFilterManifest::parse(&text)
+                            .map_err(|e| format!("@{pkg}/assets.toml: {e}"))?,
+                    ),
+                    Err(_) => None,
+                },
+                None => None,
+            };
+
+            if let Some(manifest) = manifest {
+                let rel_list: Vec<String> = pkg_files.keys().cloned().collect();
+                let resolved = resolve_package_assets(&pkg, &rel_list, &manifest, ctx)
+                    .map_err(|e| e.to_string())?;
+                for item in resolved.included {
+                    if let Some(source) = pkg_files.get(&item.physical_path) {
+                        files.insert(format!("@{pkg}/{}", item.logical_path), source.clone());
+                    }
+                }
+                if let Some(source) = manifest_source {
+                    files.insert(format!("@{pkg}/assets.toml"), source);
+                }
+                for (excl_rel, reason) in resolved.excluded {
+                    excluded.insert(format!("@{pkg}/{excl_rel}"), reason);
+                }
+            } else {
+                for (rel, source) in pkg_files {
+                    files.insert(format!("@{pkg}/{rel}"), source);
+                }
+            }
+        }
+
+        Ok(Self {
+            files,
+            excluded,
+            context: Some(ctx.clone()),
+        })
     }
 
     /// Why no set ships `path`: the closest files they do ship (by edit
@@ -75,6 +159,13 @@ impl SetAssets {
             near.join(", ")
         )
     }
+}
+
+/// Splits `@<package>/<rel>` into `(<package>, <rel>)`.
+fn split_package_path(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix('@')?;
+    let (pkg, rel) = rest.split_once('/')?;
+    (!pkg.is_empty() && !rel.is_empty()).then_some((pkg, rel))
 }
 
 /// `path`'s variant at `scale` among a set's files (`@acme-ui/logo.png`
@@ -108,6 +199,17 @@ impl NshPlugin {
         };
         let path = &url["asset:/".len()..];
         if !self.set_assets.files.contains_key(path) {
+            if let Some(reason) = self.set_assets.excluded.get(path) {
+                let ctx_desc = self
+                    .set_assets
+                    .context
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "{}".to_owned());
+                return Err(self.refuse(format!(
+                    "{from}`{spec}` is excluded by the active build context {ctx_desc} ({reason})"
+                )));
+            }
             let why = self.set_assets.missing(path);
             return Err(self.refuse(format!("{from}`{spec}`: {why}")));
         }
@@ -341,5 +443,151 @@ mod tests {
             variant("@acme-ui/logo.png", 2.0).as_deref(),
             Some("@acme-ui/logo@2x.png")
         );
+    }
+
+    #[test]
+    fn context_defines_tree_shake_dead_branches() {
+        let dir = app("defines");
+        std::fs::write(
+            dir.join("app/App.tsx"),
+            r#"
+import { mount, Text } from "nsh";
+const brand = process.env.NSH_CONTEXT_BRAND === "acme" ? "ACME_LIVE" : "GLOBEX_DEAD";
+const plat = import.meta.env.NSH_CONTEXT_PLATFORM === "ios" ? "IOS_LIVE" : "ANDROID_DEAD";
+mount(() => <Text>{brand + ":" + plat}</Text>);
+"#,
+        )
+        .unwrap();
+        let ctx = BuildContext::from_target(
+            Some(nsh_core::platform::Os::Ios),
+            true,
+            &[],
+            &BTreeMap::from([("brand".to_owned(), vec!["acme".to_owned()])]),
+        );
+        let built = bundle(&BundleOptions {
+            entry: dir.join("app/App.tsx"),
+            minify: true,
+            context: Some(ctx),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(built.code.contains("ACME_LIVE"), "{}", built.code);
+        assert!(built.code.contains("IOS_LIVE"), "{}", built.code);
+        assert!(!built.code.contains("GLOBEX_DEAD"), "{}", built.code);
+        assert!(!built.code.contains("ANDROID_DEAD"), "{}", built.code);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn context_resolves_aliased_set_assets_with_dimensions_and_scales() {
+        let dir = app("aliases");
+        let manifest = br#"
+[[asset]]
+path = "brand/acme/logo.png"
+alias = "brand/logo.png"
+when = { brand = "acme" }
+
+[[asset]]
+path = "brand/acme/logo@2x.png"
+when = { brand = "acme" }
+
+[[asset]]
+path = "brand/globex/logo.png"
+alias = "brand/logo.png"
+when = { brand = "globex" }
+"#;
+        let acme = set(
+            &dir.join("acme-ui"),
+            &[
+                ("assets.toml", manifest.to_vec()),
+                ("brand/acme/logo.png", png(40, 20)),
+                ("brand/acme/logo@2x.png", png(80, 40)),
+                ("brand/globex/logo.png", png(100, 50)),
+            ],
+        );
+        write_app(&dir, &[("logo", "asset:/@acme-ui/brand/logo.png")]);
+
+        let bare = |code: &str| code.split_whitespace().collect::<String>();
+
+        let acme_ctx = BuildContext::new().with("brand", "acme");
+        let built_acme = bundle(&BundleOptions {
+            entry: dir.join("app/App.tsx"),
+            ui_sets: vec![acme.clone()],
+            context: Some(acme_ctx),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            bare(&built_acme.code).contains(&bare(
+                "url: \"asset:/@acme-ui/brand/logo.png\", size: { width: 40, height: 20 }, scales: [1, 2]"
+            )),
+            "{}",
+            built_acme.code
+        );
+
+        let globex_ctx = BuildContext::new().with("brand", "globex");
+        let built_globex = bundle(&BundleOptions {
+            entry: dir.join("app/App.tsx"),
+            ui_sets: vec![acme],
+            context: Some(globex_ctx),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(
+            bare(&built_globex.code).contains(&bare(
+                "url: \"asset:/@acme-ui/brand/logo.png\", size: { width: 100, height: 50 } }"
+            )),
+            "{}",
+            built_globex.code
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn importing_asset_excluded_by_when_fails_with_actionable_error() {
+        let dir = app("excluded-when");
+        let manifest = br#"
+[[asset]]
+path = "ios/badge.svg"
+when = { platform = ["ios", "macos"] }
+"#;
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>"#;
+        let acme = set(
+            &dir.join("acme-ui"),
+            &[
+                ("assets.toml", manifest.to_vec()),
+                ("ios/badge.svg", svg.to_vec()),
+            ],
+        );
+        write_app(&dir, &[("badge", "asset:/@acme-ui/ios/badge.svg")]);
+
+        let android_ctx = BuildContext::from_target(
+            Some(nsh_core::platform::Os::Android),
+            true,
+            &[],
+            &BTreeMap::new(),
+        );
+        let error = bundle(&BundleOptions {
+            entry: dir.join("app/App.tsx"),
+            ui_sets: vec![acme],
+            context: Some(android_ctx),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .plain;
+
+        assert!(
+            error.contains("asset:/@acme-ui/ios/badge.svg"),
+            "names asset: {error}"
+        );
+        assert!(
+            error.contains("platform = [\"ios\", \"macos\"]"),
+            "names required when predicate: {error}"
+        );
+        assert!(
+            error.contains("platform = \"android\""),
+            "names active build context: {error}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

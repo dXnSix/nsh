@@ -170,6 +170,12 @@ enum Command {
         /// (`Screen.js`, ...), loaded on demand: how web apps are published.
         #[arg(long)]
         split: bool,
+        /// Asset build context override (`key=value`; repeatable).
+        #[arg(long = "context", value_name = "KEY=VALUE")]
+        context: Vec<String>,
+        /// Named asset build profile from `nsh.json` `assets.profiles`.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Run an app's tests headless: its test files (`*.test.tsx`,
     /// `*.test.ts`, importing `nsh/test`), each test opening the app on an
@@ -332,6 +338,12 @@ enum Command {
         /// and `web`, and the page `--server-only` serves to browsers).
         #[arg(long, value_enum)]
         idiom: Option<run::DevIdiom>,
+        /// Asset build context override (`key=value`; repeatable).
+        #[arg(long = "context", value_name = "KEY=VALUE")]
+        context: Vec<String>,
+        /// Named asset build profile from `nsh.json` `assets.profiles`.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Package an installable app from the prebuilt runtime (no Rust
     /// needed). Metadata comes from `nsh.json` next to the entry, overridden
@@ -417,6 +429,12 @@ enum Command {
         /// (TSX entries).
         #[arg(long)]
         background: bool,
+        /// Asset build context override (`key=value`; repeatable).
+        #[arg(long = "context", value_name = "KEY=VALUE")]
+        context: Vec<String>,
+        /// Named asset build profile from `nsh.json` `assets.profiles`.
+        #[arg(long, value_name = "NAME")]
+        profile: Option<String>,
     },
     /// Create a signing key: `<name>.secret` (keep it offline for a root)
     /// and `<name>.pub` (what apps trust, for a root).
@@ -725,9 +743,10 @@ struct PackageArgs {
     /// whose `nsh.json` `"entry"` is the entry (default: its `App.tsx`).
     #[arg(default_value = ".")]
     entry: PathBuf,
-    /// What to build for.
+    /// What to build for (optional when `--profile` selects a profile in
+    /// `nsh.json` that sets `target`).
     #[arg(long, value_enum)]
-    target: package::PackageTarget,
+    target: Option<package::PackageTarget>,
     /// Output directory.
     #[arg(short, long, default_value = ".nsh/out")]
     out: PathBuf,
@@ -754,11 +773,13 @@ struct PackageArgs {
     /// (default: `nsh.json` `tizen.signing`).
     #[arg(long)]
     sign: Option<String>,
-    /// Provisioning profile for devices (`.mobileprovision`). Repeat it to
-    /// give each app extension (`nsh.json` `ios.extensions`) its own: every
-    /// bundle takes the profile for its identifier.
+    /// Provisioning profile for devices (`.mobileprovision`, repeatable), or a
+    /// named asset build profile from `nsh.json` `assets.profiles`.
     #[arg(long)]
     profile: Vec<PathBuf>,
+    /// Asset build context override (`key=value`; repeatable).
+    #[arg(long = "context", value_name = "KEY=VALUE")]
+    context: Vec<String>,
     /// Android release keystore (default: the debug key).
     #[arg(long, requires = "key_alias")]
     keystore: Option<PathBuf>,
@@ -1040,6 +1061,20 @@ fn run(mut command: Command) -> anyhow::Result<()> {
         // keeps TypeScript tests (a `tsconfig.json` for them).
         types &= check::has_typescript(entry);
     }
+    if let Command::Package(args) = &mut command
+        && args.target.is_none()
+    {
+        let (_, asset_profile) = package::split_package_profiles(&args.profile)?;
+        if let Some(profile_name) = asset_profile.as_deref() {
+            let config = package::read_config(&args.entry)?;
+            args.target = package::profile_package_target(&config, profile_name)?;
+        }
+        if args.target.is_none() {
+            anyhow::bail!(
+                "nsh package needs --target (or a --profile that sets `target` in nsh.json)"
+            );
+        }
+    }
     // Own the port across builds and restarts, until every host and forwarding
     // rule from this command has been cleaned up.
     let _port = match &mut command {
@@ -1116,7 +1151,7 @@ fn run(mut command: Command) -> anyhow::Result<()> {
             server_only: false,
             ..
         } => here(*target),
-        Command::Package(args) => Some(args.target) == package::PackageTarget::desktop(),
+        Command::Package(args) => args.target == package::PackageTarget::desktop(),
         _ => false,
     };
     // A design tool's optimized run (`--release` with NSH_DESIGN_SOCKET on a
@@ -1161,7 +1196,7 @@ fn run(mut command: Command) -> anyhow::Result<()> {
             server_only: false,
             ..
         } => Some(target.os()),
-        Command::Package(args) => args.target.asset_target(),
+        Command::Package(args) => args.target.and_then(package::PackageTarget::asset_target),
         _ => None,
     };
     let app = match command.entry_mut() {
@@ -1278,7 +1313,19 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             out,
             release,
             split,
-        } => build::build(&entry, &out, release, split),
+            context,
+            profile,
+        } => {
+            let config = package::read_config(&entry)?;
+            let build_context = package::resolve_build_context(
+                &config,
+                None,
+                release,
+                profile.as_deref(),
+                &context,
+            )?;
+            build::build(&entry, &out, release, split, &build_context)
+        }
         Command::Check { entry, tsc, args } => check::check(&entry, tsc.as_deref(), &args),
         Command::Theme { action } => theme::run(action),
         Command::Test {
@@ -1325,8 +1372,18 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             device,
             server_only,
             idiom,
+            context,
+            profile,
         } => {
             no_limits_for_rust(&entry, limits)?;
+            let config = package::read_config(&entry)?;
+            let build_context = package::resolve_build_context(
+                &config,
+                (!server_only).then_some(target.os()),
+                release,
+                profile.as_deref(),
+                &context,
+            )?;
             // `--server-only` serves hosts started elsewhere, on other
             // machines too; a host `nsh dev` starts is on the network only
             // as `nsh run` starts it.
@@ -1341,7 +1398,14 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 // The page it serves takes the idiom; hosts started
                 // separately take theirs on their command line.
                 let idiom = run::DevIdiom::resolve(idiom, &entry, None)?;
-                let session = dev::DevSession::start(&entry, listen, release, limits, idiom)?;
+                let session = dev::DevSession::start_with_context(
+                    &entry,
+                    listen,
+                    release,
+                    limits,
+                    idiom,
+                    build_context,
+                )?;
                 session.print_urls();
                 session.watch(|| Ok(false))
             } else {
@@ -1355,6 +1419,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                         fps: false,
                         points_per_cell: None,
                         idiom,
+                        context: build_context,
                     },
                     target,
                     device.as_deref(),
@@ -1374,6 +1439,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 icon,
                 sign,
                 profile,
+                context,
                 keystore,
                 key_alias,
                 keystore_password,
@@ -1386,8 +1452,31 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 probe,
                 shared_runtime,
             } = *args;
-            let (arch, tizen_archs) = package_archs(target, &arch)?;
+            let (provisioning_profiles, asset_profile) = package::split_package_profiles(&profile)?;
             let mut config = package::read_config(&entry)?;
+            let target = match target {
+                Some(target) => target,
+                None => match asset_profile.as_deref() {
+                    Some(name) => {
+                        package::profile_package_target(&config, name)?.ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "nsh package needs --target (profile `{name}` sets no target)"
+                            )
+                        })?
+                    }
+                    None => anyhow::bail!(
+                        "nsh package needs --target (or a --profile that sets `target` in nsh.json)"
+                    ),
+                },
+            };
+            let build_context = package::resolve_build_context(
+                &config,
+                target.asset_target(),
+                true,
+                asset_profile.as_deref(),
+                &context,
+            )?;
+            let (arch, tizen_archs) = package_archs(target, &arch)?;
             config.name = name.or(config.name);
             config.id = id.or(config.id);
             config.version = version.or(config.version);
@@ -1399,7 +1488,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 out: &out,
                 config,
                 sign: sign.as_deref(),
-                profiles: &profile,
+                profiles: &provisioning_profiles,
                 keystore: keystore.as_deref().map(|k| {
                     (
                         k,
@@ -1417,6 +1506,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                 probe,
                 shared_runtime,
                 development: false,
+                context: build_context,
             })
         }
         Command::Run {
@@ -1435,8 +1525,18 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             background,
             points_per_cell,
             idiom,
+            context,
+            profile,
         } => {
             no_limits_for_rust(&entry, limits)?;
+            let config = package::read_config(&entry)?;
+            let build_context = package::resolve_build_context(
+                &config,
+                Some(target.os()),
+                release,
+                profile.as_deref(),
+                &context,
+            )?;
             run::run(
                 &entry,
                 dev::Listen::new(port.unwrap_or_default(), target.uses_network()),
@@ -1447,6 +1547,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     fps,
                     points_per_cell,
                     idiom,
+                    context: build_context,
                 },
                 target,
                 device.as_deref(),
@@ -1770,7 +1871,7 @@ mod command_tests {
             line.extend_from_slice(args);
             match Cli::try_parse_from(line).map(|cli| cli.command) {
                 Ok(Command::Package(args)) => {
-                    package_archs(args.target, &args.arch).map(|(arch, _)| arch)
+                    package_archs(args.target.expect("target"), &args.arch).map(|(arch, _)| arch)
                 }
                 Ok(_) => panic!("expected nsh package"),
                 Err(e) => Err(e.into()),
@@ -1901,5 +2002,69 @@ mod command_tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn context_and_profile_flags_parse_on_run_build_and_package() {
+        let cli = Cli::try_parse_from([
+            "nsh",
+            "build",
+            "--profile",
+            "acme-ios",
+            "--context",
+            "brand=acme",
+            "--context",
+            "locale=en",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Build {
+                profile: Some(ref p),
+                ref context,
+                ..
+            } if p == "acme-ios" && context == &["brand=acme", "locale=en"]
+        ));
+
+        let cli = Cli::try_parse_from([
+            "nsh",
+            "run",
+            "--target",
+            "ios",
+            "--profile",
+            "acme-ios",
+            "--context",
+            "brand=globex",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Run {
+                profile: Some(ref p),
+                ref context,
+                ..
+            } if p == "acme-ios" && context == &["brand=globex"]
+        ));
+
+        let cli = Cli::try_parse_from([
+            "nsh",
+            "package",
+            "--target",
+            "ios",
+            "--profile",
+            "acme-ios",
+            "--profile",
+            "app.mobileprovision",
+            "--context",
+            "brand=acme",
+        ])
+        .unwrap();
+        let Command::Package(args) = cli.command else {
+            panic!("expected package");
+        };
+        assert_eq!(args.context, ["brand=acme"]);
+        let (prov, asset_profile) = super::package::split_package_profiles(&args.profile).unwrap();
+        assert_eq!(prov, [std::path::PathBuf::from("app.mobileprovision")]);
+        assert_eq!(asset_profile.as_deref(), Some("acme-ios"));
     }
 }

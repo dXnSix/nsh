@@ -55,6 +55,10 @@ pub(crate) struct DevSession {
     /// A Rust app (`nsh.json` `"root"`): nothing to bundle, the hosts run
     /// its root; the session serves its assets, its web page and its logs.
     rust_root: bool,
+    /// Active build context for asset filtering, aliases, and compile-time defines.
+    context: nsh_core::element::BuildContext,
+    /// Scratch directory for generated pruned manifests served during `nsh run`.
+    context_assets_dir: PathBuf,
 }
 
 /// Where a dev server listens.
@@ -82,12 +86,32 @@ impl DevSession {
     /// would (`--limits`), or with none, as an app on its own; the web page
     /// it serves runs it in `idiom` (`--idiom`, `nsh.json` `dev.idiom`), or
     /// in the one the browser measures.
+    #[cfg(test)]
     pub(crate) fn start(
         entry: &Path,
         listen: Listen,
         release: bool,
         limits: Option<nsh_core::js::HostLimits>,
         idiom: Option<crate::run::DevIdiom>,
+    ) -> anyhow::Result<DevSession> {
+        Self::start_with_context(
+            entry,
+            listen,
+            release,
+            limits,
+            idiom,
+            nsh_core::element::BuildContext::new(),
+        )
+    }
+
+    /// Starts the server with an explicit [`nsh_core::element::BuildContext`].
+    pub(crate) fn start_with_context(
+        entry: &Path,
+        listen: Listen,
+        release: bool,
+        limits: Option<nsh_core::js::HostLimits>,
+        idiom: Option<crate::run::DevIdiom>,
+        context: nsh_core::element::BuildContext,
     ) -> anyhow::Result<DevSession> {
         let entry = dunce::canonicalize(entry)
             .with_context(|| format!("entry not found: {}", entry.display()))?;
@@ -98,13 +122,19 @@ impl DevSession {
         // The app's directory: its `nsh.json`'s, which may be above the
         // entry (`"entry"`); its assets are named from it.
         let app_dir = nsh_bundler::app_dir::app_dir_of(&entry);
+        let context_assets_dir = app_dir.join(".nsh").join("context-assets");
         // What its `"watch"` leaves out of the watcher.
         let watch_ignored = crate::package::read_config(&entry)
             .ok()
             .map(|config| ignored_dirs(&config.watch.ignore, &app_dir))
             .unwrap_or_default();
         let server = start_server(listen, &app_dir, devices.clone())?;
-        server.serve_files(crate::build::crate_assets().map(|a| (a.path, a.source)));
+        let crate_assets: Vec<build::Asset> = crate::build::crate_assets().collect();
+        let initial_served = build::resolve_assets_for_context(&crate_assets, &context)?;
+        server.serve_files(materialize_dev_assets(
+            &initial_served,
+            &context_assets_dir,
+        )?);
         server.install_commands(install_commands(&app_dir));
         server.set_limits(limits.map(|l| l.to_string()));
         // Browsers too, when there is a web runtime to serve (`nsh run
@@ -132,6 +162,8 @@ impl DevSession {
             last_failed: Cell::new(false),
             builds: Cell::new(0),
             rust_root,
+            context,
+            context_assets_dir,
         };
         session.rebuild();
         // A Rust app's hosts that connect (the terminal's) run the root
@@ -349,12 +381,13 @@ impl DevSession {
         if let Some(root) = &built.asset_root {
             self.server.set_assets_root(Some(root.clone()));
         }
-        self.server.serve_files(
-            built
-                .assets
-                .iter()
-                .map(|asset| (asset.path.clone(), asset.source.clone())),
-        );
+        match built
+            .assets_for_context(&self.context)
+            .and_then(|resolved| materialize_dev_assets(&resolved, &self.context_assets_dir))
+        {
+            Ok(files) => self.server.serve_files(files),
+            Err(err) => ui::warn(format!("could not resolve context assets: {err:#}")),
+        }
     }
 
     fn rebuild(&self) {
@@ -363,8 +396,9 @@ impl DevSession {
             return;
         }
         self.server.building();
+        let active_ctx = (!self.context.is_empty()).then_some(&self.context);
         if self.release {
-            match build::compile(&self.entry, true) {
+            match build::compile_with_context(&self.entry, true, false, active_ctx) {
                 Ok(built) => {
                     self.watch_files.replace(built.watch_files.clone());
                     *lock(&self.glob_dirs) = built.glob_dirs.clone();
@@ -391,7 +425,7 @@ impl DevSession {
             }
             return;
         }
-        match build::compile_hot(&self.entry) {
+        match build::compile_hot_with_context(&self.entry, active_ctx) {
             Ok((built, hot)) => {
                 self.watch_files.replace(built.watch_files.clone());
                 *lock(&self.glob_dirs) = built.glob_dirs.clone();
@@ -473,6 +507,33 @@ impl Drop for DevSession {
         // The server stops next.
         self.devices.closing.store(true, Ordering::Relaxed);
     }
+}
+
+/// Converts resolved packaged assets into `(logical_path, disk_file)` pairs
+/// for [`DevServer::serve_files`], writing any generated bytes (such as pruned
+/// `assets.toml`) under `scratch_dir`.
+fn materialize_dev_assets(
+    assets: &[build::PackagedAsset],
+    scratch_dir: &Path,
+) -> anyhow::Result<Vec<(String, PathBuf)>> {
+    let mut out = Vec::with_capacity(assets.len());
+    for asset in assets {
+        match &asset.content {
+            build::PackagedAssetContent::File(source) => {
+                out.push((asset.path.clone(), source.clone()));
+            }
+            build::PackagedAssetContent::Bytes(bytes) => {
+                let dest = scratch_dir.join(&asset.path);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&dest, bytes)
+                    .with_context(|| format!("write pruned {}", asset.path))?;
+                out.push((asset.path.clone(), dest));
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The hosts connected to the dev server: what they do is shown as `•`

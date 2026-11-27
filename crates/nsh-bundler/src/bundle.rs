@@ -48,6 +48,12 @@ pub struct BundleOptions {
     /// its assets are named from ([`Bundle::asset_root`]). `None`: found
     /// from the entry's directory, as an app's own entry is.
     pub app_dir: Option<PathBuf>,
+    /// Active build context dimensions (`platform`, `formFactor`, `env`,
+    /// `locale`, and custom dimensions from `nsh.json` / `--context` /
+    /// `--profile`): injected as `process.env.NSH_CONTEXT_*` and
+    /// `import.meta.env.NSH_CONTEXT_*` defines, used to resolve aliased UI-set
+    /// assets and refuse static imports of assets excluded by `when`.
+    pub context: Option<nsh_core::element::BuildContext>,
 }
 
 /// The app's directory: `given` canonical (`BundleOptions::app_dir`), else
@@ -897,6 +903,19 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
         ..Default::default()
     };
     resolve.apply(&mut bundler_options, options.minify);
+    if let Some(context) = &options.context {
+        let defines = context.define_constants();
+        if !defines.is_empty() {
+            bundler_options
+                .define
+                .get_or_insert_with(Default::default)
+                .extend(defines);
+        }
+    }
+    let set_assets = Arc::new(
+        plugin::set_assets::SetAssets::new_with_context(&options.ui_sets, options.context.as_ref())
+            .map_err(BundleError::other)?,
+    );
     let mut bundler = Bundler::with_plugins(
         bundler_options,
         vec![Pluginable::new_shared(plugin::NshPlugin {
@@ -914,7 +933,7 @@ pub async fn bundle_async(options: &BundleOptions) -> Result<Bundle, BundleError
             modules,
             names: Default::default(),
             globs: globs.clone(),
-            set_assets: Arc::new(plugin::set_assets::SetAssets::new(&options.ui_sets)),
+            set_assets,
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;
@@ -1293,10 +1312,22 @@ pub fn bundle_hot_in(
     app_dir: Option<&std::path::Path>,
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<HotBundle, BundleError> {
+    bundle_hot_in_with_context(entry, app_dir, ui_sets, None)
+}
+
+/// [`bundle_hot_in`] with an explicit [`nsh_core::element::BuildContext`].
+pub fn bundle_hot_in_with_context(
+    entry: &std::path::Path,
+    app_dir: Option<&std::path::Path>,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+    context: Option<&nsh_core::element::BuildContext>,
+) -> Result<HotBundle, BundleError> {
     tokio::runtime::Builder::new_current_thread()
         .build()
         .map_err(BundleError::other)?
-        .block_on(bundle_hot_in_async(entry, app_dir, ui_sets))
+        .block_on(bundle_hot_in_async_with_context(
+            entry, app_dir, ui_sets, context,
+        ))
 }
 
 /// Bundles an app for development with hot module replacement.
@@ -1304,7 +1335,7 @@ pub async fn bundle_hot_async(
     entry: &std::path::Path,
     ui_sets: &[nsh_core::element::description::SetDescription],
 ) -> Result<HotBundle, BundleError> {
-    bundle_hot_in_async(entry, None, ui_sets).await
+    bundle_hot_in_async_with_context(entry, None, ui_sets, None).await
 }
 
 /// [`bundle_hot_async`] of an entry kept outside its app, whose directory
@@ -1313,6 +1344,16 @@ pub async fn bundle_hot_in_async(
     entry: &std::path::Path,
     app_dir: Option<&std::path::Path>,
     ui_sets: &[nsh_core::element::description::SetDescription],
+) -> Result<HotBundle, BundleError> {
+    bundle_hot_in_async_with_context(entry, app_dir, ui_sets, None).await
+}
+
+/// [`bundle_hot_in_async`] with an explicit [`nsh_core::element::BuildContext`].
+pub async fn bundle_hot_in_async_with_context(
+    entry: &std::path::Path,
+    app_dir: Option<&std::path::Path>,
+    ui_sets: &[nsh_core::element::description::SetDescription],
+    context: Option<&nsh_core::element::BuildContext>,
 ) -> Result<HotBundle, BundleError> {
     let start = Instant::now();
     let entry = dunce::canonicalize(entry)
@@ -1372,6 +1413,19 @@ pub async fn bundle_hot_in_async(
         ..Default::default()
     };
     resolve.apply(&mut bundler_options, false);
+    if let Some(context) = context {
+        let defines = context.define_constants();
+        if !defines.is_empty() {
+            bundler_options
+                .define
+                .get_or_insert_with(Default::default)
+                .extend(defines);
+        }
+    }
+    let set_assets = Arc::new(
+        plugin::set_assets::SetAssets::new_with_context(ui_sets, context)
+            .map_err(BundleError::other)?,
+    );
     let mut bundler = Bundler::with_plugins(
         bundler_options,
         vec![Pluginable::new_shared(plugin::NshPlugin {
@@ -1389,7 +1443,7 @@ pub async fn bundle_hot_in_async(
             split: false,
             names: Default::default(),
             globs: globs.clone(),
-            set_assets: Arc::new(plugin::set_assets::SetAssets::new(ui_sets)),
+            set_assets,
         })],
     )
     .map_err(|e| BundleError::new(e.into_vec()))?;

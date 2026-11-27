@@ -74,12 +74,9 @@ pub(crate) fn package(
     if let Some(json) = built.capabilities_json() {
         fs::write(resources.join("capabilities.json"), json)?;
     }
-    for asset in built.assets_for(options.target.asset_target()) {
-        let dest = resources.join("assets").join(&asset.path);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&asset.source, &dest).with_context(|| format!("copy {}", asset.path))?;
+    let assets_dir = resources.join("assets");
+    for asset in built.assets_for_context(&options.context)? {
+        asset.write_to(&assets_dir)?;
     }
     let version = config.version.as_deref().unwrap_or("1.0.0");
     let info = crate::package::desktop_app_json(config, name, id, version);

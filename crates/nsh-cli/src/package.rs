@@ -372,6 +372,268 @@ pub(crate) struct AppConfig {
     /// `tizen-manifest.xml` (`tizen.rs`).
     #[serde(default)]
     pub(crate) tizen: TizenConfig,
+    /// Asset build-context dimensions and named build profiles (`"assets"`).
+    #[serde(default)]
+    pub(crate) assets: Option<AssetsConfig>,
+}
+
+/// `nsh.json` `"assets"`: custom build-context dimensions and named build profiles.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AssetsConfig {
+    /// Custom context dimensions, keyed by dimension name (e.g. `"brand"`).
+    #[serde(default)]
+    pub(crate) contexts: std::collections::BTreeMap<String, AssetContextDimension>,
+    /// Named build profiles, keyed by profile name (e.g. `"acme-ios"`).
+    #[serde(default)]
+    pub(crate) profiles: std::collections::BTreeMap<String, AssetProfileConfig>,
+}
+
+/// One declared dimension under `nsh.json` `assets.contexts`.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AssetContextDimension {
+    /// Allowed values for this dimension (empty allows any non-empty value).
+    #[serde(default)]
+    pub(crate) values: Vec<String>,
+    /// Default value(s) applied when neither a profile nor `--context` sets this dimension.
+    pub(crate) default: Option<ContextValue>,
+}
+
+/// One named build profile under `nsh.json` `assets.profiles`.
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AssetProfileConfig {
+    /// Optional target name (`ios`, `ios-simulator`, `android`, `macos`,
+    /// `windows`, `linux`, `web`, `tizen-web`, `tizen`).
+    pub(crate) target: Option<String>,
+    /// Dimension values set by this profile.
+    #[serde(default)]
+    pub(crate) context: std::collections::BTreeMap<String, ContextValue>,
+    /// Optional locale list for this profile (populates built-in `locale`).
+    #[serde(default)]
+    pub(crate) locales: Vec<String>,
+}
+
+/// A single string or array of strings for a context dimension value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum ContextValue {
+    /// One value (`"acme"`).
+    One(String),
+    /// Several values (`["en", "de"]`).
+    Many(Vec<String>),
+}
+
+impl ContextValue {
+    fn to_vec(&self) -> Vec<String> {
+        match self {
+            Self::One(v) => vec![v.clone()],
+            Self::Many(vs) => vs.clone(),
+        }
+    }
+}
+
+/// Separates `nsh package --profile` arguments into iOS provisioning profiles
+/// (`.mobileprovision` files or existing file paths) and at most one named
+/// asset build profile from `nsh.json` `assets.profiles`.
+pub(crate) fn split_package_profiles(
+    raw: &[PathBuf],
+) -> anyhow::Result<(Vec<PathBuf>, Option<String>)> {
+    let mut provisioning = Vec::new();
+    let mut asset_profile: Option<String> = None;
+    for path in raw {
+        let s = path.to_string_lossy();
+        let is_provisioning = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("mobileprovision"))
+            || s.contains('/')
+            || s.contains('\\')
+            || path.is_file();
+        if is_provisioning {
+            provisioning.push(path.clone());
+        } else {
+            if let Some(first) = &asset_profile {
+                bail!(
+                    "multiple asset --profile names given (`{first}` and `{s}`): pass at most one asset profile"
+                );
+            }
+            asset_profile = Some(s.into_owned());
+        }
+    }
+    Ok((provisioning, asset_profile))
+}
+
+/// Resolves the optional `target` field of a named asset profile in `config` to
+/// a [`PackageTarget`].
+pub(crate) fn profile_package_target(
+    config: &AppConfig,
+    profile: &str,
+) -> anyhow::Result<Option<PackageTarget>> {
+    use clap::ValueEnum as _;
+    let profile_cfg = lookup_asset_profile(config, profile)?;
+    let Some(target) = &profile_cfg.target else {
+        return Ok(None);
+    };
+    let parsed = PackageTarget::from_str(target, true).map_err(|_| {
+        anyhow::anyhow!("nsh.json assets.profiles.{profile}.target: unknown target `{target}`")
+    })?;
+    Ok(Some(parsed))
+}
+
+fn lookup_asset_profile<'a>(
+    config: &'a AppConfig,
+    name: &str,
+) -> anyhow::Result<&'a AssetProfileConfig> {
+    let Some(assets) = &config.assets else {
+        bail!("unknown asset profile `{name}`: nsh.json declares no `assets.profiles`");
+    };
+    if let Some(profile) = assets.profiles.get(name) {
+        return Ok(profile);
+    }
+    if assets.profiles.is_empty() {
+        bail!("unknown asset profile `{name}`: nsh.json declares no `assets.profiles`");
+    }
+    let available: Vec<&str> = assets.profiles.keys().map(String::as_str).collect();
+    bail!(
+        "unknown asset profile `{name}` in nsh.json (available: {})",
+        available.join(", ")
+    )
+}
+
+/// Parses and validates `--profile` and repeatable `--context key=value` flags
+/// against `config.assets` (`nsh.json`), returning the resolved
+/// [`nsh_core::element::BuildContext`].
+pub(crate) fn resolve_build_context(
+    config: &AppConfig,
+    target_os: Option<nsh_core::platform::Os>,
+    release: bool,
+    profile_name: Option<&str>,
+    cli_contexts: &[String],
+) -> anyhow::Result<nsh_core::element::BuildContext> {
+    use std::collections::BTreeMap;
+
+    use nsh_core::element::{
+        BUILTIN_CONTEXT_DIMENSIONS, BuildContext, asset_context::parse_os_name,
+    };
+
+    let assets_cfg = config.assets.as_ref();
+
+    let validate_dim = |key: &str, vals: &[String], source: &str| -> anyhow::Result<()> {
+        let is_builtin = BUILTIN_CONTEXT_DIMENSIONS.contains(&key);
+        if let Some(cfg) = assets_cfg {
+            if let Some(dim) = cfg.contexts.get(key) {
+                if !dim.values.is_empty() {
+                    for val in vals {
+                        if !dim.values.iter().any(|allowed| allowed == val) {
+                            bail!(
+                                "{source}: invalid value `{val}` for context `{key}` (allowed: {})",
+                                dim.values.join(", ")
+                            );
+                        }
+                    }
+                }
+            } else if !is_builtin && !cfg.contexts.is_empty() {
+                let declared: Vec<&str> = cfg.contexts.keys().map(String::as_str).collect();
+                bail!(
+                    "{source}: unknown context `{key}` (declared: {}; built-in: {})",
+                    declared.join(", "),
+                    BUILTIN_CONTEXT_DIMENSIONS.join(", ")
+                );
+            }
+        }
+        Ok(())
+    };
+
+    let mut overrides: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    // 1. Declared defaults from `nsh.json` `assets.contexts`.
+    if let Some(cfg) = assets_cfg {
+        for (key, dim) in &cfg.contexts {
+            if let Some(default) = &dim.default {
+                let vals = default.to_vec();
+                validate_dim(
+                    key,
+                    &vals,
+                    &format!("nsh.json assets.contexts.{key}.default"),
+                )?;
+                overrides.insert(key.clone(), vals);
+            }
+        }
+    }
+
+    // 2. Named profile from `nsh.json` `assets.profiles.<name>`.
+    let mut profile_os = None;
+    let mut profile_locales: Option<Vec<String>> = None;
+    if let Some(name) = profile_name {
+        let profile = lookup_asset_profile(config, name)?;
+        if let Some(target) = &profile.target {
+            let parsed = parse_os_name(target).or_else(|| {
+                use clap::ValueEnum as _;
+                PackageTarget::from_str(target, true)
+                    .ok()
+                    .and_then(PackageTarget::asset_target)
+            });
+            let Some(os) = parsed else {
+                bail!("nsh.json assets.profiles.{name}.target: unknown target `{target}`");
+            };
+            profile_os = Some(os);
+        }
+        if !profile.locales.is_empty() {
+            profile_locales = Some(profile.locales.clone());
+        }
+        for (key, val) in &profile.context {
+            let vals = val.to_vec();
+            validate_dim(
+                key,
+                &vals,
+                &format!("nsh.json assets.profiles.{name}.context"),
+            )?;
+            overrides.insert(key.clone(), vals);
+        }
+    }
+
+    // 3. Repeatable CLI `--context key=value` overrides.
+    let mut cli_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for spec in cli_contexts {
+        let Some((raw_key, raw_val)) = spec.split_once('=') else {
+            bail!("--context `{spec}` must be in `key=value` form");
+        };
+        let key = raw_key.trim();
+        let val = raw_val.trim();
+        if key.is_empty() || val.is_empty() {
+            bail!("--context `{spec}` must have non-empty key and value (`key=value`)");
+        }
+        let parts: Vec<String> = val
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if parts.is_empty() {
+            bail!("--context `{spec}` must have a non-empty value");
+        }
+        validate_dim(key, &parts, "--context")?;
+        let entry = cli_map.entry(key.to_owned()).or_default();
+        for part in parts {
+            if !entry.contains(&part) {
+                entry.push(part);
+            }
+        }
+    }
+    for (key, vals) in cli_map {
+        overrides.insert(key, vals);
+    }
+
+    let effective_os = target_os.or(profile_os);
+    let locales = profile_locales.as_deref().unwrap_or(&config.localizations);
+    Ok(BuildContext::from_target(
+        effective_os,
+        release,
+        locales,
+        &overrides,
+    ))
 }
 
 /// `nsh.json` `"tizen"`: Samsung TVs' packages. Every key has a default.
@@ -960,6 +1222,9 @@ pub(crate) struct PackageOptions<'a> {
     /// A development build for `nsh run`. Android: the APK is debuggable,
     /// so `AppActivity` takes the environment `nsh run` passes it.
     pub(crate) development: bool,
+    /// Active build context used for asset filtering, alias resolution,
+    /// pruned `assets.toml` emission, and compile-time defines.
+    pub(crate) context: nsh_core::element::BuildContext,
 }
 
 /// `nsh.json` `"icon"`: one PNG for every target, or one per platform
@@ -1663,8 +1928,9 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
         crate::build::rust_root()
     } else {
         let split = matches!(options.target, PackageTarget::Web | PackageTarget::TizenWeb);
-        let built = crate::build::compile_package(&entry, split, config)
-            .map_err(|e| e.into_error(&entry))?;
+        let built =
+            crate::build::compile_package_with_context(&entry, split, config, &options.context)
+                .map_err(|e| e.into_error(&entry))?;
         ui::done(format!("built {} {}", ui::path(&entry), built.summary("")));
         built
     };
@@ -1800,14 +2066,12 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
             config.window.as_ref(),
         ),
     )?;
-    for asset in built.assets_for(options.target.asset_target()) {
-        let dest = resources.join("assets").join(&asset.path);
-        if let Some(dir) = dest.parent() {
-            fs::create_dir_all(dir)?;
-        }
-        fs::copy(&asset.source, &dest).with_context(|| format!("copy {}", asset.path))?;
+    let packaged_assets = built.assets_for_context(&options.context)?;
+    let assets_dir = resources.join("assets");
+    for asset in &packaged_assets {
+        asset.write_to(&assets_dir)?;
     }
-    copy_apple_sounds(config, &built, &app)?;
+    copy_apple_sounds(config, &packaged_assets, &app)?;
 
     let sdk = match options.target {
         PackageTarget::Ios => "iphoneos",
@@ -2029,8 +2293,9 @@ fn package_android(
         )
         .into_bytes(),
     ));
-    for asset in built.assets_for(options.target.asset_target()) {
-        let bytes = fs::read(&asset.source).with_context(|| format!("read {}", asset.path))?;
+    let packaged_assets = built.assets_for_context(&options.context)?;
+    for asset in &packaged_assets {
+        let bytes = asset.read_bytes()?;
         assets.push((format!("nsh/assets/{}", asset.path), bytes));
     }
     let signing = match options.keystore {
@@ -2088,7 +2353,7 @@ fn package_android(
             icon: config.android_icon(),
             launch_screen: config.android.launch_screen.as_ref(),
             assets,
-            sounds: android_sounds(config, built),
+            sounds: android_sounds(config, &packaged_assets),
             res: res.as_deref(),
             signing,
         },
@@ -2159,12 +2424,9 @@ fn package_linux(
     if let Some(json) = built.capabilities_json() {
         fs::write(resources.join("capabilities.json"), json)?;
     }
-    for asset in built.assets_for(options.target.asset_target()) {
-        let dest = resources.join("assets").join(&asset.path);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&asset.source, &dest).with_context(|| format!("copy {}", asset.path))?;
+    let assets_dir = resources.join("assets");
+    for asset in built.assets_for_context(&options.context)? {
+        asset.write_to(&assets_dir)?;
     }
     let version = config.version.as_deref().unwrap_or("1.0.0");
     let mut info = desktop_app_json(config, name, id, version);
@@ -2266,15 +2528,22 @@ const ANDROID_SOUNDS: &[&str] = &["ogg", "mp3", "wav"];
 /// `notifications` capability.
 fn notification_sounds<'a>(
     config: &AppConfig,
-    built: &'a crate::build::Built,
+    assets: &'a [crate::build::PackagedAsset],
     extensions: &'static [&'static str],
-) -> impl Iterator<Item = &'a crate::build::Asset> {
+) -> impl Iterator<Item = (&'a str, &'a Path)> {
     let on = config.notifications();
-    built.assets.iter().filter(move |asset| {
-        on && Path::new(&asset.path)
+    assets.iter().filter_map(move |asset| {
+        if !on {
+            return None;
+        }
+        let crate::build::PackagedAssetContent::File(source) = &asset.content else {
+            return None;
+        };
+        let matches_ext = Path::new(&asset.path)
             .extension()
             .and_then(|e| e.to_str())
-            .is_some_and(|e| extensions.contains(&e.to_ascii_lowercase().as_str()))
+            .is_some_and(|e| extensions.contains(&e.to_ascii_lowercase().as_str()));
+        matches_ext.then_some((asset.path.as_str(), source.as_path()))
     })
 }
 
@@ -2282,37 +2551,38 @@ fn notification_sounds<'a>(
 /// on Apple platforms, where the system finds them by file name.
 fn copy_apple_sounds(
     config: &AppConfig,
-    built: &crate::build::Built,
+    assets: &[crate::build::PackagedAsset],
     dir: &Path,
 ) -> anyhow::Result<()> {
     let mut names = std::collections::HashMap::new();
-    for asset in notification_sounds(config, built, APPLE_SOUNDS) {
-        let name = nsh_core::notifications::Notification::sound_file_name(&asset.path);
-        if let Some(other) = names.insert(name.to_owned(), asset.path.clone()) {
+    for (path, source) in notification_sounds(config, assets, APPLE_SOUNDS) {
+        let name = nsh_core::notifications::Notification::sound_file_name(path);
+        if let Some(other) = names.insert(name.to_owned(), path.to_owned()) {
             ui::warn(format!(
-                "notification sounds {other} and {} share the file name {name}: only the last plays",
-                asset.path
+                "notification sounds {other} and {path} share the file name {name}: only the last plays"
             ));
         }
-        fs::copy(&asset.source, dir.join(name)).with_context(|| format!("copy {}", asset.path))?;
+        fs::copy(source, dir.join(name)).with_context(|| format!("copy {path}"))?;
     }
     Ok(())
 }
 
 /// The app's notification sounds as Android raw resources: (resource
 /// name, file).
-fn android_sounds(config: &AppConfig, built: &crate::build::Built) -> Vec<(String, PathBuf)> {
+fn android_sounds(
+    config: &AppConfig,
+    assets: &[crate::build::PackagedAsset],
+) -> Vec<(String, PathBuf)> {
     let mut sounds: Vec<(String, PathBuf)> = Vec::new();
-    for asset in notification_sounds(config, built, ANDROID_SOUNDS) {
-        let name = nsh_core::notifications::Notification::sound_resource_name(&asset.path);
+    for (path, source) in notification_sounds(config, assets, ANDROID_SOUNDS) {
+        let name = nsh_core::notifications::Notification::sound_resource_name(path);
         if sounds.iter().any(|(n, _)| *n == name) {
             ui::warn(format!(
-                "notification sound {} has the resource name {name} of another: only the first plays",
-                asset.path
+                "notification sound {path} has the resource name {name} of another: only the first plays"
             ));
             continue;
         }
-        sounds.push((name, asset.source.clone()));
+        sounds.push((name, source.to_path_buf()));
     }
     sounds
 }
@@ -2356,14 +2626,12 @@ fn package_macos(
     if let Some(json) = built.capabilities_json() {
         fs::write(nsh.join("capabilities.json"), json)?;
     }
-    for asset in built.assets_for(options.target.asset_target()) {
-        let dest = nsh.join("assets").join(&asset.path);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(&asset.source, &dest).with_context(|| format!("copy {}", asset.path))?;
+    let packaged_assets = built.assets_for_context(&options.context)?;
+    let assets_dir = nsh.join("assets");
+    for asset in &packaged_assets {
+        asset.write_to(&assets_dir)?;
     }
-    copy_apple_sounds(config, built, &resources)?;
+    copy_apple_sounds(config, &packaged_assets, &resources)?;
     let version = config.version.as_deref().unwrap_or("1.0.0");
     let mut info = serde_json::json!({ "name": name, "id": id, "version": version });
     if let Some(appearance) = &config.appearance {
@@ -3496,6 +3764,7 @@ mod tests {
                 probe: false,
                 shared_runtime: false,
                 development: false,
+                context: Default::default(),
             })
             .unwrap_err();
             assert_eq!(
@@ -3529,6 +3798,7 @@ mod tests {
             development: false,
             tizen_archs: &[],
             probe: false,
+            context: Default::default(),
         };
         for target in [
             PackageTarget::Macos,
@@ -5167,5 +5437,101 @@ mod tests {
             error.contains("macos.infoPlist.LSMinimumSystemVersion: \"13.0\" is below"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn nsh_json_asset_contexts_and_profiles_parse_and_validate() {
+        let json = r#"{
+            "name": "Demo",
+            "id": "com.acme.demo",
+            "assets": {
+                "contexts": {
+                    "brand": { "values": ["acme", "globex"], "default": "acme" }
+                },
+                "profiles": {
+                    "acme-ios": {
+                        "target": "ios",
+                        "context": { "brand": "acme" },
+                        "locales": ["en", "de"]
+                    },
+                    "globex-android": {
+                        "target": "android",
+                        "context": { "brand": "globex" }
+                    }
+                }
+            }
+        }"#;
+        let (config, ignored) = parse_config(json).unwrap();
+        assert!(ignored.is_empty(), "{ignored:?}");
+
+        // Default brand applies when no profile/context flag is given.
+        let default_ctx = resolve_build_context(
+            &config,
+            Some(nsh_core::platform::Os::MacOs),
+            false,
+            None,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(default_ctx.get("brand"), Some(&["acme".to_owned()][..]));
+        assert_eq!(default_ctx.get("platform"), Some(&["macos".to_owned()][..]));
+        assert_eq!(
+            default_ctx.get("formFactor"),
+            Some(&["desktop".to_owned()][..])
+        );
+        assert_eq!(
+            default_ctx.get("env"),
+            Some(&["development".to_owned()][..])
+        );
+
+        // Profile sets target, context, and locales; CLI `--context` overrides profile.
+        let prof_ctx = resolve_build_context(&config, None, true, Some("acme-ios"), &[]).unwrap();
+        assert_eq!(prof_ctx.get("platform"), Some(&["ios".to_owned()][..]));
+        assert_eq!(prof_ctx.get("formFactor"), Some(&["mobile".to_owned()][..]));
+        assert_eq!(prof_ctx.get("brand"), Some(&["acme".to_owned()][..]));
+        assert_eq!(
+            prof_ctx.get("locale"),
+            Some(&["en".to_owned(), "de".to_owned()][..])
+        );
+        assert_eq!(
+            profile_package_target(&config, "acme-ios").unwrap(),
+            Some(PackageTarget::Ios)
+        );
+
+        let overridden = resolve_build_context(
+            &config,
+            None,
+            true,
+            Some("acme-ios"),
+            &["brand=globex".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(overridden.get("brand"), Some(&["globex".to_owned()][..]));
+
+        // Unknown profile fails clearly.
+        let err = resolve_build_context(&config, None, false, Some("missing"), &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown asset profile `missing`"), "{err}");
+        assert!(err.contains("acme-ios"), "{err}");
+
+        // Disallowed dimension value fails clearly.
+        let err = resolve_build_context(&config, None, false, None, &["brand=initech".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid value `initech`"), "{err}");
+        assert!(err.contains("acme, globex"), "{err}");
+
+        // Unknown dimension fails when `assets.contexts` declares dimensions.
+        let err = resolve_build_context(&config, None, false, None, &["typo=1".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown context `typo`"), "{err}");
+
+        // Malformed `--context` flag fails clearly.
+        let err = resolve_build_context(&config, None, false, None, &["brand".to_owned()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("key=value"), "{err}");
     }
 }

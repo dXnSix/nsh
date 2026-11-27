@@ -356,6 +356,7 @@ pub(crate) struct AppFiles {
     pub(crate) capabilities: Option<String>,
     pub(crate) app_json: String,
     pub(crate) assets: Vec<(String, PathBuf)>,
+    pub(crate) asset_bytes: Vec<(String, Vec<u8>)>,
     pub(crate) icon: Option<PathBuf>,
 }
 
@@ -398,6 +399,12 @@ pub(crate) fn stage(runtime: &Path, arch: Arch, app: &AppFiles, manifest: &Manif
         entries.push(Entry::Copy {
             from: from.clone(),
             to: res.join("assets").join(path),
+        });
+    }
+    for (path, contents) in &app.asset_bytes {
+        entries.push(Entry::Write {
+            to: res.join("assets").join(path),
+            contents: contents.clone(),
         });
     }
     if let Some(icon) = &app.icon {
@@ -519,12 +526,28 @@ fn install_package(device: &Sdb, tpk: &Path) -> anyhow::Result<()> {
 
 /// The app's files in a package: its bundle, capabilities and assets, and
 /// `app.json` (name, id, appearance, window).
-fn app_files(config: &AppConfig, name: &str, id: &str, built: &Built) -> AppFiles {
+fn app_files(
+    config: &AppConfig,
+    name: &str,
+    id: &str,
+    built: &Built,
+    context: &nsh_core::element::BuildContext,
+) -> anyhow::Result<AppFiles> {
     let mut info = serde_json::json!({ "id": id, "name": name });
     if let Some(appearance) = &config.appearance {
         info["appearance"] = appearance.as_str().into();
     }
-    AppFiles {
+    let mut assets = Vec::new();
+    let mut asset_bytes = Vec::new();
+    for asset in built.assets_for_context(context)? {
+        match asset.content {
+            crate::build::PackagedAssetContent::File(source) => assets.push((asset.path, source)),
+            crate::build::PackagedAssetContent::Bytes(bytes) => {
+                asset_bytes.push((asset.path, bytes))
+            }
+        }
+    }
+    Ok(AppFiles {
         bundle: (!built.rust_root).then(|| built.bytecode.clone()),
         capabilities: built.capabilities_json(),
         app_json: crate::package::app_json(
@@ -532,13 +555,10 @@ fn app_files(config: &AppConfig, name: &str, id: &str, built: &Built) -> AppFile
             &nsh_core::url_scheme::AppLinks::default(),
             config.window.as_ref(),
         ),
-        assets: built
-            .assets
-            .iter()
-            .map(|a| (a.path.clone(), a.source.clone()))
-            .collect(),
+        assets,
+        asset_bytes,
         icon: config.icon(PackageTarget::Tizen).map(Path::to_path_buf),
-    }
+    })
 }
 
 /// `nsh package --target tizen`: a TPK per architecture of `archs` from the
@@ -569,7 +589,7 @@ pub(crate) fn package(
         archs = vec![device.arch];
     }
     let runtime = crate::runtime::tizen(false, &archs)?;
-    let app = app_files(config, name, id, built);
+    let app = app_files(config, name, id, built, &options.context)?;
     let multi = archs.len() > 1;
     let mut packages = Vec::new();
     for &arch in &archs {
@@ -1599,6 +1619,7 @@ mod tests {
             capabilities: Some("{}".into()),
             app_json: r#"{"id":"com.acme.counter"}"#.into(),
             assets: vec![("img/logo.png".into(), PathBuf::from("/app/img/logo.png"))],
+            asset_bytes: Vec::new(),
             icon: Some(PathBuf::from("/app/icon.png")),
         };
         let manifest = Manifest::dev();
