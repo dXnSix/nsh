@@ -20,6 +20,7 @@ mod relations;
 mod renders;
 mod resize_anchor;
 mod scrollbars;
+mod selection_ends;
 mod services;
 mod slots;
 mod sticky;

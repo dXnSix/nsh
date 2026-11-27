@@ -214,6 +214,7 @@ pub use crate::element::{
     System,
     Task,
     Text,
+    TextSelectionEndpoint,
     TextSelectionEvent,
     TextShadow,
     ThemeScope,
