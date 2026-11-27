@@ -379,7 +379,7 @@ fn KeyMenuScreen() -> impl IntoElement {
     let item = move |label: &'static str| {
         menu_item()
             .accessibility_label(label)
-            .on_select(move || chose.update(|c| c.push(label)))
+            .on_select(move |_: &_| chose.update(|c| c.push(label)))
             .child(text(label))
     };
     view()

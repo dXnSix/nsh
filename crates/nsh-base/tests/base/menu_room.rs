@@ -21,7 +21,7 @@ const ITEMS: u32 = 20;
 fn item(chose: Signal<String>, label: String) -> impl IntoElement {
     let chosen = label.clone();
     menu_item()
-        .on_select(move || chose.set(chosen.clone()))
+        .on_select(move |_: &_| chose.set(chosen.clone()))
         .child(view().h(px(30.0)).child(text(label)))
 }
 

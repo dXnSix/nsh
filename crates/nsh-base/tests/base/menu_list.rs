@@ -30,7 +30,7 @@ fn model_rows(chose: Signal<String>) -> impl IntoElement {
             let index = e.index;
             menu_item()
                 .disabled(disabled(index))
-                .on_select(move || chose.set(format!("Row {index}")))
+                .on_select(move |_: &_| chose.set(format!("Row {index}")))
                 .child(view().h(px(30.0)).child(text(format!("Row {index}"))))
         })
         .w(px(200.0))
@@ -39,7 +39,7 @@ fn model_rows(chose: Signal<String>) -> impl IntoElement {
 
 fn item(chose: Signal<String>, label: &'static str) -> impl IntoElement {
     menu_item()
-        .on_select(move || chose.set(label.into()))
+        .on_select(move |_: &_| chose.set(label.into()))
         .child(view().h(px(30.0)).child(text(label)))
 }
 
@@ -428,7 +428,7 @@ fn HiddenList() -> impl IntoElement {
                         .render_item(move |e: &MenuListEntry| {
                             let index = e.index;
                             menu_item()
-                                .on_select(move || chose.set(format!("Row {index}")))
+                                .on_select(move |_: &_| chose.set(format!("Row {index}")))
                                 .child(view().h(px(30.0)).child(text(format!("Row {index}"))))
                         })
                         .w(px(200.0))
