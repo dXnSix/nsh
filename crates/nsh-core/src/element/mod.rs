@@ -34,6 +34,7 @@
 mod ambient;
 pub(crate) mod animated;
 mod asset;
+pub mod asset_context;
 mod audio;
 mod back;
 pub(crate) mod builder;
@@ -162,6 +163,11 @@ pub use self::{
         sample_spring,
     },
     asset::{AssetFile, AssetKind, FileAsset, FontAsset, ImageAsset, ImageSrc},
+    asset_context::{
+        AssetContextError, AssetFilterEntry, AssetFilterManifest, BUILTIN_CONTEXT_DIMENSIONS,
+        BuildContext, ExclusionReason, ResolvedAsset, ResolvedAssets, WhenPredicate, glob_matches,
+        resolve_package_assets,
+    },
     audio::{
         AudioFailure, AudioPlayer, PlayerState, Sound, SoundSource, audio_available, audio_player,
         load_sound,

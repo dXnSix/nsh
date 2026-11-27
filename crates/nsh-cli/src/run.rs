@@ -226,6 +226,8 @@ pub(crate) struct HostFlags {
     /// The idiom to run the app in (`--idiom`), over `nsh.json`'s
     /// ([`DevIdiom::resolve`]).
     pub(crate) idiom: Option<DevIdiom>,
+    /// Active build context (`--context` / `--profile` / `nsh.json` defaults).
+    pub(crate) context: nsh_core::element::BuildContext,
 }
 
 /// The host window's own options: the desktop hosts take the size
@@ -335,6 +337,7 @@ pub(crate) fn run(
         fps,
         points_per_cell,
         idiom,
+        context,
     } = flags;
     if points_per_cell.is_some() && target != Target::Tui {
         bail!("--points-per-cell needs --target tui");
@@ -381,24 +384,39 @@ pub(crate) fn run(
                 fps,
                 points_per_cell,
                 idiom,
+                context,
             },
             &work,
         );
     }
     if crate::rust_app::is_root(entry) {
-        return run_rust_app(entry, listen, target, device, idiom, &work);
+        return run_rust_app(entry, listen, target, device, idiom, context, &work);
     }
     if target == Target::Android {
-        return run_android(entry, listen, release, limits, &work, trace, device);
+        return run_android(
+            entry,
+            listen,
+            release,
+            HostFlags {
+                limits,
+                trace,
+                fps,
+                points_per_cell,
+                idiom,
+                context,
+            },
+            &work,
+            device,
+        );
     }
     if target == Target::Web {
-        return run_web(entry, listen, release, limits, idiom);
+        return run_web(entry, listen, release, limits, idiom, context);
     }
     if target == Target::TizenWeb {
-        return run_tizen_web(entry, listen, release, limits, device);
+        return run_tizen_web(entry, listen, release, limits, device, context);
     }
     if target == Target::Tizen {
-        return run_tizen(entry, listen, release, limits, device);
+        return run_tizen(entry, listen, release, limits, device, context);
     }
     // The host a previous session left running would connect to this one
     // until it is replaced.
@@ -420,7 +438,7 @@ pub(crate) fn run(
         | Target::Tui => None,
     };
     // The host it starts connects by itself: no addresses to show.
-    let session = DevSession::start(entry, listen, release, limits, idiom)?;
+    let session = DevSession::start_with_context(entry, listen, release, limits, idiom, context)?;
     let host = crate::runtime::file(target.platform(), false)?;
     let mut args = vec!["--dev-server".to_owned(), session.local_url()];
     if trace {
@@ -547,10 +565,11 @@ fn run_web(
     release: bool,
     limits: Option<HostLimits>,
     idiom: Option<DevIdiom>,
+    context: nsh_core::element::BuildContext,
 ) -> anyhow::Result<()> {
     // Built first in a checkout: the session serves the runtime it finds.
     crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
-    let session = DevSession::start(entry, listen, release, limits, idiom)?;
+    let session = DevSession::start_with_context(entry, listen, release, limits, idiom, context)?;
     session.print_web_url();
     session.watch(|| Ok(false))
 }
@@ -566,9 +585,10 @@ fn run_tizen_web(
     release: bool,
     limits: Option<HostLimits>,
     device: Option<&str>,
+    context: nsh_core::element::BuildContext,
 ) -> anyhow::Result<()> {
     crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
-    let session = DevSession::start(entry, listen, release, limits, None)?;
+    let session = DevSession::start_with_context(entry, listen, release, limits, None, context)?;
     session.serve_tv_page()?;
     crate::tizen_web::run_dev(entry, &session.device_web_url(), device)?;
     session.print_web_url();
@@ -586,8 +606,9 @@ fn run_tizen(
     release: bool,
     limits: Option<HostLimits>,
     device: Option<&str>,
+    context: nsh_core::element::BuildContext,
 ) -> anyhow::Result<()> {
-    let session = DevSession::start(entry, listen, release, limits, None)?;
+    let session = DevSession::start_with_context(entry, listen, release, limits, None, context)?;
     // The mappings and the app go when the run ends, Ctrl-C too.
     let stoppable = ui::Stoppable::new();
     let run = crate::tizen::run_dev(entry, device, session.port())?;
@@ -652,6 +673,7 @@ fn run_rust_app(
     target: Target,
     device: Option<&str>,
     idiom: Option<DevIdiom>,
+    context: nsh_core::element::BuildContext,
     work: &Path,
 ) -> anyhow::Result<()> {
     let app =
@@ -667,10 +689,9 @@ fn run_rust_app(
         if dir.exists() {
             fs::remove_dir_all(dir)?;
         }
-        for asset in &built.assets {
-            let dest = dir.join("assets").join(&asset.path);
-            fs::create_dir_all(dest.parent().context("asset dir")?)?;
-            fs::copy(&asset.source, &dest).with_context(|| format!("copy {}", asset.path))?;
+        let assets_dir = dir.join("assets");
+        for asset in built.assets_for_context(&context)? {
+            asset.write_to(&assets_dir)?;
         }
         fs::create_dir_all(dir)?;
         let mut info = serde_json::json!({ "name": name, "id": id });
@@ -741,6 +762,7 @@ fn run_rust_app(
                 &out,
                 config,
                 &[],
+                context.clone(),
             )?;
             let bundle = out.join(format!("{name}.app"));
             let step = ui::Step::start(format!("installing {id} in the simulator"));
@@ -776,6 +798,7 @@ fn run_rust_app(
                 &out,
                 config,
                 std::slice::from_ref(&abi),
+                context.clone(),
             )?;
             let apk = out.join(format!("{name}.apk"));
             let step = ui::Step::start(format!("installing {id} on {serial}"));
@@ -792,7 +815,8 @@ fn run_rust_app(
         }
         Target::Web => {
             crate::runtime::web(crate::runtime::WebKind::Dev, true)?.context("no web runtime")?;
-            let session = DevSession::start(&entry, listen, false, None, idiom)?;
+            let session =
+                DevSession::start_with_context(&entry, listen, false, None, idiom, context)?;
             session.print_web_url();
             session.watch(|| Ok(false))
         }
@@ -809,6 +833,7 @@ fn run_rust_app(
                     &run.join("tizen"),
                     config,
                     &[],
+                    context,
                 )
             })?;
             let _stoppable = ui::Stoppable::new();
@@ -826,8 +851,9 @@ fn package_for_run(
     out: &Path,
     config: crate::package::AppConfig,
     abis: &[String],
+    context: nsh_core::element::BuildContext,
 ) -> anyhow::Result<()> {
-    crate::package::package(package_options(entry, target, out, config, abis))
+    crate::package::package(package_options(entry, target, out, config, abis, context))
 }
 
 /// [`package_for_run`]'s options.
@@ -837,6 +863,7 @@ fn package_options<'a>(
     out: &'a Path,
     config: crate::package::AppConfig,
     abis: &'a [String],
+    context: nsh_core::element::BuildContext,
 ) -> crate::package::PackageOptions<'a> {
     crate::package::PackageOptions {
         entry,
@@ -856,6 +883,7 @@ fn package_options<'a>(
         probe: false,
         shared_runtime: false,
         development: true,
+        context,
     }
 }
 
@@ -912,6 +940,7 @@ fn run_tui(
         points_per_cell,
         // The terminal host takes none (`DevIdiom::resolve`).
         idiom: _,
+        context,
     } = flags;
     let config = crate::package::read_config(entry)?;
     let cells = points_per_cell
@@ -922,7 +951,7 @@ fn run_tui(
     fs::create_dir_all(work)?;
     let path = work.join("tui.log");
     let building = ui::Step::start(format!("building {}", ui::path(entry)));
-    let session = DevSession::start(entry, listen, release, limits, None)?;
+    let session = DevSession::start_with_context(entry, listen, release, limits, None, context)?;
     building.finish();
     // A Rust root also uses the development host, which receives the Root event.
     let host = crate::runtime::test_host(Platform::Tui)?;
@@ -1092,17 +1121,22 @@ fn run_android(
     entry: &Path,
     listen: crate::dev::Listen,
     release: bool,
-    limits: Option<HostLimits>,
+    flags: HostFlags,
     work: &Path,
-    trace: bool,
     device: Option<&str>,
 ) -> anyhow::Result<()> {
     use crate::android;
+    let HostFlags {
+        limits,
+        trace,
+        context,
+        ..
+    } = flags;
     let sdk = android::Sdk::find()?;
     let serial = android::device(&sdk, device)?;
     // As on iOS: the host of a previous session must not connect first.
     let _ = android::adb(&sdk, &serial, &["shell", "am", "force-stop", BUNDLE_ID]);
-    let session = DevSession::start(entry, listen, release, limits, None)?;
+    let session = DevSession::start_with_context(entry, listen, release, limits, None, context)?;
     let abis = android::dev_abis(&sdk, &serial)?;
     let runtime = crate::runtime::android(true, &abis)?;
     let config = crate::package::read_config(entry)?.android;

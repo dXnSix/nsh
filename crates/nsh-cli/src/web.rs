@@ -307,13 +307,18 @@ pub(crate) fn write_site(
     } = modules;
     let mut assets = serde_json::Map::new();
     let mut fonts = Vec::new();
-    for asset in built.assets_for(Some(nsh_core::platform::Os::Web)) {
-        let bytes = fs::read(&asset.source).with_context(|| format!("read {}", asset.path))?;
+    let web_ctx = if options.context.target_os().is_some() {
+        options.context.clone()
+    } else {
+        options.context.clone().with("platform", "web")
+    };
+    for asset in built.assets_for_context(&web_ctx)? {
+        let bytes = asset.read_bytes()?;
         let url = site.add(&format!("assets/{}", asset.path), &bytes)?;
         if is_font(&asset.path) {
             fonts.push(asset.path.clone());
         }
-        assets.insert(asset.path.clone(), url.into());
+        assets.insert(asset.path, url.into());
     }
     // The page imports it as it is: one module, its imports absolute URLs.
     let host = match &config.web.host {
