@@ -100,10 +100,10 @@ pub(crate) fn set_release_hosts() {
 /// optimized runs ([`DESIGN_HOST`], [`DESIGN_PROFILE_TOML`]).
 const DESIGN_PROFILE: &str = "design";
 
-/// The generated workspace's [`DESIGN_PROFILE`]: release's optimizations,
-/// built again on every change to the app's Rust code, so without LTO and
-/// incremental, in its own `target/design`, apart from the `release` builds
-/// that packages ship.
+/// The generated workspace's [`DESIGN_PROFILE`]: light optimization with no
+/// debug info, built again on every change to the app's Rust code, so without
+/// LTO and incremental, in its own `target/design`, apart from the `release`
+/// builds that packages ship. Hot runtime crates stay at `opt-level = 3`.
 const DESIGN_PROFILE_TOML: &str = "
 # A design tool's optimized runs (`nsh run --release` with NSH_DESIGN_SOCKET):
 # the development host and the describing program, built together, and again
@@ -111,9 +111,23 @@ const DESIGN_PROFILE_TOML: &str = "
 # Packages keep `release`.
 [profile.design]
 inherits = \"release\"
+opt-level = 1
+debug = false
 lto = \"off\"
 codegen-units = 16
 incremental = true
+
+[profile.design.package.quickjs-jit-sys]
+opt-level = 3
+
+[profile.design.package.taffy]
+opt-level = 3
+
+[profile.design.package.objc2]
+opt-level = 3
+
+[profile.design.package.objc2-encode]
+opt-level = 3
 ";
 
 /// The desktop a design tool starts the app on optimized: `nsh run
@@ -3891,13 +3905,13 @@ opt-level = \"s\"
     ) -> anyhow::Result<()> {
         let path = ws.join("Cargo.toml");
         let mut manifest = base.to_owned();
-        // Code the app does not write is built as for release, once: nsh's
-        // crates, its nshm and their dependencies start and run at speed,
-        // and keep only line tables (a far smaller binary to link and
-        // load). These run on every interaction: Objective-C signature
-        // checks stay enabled, their parser optimized as well as the bridge.
+        // Code the app does not write is built at light optimization once:
+        // nsh's crates, its nshm and their dependencies compile much faster
+        // than `opt-level = 3`, still run briskly, and keep only line tables
+        // (a far smaller binary to link and load). Hot runtime crates stay
+        // pinned at `opt-level = 3` right below.
         manifest.push_str(
-            "\n[profile.dev.package.\"*\"]\nopt-level = 3\ndebug = \"line-tables-only\"\n",
+            "\n[profile.dev.package.\"*\"]\nopt-level = 1\ndebug = \"line-tables-only\"\n",
         );
         // A shared build is nobody's code to debug: it is a release build
         // (its development host serves `--release` as well), keeping only
@@ -6665,7 +6679,7 @@ mod tests {
         // As every generated workspace: what the app does not write is
         // optimized, its own crate is not.
         let mut debug =
-            "\n[profile.dev.package.\"*\"]\nopt-level = 3\ndebug = \"line-tables-only\"\n"
+            "\n[profile.dev.package.\"*\"]\nopt-level = 1\ndebug = \"line-tables-only\"\n"
                 .to_owned();
         debug.extend(
             ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"]
@@ -6931,13 +6945,75 @@ mod tests {
         app.gpui_workspace().unwrap();
         for file in ["Cargo.toml", "gpui/Cargo.toml"] {
             let manifest = std::fs::read_to_string(app.workspace.join(file)).unwrap();
+            assert!(
+                manifest.contains(
+                    "[profile.dev.package.\"*\"]\nopt-level = 1\ndebug = \"line-tables-only\""
+                ),
+                "{file} must tune third-party dev dependencies to opt-level = 1 with line tables: {manifest}"
+            );
             for package in ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"] {
                 assert!(
                     manifest.contains(&format!("[profile.dev.package.{package}]\nopt-level = 3")),
                     "{file} must keep {package} fast in debug builds"
                 );
             }
+            assert!(
+                manifest
+                    .contains("[profile.dev.package.\"app-native\"]\nopt-level = 0\ndebug = true"),
+                "{file} must keep the app's own crate debuggable at opt-level = 0: {manifest}"
+            );
+            assert!(
+                !manifest.contains("[profile.release"),
+                "{file} must leave [profile.release] untouched: {manifest}"
+            );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generated_profiles_tune_dev_and_design_while_leaving_release_and_web_untouched() {
+        let dir =
+            std::env::temp_dir().join(format!("nsh-rust-profiles-release-{}", std::process::id()));
+        let app = app(&dir, &[("app-native", dir.join("native"))], None);
+        app.write_workspace().unwrap();
+        let manifest = std::fs::read_to_string(app.workspace.join("Cargo.toml")).unwrap();
+        assert!(
+            manifest.contains(
+                "[profile.dev.package.\"*\"]\nopt-level = 1\ndebug = \"line-tables-only\"\n"
+            ),
+            "{manifest}"
+        );
+        assert!(
+            manifest.contains(
+                "[profile.design]\ninherits = \"release\"\nopt-level = 1\ndebug = false\nlto = \"off\"\ncodegen-units = 16\nincremental = true\n"
+            ),
+            "{manifest}"
+        );
+        for package in ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"] {
+            assert!(
+                manifest.contains(&format!("[profile.dev.package.{package}]\nopt-level = 3\n")),
+                "{manifest}"
+            );
+            assert!(
+                manifest.contains(&format!(
+                    "[profile.design.package.{package}]\nopt-level = 3\n"
+                )),
+                "{manifest}"
+            );
+        }
+        assert!(
+            manifest
+                .contains("[profile.dev.package.\"app-native\"]\nopt-level = 0\ndebug = true\n"),
+            "{manifest}"
+        );
+        // Production release and web profiles remain completely unaffected.
+        assert!(!manifest.contains("[profile.release"), "{manifest}");
+        assert!(
+            manifest.contains(
+                "[profile.web]\ninherits = \"release\"\nopt-level = \"z\"\nlto = \"fat\"\ncodegen-units = 1\nstrip = true\npanic = \"abort\"\n"
+            ),
+            "{manifest}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -7492,15 +7568,35 @@ mod tests {
                 design,
                 [
                     "inherits = \"release\"",
+                    "opt-level = 1",
+                    "debug = false",
                     "lto = \"off\"",
                     "codegen-units = 16",
                     "incremental = true",
                 ],
                 "{manifest}"
             );
-            assert_eq!(manifest.matches("[profile.design").count(), 1, "{manifest}");
+            assert_eq!(
+                manifest.matches("[profile.design]").count(),
+                1,
+                "{manifest}"
+            );
+            for package in ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"] {
+                let header = format!("[profile.design.package.{package}]");
+                assert_eq!(manifest.matches(&header).count(), 1, "{manifest}");
+                assert!(
+                    manifest.contains(&format!("{header}\nopt-level = 3")),
+                    "{manifest}"
+                );
+            }
+            assert!(
+                manifest.contains(
+                    "[profile.dev.package.\"*\"]\nopt-level = 1\ndebug = \"line-tables-only\""
+                ),
+                "{manifest}"
+            );
             // What packages build with is Cargo's `release`, as before.
-            assert!(!manifest.contains("[profile.release]"), "{manifest}");
+            assert!(!manifest.contains("[profile.release"), "{manifest}");
             let _ = std::fs::remove_dir_all(&dir);
         }
     }

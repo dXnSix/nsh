@@ -161,9 +161,14 @@ impl App {
             .collect()
     }
 
+    /// The generated workspace manifest (`.nsh/rust/Cargo.toml`).
+    fn manifest(&self) -> String {
+        fs::read_to_string(self.0.join(".nsh/rust/Cargo.toml")).unwrap()
+    }
+
     /// The workspace's `[profile.design]` table.
     fn design_profile(&self) -> Vec<String> {
-        let manifest = fs::read_to_string(self.0.join(".nsh/rust/Cargo.toml")).unwrap();
+        let manifest = self.manifest();
         manifest
             .lines()
             .skip_while(|line| *line != "[profile.design]")
@@ -202,11 +207,32 @@ fn a_design_tools_release_run_builds_describe_and_the_host_with_the_design_profi
         app.design_profile(),
         [
             "inherits = \"release\"",
+            "opt-level = 1",
+            "debug = false",
             "lto = \"off\"",
             "codegen-units = 16",
             "incremental = true",
         ]
     );
+    let manifest = app.manifest();
+    assert!(
+        manifest
+            .contains("[profile.dev.package.\"*\"]\nopt-level = 1\ndebug = \"line-tables-only\""),
+        "{manifest}"
+    );
+    for package in ["quickjs-jit-sys", "taffy", "objc2", "objc2-encode"] {
+        assert!(
+            manifest.contains(&format!("[profile.dev.package.{package}]\nopt-level = 3")),
+            "{manifest}"
+        );
+        assert!(
+            manifest.contains(&format!(
+                "[profile.design.package.{package}]\nopt-level = 3"
+            )),
+            "{manifest}"
+        );
+    }
+    assert!(!manifest.contains("[profile.release"), "{manifest}");
     app.run(&["dev", "--release"], Some("/tmp/design.sock"));
     assert_eq!(
         app.builds(),
