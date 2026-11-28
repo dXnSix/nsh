@@ -212,16 +212,17 @@ fn Workspace(props: WorkspaceProps) -> impl IntoElement {
                                 (None, Some(side)) => format!("{side:?}"),
                                 (None, None) => String::from("into"),
                             };
-                            view()
-                                .test_id("drop")
-                                .flex_1()
-                                .child(text(format!("Drop {place}")))
+                            // Upstream's insertion-line tests look for
+                            // `drop-indicator`; the edge tests read the text.
+                            view().test_id("drop-indicator").flex_1().child(
+                                view()
+                                    .test_id("drop")
+                                    .flex_1()
+                                    .child(text(format!("Drop {place}"))),
+                            )
                         })
                         .render_empty(|placement: &DockPlacement| {
                             text(format!("Empty {placement:?}"))
-                        })
-                        .render_drop_indicator(|_: &DockDropIndicator| {
-                            view().test_id("drop-indicator")
                         })
                         .on_layout_change(move |next: &DockAreaLayout| layout.set(next.clone()))
                         .on_panel_remove(move |panel: &PanelId| removed.set(panel.to_string()))
