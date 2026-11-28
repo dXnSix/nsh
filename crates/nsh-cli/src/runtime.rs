@@ -358,7 +358,7 @@ fn prebuilt_tizen(dev: bool, archs: &[crate::tizen::Arch]) -> anyhow::Result<Pat
     }
     // Cargo checkout: `cargo xtask tizen` output (dXn.GpuiTizen's cross
     // driver, `docs/dev/tizen.md`).
-    if let Some(root) = checkout(bin) {
+    if let Some(CheckoutBuild { root, .. }) = cli_build() {
         let built = root.join("target/tizen").join(variant);
         let missing = !built.join(crate::tizen::HOST).exists()
             || archs
@@ -371,7 +371,7 @@ fn prebuilt_tizen(dev: bool, archs: &[crate::tizen::Arch]) -> anyhow::Result<Pat
             if !arch.is_empty() {
                 args.extend(["--arch", &arch]);
             }
-            cargo(&root, &args, "the Tizen runtime")?;
+            cargo(root, &args, "the Tizen runtime")?;
         }
         return tizen_existing(built, archs, dev);
     }

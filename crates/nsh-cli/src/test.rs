@@ -1210,6 +1210,7 @@ test src/lib.rs - App (line 3) ... ok
             None,
             false,
             None,
+            None,
         )
         .err();
         std::fs::remove_dir_all(&dir).unwrap();
