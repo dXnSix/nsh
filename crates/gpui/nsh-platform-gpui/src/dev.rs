@@ -294,7 +294,8 @@ pub(crate) fn start(
         let _ = failed.unbounded_send(Msg::HotUpdateFailed);
     });
 
-    let mut host = HostInfo::new(HostPlatform::Gpui);
+    // The platform an embedding host's transport names (a TV's), else GPUI.
+    let mut host = HostInfo::new(platform);
     host.device = device_name(host_name().as_deref());
     host.bytecode_version = BYTECODE_VERSION.to_owned();
     host.ui_sets = nsh_core::element::Registry::served_sets(&crate::app::ui_sets())
