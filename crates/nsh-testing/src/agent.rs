@@ -525,6 +525,11 @@ impl Model {
     /// The engine [`Model::set_up_engine`] set up started: the test moves
     /// its clock through it.
     pub fn engine_started(&self, engine: nsh_engine::EngineControl) {
+        // An observed app keeps its culling and its clock; its mirror was
+        // reset when its engine was set up, and may hold its first batch.
+        if self.observing {
+            return;
+        }
         // The views of the app it replaced are gone: an app reloaded in a
         // development session starts on a fresh screen, in the same window.
         {
@@ -532,10 +537,6 @@ impl Model {
             if state.batches > 0 {
                 state.screen = state.screen.restarted();
             }
-        }
-        // An observed app keeps its culling and its clock.
-        if self.observing {
-            return;
         }
         if let Some(setup) = &mut *self.setup.lock().unwrap_or_else(|e| e.into_inner()) {
             // A test's steps reach every view of a page, below its fold
