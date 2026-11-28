@@ -343,9 +343,6 @@ mod macos {
             mtm,
             AppOptions {
                 size: (400, 300),
-                // The test embeds the view as a host app does: a JS root
-                // mounts in it, not in an implicit window of its own.
-                inline_root: true,
                 ..AppOptions::default()
             },
         )

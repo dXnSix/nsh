@@ -1220,7 +1220,7 @@ impl<M: TextEngine> Core<M> {
                 let group = |_: &str| 0;
                 let cx = Context {
                     env: self.class_env_at(key),
-                    window: self.viewport,
+                    window: self.class_window(),
                     rtl: node.rtl,
                     states: 0,
                     position: 0,
@@ -1692,6 +1692,14 @@ impl<M: TextEngine> Core<M> {
             id: node.id,
             states: node.tracked,
         })
+    }
+
+    /// The window size width and orientation variants (`md:`,
+    /// `max-[900px]:`, `landscape:`) match against: the one `windowSize()`
+    /// reports. Under the window model that is the app's primary window,
+    /// not the hidden host's root view.
+    pub(super) fn class_window(&self) -> crate::Size<crate::Points> {
+        self.components.environment.window
     }
 
     /// Restyles the nodes whose classes depend on any of `changed`.
@@ -2169,7 +2177,7 @@ impl<M: TextEngine> Core<M> {
         let cache_key = ResolvedKey::new(
             &classes,
             &env,
-            self.viewport,
+            self.class_window(),
             rtl,
             states,
             pos,
@@ -2181,7 +2189,7 @@ impl<M: TextEngine> Core<M> {
             let group = |_: &str| 0;
             let cx = Context {
                 env,
-                window: self.viewport,
+                window: self.class_window(),
                 rtl,
                 states,
                 position: pos,
@@ -2487,7 +2495,7 @@ impl<M: TextEngine> Core<M> {
                 0
             };
             let positional = pos != 0 && node.parent != NO_KEY;
-            let window = self.viewport;
+            let window = self.class_window();
             let cx = Context {
                 env: self.class_env_at(key),
                 window,

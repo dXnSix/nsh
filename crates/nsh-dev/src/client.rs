@@ -13,8 +13,10 @@ use crate::protocol::{
     RunningBuild, ServerMessage, StepOutcome, TestStep,
 };
 
-/// Something the dev server told the host.
+/// Something the dev server told the host. Hosts ignore events they do not
+/// know (`_ => {}`), so the server can add events for some hosts only.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum DevEvent {
     /// Connected (or reconnected) to the server.
     Connected,
@@ -23,6 +25,11 @@ pub enum DevEvent {
     /// The server runs a test session: keep the model of the app test
     /// steps need, from the first bundle on. Comes before the bundle.
     Testing,
+    /// The server's development session takes steps from `nsh test
+    /// --attach`, and the host said it takes them ([`HostInfo::attach`]):
+    /// keep the model of the app those steps need, from the first bundle
+    /// on, without changing how the app runs. Comes before the bundle.
+    Attachable,
     /// A step of the test: answer it with [`DevClient::step_done`] and its
     /// id.
     Step {
@@ -97,6 +104,8 @@ pub enum DevEvent {
         /// The app's id (`nsh.json` `"id"`): give it to the bundle
         /// (`Bundle::with_app_id`), as it names where the app keeps its data.
         app_id: Option<String>,
+        /// Checked URL scheme claims; an empty vector revokes earlier claims.
+        url_schemes: Vec<String>,
         /// The main window's launch-time options (`nsh.json` `"window"`,
         /// JSON): give them to the bundle (`Bundle::with_main_window`).
         window: Option<String>,
@@ -138,8 +147,11 @@ fn tap_to(observer: Option<&LogObserver>, level: LogLevel, target: &str, message
     }
 }
 
-/// What a host tells the dev server about itself.
+/// What a host tells the dev server about itself. Hosts in other crates
+/// start from [`HostInfo::new`] and assign the fields they know, so a field
+/// added later does not break them.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct HostInfo {
     /// Human-readable device name, shown in the developer's terminal.
     pub device: String,
@@ -152,6 +164,24 @@ pub struct HostInfo {
     pub ui_sets: Vec<String>,
     /// It takes test steps ([`DevEvent::Step`]).
     pub tests: bool,
+    /// It takes steps in a development session too, from `nsh test
+    /// --attach` ([`DevEvent::Attachable`]).
+    pub attach: bool,
+}
+
+impl HostInfo {
+    /// A host of `platform` with nothing else said: no device name, no
+    /// bytecode version, no UI sets, and it takes no steps.
+    pub fn new(platform: HostPlatform) -> Self {
+        HostInfo {
+            device: String::new(),
+            platform,
+            bytecode_version: String::new(),
+            ui_sets: Vec::new(),
+            tests: false,
+            attach: false,
+        }
+    }
 }
 
 /// Where a dev client's connections to the server come from. By default
@@ -240,12 +270,14 @@ impl DevClient {
             platform: Some(host.platform),
             ui_sets: Some(host.ui_sets),
             tests: host.tests,
+            attach: host.attach,
             running: None,
         };
         // The build the app reached, across reconnects. Hosts check each
         // patch's base themselves, so a patch the app could not apply only
         // makes the server's catch-up patches fall through to the bundle.
         let mut running: Option<RunningBuild> = None;
+        let attach = host.attach;
         thread::Builder::new()
             .name("nsh-dev-client".into())
             .spawn(move || {
@@ -272,6 +304,7 @@ impl DevClient {
                                 &log_rx,
                                 &reply_rx,
                                 &mut running,
+                                attach,
                                 &mut on_event,
                             );
                             let error = match end {
@@ -371,6 +404,7 @@ fn session(
     logs: &Receiver<ClientMessage>,
     replies: &Receiver<ClientMessage>,
     running: &mut Option<RunningBuild>,
+    attach: bool,
     on_event: &mut impl FnMut(DevEvent),
 ) -> Result<(), SessionEnd> {
     if let MaybeTlsStream::Plain(stream) = socket.get_mut() {
@@ -388,6 +422,7 @@ fn session(
         source_map: bool,
         capabilities: Option<String>,
         app_id: Option<String>,
+        url_schemes: Vec<String>,
         window: Option<String>,
         application: Option<String>,
         limits: Option<String>,
@@ -417,10 +452,17 @@ fn session(
         };
         match msg {
             Message::Text(text) => match serde_json::from_str::<ServerMessage>(&text) {
-                Ok(ServerMessage::Hello { session, test, .. }) => {
+                Ok(ServerMessage::Hello {
+                    session,
+                    test,
+                    attach: attachable,
+                    ..
+                }) => {
                     server_session = session;
                     if test {
                         on_event(DevEvent::Testing);
+                    } else if attachable && attach {
+                        on_event(DevEvent::Attachable);
                     }
                 }
                 Ok(ServerMessage::Step { id, step }) => on_event(DevEvent::Step { id, step }),
@@ -451,6 +493,7 @@ fn session(
                     source_map,
                     capabilities,
                     app_id,
+                    url_schemes,
                     window,
                     application,
                     limits,
@@ -462,6 +505,7 @@ fn session(
                         source_map,
                         capabilities,
                         app_id,
+                        url_schemes,
                         window,
                         application,
                         limits,
@@ -480,6 +524,7 @@ fn session(
                         source_map,
                         capabilities: None,
                         app_id: None,
+                        url_schemes: Vec::new(),
                         window: None,
                         application: None,
                         limits: None,
@@ -538,6 +583,7 @@ fn session(
                             source_map,
                             capabilities: p.capabilities,
                             app_id: p.app_id,
+                            url_schemes: p.url_schemes,
                             window: p.window,
                             application: p.application,
                             limits: p.limits,

@@ -59,6 +59,9 @@ pub(crate) struct DevSession {
     context: nsh_core::element::BuildContext,
     /// Scratch directory for generated pruned manifests served during `nsh run`.
     context_assets_dir: PathBuf,
+    /// The token `nsh test --attach` drives the session's hosts with, kept
+    /// where that command finds it while the session runs.
+    _attach: Option<crate::dev_port::AttachFile>,
 }
 
 /// Where a dev server listens.
@@ -137,6 +140,20 @@ impl DevSession {
         )?);
         server.install_commands(install_commands(&app_dir));
         server.set_limits(limits.map(|l| l.to_string()));
+        // `nsh test --attach` drives the hosts that take its steps, from this
+        // machine, with the token only this user reads.
+        let attach = match crate::dev_port::AttachFile::new(server.local_addr().port()) {
+            Ok(attach) => {
+                server.set_attach_token(Some(attach.token().to_owned()));
+                Some(attach)
+            }
+            Err(err) => {
+                ui::warn(format!(
+                    "nsh test --attach cannot drive this session: {err:#}"
+                ));
+                None
+            }
+        };
         // Browsers too, when there is a web runtime to serve (`nsh run
         // --target web` builds it in a checkout).
         let rust_root = crate::rust_app::is_root(&entry);
@@ -164,6 +181,7 @@ impl DevSession {
             rust_root,
             context,
             context_assets_dir,
+            _attach: attach,
         };
         session.rebuild();
         // A Rust app's hosts that connect (the terminal's) run the root
@@ -413,6 +431,7 @@ impl DevSession {
                         built.source_map,
                         nsh_dev::AppInfo {
                             capabilities,
+                            url_schemes: built.url_schemes,
                             id: crate::package::app_id(&self.entry).ok(),
                             window: crate::package::window_json(&self.entry),
                             application: crate::package::application_json(&self.entry),
@@ -458,6 +477,7 @@ impl DevSession {
                     built.source_map,
                     nsh_dev::AppInfo {
                         capabilities,
+                        url_schemes: built.url_schemes,
                         id: crate::package::app_id(&self.entry).ok(),
                         window: crate::package::window_json(&self.entry),
                         application: crate::package::application_json(&self.entry),

@@ -2255,12 +2255,15 @@ impl<M: TextEngine> Core<M> {
         if options.attributes.is_empty() {
             return;
         }
-        let _ = self.apply_op(Op::Command {
-            id: crate::ROOT_ID,
-            command: Command::Desktop(Box::new(crate::desktop::DesktopCommand::SetAttributes(
-                Box::new(options.attributes.clone()),
-            ))),
-        });
+        // The launch defaults are the host's, read before the app runs:
+        // they are not the sandboxed app acting on the main window.
+        if self.key(crate::ROOT_ID).is_ok() {
+            self.window_command(
+                crate::ROOT_ID,
+                crate::desktop::DesktopCommand::SetAttributes(Box::new(options.attributes.clone())),
+                true,
+            );
+        }
     }
 
     /// Opens and applies the app's windows of its own with `backend`, an
@@ -2414,7 +2417,7 @@ impl<M: TextEngine> Core<M> {
             let root = self.nodes[self.root as usize].layout.expect("root layout");
             self.layout.set_style(root, root_style(viewport));
             self.needs_layout = true;
-            self.restyle_where(crate::tailwind::deps::WIDTH | crate::tailwind::deps::HEIGHT);
+            // Restyles what follows the window's size (`apply_environment`).
             self.components_viewport(viewport);
         }
     }
@@ -3222,7 +3225,7 @@ impl<M: TextEngine> Core<M> {
                 command: Command::Desktop(desktop),
             } if desktop.is_core_handled() => {
                 self.key(id)?;
-                self.window_command(id, *desktop);
+                self.window_command(id, *desktop, false);
                 Ok(())
             }
             Op::Command { id, command } => {
@@ -3237,7 +3240,12 @@ impl<M: TextEngine> Core<M> {
     /// record ([`Core::flush_windows`] sends what changed), opening one is
     /// checked against the capabilities and resolved, a placement is fitted
     /// on the displays there are.
-    fn window_command(&mut self, id: NodeId, command: crate::desktop::DesktopCommand) {
+    fn window_command(
+        &mut self,
+        id: NodeId,
+        command: crate::desktop::DesktopCommand,
+        launch: bool,
+    ) {
         use crate::desktop::{
             DesktopCommand, WindowPlacement, WindowRequest,
             window::{WindowRecord, placement_key},
@@ -3246,6 +3254,22 @@ impl<M: TextEngine> Core<M> {
             // The quit mode reaches past the app's view, as quitting does:
             // a sandboxed app without `application` keeps the platform's.
             DesktopCommand::SetQuitMode(_) if !self.access.allows_application() => {
+                self.deny(
+                    "the application (its main window, menu, tray, global shortcuts, quitting and restarting) is not granted: add `\"application\": true` to capabilities in nsh.json".into(),
+                );
+            }
+            // nsh.json's launch attributes are the host's, applied before
+            // the app runs; the app's own sets still need `application`.
+            DesktopCommand::SetAttributes(_)
+                if id == crate::ROOT_ID && !launch && !self.access.allows_application() =>
+            {
+                self.deny(
+                    "the application (its main window, menu, tray, global shortcuts, quitting and restarting) is not granted: add `\"application\": true` to capabilities in nsh.json".into(),
+                );
+            }
+            DesktopCommand::Request(WindowRequest::SetPlacement(_))
+                if id == crate::ROOT_ID && !self.access.allows_application() =>
+            {
                 self.deny(
                     "the application (its main window, menu, tray, global shortcuts, quitting and restarting) is not granted: add `\"application\": true` to capabilities in nsh.json".into(),
                 );
@@ -4172,15 +4196,23 @@ impl<M: TextEngine> Core<M> {
                 }
                 // A context menu shows in the app's own view, and the
                 // windows the app opens are `capabilities.windows`'
-                // (`Access::check_window`): neither needs `application`. The main
-                // window, the application menu, the tray, global shortcuts
-                // and quitting reach past the app's view and do.
+                // (`Access::check_window`): neither needs `application`. The
+                // main window, the application menu, the tray, global
+                // shortcuts and quitting reach past the app's view and do.
+                // The core-handled window commands (a window's attributes, a
+                // placement, opening one) are checked where they are applied,
+                // so that nsh.json's launch attributes reach the main window
+                // while the app's own sets need `application`. Fitting a
+                // window's content is the core's own follow-up.
                 Command::Desktop(desktop)
                     if !self.access.allows_application()
+                        && !desktop.is_core_handled()
                         && !matches!(
                             **desktop,
                             crate::desktop::DesktopCommand::PopupMenu { .. }
-                                | crate::desktop::DesktopCommand::OpenWindow(_)
+                                | crate::desktop::DesktopCommand::Request(
+                                    crate::desktop::WindowRequest::SetContentSize { .. }
+                                )
                         )
                         && (id == crate::ROOT_ID || !desktop.is_window_command()) =>
                 {
@@ -5576,6 +5608,15 @@ impl<M: TextEngine> Core<M> {
         let prop = match prop {
             Prop::Native(NativeProp::AllowOrigin(Some(origin))) => {
                 Prop::Native(NativeProp::AllowOrigin(self.check_allow_origin(&origin)))
+            }
+            Prop::Native(NativeProp::AllowNavigation(Some(hosts))) => {
+                match crate::access::WebHosts::parse(&hosts) {
+                    Ok(_) => Prop::Native(NativeProp::AllowNavigation(Some(hosts))),
+                    Err(e) => {
+                        self.deny(format!("`allowNavigation`: {e}"));
+                        Prop::Native(NativeProp::AllowNavigation(None))
+                    }
+                }
             }
             prop => prop,
         };
@@ -13009,6 +13050,9 @@ fn apply_native(control: &mut NativeProps, prop: NativeProp) {
         (NativeProps::WebView(p), P::AllowOrigin(v)) => {
             p.allow_origin = v.and_then(|o| crate::access::WebOrigin::parse(&o).ok());
         }
+        (NativeProps::WebView(p), P::AllowNavigation(v)) => {
+            p.allow_navigation = v.and_then(|h| crate::access::WebHosts::parse(&h).ok());
+        }
         (NativeProps::WebView(p), P::InjectedJavaScript(v)) => p.injected_js = v,
         (NativeProps::WebView(p), P::InjectedJavaScriptBefore(v)) => p.injected_js_before = v,
         (NativeProps::WebView(p), P::UserAgent(v)) => p.user_agent = v,
@@ -13439,7 +13483,6 @@ fn shown_by(item: &MountItem) -> Shown {
                 | C::OpenUrl { .. }
                 | C::OpenAppSettings { .. }
                 | C::PickScreenColor { .. }
-                | C::Share { .. }
                 | C::RenderCanvas { .. }
                 | C::FileRequest { .. }
                 | C::Audio { .. }

@@ -294,24 +294,26 @@ pub(crate) fn start(
         let _ = failed.unbounded_send(Msg::HotUpdateFailed);
     });
 
-    let host = HostInfo {
-        device: device_name(host_name().as_deref()),
-        platform,
-        bytecode_version: BYTECODE_VERSION.to_owned(),
-        ui_sets: nsh_core::element::Registry::served_sets(&crate::app::ui_sets())
-            .into_iter()
-            .filter_map(|set| set.specifier().map(str::to_owned))
-            .collect(),
-        tests: true,
-    };
-    // A test session (`nsh test --target gpui`): the model goes to the
-    // surface through the session's messages, ahead of the bundle.
+    let mut host = HostInfo::new(HostPlatform::Gpui);
+    host.device = device_name(host_name().as_deref());
+    host.bytecode_version = BYTECODE_VERSION.to_owned();
+    host.ui_sets = nsh_core::element::Registry::served_sets(&crate::app::ui_sets())
+        .into_iter()
+        .filter_map(|set| set.specifier().map(str::to_owned))
+        .collect();
+    host.tests = true;
+    host.attach = true;
+    // A test session (`nsh test --target gpui`), or a development session
+    // `nsh test --attach` may drive: the model goes to the surface through
+    // the session's messages, ahead of the bundle. Keeping it changes
+    // nothing of how the app runs, so both attach it alike.
     let models = tx.clone();
     let key = surface.key();
-    let tester = nsh_testing::agent::Tester::new(move |model| {
+    let keep_model = move |model| {
         let _ = models.unbounded_send(Msg::TestModel(model));
-        Box::new(crate::agent::GpuiNative::new(key))
-    });
+        Box::new(crate::agent::GpuiNative::new(key)) as Box<dyn nsh_testing::agent::Native>
+    };
+    let tester = nsh_testing::agent::Tester::with_attach(keep_model.clone(), keep_model);
     let tests = tester.clone();
     let events = tx;
     let hear = move |event: DevEvent| {
@@ -499,6 +501,7 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
         DevEvent::Disconnected => dev.show_status(Status::Reconnecting),
         // The client's thread hands them to the test agent.
         DevEvent::Testing
+        | DevEvent::Attachable
         | DevEvent::Step { .. }
         | DevEvent::TestSetup { .. }
         | DevEvent::Fetch { .. } => {}
@@ -535,6 +538,7 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
             source_map,
             capabilities,
             app_id,
+            url_schemes,
             limits,
             window,
             application,
@@ -570,6 +574,7 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
             bundle = bundle.with_main_window(window.as_deref());
             bundle = bundle.with_application(application.as_deref());
             bundle = match bundle
+                .with_url_schemes(url_schemes)
                 .with_app_id(app_id.as_deref())
                 .with_capabilities_json(capabilities.as_deref())
             {
@@ -630,6 +635,8 @@ fn on_event(view: &AppView, dev: &mut DevSession, event: DevEvent) -> Option<App
                 dev.show_status(Status::Updated);
             }
         }
+        // Events added later for other hosts (`DevEvent` is non-exhaustive).
+        _ => {}
     }
     None
 }

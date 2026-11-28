@@ -181,34 +181,45 @@ pub(crate) fn start(view: &Rc<AppView>, url: String) {
         }
     });
 
-    let host = HostInfo {
-        device: device_name(),
-        platform: HostPlatform::MacOs,
-        bytecode_version: BYTECODE_VERSION.to_owned(),
-        ui_sets: nsh_core::element::Registry::served_sets(&crate::app::ui_sets())
-            .into_iter()
-            .filter_map(|set| set.specifier().map(str::to_owned))
-            .collect(),
-        tests: true,
-    };
-    // A test session (`nsh test --target macos`): the surface keeps the
-    // model the agent's steps see, from the first bundle on.
+    let mut host = HostInfo::new(HostPlatform::MacOs);
+    host.device = device_name();
+    host.bytecode_version = BYTECODE_VERSION.to_owned();
+    host.ui_sets = nsh_core::element::Registry::served_sets(&crate::app::ui_sets())
+        .into_iter()
+        .filter_map(|set| set.specifier().map(str::to_owned))
+        .collect();
+    host.tests = true;
+    // A dev tool observing the app keeps the surface's model for itself:
+    // `nsh test --attach` would replace it, so the host takes no attached
+    // steps then.
+    host.attach = !nsh_testing::agent::observer_wanted();
+    // A test session (`nsh test --target macos`), or a development session
+    // `nsh test --attach` may drive: the surface keeps the model the agent's
+    // steps see, from the first bundle on. Only a test changes how the app
+    // runs (`Surface::testing`).
     let key_of_surface = surface.key();
-    let tester = nsh_testing::agent::Tester::new(move |model| {
+    let keep_model = move |model, testing| {
         DispatchQueue::main().exec_async(move || {
             if let Some(surface) = crate::surface::Surface::with_key(key_of_surface) {
-                surface.set_test_model(Some(model));
-                crate::system::testing_started(&surface);
+                surface.set_test_model(Some(model), testing);
+                if testing {
+                    crate::system::testing_started(&surface);
+                }
             }
         });
         Box::new(crate::agent::MacNative::new(key_of_surface))
-    });
+            as Box<dyn nsh_testing::agent::Native>
+    };
     // A dev tool observing the app (`nsh_testing::agent::observe`): its
     // model takes every batch from the first, outside any test session,
     // which replaces it with its own.
     nsh_testing::agent::attach_observer(
-        |model| surface.set_test_model(Some(model)),
+        |model| surface.set_test_model(Some(model), false),
         || Box::new(crate::agent::MacNative::new(key_of_surface)),
+    );
+    let tester = nsh_testing::agent::Tester::with_attach(
+        move |model| keep_model(model, true),
+        move |model| keep_model(model, false),
     );
     let tests = tester.clone();
     let started = DevClient::start(url, host, move |event| {
@@ -325,6 +336,7 @@ fn handle(ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
         DevEvent::Disconnected => show_status(ui, "Dev server disconnected — reconnecting…"),
         // The client's thread hands them to the test agent.
         DevEvent::Testing
+        | DevEvent::Attachable
         | DevEvent::Step { .. }
         | DevEvent::TestSetup { .. }
         | DevEvent::Fetch { .. } => {}
@@ -367,6 +379,7 @@ fn handle(ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
             source_map,
             capabilities,
             app_id,
+            url_schemes,
             limits,
             window,
             application,
@@ -400,6 +413,7 @@ fn handle(ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
                 .with_main_window(window.as_deref())
                 .with_application(application.as_deref());
             bundle = match bundle
+                .with_url_schemes(url_schemes)
                 .with_app_id(app_id.as_deref())
                 .with_capabilities_json(capabilities.as_deref())
             {
@@ -460,6 +474,8 @@ fn handle(ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
                 hide_error(ui);
             }
         }
+        // Events added later for other hosts (`DevEvent` is non-exhaustive).
+        _ => {}
     }
 }
 

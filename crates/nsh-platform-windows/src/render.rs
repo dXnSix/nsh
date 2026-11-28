@@ -2088,13 +2088,8 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
         return WindowFrameOutcome::Failed;
     };
     let resized = chain.size != (size.0.max(1), size.1.max(1));
-    if let Err(err) = chain.resize(&gfx, size) {
-        log::error!("cannot resize a window's swap chain: {err}");
-        *swap = None;
-        return WindowFrameOutcome::Failed;
-    }
-    // As the main window's ([`frame`]): resized, it draws once its frame in
-    // flight is shown; otherwise it waits until its swap chain has room.
+    // Wait for the previous frame before replacing its buffers. If the
+    // compositor is busy, the old buffers stay available while we defer.
     let ready = if resized {
         chain.wait_ready()
     } else {
@@ -2102,6 +2097,11 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
     };
     if !ready {
         return WindowFrameOutcome::Deferred;
+    }
+    if let Err(err) = chain.resize(&gfx, size) {
+        log::error!("cannot resize a window's swap chain: {err}");
+        *swap = None;
+        return WindowFrameOutcome::Failed;
     }
     if (target_scale.replace(scale) - scale).abs() > f32::EPSILON {
         chain.drop_target();
@@ -2131,7 +2131,7 @@ pub(crate) fn window_frame(surface: &Rc<Surface>, frame: WindowFrame<'_>) -> Win
     };
     let mut changed = damage
         .take()
-        .filter(|_| records && !backdrops && expected_layers.is_some())
+        .filter(|_| !resized && records && !backdrops && expected_layers.is_some())
         .map(|rects| merged(pixel_rects(&rects, scale, presented_size)));
     if changed.as_ref().is_some_and(Vec::is_empty) && chain.shows_a_frame() {
         return WindowFrameOutcome::Presented(presented_size);

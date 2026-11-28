@@ -126,22 +126,22 @@ impl DevSession {
         let tests = tester.clone();
         let target = MainThreadBound::new((view, ui.clone()), mtm);
         let target = Arc::new(target);
-        let host = HostInfo {
-            device: device_name(mtm),
-            platform: if cfg!(target_abi = "macabi") {
-                HostPlatform::MacCatalyst
-            } else if cfg!(target_abi = "sim") {
-                HostPlatform::IosSimulator
-            } else {
-                HostPlatform::Ios
-            },
-            bytecode_version: BYTECODE_VERSION.to_owned(),
-            ui_sets: nsh_core::element::Registry::served_sets(&crate::ui_sets())
-                .into_iter()
-                .filter_map(|set| set.specifier().map(str::to_owned))
-                .collect(),
-            tests: true,
-        };
+        let mut host = HostInfo::new(if cfg!(target_abi = "macabi") {
+            HostPlatform::MacCatalyst
+        } else if cfg!(target_abi = "sim") {
+            HostPlatform::IosSimulator
+        } else {
+            HostPlatform::Ios
+        });
+        host.device = device_name(mtm);
+        host.bytecode_version = BYTECODE_VERSION.to_owned();
+        host.ui_sets = nsh_core::element::Registry::served_sets(&crate::ui_sets())
+            .into_iter()
+            .filter_map(|set| set.specifier().map(str::to_owned))
+            .collect();
+        host.tests = true;
+        // It keeps no model in a development session (`nsh test --attach`).
+        host.attach = false;
         let started = DevClient::start(url, host, move |event| {
             // Taken off the main queue: a step waits for what it does there.
             let Some(event) = tests.event(event) else {
@@ -263,6 +263,7 @@ fn handle(view: &Rc<Inner>, ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
         }
         // The client's thread hands them to the test agent.
         DevEvent::Testing
+        | DevEvent::Attachable
         | DevEvent::Step { .. }
         | DevEvent::TestSetup { .. }
         | DevEvent::Fetch { .. } => {}
@@ -307,6 +308,7 @@ fn handle(view: &Rc<Inner>, ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
             source_map,
             capabilities,
             app_id,
+            url_schemes,
             window,
             application,
             limits,
@@ -334,6 +336,7 @@ fn handle(view: &Rc<Inner>, ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
                 bundle = bundle.with_source_map(map);
             }
             bundle = bundle
+                .with_url_schemes(url_schemes)
                 .with_app_id(app_id.as_deref())
                 .with_main_window(window.as_deref())
                 .with_application(application.as_deref());
@@ -381,6 +384,8 @@ fn handle(view: &Rc<Inner>, ui: &Rc<RefCell<DevUi>>, event: DevEvent) {
                 hide_error(ui);
             }
         }
+        // Events added later for other hosts (`DevEvent` is non-exhaustive).
+        _ => {}
     }
 }
 

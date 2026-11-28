@@ -6,12 +6,15 @@
 //! show up in the developer's terminal.
 //!
 //! - [`protocol`]: the wire format, shared by both sides.
-//! - `client` (feature `client`): the host side.
+//! - `client` (feature `client`): the host side, and [`Attachment`]:
+//!   `nsh test --attach`'s side, which drives a running session's hosts.
 //! - `server` (feature `server`): the CLI side, and [`SiteServer`]: a
 //!   static site as a CDN would serve it (`nsh package --target web --run`).
 
 pub mod protocol;
 
+#[cfg(feature = "client")]
+mod attach;
 #[cfg(feature = "client")]
 mod client;
 #[cfg(feature = "server")]
@@ -20,8 +23,11 @@ mod server;
 mod site;
 
 #[cfg(feature = "client")]
-pub use crate::client::{
-    DevClient, DevEvent, DevTransport, HostInfo, LogObserver, set_log_observer, tap_log,
+pub use crate::{
+    attach::Attachment,
+    client::{
+        DevClient, DevEvent, DevTransport, HostInfo, LogObserver, set_log_observer, tap_log,
+    },
 };
 #[cfg(feature = "server")]
 pub use crate::{
