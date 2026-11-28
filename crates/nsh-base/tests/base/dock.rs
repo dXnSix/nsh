@@ -1371,3 +1371,72 @@ fn a_tab_bar_ends_with_the_toolbar_of_its_displayed_tab() {
     app.wait_for("Toolbar c of 0").unwrap();
     assert_eq!(app.screen().count("text:Toolbar a of 0"), Ok(0));
 }
+
+#[component]
+fn CenterSidebarsHarness() -> impl IntoElement {
+    let mut left_region = DockRegion::new(DockLayout::tabs().panel("files"));
+    left_region.size = Some(px(160.0));
+    let mut bottom_region = DockRegion::new(DockLayout::tabs().panel("console"));
+    bottom_region.size = Some(px(120.0));
+    let layout = DockAreaLayout::new(
+        DockLayout::v_split()
+            .child(DockLayout::tabs().panel("top"), Some(px(300.0)))
+            .child(DockLayout::tabs().panel("bottom-center"), None),
+    )
+    .with_dock(DockPlacement::Left, left_region)
+    .with_dock(DockPlacement::Bottom, bottom_region);
+    view().w(px(1000.0)).h(px(700.0)).child(
+        dock_area()
+            .default_layout(layout)
+            .compact(false)
+            .tab_bar_class("flex-row h-6")
+            .render_tab(|tab: &DockTab| view().h(px(24.0)).child(text(format!("Tab {}", tab.panel))))
+            .render_panel(|panel: &DockPanel| {
+                view()
+                    .test_id(&format!("panel-{}", panel.id))
+                    .flex_1()
+                    .child(text(format!("Panel {}", panel.id)))
+            })
+            .center_left(view().test_id("sidebar-left").flex_1().child(text("Left")))
+            .center_left_size(px(180.0))
+            .center_left_min_size(px(120.0))
+            .center_left_visible(true)
+            .center_right(view().test_id("sidebar-right").flex_1().child(text("Right")))
+            .center_right_size(px(200.0))
+            .center_right_min_size(px(120.0))
+            .center_right_visible(true)
+            .size_full(),
+    )
+}
+
+#[test]
+fn center_sidebars_constrain_both_center_splits_and_bottom_dock_between_them() {
+    let mut config = EngineConfig {
+        viewport: Size::new(px(1000.0), px(700.0)),
+        ..EngineConfig::new(nsh_testing::windowed_root::<CenterSidebarsHarness>())
+    };
+    config.environment.os = Os::MacOs;
+    config.environment.idiom = Idiom::Desktop;
+    let mut app = Headless::start(config).expect("the engine starts");
+    app.wait_for("Panel top").unwrap();
+    app.wait_for("Panel bottom-center").unwrap();
+    app.wait_for("Panel console").unwrap();
+
+    let files = frame_of(&app, "panel-files");
+    let left_sb = frame_of(&app, "sidebar-left");
+    let top = frame_of(&app, "panel-top");
+    let bottom_center = frame_of(&app, "panel-bottom-center");
+    let console = frame_of(&app, "panel-console");
+    let right_sb = frame_of(&app, "sidebar-right");
+
+    // Left-to-right order: outer Left dock -> centerLeft -> center column -> centerRight.
+    assert!(files.origin.x + files.size.width <= left_sb.origin.x + px(2.0));
+    assert!(left_sb.origin.x + left_sb.size.width <= top.origin.x + px(2.0));
+    assert!(top.origin.x + top.size.width <= right_sb.origin.x + px(2.0));
+
+    // Bottom-split center tab and Bottom outer dock both match the exact central column width.
+    assert!((bottom_center.origin.x - top.origin.x).abs() <= px(2.0));
+    assert!((bottom_center.size.width - top.size.width).abs() <= px(2.0));
+    assert!((console.origin.x - top.origin.x).abs() <= px(2.0));
+    assert!((console.size.width - top.size.width).abs() <= px(2.0));
+}
