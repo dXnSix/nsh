@@ -44,7 +44,7 @@ fn trigger() -> impl IntoElement {
 
 fn item(chose: Signal<String>, label: &'static str) -> impl IntoElement {
     menu_item()
-        .on_select(move || chose.set(label.into()))
+        .on_select(move |_: &_| chose.set(label.into()))
         .child(view().h(px(30.0)).child(text(label)))
 }
 
@@ -72,7 +72,7 @@ fn SortMenu() -> impl IntoElement {
                 .child(
                     menu_item()
                         .disabled(true)
-                        .on_select(move || chose.set("Tags".into()))
+                        .on_select(move |_: &_| chose.set("Tags".into()))
                         .child(view().h(px(30.0)).child(text("Tags"))),
                 )
                 .child(item(chose, "Time"))
@@ -80,7 +80,7 @@ fn SortMenu() -> impl IntoElement {
                 .child(
                     menu_item()
                         .accessibility_label("Archive")
-                        .on_select(move || chose.set("Zone".into()))
+                        .on_select(move |_: &_| chose.set("Zone".into()))
                         .child(view().h(px(30.0)).child(text("Zone"))),
                 ),
         )
@@ -352,7 +352,7 @@ fn ListMenu() -> impl IntoElement {
                         let label = name(e.index);
                         let chosen = label.clone();
                         menu_item()
-                            .on_select(move || chose.set(chosen.clone()))
+                            .on_select(move |_: &_| chose.set(chosen.clone()))
                             .child(view().h(px(30.0)).child(text(label)))
                     })
                     .w(px(200.0))

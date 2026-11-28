@@ -58,7 +58,7 @@ fn Menus() -> impl IntoElement {
                 .trigger(row("file", "File").w(px(80.0)))
                 .child(
                     menu_item()
-                        .on_select(move || log.update(|l| l.push("chose new".into())))
+                        .on_select(move |_: &_| log.update(|l| l.push("chose new".into())))
                         .child(row("new", "New")),
                 )
                 .child(
@@ -70,7 +70,7 @@ fn Menus() -> impl IntoElement {
                         .child(
                             menu_item()
                                 .close_on_select(false)
-                                .on_select(move || open.set(false))
+                                .on_select(move |_: &_| open.set(false))
                                 .child(row("dismiss", "Dismiss")),
                         ),
                 )
@@ -319,7 +319,7 @@ fn Owned(props: OwnedProps) -> impl IntoElement {
         |id: &'static str, label: &'static str| view().test_id(id).h(px(30.0)).child(text(label));
     let item = move |id: &'static str, label: &'static str| {
         menu_item()
-            .on_select(move || note(format!("chose {id}")))
+            .on_select(move |_: &_| note(format!("chose {id}")))
             .child(row(id, label))
     };
     view()
@@ -334,7 +334,7 @@ fn Owned(props: OwnedProps) -> impl IntoElement {
                         item("new", "New").into_element(),
                         menu_item()
                             .close_on_select(false)
-                            .on_select(move || share.set(true))
+                            .on_select(move |_: &_| share.set(true))
                             .child(row("show", "Show share"))
                             .into_element(),
                         submenu()
@@ -352,7 +352,7 @@ fn Owned(props: OwnedProps) -> impl IntoElement {
                             .child(
                                 menu_item()
                                     .close_on_select(false)
-                                    .on_select(move || made.update(|n| *n += 1))
+                                    .on_select(move |_: &_| made.update(|n| *n += 1))
                                     .child(row("refresh", "Refresh")),
                             )
                             .child(item("print", "Print"))

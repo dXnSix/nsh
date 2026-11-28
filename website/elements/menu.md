@@ -83,7 +83,7 @@ use nsh_core::prelude::*;
 
 fn item(label: &'static str, on_select: impl Fn() + 'static) -> impl IntoElement {
     menu_item()
-        .on_select(on_select)
+        .on_select(move |_: &_| on_select())
         .px_3()
         .py_2()
         .rounded_md()
@@ -239,7 +239,7 @@ fn view_menu(sidebar: Signal<bool>, sort: Signal<&'static str>) -> impl IntoElem
             .checked(move || Some(sort.get() == label))
             .indicator_style(part)
             .indicator(text("✓"))
-            .on_select(move || sort.set(label))
+            .on_select(move |_: &_| sort.set(label))
             .flex_row()
             .gap_2()
             .px_3()
@@ -254,7 +254,7 @@ fn view_menu(sidebar: Signal<bool>, sort: Signal<&'static str>) -> impl IntoElem
                 .close_on_select(false)
                 .indicator_style(part)
                 .indicator(text("✓"))
-                .on_select(move || sidebar.set(!sidebar.get_untracked()))
+                .on_select(move |_: &_| sidebar.set(!sidebar.get_untracked()))
                 .flex_row()
                 .gap_2()
                 .px_3()
@@ -356,7 +356,7 @@ menu()
             .render_item(move |e: &MenuListEntry| {
                 let index = e.index as usize;
                 menu_item()
-                    .on_select(move || choose(index))
+                    .on_select(move |_: &_| choose(index))
                     .child(text(move || models.with(|m| m[index].name.clone())))
             })
             .h(px(240.0)),
@@ -577,8 +577,10 @@ iOS only.
 | `onCancel` (`Menu`, `ContextMenu`) | `.on_cancel(\|\| ..)` | The user tried to close it without choosing (Escape or back, a press outside or on the backdrop). |
 | `onSelect` (`ContextMenu`) | `.on_select(\|id: &SharedString\| ..)` | iOS only, with `items`: the item of this `id` was chosen in the system's menu. Not sent on the other platforms, where the `MenuItem`s report the choice. |
 | `onPreviewPress` (`ContextMenu`) | `.on_preview_press(\|\| ..)` | iOS only, with `preview`: the preview was pressed; the menu closed as for a chosen item. |
-| `onSelect` (`MenuItem`) | `.on_select(\|\| ..)` | The item was chosen; a checkable item asks for its other value. |
+| `onSelect` (`MenuItem`) | `.on_select(\|m: &Modifiers\| ..)` | The item was chosen, carrying `modifiers` (`{ modifiers: Modifiers }`, e.g. `alt` for Alt+Click); a checkable item asks for its other value. |
 | `onOpenChange` (`Submenu`) | `.on_open_change(\|e\| ..)` | It opened or closed as the user asked, with why. |
+
+`MenuItem`'s `onSelect` receives `{ modifiers }` (`Modifiers`: `control`, `alt`, `shift`, `platform`, `altGraph`) from the pointer press (e.g. `modifiers.alt` for Alt+Click) or default modifiers when chosen from the keyboard. Handlers that do not inspect modifiers can continue using `onSelect={() => ...}`.
 
 ## Accessibility
 

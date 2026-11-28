@@ -28,6 +28,7 @@ use nsh_base::{
 use nsh_core::{
     Checked, Command, MountItem, NodeId, Size,
     element::Root,
+    keymap::Modifiers,
     platform::{CONTEXT_MENU_COMPONENT, Idiom, Os},
     prelude::*,
 };
@@ -177,7 +178,7 @@ fn ViewMenu() -> impl IntoElement {
             } else {
                 "sidebar-mark"
             }))
-            .on_select(move || {
+            .on_select(move |_: &_| {
                 selects.update(|n| *n += 1);
                 on.set(!on.get_untracked());
             })
@@ -188,7 +189,7 @@ fn ViewMenu() -> impl IntoElement {
             .accessibility_label(label)
             .role(AccessibilityRole::MenuItemRadio)
             .checked(move || Some(sort.get() == key))
-            .on_select(move || {
+            .on_select(move |_: &_| {
                 selects.update(|n| *n += 1);
                 sort.set(key);
             })
@@ -384,7 +385,7 @@ fn FileMenu() -> impl IntoElement {
         menu_item()
             .accessibility_label(label)
             .disabled(disabled)
-            .on_select(move || chose.set(label))
+            .on_select(move |_: &_| chose.set(label))
             .child(text(label))
     };
     view()
@@ -415,7 +416,7 @@ fn FieldAndMenu() -> impl IntoElement {
     let item = move |label: &'static str| {
         menu_item()
             .accessibility_label(label)
-            .on_select(move || chose.set(label))
+            .on_select(move |_: &_| chose.set(label))
             .child(text(label))
     };
     view()
@@ -473,7 +474,7 @@ fn FilteredMenu() -> impl IntoElement {
     let item = move |label: &'static str| {
         menu_item()
             .accessibility_label(label)
-            .on_select(move || chose.set(label))
+            .on_select(move |_: &_| chose.set(label))
             .child(text(label))
     };
     view()
@@ -693,7 +694,7 @@ fn RenameMenu(props: RenameMenuProps) -> impl IntoElement {
             )
             .child(
                 menu_item()
-                    .on_select(move || field.focus())
+                    .on_select(move |_: &_| field.focus())
                     .child(text("Rename")),
             )
             .child(menu_item().child(text("Copy"))),
@@ -791,7 +792,7 @@ fn DeleteMenu() -> impl IntoElement {
                 )
                 .child(
                     menu_item()
-                        .on_select(move || confirming.set(true))
+                        .on_select(move |_: &_| confirming.set(true))
                         .child(text("Delete")),
                 )
                 .child(menu_item().child(text("Rename"))),
@@ -947,7 +948,7 @@ fn DocumentMenu() -> impl IntoElement {
         menu_item()
             .accessibility_label(label)
             .disabled(disabled)
-            .on_select(move || chose.set(label))
+            .on_select(move |_: &_| chose.set(label))
             .child(text(label))
     };
     view()
@@ -1367,7 +1368,7 @@ fn ShownMenu() -> impl IntoElement {
         menu_item()
             .accessibility_label(label)
             .disabled(disabled)
-            .on_select(move || chose.set(label))
+            .on_select(move |_: &_| chose.set(label))
             .child(text(label))
     };
     view()
@@ -2131,4 +2132,79 @@ fn a_held_finger_on_a_nested_trigger_opens_the_inner_menu_alone() {
     hold_on(&mut app, vec![row]);
     app.app.wait_for("Row item").unwrap();
     assert!(!app.app.shows("Chip item"));
+}
+
+/// A menu whose items record both the chosen item and the modifiers active
+/// at selection time.
+#[component]
+fn ModifiersMenu() -> impl IntoElement {
+    let last = signal(String::from("none"));
+    let item = move |label: &'static str| {
+        menu_item()
+            .accessibility_label(label)
+            .on_select(move |m: &Modifiers| {
+                last.set(format!(
+                    "{label}:ctrl={},alt={},shift={},cmd={},alt_graph={}",
+                    m.ctrl, m.alt, m.shift, m.cmd, m.alt_graph
+                ));
+            })
+            .child(text(label))
+    };
+    view()
+        .pt(px(100.0))
+        .pl(px(40.0))
+        .child(
+            menu()
+                .trigger(
+                    view()
+                        .test_id("actions")
+                        .w(px(80.0))
+                        .h(px(30.0))
+                        .child(text("Actions")),
+                )
+                .child(item("Expand"))
+                .child(item("Collapse")),
+        )
+        .child(text(move || format!("last:{}", last.get())))
+}
+
+#[test]
+fn menu_item_select_carries_pointer_modifiers() {
+    let mut app = start_with(nsh_testing::windowed_root::<ModifiersMenu>());
+    app.app.press("id:actions").unwrap();
+    app.app.wait_for("Expand").unwrap();
+    app.app.hold_keys("alt", true).unwrap();
+    app.app.press("text:Expand").unwrap();
+    app.app.hold_keys("alt", false).unwrap();
+    app.app
+        .wait_for("text:last:Expand:ctrl=false,alt=true,shift=false,cmd=false,alt_graph=false")
+        .unwrap();
+
+    // A plain pointer press reports default modifiers.
+    app.app.press("id:actions").unwrap();
+    app.app.wait_for("Collapse").unwrap();
+    app.app.press("text:Collapse").unwrap();
+    app.app
+        .wait_for("text:last:Collapse:ctrl=false,alt=false,shift=false,cmd=false,alt_graph=false")
+        .unwrap();
+}
+
+#[test]
+fn menu_item_keyboard_selection_carries_default_modifiers() {
+    let mut app = start_with(nsh_testing::windowed_root::<ModifiersMenu>());
+    app.app.press_key("tab").unwrap();
+    app.app.press_key("enter").unwrap();
+    app.app.wait_for("Expand").unwrap();
+    app.app.press_key("enter").unwrap();
+    app.app
+        .wait_for("text:last:Expand:ctrl=false,alt=false,shift=false,cmd=false,alt_graph=false")
+        .unwrap();
+
+    // Typed-ahead keyboard selection (Down + Enter) also reports default modifiers.
+    app.app.press_key("enter").unwrap();
+    app.app.wait_for("Expand").unwrap();
+    app.app.press_keys(&["down", "enter"]).unwrap();
+    app.app
+        .wait_for("text:last:Collapse:ctrl=false,alt=false,shift=false,cmd=false,alt_graph=false")
+        .unwrap();
 }

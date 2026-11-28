@@ -44,7 +44,7 @@ use nsh_core::{
     AccessibilityState, Checked, ContextMenuEvent, JsonValue, PointerType, TouchEvent, TouchPhase,
     element::{OrderWatch, Style, watch_order},
     geometry::Axis,
-    keymap::When,
+    keymap::{Modifiers, When},
     overlay::OverlayAnchor,
     platform::{CONTEXT_MENU_COMPONENT, Idiom, Os},
     prelude::*,
@@ -737,7 +737,7 @@ struct Items {
 type Queued = Box<dyn FnOnce()>;
 
 /// An item's select.
-type Select = Rc<dyn Fn()>;
+type Select = Rc<dyn Fn(Modifiers)>;
 
 /// A key move under way: the keys waiting for it go on once it ends.
 struct Busy(Items);
@@ -1225,6 +1225,7 @@ impl Items {
         if !typed || (self.busy.get() == 0 && !ahead) {
             return false;
         }
+        let modifiers = press.modifiers;
         self.in_turn(move |items| {
             let to = items.cursor.get().unwrap_or(key);
             let select = items
@@ -1234,14 +1235,14 @@ impl Items {
                 .find(|s| s.0 == to)
                 .map(|s| s.1.clone());
             if let Some(select) = select {
-                select();
+                select(modifiers);
             }
         });
         true
     }
 
     /// Adds item `key`'s select, forgotten when the current owner ends.
-    fn add_select(&self, key: u64, select: Rc<dyn Fn()>) {
+    fn add_select(&self, key: u64, select: Select) {
         self.selects.borrow_mut().push((key, select));
         let selects = self.selects.clone();
         cleanup(move || selects.borrow_mut().retain(|s| s.0 != key));
@@ -2756,8 +2757,10 @@ pub struct MenuItemProps {
 #[derive(Debug, Clone, PartialEq, Event)]
 pub enum MenuItemEvent {
     /// It was chosen (a checkable item asks for the other value: the app
-    /// sets `checked`).
-    Select,
+    /// sets `checked`), carrying the keyboard modifiers active at selection
+    /// time (e.g. `alt` for Alt+Click).
+    #[args(modifiers)]
+    Select(Modifiers),
 }
 
 /// An item of a `Menu`, `ContextMenu` or `Submenu`: pressing it chooses it
@@ -2806,17 +2809,17 @@ pub fn MenuItem(props: MenuItemProps, cx: Scope<MenuItemEvent>) -> impl IntoElem
             move |()| leave(),
         );
     }
-    let select: Rc<dyn Fn()> = {
+    let select: Select = {
         let chosen = chosen.clone();
         let close_on_select = props.close_on_select;
-        Rc::new(move || {
+        Rc::new(move |modifiers: Modifiers| {
             // On its way out a menu takes no presses: the pointer's go
             // through it, and the keyboard's (Return on an item the focus
             // has not left yet) do nothing.
             if chosen.as_ref().is_some_and(|m| !m.open.get_untracked()) {
                 return;
             }
-            cx.emit(MenuItemEvent::Select);
+            cx.emit(MenuItemEvent::Select(modifiers));
             if close_on_select.get_untracked()
                 && let Some(m) = &chosen
             {
@@ -2939,7 +2942,7 @@ pub fn MenuItem(props: MenuItemProps, cx: Scope<MenuItemEvent>) -> impl IntoElem
             {
                 return;
             }
-            select();
+            select(e.modifiers);
         })
         .children(content)
 }
@@ -3564,4 +3567,21 @@ pub fn Submenu(props: SubmenuProps, cx: Scope<SubmenuEvent>) -> impl IntoElement
             },
         ))
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use nsh_core::element::{Event, TsTypes};
+
+    use super::MenuItemEvent;
+
+    #[test]
+    fn menu_item_select_event_spec_exposes_modifiers() {
+        let mut types = TsTypes::default();
+        let specs = MenuItemEvent::spec(&mut types);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "select");
+        assert_eq!(specs[0].arg, "event");
+        assert_eq!(specs[0].data, "{ modifiers: Modifiers }");
+    }
 }
