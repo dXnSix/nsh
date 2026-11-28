@@ -459,6 +459,7 @@ impl Surface {
             test_model: RefCell::default(),
             #[cfg(feature = "dev")]
             applied: Cell::new(0),
+            #[cfg(feature = "dev")]
             testing: Cell::new(false),
             link: RefCell::new(None),
             link_rate: Cell::new(None),
