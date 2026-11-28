@@ -44,7 +44,7 @@ pub use natives::{Imported, NativeUse};
 #[cfg(feature = "bundle")]
 pub use types::{
     TSCONFIG, TSCONFIG_BASE, modifiers_declaration, roles_declaration, set_assets_declaration,
-    tokens_declaration, type_definitions,
+    tokens_declaration, translation_warnings, translations_declaration, type_definitions,
 };
 
 /// Compiles one module (TSX, JSX, TS or JS, as `name`'s extension says) to

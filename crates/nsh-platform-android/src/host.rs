@@ -1059,7 +1059,8 @@ extern "system" fn Java_com_longbridge_nsh_Native_registerFont<'local>(
 }
 
 /// Whether a web view of the running app may navigate to `url`, with its
-/// `allowOrigin` `origin` (null: none), as the core wrote it.
+/// `allowOrigin` `origin` and its `allowNavigation` `hosts` (one pattern
+/// per line; null: none), as the core wrote them.
 #[unsafe(no_mangle)]
 extern "system" fn Java_com_longbridge_nsh_Native_allowsWebview(
     mut env: JNIEnv<'_>,
@@ -1067,6 +1068,7 @@ extern "system" fn Java_com_longbridge_nsh_Native_allowsWebview(
     handle: jlong,
     url: JString<'_>,
     origin: JString<'_>,
+    hosts: JString<'_>,
 ) -> jboolean {
     // SAFETY: Java passes its live handle.
     let host = unsafe { host(handle) };
@@ -1079,8 +1081,18 @@ extern "system" fn Java_com_longbridge_nsh_Native_allowsWebview(
         .then(|| env.get_string(&origin).ok().map(String::from))
         .flatten()
         .and_then(|o| nsh_core::access::WebOrigin::parse(&o).ok());
+    // Hosts that do not read narrow to nothing: refusing is the safe side.
+    let hosts = (!hosts.is_null())
+        .then(|| env.get_string(&hosts).ok().map(String::from))
+        .flatten()
+        .map(|h| {
+            let lines: Vec<&str> = h.lines().filter(|l| !l.is_empty()).collect();
+            nsh_core::access::WebHosts::parse(&lines).unwrap_or_default()
+        });
     let access = host.access.lock().expect("access").clone();
-    access.allows_webview_with(&url, origin.as_ref()).into()
+    access
+        .allows_webview_in(&url, origin.as_ref(), hosts.as_ref())
+        .into()
 }
 
 /// Whether the running app's web pages may capture `kind` (`"microphone"`,
@@ -1355,10 +1367,6 @@ extern "system" fn Java_com_longbridge_nsh_Native_environment(
     environment.os = nsh_engine::Os::Android;
     environment.notifications = true;
     environment.audio = true;
-    // A chooser over `ACTION_SEND` (`Share.java`).
-    environment.share = true;
-    // A Custom Tab, ended by the callback link (`AuthSession.java`).
-    environment.auth_session = true;
     // The app's details in the system's settings (`SystemUi.java`
     // `openAppSettings`).
     environment.app_settings = true;
@@ -2255,7 +2263,9 @@ extern "system" fn Java_com_longbridge_nsh_Native_runMainThreadTasks(
         .unwrap_or_else(|e| e.into_inner())
         .pop_front();
     if let Some(task) = task {
-        task.run();
+        // A module's UI-thread function: this surface is current while it
+        // runs (`crate::native_view`, `crate::presenting_activity`).
+        crate::presenting::run_for(host.view.clone(), || task.run());
     }
 }
 

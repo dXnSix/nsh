@@ -1023,7 +1023,7 @@ fn MenuBeside() -> impl IntoElement {
                         .trigger(view().w(px(80.0)).child(text("File")))
                         .child(
                             nsh_base::menu_item()
-                                .on_select(move || seen.update(|s| s.push_str(" chose New")))
+                                .on_select(move |_: &_| seen.update(|s| s.push_str(" chose New")))
                                 .child(text("New")),
                         )
                         .child(nsh_base::menu_item().child(text("Open"))),
@@ -1071,7 +1071,7 @@ fn MenuWithSubmenu() -> impl IntoElement {
     let seen = signal(String::new());
     let item = move |name: &'static str| {
         nsh_base::menu_item()
-            .on_select(move || {
+            .on_select(move |_: &_| {
                 seen.update(|s| s.push_str(&format!(" chose {}", name.to_lowercase())))
             })
             .child(text(name))

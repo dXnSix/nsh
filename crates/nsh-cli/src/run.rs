@@ -689,6 +689,7 @@ fn write_dev_desktop_entry(dir: &Path, id: &str, exec: &Path) -> anyhow::Result<
 /// and Android a package of it, the web the dev server's page. A change to
 /// the app's Rust code ends the command with [`crate::rust_app::Restart`]:
 /// `nsh` builds it again and runs it anew.
+#[allow(clippy::too_many_arguments)]
 fn run_rust_app(
     entry: &Path,
     listen: crate::dev::Listen,

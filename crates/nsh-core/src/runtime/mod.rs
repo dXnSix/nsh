@@ -34,7 +34,6 @@ mod notifications;
 mod os;
 mod picker;
 mod process;
-mod share;
 mod storage;
 mod tizen;
 mod updater;
@@ -72,7 +71,6 @@ pub fn registries() -> &'static [Registry] {
             .module::<accessibility::Accessibility>()
             .module::<clipboard::Clipboard>()
             .module::<picker::Picker>()
-            .module::<share::Share>()
             .class::<audio::Sound>()
             .class::<audio::AudioPlayer>()
             .module::<notifications::Notifications>()
@@ -87,9 +85,6 @@ pub fn registries() -> &'static [Registry] {
         let mut mobile = Registry::runtime("nsh/mobile");
         mobile
             .register::<crate::mobile::TabBar>()
-            .register::<crate::mobile::SegmentedControl>()
-            .register::<crate::mobile::Switch>()
-            .register::<crate::mobile::DateTimePicker>()
             .module::<android::BackHandler>()
             .module::<haptics::Haptics>()
             .module::<app_settings::AppSettings>();

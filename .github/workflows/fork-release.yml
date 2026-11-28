@@ -88,7 +88,9 @@ jobs:
     name: dist (${{ matrix.name }})
     needs: check
     strategy:
-      fail-fast: false
+      # As upstream's `release.yml`: the first build that fails cancels the
+      # rest (the optional Windows on Arm one, `continue-on-error`, does not).
+      fail-fast: true
       matrix:
         # The components the same everywhere (Android, web) come from x86_64
         # Linux's build alone (`shared`), as in upstream's `release.yml`; the
@@ -108,8 +110,11 @@ jobs:
           # The Linux guests (Lima) on Apple silicon Macs.
           - name: linux-arm64
             os: ubuntu-24.04-arm
+          # As upstream's: x86_64 Windows builds the release runner for
+          # x86_64-pc-windows-gnullvm, with its link kit (#1644).
           - name: windows-x86_64
             os: windows-latest
+            gnullvm: true
           # Optional: it may fail without holding the release back.
           - name: windows-arm64
             os: windows-11-arm
@@ -184,7 +189,30 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown${{ matrix.gnullvm && ',x86_64-pc-windows-gnullvm' || '' }}
+
+      # The gnullvm runner's C code (QuickJS, zstd, ring) and its link need a
+      # mingw toolchain; bindgen's libclang rejects the gnullvm triple, so it
+      # is given mingw's. `cargo xtask dist` builds the runner for gnullvm
+      # when `CC_x86_64_pc_windows_gnullvm` is set (upstream's `release.yml`).
+      - name: Set up llvm-mingw
+        if: matrix.gnullvm
+        env:
+          LLVM_MINGW_VERSION: "20261117"
+        run: |
+          name="llvm-mingw-$LLVM_MINGW_VERSION-ucrt-x86_64"
+          curl -sSfL -o "$RUNNER_TEMP/llvm-mingw.zip" \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/$LLVM_MINGW_VERSION/$name.zip"
+          unzip -q "$RUNNER_TEMP/llvm-mingw.zip" -d "$RUNNER_TEMP"
+          m="$(cygpath -m "$RUNNER_TEMP/$name")"
+          echo "$m/bin" >> "$GITHUB_PATH"
+          {
+            echo "CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER=x86_64-w64-mingw32-clang"
+            echo "CC_x86_64_pc_windows_gnullvm=x86_64-w64-mingw32-clang"
+            echo "CXX_x86_64_pc_windows_gnullvm=x86_64-w64-mingw32-clang++"
+            echo "AR_x86_64_pc_windows_gnullvm=llvm-ar"
+            echo "BINDGEN_EXTRA_CLANG_ARGS_x86_64_pc_windows_gnullvm=--target=x86_64-w64-mingw32 -isystem $m/include"
+          } >> "$GITHUB_ENV"
 
       # The web runtime's C code (zstd) needs upstream LLVM: Apple's clang
       # does not target wasm32. Check the C tools before building runtimes.

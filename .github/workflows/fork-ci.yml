@@ -407,9 +407,9 @@ jobs:
         with:
           cache: rust-app
       - name: Clippy
-        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/speech --locked -- -D warnings
+        run: cargo clippy -p gallery-native -p nsh-extra --all-targets --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/share,nsh-extra/speech --locked -- -D warnings
       - name: Test the crate
-        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/speech --locked
+        run: bash .github/fork/retry.sh cargo test -p gallery-native -p nsh-extra --features nsh-extra/camera,nsh-extra/location,nsh-extra/photos,nsh-extra/push,nsh-extra/share,nsh-extra/speech --locked
       - name: Check the native dependency graph
         run: |
           cargo tree -p gallery-native --locked -e normal > "$RUNNER_TEMP/rust-app-dependencies.txt"
@@ -508,7 +508,7 @@ jobs:
         with:
           cache: web
       - name: The web runtime's JS tests
-        run: node --test crates/nsh-platform-web/web/scroll.test.mjs crates/nsh-platform-web/web/nsh.test.mjs
+        run: node --test crates/nsh-platform-web/web/scroll.test.mjs crates/nsh-platform-web/web/nsh.test.mjs crates/nsh-platform-web/web/mouse.test.mjs crates/nsh-platform-web/web/local-time.test.mjs
       - name: Publish the counter for the web
         run: |
           cargo build -p nsh-cli --locked
