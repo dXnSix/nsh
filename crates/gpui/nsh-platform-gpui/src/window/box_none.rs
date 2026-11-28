@@ -556,9 +556,12 @@ mod linux {
     /// through GPUI, X11's input shape here (GPUI sets none there).
     pub(crate) fn set_input_region(window: &Window, region: Option<&[gpui::Bounds<Pixels>]>) {
         window.set_input_region(region);
+        // A Tizen TV has no X server (and builds without x11rb).
+        #[cfg(not(target_vendor = "tizen"))]
         x11::set_input_shape(window, region);
     }
 
+    #[cfg(not(target_vendor = "tizen"))]
     mod x11 {
         use std::cell::OnceCell;
 
