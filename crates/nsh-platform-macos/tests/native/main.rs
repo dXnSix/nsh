@@ -15,6 +15,8 @@
 #[cfg(target_os = "macos")]
 mod canvas_bounds;
 #[cfg(target_os = "macos")]
+mod clamped_scroll;
+#[cfg(target_os = "macos")]
 mod deleted_scroll;
 #[cfg(target_os = "macos")]
 mod download_redirect;
@@ -28,6 +30,8 @@ mod fitting_input;
 mod focus_selection;
 #[cfg(target_os = "macos")]
 mod fps_collapse;
+#[cfg(all(target_os = "macos", feature = "shader"))]
+mod gpu_view;
 #[cfg(target_os = "macos")]
 mod hover_cursor;
 #[cfg(target_os = "macos")]
@@ -37,11 +41,15 @@ mod ime;
 #[cfg(all(target_os = "macos", feature = "js"))]
 mod implicit_quit;
 #[cfg(target_os = "macos")]
+mod input_baseline;
+#[cfg(target_os = "macos")]
 mod input_clip;
 #[cfg(target_os = "macos")]
 mod input_focus;
 #[cfg(target_os = "macos")]
 mod input_hidden;
+#[cfg(target_os = "macos")]
+mod input_line_height;
 #[cfg(target_os = "macos")]
 mod input_restyle;
 #[cfg(target_os = "macos")]
@@ -75,6 +83,8 @@ mod press_momentum;
 #[cfg(target_os = "macos")]
 mod quit_requests;
 #[cfg(target_os = "macos")]
+mod refresh_dismiss;
+#[cfg(target_os = "macos")]
 mod removed_focus;
 #[cfg(target_os = "macos")]
 mod scaled_input;
@@ -94,6 +104,10 @@ mod text_view_selection;
 mod title_bar;
 #[cfg(target_os = "macos")]
 mod tray_owner;
+#[cfg(target_os = "macos")]
+mod web_file_input;
+#[cfg(target_os = "macos")]
+mod web_load_wait;
 #[cfg(target_os = "macos")]
 mod window_alert;
 #[cfg(target_os = "macos")]
@@ -136,11 +150,16 @@ fn main() {
                 modal_focus::run();
             } else if std::env::var_os("NSH_NAVIGATION_UNMOUNT_CHECK_ONLY").is_some() {
                 navigation_unmount::run();
+            } else if std::env::var_os("NSH_GPU_VIEW_CHECK_ONLY").is_some() {
+                #[cfg(feature = "shader")]
+                gpu_view::run();
             } else if std::env::var_os("NSH_SHADER_CONTENT_CHECK_ONLY").is_some() {
                 #[cfg(feature = "shader")]
                 shader_content::run();
             } else if mount::bench_only() {
                 mount::bench_alone();
+            } else if std::env::var_os("NSH_LEAF_BENCH_ONLY").is_some() {
+                mount::leaf_bench();
             } else if std::env::var_os("NSH_MENU_LABELS_CHECK_ONLY").is_some() {
                 window_press::run();
                 menu_labels::run();
@@ -150,6 +169,9 @@ fn main() {
             } else if std::env::var_os("NSH_FILE_PANELS_CHECK_ONLY").is_some() {
                 window_press::run();
                 file_panels::run();
+            } else if std::env::var_os("NSH_WEB_FILE_INPUT_CHECK_ONLY").is_some() {
+                window_press::run();
+                web_file_input::run();
             } else if std::env::var_os("NSH_TRAY_OWNER_CHECK_ONLY").is_some() {
                 window_press::run();
                 tray_owner::run();
@@ -165,6 +187,8 @@ fn main() {
                 window_alert::run();
             } else if std::env::var_os("NSH_FOCUS_SELECTION_CHECK_ONLY").is_some() {
                 focus_selection::run();
+            } else if std::env::var_os("NSH_INPUT_BASELINE_CHECK_ONLY").is_some() {
+                input_baseline::run();
             } else if std::env::var_os("NSH_INPUT_FOCUS_CHECK_ONLY").is_some() {
                 input_focus::run();
             } else if std::env::var_os("NSH_IMAGE_PLACEHOLDER_CHECK_ONLY").is_some() {
@@ -177,6 +201,8 @@ fn main() {
                 removed_focus::run();
             } else if std::env::var_os("NSH_INPUT_HIDDEN_CHECK_ONLY").is_some() {
                 input_hidden::run();
+            } else if std::env::var_os("NSH_INPUT_LINE_HEIGHT_CHECK_ONLY").is_some() {
+                input_line_height::run();
             } else if std::env::var_os("NSH_INPUT_TAB_STOPS_CHECK_ONLY").is_some() {
                 input_tab_stops::run();
             } else if std::env::var_os("NSH_FITTING_INPUT_CHECK_ONLY").is_some() {
@@ -196,10 +222,16 @@ fn main() {
             } else if std::env::var_os("NSH_KEYBOARD_CHECK_ONLY").is_some() {
                 window_press::run();
                 keyboard::run();
+            } else if std::env::var_os("NSH_CLAMPED_SCROLL_CHECK_ONLY").is_some() {
+                clamped_scroll::run();
             } else if std::env::var_os("NSH_DELETED_SCROLL_CHECK_ONLY").is_some() {
                 deleted_scroll::run();
+            } else if std::env::var_os("NSH_REFRESH_DISMISS_CHECK_ONLY").is_some() {
+                refresh_dismiss::run();
             } else if std::env::var_os("NSH_DOWNLOAD_REDIRECT_CHECK_ONLY").is_some() {
                 download_redirect::run();
+            } else if std::env::var_os("NSH_WEB_LOAD_WAIT_CHECK_ONLY").is_some() {
+                web_load_wait::run();
             } else if std::env::var_os("NSH_INPUT_WHEEL_CHAIN_CHECK_ONLY").is_some() {
                 input_wheel_chain::run();
             } else if std::env::var_os("NSH_SELECTION_AUTOSCROLL_CHECK_ONLY").is_some() {
@@ -238,12 +270,15 @@ fn main() {
                 hover_cursor::run();
                 #[cfg(feature = "shader")]
                 shader_content::run();
+                #[cfg(feature = "shader")]
+                gpu_view::run();
                 canvas_bounds::run();
                 canvas_bounds::run_scale();
                 mask_corners::run();
                 menu_labels::run();
                 menu_lifetime::run();
                 file_panels::run();
+                web_file_input::run();
                 tray_owner::run();
                 window_frames::run();
                 window_layout::run();
@@ -255,6 +290,8 @@ fn main() {
                 image_placeholder::run();
                 fitting_input::run();
                 input_focus::run();
+                input_baseline::run();
+                input_line_height::run();
                 input_restyle::run();
                 removed_focus::run();
                 focus_selection::run();
@@ -263,8 +300,11 @@ fn main() {
                 scaled_input::run();
                 zoom::run();
                 deleted_scroll::run();
+                refresh_dismiss::run();
+                clamped_scroll::run();
                 scroll_indicator_layout::run();
                 download_redirect::run();
+                web_load_wait::run();
                 mount::run();
                 // Last: it makes the process an accessory app.
                 embedded_scroll::run();

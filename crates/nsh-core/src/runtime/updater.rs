@@ -1,7 +1,10 @@
 //! `nsh/updater`: the app updates itself (`docs/dev/updater.md`). The rules
 //! are `nsh-updater`'s; this module is its JS face over the platform's HTTP
 //! stack ([`UpdaterHost`]). The source comes from the package, never from
-//! the caller, so what the app's code can do is ask, not point it elsewhere.
+//! the caller, so what the app's code can do is ask, not point it elsewhere;
+//! the one exception is opted into in `nsh.json`: packages from a feed the
+//! code names (`"packages": { "source": "runtime" }`), still signed with the
+//! package's keys.
 //!
 //! Needs no capability: the developer named the source in `nsh.json`, and a
 //! module running inside another app has no installation to replace.
@@ -25,6 +28,40 @@ use crate::element::{Callback, JsError, JsObject, Later, System, codes, module};
 /// Takes a piece of a body: its byte offset in the resource, the bytes, and
 /// the resource's total size if known; an error stops it.
 pub type UpdaterSink<'a> = &'a mut dyn FnMut(u64, &[u8], Option<u64>) -> Result<(), String>;
+
+/// Downloads an update for the app, in place of the engine's HTTP
+/// ([`set_updater_transport`]). Same contract as [`UpdaterHost::get`].
+pub type UpdaterTransport = dyn Fn(&str, u64, UpdaterSink<'_>) -> Result<(), String> + Send + Sync;
+
+static TRANSPORT: std::sync::OnceLock<std::sync::Arc<UpdaterTransport>> =
+    std::sync::OnceLock::new();
+
+/// Makes `get` download the update check and the archive, instead of the
+/// engine's HTTP; for releases behind credentials the app holds (a private
+/// GitHub repository, a CDN behind SSO). Call it at startup, before the
+/// first check. Only the first call counts.
+///
+/// The URLs still come from the packaged `nsh-updater.json`, and NSH still
+/// checks everything it checks otherwise (signature, version, size,
+/// SHA-256). `get` follows [`UpdaterHost::get`]: it gets `url` from byte
+/// `from` on (`Range: bytes=<from>-`), follows redirects, and hands each
+/// piece to `sink` with its offset; a server that ignores the range sends
+/// from offset `0`.
+///
+/// ```ignore
+/// nsh_core::runtime::set_updater_transport(|url, from, sink| my_fetch(url, from, sink));
+/// ```
+pub fn set_updater_transport(
+    get: impl Fn(&str, u64, UpdaterSink<'_>) -> Result<(), String> + Send + Sync + 'static,
+) {
+    let _ = TRANSPORT.set(std::sync::Arc::new(get));
+}
+
+/// The app's [`set_updater_transport`], if it set one.
+#[doc(hidden)]
+pub fn updater_transport() -> Option<&'static std::sync::Arc<UpdaterTransport>> {
+    TRANSPORT.get()
+}
 
 /// What the platform gives the module: the package's update configuration
 /// and HTTP. Both block, and are called off the engine thread.
@@ -117,6 +154,15 @@ pub(crate) struct PackageCheckOptions {
     /// As `checkForUpdate`'s: the language `notes` is in, when the
     /// manifest has it.
     pub(crate) locale: Option<String>,
+    /// The manifest to check, for an app whose `nsh.json` lets its code
+    /// name it (`"updater": { "packages": { "source": "runtime" } }`): one
+    /// build of the app for several servers. HTTPS, or plain HTTP with
+    /// `"allowHttp": true`, which keeps the feed's files and redirects on
+    /// its origin. The manifest's signature and the package's are checked
+    /// against the keys in `nsh.json` as for any source, and a package not
+    /// newer than the running build is never offered. `downloadPackage`
+    /// downloads what this check found.
+    pub(crate) url: Option<String>,
 }
 
 /// A newer version of the app.
@@ -305,16 +351,20 @@ impl Updater {
     /// Asks the source in `nsh.json`'s `"updater"` for a newer build of the
     /// app's code: a signed package newer than the running build (the
     /// running package's, else the one the app shipped with) that this
-    /// runtime runs. Resolves with it, or `null` when there is none, the
+    /// runtime runs. With `url`, asks that manifest instead, when the
+    /// package lets the app's code choose (`"packages": { "source":
+    /// "runtime" }`). Resolves with it, or `null` when there is none, the
     /// app trusts no package roots (`"updater": { "packages": { "roots" } }`)
     /// or runs where apps do not update (the web, a development run).
-    /// Rejects as `checkForUpdate` does.
+    /// Rejects as `checkForUpdate` does, and for a `url` the package does
+    /// not let the app choose, or without one when the package names no
+    /// source of its own.
     pub(crate) fn check_for_package(
         options: Option<PackageCheckOptions>,
         sys: System,
     ) -> Later<Option<PackageUpdate>> {
-        let locale = options.and_then(|options| options.locale);
-        Later::new(native::check_package(sys, locale))
+        let options = options.unwrap_or_default();
+        Later::new(native::check_package(sys, options.locale, options.url))
     }
 
     /// Downloads the package the last `checkForPackage` found, checks it
@@ -481,6 +531,13 @@ mod native {
                 return Ok(None);
             };
             let config = Config::parse(&bytes).map_err(|e| e.to_string())?;
+            if !config.has_source() && channel.is_none() {
+                return Err(
+                    "no update source: the app's nsh.json names no github or url, only \
+                            package feeds its code chooses (checkForPackage({ url }))"
+                        .to_owned(),
+                );
+            }
             // Only the source changes: the id, version and key are the
             // package's, and the installation is found by its own file.
             let config = match &channel {
@@ -1378,6 +1435,7 @@ mod native {
     pub(super) async fn check_package(
         sys: System,
         locale: Option<String>,
+        url: Option<String>,
     ) -> Result<Option<PackageUpdate>, JsError> {
         let found = sys.locals.get::<Found>();
         let _operation = begin(&found)?;
@@ -1394,6 +1452,17 @@ mod native {
             if config.package_roots().is_empty() {
                 return Ok(None);
             }
+            // Only the source changes, as for a channel: the id, keys and
+            // roots stay the package's.
+            let config = match &url {
+                Some(url) => config.package_feed(url).map_err(|e| e.to_string())?,
+                None if !config.has_source() => {
+                    return Err("checkForPackage: pass `url`: the app's nsh.json names no \
+                                source of its own (\"packages\": { \"source\": \"runtime\" })"
+                        .to_owned());
+                }
+                None => config,
+            };
             let running_build = worker
                 .running_package()
                 .map(|running| running.build)
@@ -1865,6 +1934,8 @@ mod native {
             package_manifest: Option<Vec<u8>>,
             verify_error: Option<String>,
             verify_calls: std::sync::atomic::AtomicUsize,
+            /// Every URL asked for, in order.
+            urls: std::sync::Mutex<Vec<String>>,
         }
 
         enum ScriptedResponse {
@@ -1892,6 +1963,7 @@ mod native {
                     package_manifest: None,
                     verify_error: None,
                     verify_calls: std::sync::atomic::AtomicUsize::new(0),
+                    urls: std::sync::Mutex::new(Vec::new()),
                 }
             }
 
@@ -1906,6 +1978,7 @@ mod native {
             }
 
             fn get(&self, url: &str, from: u64, sink: UpdaterSink<'_>) -> Result<(), String> {
+                self.urls.lock().unwrap().push(url.to_owned());
                 if let Some(manifest) = &self.package_manifest
                     && !url.ends_with(".nshpkg")
                 {
@@ -2488,6 +2561,70 @@ mod native {
         }
 
         #[test]
+        fn a_package_check_reads_the_feed_the_app_names_when_it_opts_in() {
+            let payload = b"signed-nshpkg-bytes";
+            let manifest = serde_json::to_vec(&serde_json::json!({
+                "id": "dev.noop.app",
+                "version": "1.0.1",
+                "package": {
+                    "version": "1.0.1", "build": 2, "url": "app-2.nshpkg",
+                    "sha256": nsh_updater::sha256(payload), "size": payload.len(),
+                    "minRuntime": "0.1.0",
+                },
+            }))
+            .unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let dir = TempDir::new("package-feed");
+            let host = |config: String| {
+                let mut host = ScriptedHost::new(payload, [ScriptedResponse::Complete]);
+                host.package_config = Some(config.into_bytes());
+                host.package_manifest = Some(manifest.clone());
+                let host = Arc::new(host);
+                let mut sys = System::default().with_updater(Some(host.clone()));
+                sys.data_dir = Some(dir.path().to_path_buf());
+                (host, sys)
+            };
+            let feed = "http://10.0.0.2:8080/updates/latest.json";
+            let check_feed = |sys: &System, url: Option<&str>| {
+                rt.block_on(check_package(sys.clone(), None, url.map(str::to_owned)))
+            };
+
+            // A runtime feed: no source of its own, plain HTTP opted into.
+            let (runtime, sys) = host(format!(
+                r#"{{"id":"dev.noop.app","version":"1.0.0","build":1,"publicKey":"{PUBLIC}","packages":{{"roots":["{PUBLIC}"],"source":"runtime","allowHttp":true}}}}"#
+            ));
+            let err = check_feed(&sys, None).unwrap_err();
+            assert!(format!("{err:?}").contains("pass `url`"), "{err:?}");
+            let err = rt.block_on(check(sys.clone(), None, None)).unwrap_err();
+            assert!(format!("{err:?}").contains("no update source"), "{err:?}");
+            assert!(runtime.urls.lock().unwrap().is_empty());
+            assert_eq!(check_feed(&sys, Some(feed)).unwrap().unwrap().build, 2.0);
+            rt.block_on(download_package(sys.clone(), None)).unwrap();
+            assert_eq!(
+                *runtime.urls.lock().unwrap(),
+                [
+                    feed.to_owned(),
+                    format!("{feed}.sig"),
+                    "http://10.0.0.2:8080/updates/app-2.nshpkg".to_owned(),
+                ]
+            );
+            // Another feed's plain-HTTP origin is refused before any request.
+            runtime.urls.lock().unwrap().clear();
+            assert!(check_feed(&sys, Some("ftp://10.0.0.2/latest.json")).is_err());
+            assert!(runtime.urls.lock().unwrap().is_empty());
+
+            // An app whose nsh.json names the source: its code cannot.
+            let (fixed, sys) = host(format!(
+                r#"{{"id":"dev.noop.app","version":"1.0.0","build":1,"url":"{STABLE}","publicKey":"{PUBLIC}","packages":{{"roots":["{PUBLIC}"]}}}}"#
+            ));
+            let err = check_feed(&sys, Some("https://evil.dev/latest.json")).unwrap_err();
+            assert!(format!("{err:?}").contains("source"), "{err:?}");
+            assert!(fixed.urls.lock().unwrap().is_empty());
+        }
+
+        #[test]
         fn download_package_resumes_and_cleans_up_refused_packages() {
             let dir = TempDir::new("package-resume");
             let payload = b"signed-nshpkg-bytes";
@@ -2538,7 +2675,7 @@ mod native {
                 .unwrap();
 
             let offered = rt
-                .block_on(check_package(sys.clone(), None))
+                .block_on(check_package(sys.clone(), None, None))
                 .unwrap()
                 .unwrap();
             assert_eq!(offered.build, 2.0);
@@ -2568,7 +2705,7 @@ mod native {
             let bad_host = Arc::new(bad_host);
             let mut sys2 = System::default().with_updater(Some(bad_host.clone()));
             sys2.data_dir = Some(dir2.path().to_path_buf());
-            rt.block_on(check_package(sys2.clone(), None))
+            rt.block_on(check_package(sys2.clone(), None, None))
                 .unwrap()
                 .unwrap();
             let err = rt.block_on(download_package(sys2, None)).unwrap_err();
@@ -2652,6 +2789,7 @@ mod native {
     pub(super) async fn check_package(
         sys: System,
         _: Option<String>,
+        _: Option<String>,
     ) -> Result<Option<PackageUpdate>, JsError> {
         configured(&sys).await?;
         Ok(None)
@@ -2702,13 +2840,17 @@ mod native {
                         .unwrap()
                         .is_none()
                 );
-                assert!(rt.block_on(check_package(sys, None)).unwrap().is_none());
+                assert!(
+                    rt.block_on(check_package(sys, None, None))
+                        .unwrap()
+                        .is_none()
+                );
             }
             // An app that ships a configuration hears why it cannot update.
             let sys = with(Some(Host(Some("{}"))));
             let err = rt.block_on(check(sys.clone(), None, None)).unwrap_err();
             assert_eq!(err.code(), Some(codes::UNAVAILABLE));
-            let err = rt.block_on(check_package(sys, None)).unwrap_err();
+            let err = rt.block_on(check_package(sys, None, None)).unwrap_err();
             assert_eq!(err.code(), Some(codes::UNAVAILABLE));
         }
     }

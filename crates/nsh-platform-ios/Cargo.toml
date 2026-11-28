@@ -87,6 +87,8 @@ objc2-authentication-services.workspace = true
 rustc-hash.workspace = true
 libc.workspace = true
 
-# The alert tint tests read theme documents.
+# The alert tint tests read theme documents; the GPU views' test (`gpu.rs`)
+# uses `nsh-gpu`.
 [target.'cfg(target_os = "ios")'.dev-dependencies]
 nsh-theme.workspace = true
+nsh-gpu.workspace = true

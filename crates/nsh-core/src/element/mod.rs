@@ -207,16 +207,16 @@ pub use self::{
     events::{
         CaretEvent, Composition, FileDragEvent, FileDropEvent, GestureEvent, HintReason,
         ImageProgress, NativeEvent, OverlayPosition, PanEvent, ScrollEvent, Selection,
-        TextSelectionEvent, VideoInfo, VideoProgress, WebNavigation,
+        TextSelectionEndpoint, TextSelectionEvent, VideoInfo, VideoProgress, WebNavigation,
     },
     flow::{Each, If, IntoElements, Reset, catch_error, dynamic, each, when},
     handle::JsHandle,
     host::{
-        CanvasArg, CanvasPaint, CanvasView, Input, InputAccessoryView, IntoUniform, Modal,
+        CanvasArg, CanvasPaint, CanvasView, GpuView, Input, InputAccessoryView, IntoUniform, Modal,
         NativeView, Orientation, Overlay, Painter, Screen, Scroll, ShaderView, Stack, Svg, Uniform,
-        Video, WebView, canvas, input, input_accessory_view, native, overlay, screen_effect,
-        screen_transition, scroll, shader, shader_effect, shader_transition, svg, video, web_view,
-        web_view_html,
+        Video, WebView, canvas, gpu_view, input, input_accessory_view, native, overlay,
+        screen_effect, screen_transition, scroll, shader, shader_effect, shader_transition, svg,
+        video, web_view, web_view_html,
     },
     interface::{Interface, InterfaceDef, InterfaceMember, InterfaceRet},
     js::{JsClass, JsHost, JsIn, JsKind, JsOwned, JsPrimitive, JsRaw},
@@ -267,7 +267,10 @@ pub use self::{
         RoleValue, Token, Tokens, role,
     },
     ts_alias::TsAlias,
-    value::{JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes, ts_of},
+    value::{
+        InContext, JsValue, NodeRef, PropEnum, PropError, SharedString, TsType, TsTypes,
+        render_params_of, ts_of,
+    },
     virtual_list::{ListLayout, ViewableItems, VirtualList, virtual_list},
     watch::OrderWatch,
 };

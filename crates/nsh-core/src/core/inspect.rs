@@ -38,6 +38,7 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Native => "native",
         Kind::Overlay => "overlay",
         Kind::Shader => "shader",
+        Kind::GpuView => "gpu-view",
     }
 }
 

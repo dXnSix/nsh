@@ -20,6 +20,7 @@ mod logger;
 mod module_meta;
 mod msix;
 mod native_features;
+mod nsh_lock;
 mod nshm;
 mod package;
 mod platforms;
@@ -435,6 +436,13 @@ enum Command {
         /// Named asset build profile from `nsh.json` `assets.profiles`.
         #[arg(long, value_name = "NAME")]
         profile: Option<String>,
+        /// Code signing identity for the macOS host (`--target macos`), as
+        /// `nsh package --sign` takes it, e.g. "Apple Development: …": the
+        /// host's signature then stays the same across rebuilds, so what
+        /// macOS ties to it (the app's keychain items) stays the app's.
+        /// Default: signed ad hoc.
+        #[arg(long)]
+        sign: Option<String>,
     },
     /// Create a signing key: `<name>.secret` (keep it offline for a root)
     /// and `<name>.pub` (what apps trust, for a root).
@@ -1420,6 +1428,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                         points_per_cell: None,
                         idiom,
                         context: build_context,
+                        sign: None,
                     },
                     target,
                     device.as_deref(),
@@ -1527,6 +1536,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             idiom,
             context,
             profile,
+            sign,
         } => {
             no_limits_for_rust(&entry, limits)?;
             let config = package::read_config(&entry)?;
@@ -1548,6 +1558,7 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
                     points_per_cell,
                     idiom,
                     context: build_context,
+                    sign,
                 },
                 target,
                 device.as_deref(),
@@ -1931,6 +1942,24 @@ mod command_tests {
             };
             assert_eq!(target, expected);
         }
+    }
+
+    #[test]
+    fn run_and_package_take_the_same_signing_identity() {
+        let identity = "Apple Development: Jane Doe (ABCDE12345)";
+        let cli = Cli::try_parse_from(["nsh", "run", "--sign", identity]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Run { sign: Some(ref sign), .. } if sign == identity
+        ));
+        let cli = Cli::try_parse_from(["nsh", "run"]).unwrap();
+        assert!(matches!(cli.command, Command::Run { sign: None, .. }));
+        let cli = Cli::try_parse_from(["nsh", "package", "--target", "macos", "--sign", identity])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Package(ref args) if args.sign.as_deref() == Some(identity)
+        ));
     }
 
     #[test]

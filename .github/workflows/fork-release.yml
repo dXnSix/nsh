@@ -266,7 +266,7 @@ jobs:
 
       - name: Check the iOS runtime build versions
         if: matrix.name == 'macos-arm64'
-        run: python3 .github/ci/ios-build-versions.py dist/nsh/runtime/ios
+        run: python3 .github/ci/ios-build-versions.py dist/nsh/runtime/ios 26 devices
 
       # The packaged CLI makes and bundles a new app.
       - name: Smoke test
@@ -301,6 +301,7 @@ jobs:
           name: nsh-${{ matrix.name }}
           path: target/release-assets/*
           if-no-files-found: error
+          retention-days: 3
 
   release:
     name: Release

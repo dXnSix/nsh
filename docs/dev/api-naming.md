@@ -72,6 +72,9 @@ go elsewhere under these rules rather than into them.
   `RichEditor.onCompositionChange({ composing })` uses `Input`'s composition name for the view's boolean state
   transitions. The editor owns the transient marked text; apps observe the start/end state through the session's
   existing `composing` value, with the event emitted after the state settles.
+  `RichEditor.onReadonlyInput()` (Rust `RichEditorEvent::ReadonlyInput`) is Monaco's
+  `onDidAttemptReadOnlyEdit` named after the act, with the state word `readonly` (below) rather than Monaco's
+  `readOnly`; like Monaco's it carries no payload, since the text never enters the document.
 - **Press, not click**: `onPress`, `onPressDown`, `onPressUp`, `onLongPress` (below, Button). `gpui-base` itself says
   *press* for pointer-independent activation (`DialogChangeReason::TriggerPress`, `close_on_backdrop_press`).
 - **States**: `disabled` blocks interaction, `readonly` allows selecting but not editing, `selected` is membership /
@@ -361,11 +364,14 @@ them yet (`compatibility.md`). The frozen RN-shaped modules keep their names. A 
 | `ImageAsset.uri` | `ImageAsset.url` | Addresses | What `import logo from "./logo.png"` gives |
 | **Video** | | | |
 | `source: string \| { uri }` | `src: string` | Addresses | |
+| `poster` | `poster?: string`, Rust `.poster(url)` | Addresses | react-native-video's name and meaning: an image shown while the video loads, until its first frame is ready. HTML's `<video poster>` stays until playback starts; the web backend takes it off at `loadeddata` so every platform shows the same |
 | **WebView** | | | |
 | `source: string \| { uri } \| { html, baseUrl }` | `src?: string`; `html?: string`, `baseUrl?: string` | Addresses | One of `src` and `html` |
 | the page's `window.ReactNativeWebView.postMessage(data)` | `window.nsh.postMessage(data)` | Where names come from | Decided by the user: only `window.nsh` is injected |
 | (new) wry's `WebViewBuilder::with_incognito(bool)` (the web views of GPUI Kit's `gpui-webview`) | `incognito` (`false`), Rust `.incognito(bool)` | States | wry's name, which Tauri's and other web view APIs share: a state of the web view, read when it is made (Rust takes a value, not a signal). A boolean, not a storage mode: a named persistent store would be a prop of its own, which `incognito` composes with |
 | (new) wry's `WebViewBuilder::with_asynchronous_custom_protocol(name, handler)`, WebKit's `setURLSchemeHandler:forURLScheme:` | Rust `.url_scheme(scheme, handler)`; `WebResourceRequest` (`url()`, `method()`, `is_cancelled()`, `respond(WebResource)`, `fail()`), `WebResource { mime_type, bytes }` | Where names come from | WebKit's and RFC 3986's word, "scheme" (wry's "protocol" is the same thing); the request is answered once, from any thread, as wry's responder is. Rust only for now: the bytes are the app's Rust data |
+| **GPU views** | | | |
+| (new) | `gpuView(name, spec)` (`GpuViewProps<P, E>`); Rust `gpu_view()` with `.renderer(make)` / `.renderer_named(name)`, `.prop`, `.bind_animated_prop`, `.on_native_event`; `nsh-gpu`'s `GpuRenderer`, `GpuFrame`, `GpuContext`, `GpuEvent`, `GpuRegistry::gpu_renderer(name, make)` | `nativeComponent(name, spec)` | Shaped as `nativeComponent`, whose props and events it shares; `Gpu` as in WebGPU's `GPUDevice` and `GpuView`, the element it makes. `renderer` names what the app writes, as wgpu's examples and Bevy's render code call it; `prepare` / `render` follow wgpu's examples' `init` / `render` split, `prepare` because the device is given, not made |
 | **NavPage** | | | |
 | `headerShown` | `headerVisible` (default `true`) | States | `header` is the page's slot; as `headerBackVisible`, which stays |
 | **TextView** (`nsh/base`) | | | |
@@ -495,6 +501,7 @@ and `Input`'s React Native names follow the rules as well.
 | `ItemSeparatorComponent` | `separator` | `Command::separator` | |
 | List `contentContainerStyle` | `contentStyle` (padding and gaps only), `contentClass` (`p-*`, `gap-*`) | *guides* "Let the enclosing name carry the context" | Same names as Scroll's, a narrower type |
 | Scroll `contentContainerStyle`, `contentContainerClass` | `contentStyle`, `contentClass` | as above; *guides* slot `content` | |
+| (new) the list items a selectable view's selection starts and ends in | `onSelectionChange`'s `anchor?` / `focus?`, each `TextSelectionEndpoint { key, offset }` (Rust `TextSelectionEvent::anchor` / `focus`) | the DOM's `Selection` (`anchorNode` / `anchorOffset`, `focusNode` / `focusOffset`); `nsh_core::selection`'s anchor and focus; `onViewableItemsChange`'s `ViewToken.key` | The DOM's two ends in the order the user made them, one object per end as `bounds` is one object; the item is named by the key the list already names items by (`keyExtractor`, else `item.key` / `item.id` / the index), not a new prop. `offset` is in the item's copy, as `start` is in the view's |
 | (none: a notched wheel scrolls as the platform's) | `smoothWheel?: boolean` and `wheelLineHeight?: number` (Rust `smooth_wheel`, `wheel_line_height`) | Chromium's `ScrollOffsetAnimationCurve`; `NSScrollView.verticalLineScroll` and `WM_MOUSEWHEEL`'s lines for the line's length; CSS `scroll-behavior` (and Tailwind's `scroll-smooth`) excludes user scrolls, so no web name fits | Two concepts, as the maintainer asked (2026-11-21): the easing and a line's length, each with the platform's default. `smooth` names what changes (motion, not distance); `LineHeight` is the unit the platforms already count wheels in. Both are props of every platform: the desktops act on them, iOS, Android and the web keep the system's and the browser's scrolling |
 | **Input** | | | |
 | `blurOnSubmit` | (dropped) | | `submitBehavior` covers it |

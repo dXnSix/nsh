@@ -2291,7 +2291,7 @@ fn a_command_without_a_search_field_takes_the_keyboard_on_focus(cx: &mut TestApp
         let moved = view.read_with(cx, |view, _| {
             crate::focus::focused(view.surface()).is_some()
                 && crate::text_input::focused(view.surface()).is_none()
-                && crate::keymap::bound(view.surface())
+                && crate::keymap::mounted(view.surface())
         });
         if moved {
             break;

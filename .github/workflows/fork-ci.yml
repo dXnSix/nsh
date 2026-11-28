@@ -19,8 +19,8 @@ name: Fork CI
 # - `headless`, `headless-rust`: the examples' tests without a platform
 #   (`nsh test <app>`), in two jobs side by side: the TSX apps, and the
 #   apps that build a Rust crate first.
-# - `android`, `web`, `tizen`: clippy for Android, the web runtime's build
-#   and its JS tests, clippy for Samsung TVs (one architecture).
+# - `web`, `tizen`: the web runtime's build and its JS tests, clippy for
+#   Samsung TVs (one architecture).
 #
 # Every `cargo test` step runs through `.github/fork/retry.sh`: a command
 # that fails runs once more before the step fails, and one that then passes
@@ -37,6 +37,9 @@ name: Fork CI
 #   sets them to pending when the pull request changes what those platforms
 #   build.
 # - Compat: `fork-compat.yml`.
+# - Clippy for Android: no upstream workflow runs it, and Rust 1.100's lints
+#   fail on upstream's own `nsh-platform-android` code. `.github/fork/local.sh`
+#   still runs it on a Mac.
 #
 # A fork-only file (branch kind `fork/*`): it never goes upstream, and adds
 # files of its own (`.github/fork/`) rather than editing upstream's, so an
@@ -89,7 +92,6 @@ jobs:
       examples: ${{ steps.jobs.outputs.examples }}
       rust-app: ${{ steps.jobs.outputs.rust-app }}
       headless: ${{ steps.jobs.outputs.headless }}
-      android: ${{ steps.jobs.outputs.android }}
       web: ${{ steps.jobs.outputs.web }}
       tizen: ${{ steps.jobs.outputs.tizen }}
     steps:
@@ -481,44 +483,6 @@ jobs:
           for app in extra post-editor rust-exports tasks-rs; do
             ./target/debug/nsh test "examples/$app"
           done
-
-  # Clippy for Android, as it was; the examples' tests in an emulator: on a
-  # Mac for a pull request (`.github/fork/local.sh`), and `fork-full.yml`.
-  android:
-    needs: changes
-    if: needs.changes.outputs.android == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install clang
-        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev
-      # The Android runtime: `javac` + `d8` (Java 17), the SDK's
-      # `platforms;android-35` and an NDK: the image's default
-      # (`ANDROID_NDK_HOME`, 27).
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - name: Install the Android platform
-        run: |
-          if [[ ! -f "$ANDROID_HOME/platforms/android-35/android.jar" ]]; then
-            sdkmanager=$(ls "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager* | head -1)
-            yes | "$sdkmanager" "platforms;android-35" > /dev/null || true
-          fi
-          test -f "$ANDROID_HOME/platforms/android-35/android.jar"
-          test -d "$ANDROID_NDK_HOME"
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-          targets: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: android-clippy
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Clippy
-        run: cargo xtask clippy-android
 
   # The web runtime builds (an app published for the web), and its JS
   # tests that need no browser. The examples' tests in Chrome:

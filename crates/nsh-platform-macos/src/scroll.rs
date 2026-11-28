@@ -222,6 +222,12 @@ pub(crate) struct Live {
     dark: bool,
     /// The refresh spinner shows.
     refreshing: bool,
+    /// `refreshing` turned off while pulled past the top: the spinner keeps
+    /// turning and fades out until the offset returns to 0.
+    dismissing: bool,
+    /// When the current refresh spin started (ms), so large monotonic
+    /// timestamps do not lose precision in `f32`.
+    spin_start: Option<f64>,
     /// The spinner's angle (radians).
     spin: f32,
     /// The view above the container that holds the indicator and the
@@ -376,6 +382,13 @@ fn clamp(p: Offset, (min, max): (Offset, Offset)) -> Offset {
         p.x.clamp(min.x, max.x.max(min.x)),
         p.y.clamp(min.y, max.y.max(min.y)),
     )
+}
+
+/// Where an offset `p` at rest goes back to: within `limits`, or `None`
+/// when it is already there (to half a point).
+fn rest_at(p: Offset, (min, max): (Offset, Offset)) -> Option<Offset> {
+    let to = clamp(p, (min, max));
+    ((to.x - p.x).abs() > 0.5 || (to.y - p.y).abs() > 0.5).then_some(to)
 }
 
 /// `p` moved by `d`, stopping at the limits; past them (the refresh space)
@@ -937,6 +950,13 @@ fn shown_at(surface: &Rc<Surface>, view: &NshView, to: Offset) {
         // How far it is pulled past its top, when that changes.
         let pulled = (!s.horizontal && (s.y < 0.0 || to.y < 0.0)).then(|| Points((-to.y).max(0.0)));
         (s.x, s.y) = (to.x, to.y);
+        if !s.horizontal && to.y >= 0.0 {
+            s.live.dismissing = false;
+            if !s.live.refreshing {
+                s.live.spin_start = None;
+                s.live.spin = 0.0;
+            }
+        }
         if s.indicator {
             s.live.shown = now();
             s.live.alpha = 1.0;
@@ -1069,7 +1089,7 @@ fn release(surface: &Rc<Surface>, view: &NshView, v: f32, snap_velocity: f32) {
             .map(|t| (p.with(s.horizontal, t.0 + lead), t.0 + lead - pos));
         (p, clamp(p, lims), target)
     };
-    if p.distance(back) > 0.5 {
+    if p.distance(back) > 0.5 || (back.y == 0.0 && p.y < 0.0) {
         animate_to(surface, view, back, ANIMATION, false, true);
     } else if let Some((target, distance)) = target {
         let duration = snap_duration(Points(distance), v);
@@ -1204,7 +1224,6 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
         };
         (s.live.phase, pos(s), limits(&state))
     };
-    let hi = Offset::new(max.x.max(min.x), max.y.max(min.y));
     match phase {
         Phase::Animate {
             from,
@@ -1265,7 +1284,8 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
             ..
         } => {
             // A mouse wheel came to rest: snapping views move on to the
-            // next snap point in the wheel's direction.
+            // next snap point in the wheel's direction, and a view pulled
+            // past an edge bounces back.
             moved_to(surface, view, raw);
             set_phase(view, Phase::Idle);
             let snaps = view
@@ -1273,23 +1293,22 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
                 .scroll
                 .as_ref()
                 .is_some_and(|s| s.behavior.snaps() || s.behavior.paging);
-            if snaps {
-                let v = if total.abs() >= 1.0 {
-                    total.signum() * WHEEL_SNAP
-                } else {
-                    0.0
-                };
-                release(surface, view, 0.0, v);
+            let v = if snaps && total.abs() >= 1.0 {
+                total.signum() * WHEEL_SNAP
             } else {
-                emit(surface, view, EventKind::ScrollEnd);
-            }
+                0.0
+            };
+            release(surface, view, 0.0, v);
         }
         Phase::AwaitMomentum { since } if now - since > MOMENTUM_WAIT => {
             set_phase(view, Phase::Idle);
             emit(surface, view, EventKind::ScrollEnd);
         }
-        Phase::Idle if p.x > hi.x + 0.5 || p.y > hi.y + 0.5 => {
-            moved_to(surface, view, Offset::new(p.x.min(hi.x), p.y.min(hi.y)));
+        // Nothing moves it: an offset past either end goes back.
+        Phase::Idle => {
+            if let Some(to) = rest_at(p, (min, max)) {
+                moved_to(surface, view, to);
+            }
         }
         _ => {}
     }
@@ -1313,14 +1332,23 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
             }
             fading = alpha > 0.0;
         }
+        if matches!(s.live.phase, Phase::Idle) && s.live.dismissing {
+            s.live.dismissing = false;
+            if !s.live.refreshing {
+                s.live.spin_start = None;
+                s.live.spin = 0.0;
+            }
+            overlays = true;
+        }
         // A deleted view's spinner stops ([`deleted`]).
         let spinning = !s.horizontal
             && main(s) < 0.0
-            && s.live.refreshing
+            && (s.live.refreshing || s.live.dismissing)
             && !s.live.deleted
             && s.behavior.refresh_indicator.is_none();
         if spinning {
-            s.live.spin = ((now / 1000.0) as f32 * 2.0 * PI) % (2.0 * PI);
+            let start = *s.live.spin_start.get_or_insert(now);
+            s.live.spin = spin_angle(now - start);
             overlays = true;
         }
         (
@@ -1533,16 +1561,12 @@ pub(crate) fn update_overlays(view: &NshView) {
         }
     }
     // The refresh spinner.
-    let shows = !s.horizontal
-        && s.y < 0.0
-        && s.behavior.refresh_indicator.is_none()
-        && (s.live.refreshing || refresh_listened);
-    if !shows {
+    let Some((progress, opacity)) = spinner_state(s, refresh_listened) else {
         if let Some(layer) = &s.live.spinner {
             layer.setHidden(true);
         }
         return;
-    }
+    };
     if s.live.spinner.is_none() {
         s.live.spinner = overlay_layer(view, &mut s.live.overlay).inspect(|layer| {
             for _ in 0..SPOKES {
@@ -1555,11 +1579,7 @@ pub(crate) fn update_overlays(view: &NshView) {
     }
     let Some(layer) = &s.live.spinner else { return };
     layer.setHidden(false);
-    let progress = if s.live.refreshing {
-        1.0
-    } else {
-        (-s.y / s.behavior.refresh_threshold().0).min(1.0)
-    };
+    layer.setOpacity(opacity);
     let cy = s.behavior.content_inset.top.0 - s.y - s.behavior.refresh_inset().0 / 2.0;
     layer.setBounds(rect(0.0, 0.0, 0.0, 0.0));
     layer.setPosition(CGPoint::new((w / 2.0) as f64, cy as f64));
@@ -1599,6 +1619,38 @@ pub(crate) fn update_overlays(view: &NshView) {
 
 /// Spokes of the refresh spinner.
 const SPOKES: usize = 8;
+
+/// Angle (radians) of the refresh spinner `elapsed` ms after it started (one
+/// turn a second), reduced in `f64` before casting to `f32` so large
+/// monotonic clocks stay precise.
+fn spin_angle(elapsed: f64) -> f32 {
+    let frac = elapsed.max(0.0).rem_euclid(1000.0) / 1000.0;
+    frac as f32 * 2.0 * PI
+}
+
+/// Pull progress (`0..=1`) and layer opacity (`0..=1`) of the refresh spinner,
+/// or `None` when it does not show.
+fn spinner_state(s: &ScrollState, refresh_listened: bool) -> Option<(f32, f32)> {
+    let active = s.live.refreshing || s.live.dismissing;
+    if s.horizontal
+        || s.y >= 0.0
+        || s.behavior.refresh_indicator.is_some()
+        || !(active || refresh_listened)
+    {
+        return None;
+    }
+    let progress = if active {
+        1.0
+    } else {
+        (-s.y / s.behavior.refresh_threshold().0).min(1.0)
+    };
+    let opacity = if s.live.dismissing {
+        (-s.y / s.behavior.refresh_inset().0).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    Some((progress, opacity))
+}
 
 // Sticky cells.
 
@@ -1780,7 +1832,11 @@ pub(crate) fn content(surface: &Rc<Surface>, view: &NshView, size: Size<Points>)
 }
 
 /// `ScrollBy`: the core keeps the visible content in place (items above
-/// the viewport changed size); not clamped, the core knows its content.
+/// the viewport changed size); not clamped, the core knows its content
+/// (a `ScrollContent` later in the batch may make room for it). At rest,
+/// an offset it leaves past either end goes back on the next frame
+/// ([`tick`]): the offset reported is within the content, so the core
+/// would never correct a view resting before its start (#3235).
 pub(crate) fn scroll_by(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32) {
     let (p, d) = {
         let mut state = view.state_mut();
@@ -1840,6 +1896,17 @@ pub(crate) fn scroll_by(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32)
     };
     if d != Offset::default() {
         moved_to(surface, view, p + d);
+        let outside = {
+            let state = view.state();
+            state
+                .scroll
+                .as_ref()
+                .is_some_and(|s| s.live.phase == Phase::Idle)
+                && rest_at(p + d, limits(&state)).is_some()
+        };
+        if outside {
+            ensure_ticking(surface, view);
+        }
     }
     report(surface, view);
 }
@@ -1956,6 +2023,15 @@ pub(crate) fn refreshing(surface: &Rc<Surface>, view: &NshView, refreshing: bool
             return;
         }
         s.live.refreshing = refreshing;
+        if refreshing {
+            s.live.dismissing = false;
+        } else if main(s) < 0.0 {
+            s.live.dismissing = true;
+        } else {
+            s.live.dismissing = false;
+            s.live.spin_start = None;
+            s.live.spin = 0.0;
+        }
         (
             main(s),
             matches!(s.live.phase, Phase::Wheel { gesture: true, .. }),
@@ -2216,6 +2292,7 @@ fn pulled_to_refresh(surface: &Surface, view: &NshView) -> bool {
         // Shown right away, as UIRefreshControl does; JS turns it off.
         if let Some(s) = view.state_mut().scroll.as_mut() {
             s.live.refreshing = true;
+            s.live.dismissing = false;
         }
         surface.event(view.id(), EventKind::Refresh, EventPayload::None);
     }
@@ -2375,6 +2452,17 @@ pub(crate) fn wheel_begin(surface: &Rc<Surface>, view: &NshView) {
         return;
     }
     interrupt(surface, view);
+    let cleared = view.state_mut().scroll.as_mut().is_some_and(|s| {
+        let cleared = !s.live.refreshing && std::mem::take(&mut s.live.dismissing);
+        if cleared {
+            s.live.spin_start = None;
+            s.live.spin = 0.0;
+        }
+        cleared
+    });
+    if cleared {
+        update_overlays(view);
+    }
     let raw = current(view);
     set_phase(
         view,
@@ -2517,7 +2605,8 @@ pub(crate) fn wheel_end(surface: &Rc<Surface>, view: &NshView, vx: f32, vy: f32)
     let outside = {
         let state = view.state();
         let p = state.scroll.as_deref().map_or(Offset::default(), goal);
-        p.distance(clamp(p, limits(&state))) > 0.5
+        let back = clamp(p, limits(&state));
+        p.distance(back) > 0.5 || (back.y == 0.0 && p.y < 0.0)
     };
     if gesture && !outside && !snaps {
         // The system's momentum may follow ([`momentum_begin`]).
@@ -2821,6 +2910,34 @@ fn reveal_with(surface: &Rc<Surface>, target: &NshView, rect_in: impl Fn(&NshVie
 mod tests {
     use super::*;
 
+    /// A view at rest goes back within its limits from past either end:
+    /// a `ScrollBy` that left a list 144 pt before its start comes back
+    /// to it, as one past its end does (#3235); within them (to half a
+    /// point, and the refresh space above the top while it refreshes) it
+    /// stays.
+    #[test]
+    fn a_view_at_rest_goes_back_from_past_either_end() {
+        let limits = (Offset::new(0.0, 0.0), Offset::new(0.0, 600.0));
+        assert_eq!(
+            rest_at(Offset::new(0.0, -144.0), limits),
+            Some(Offset::new(0.0, 0.0))
+        );
+        assert_eq!(
+            rest_at(Offset::new(0.0, 700.0), limits),
+            Some(Offset::new(0.0, 600.0))
+        );
+        assert_eq!(rest_at(Offset::new(0.0, 200.0), limits), None);
+        assert_eq!(rest_at(Offset::new(0.0, -0.4), limits), None);
+        let refreshing = (Offset::new(0.0, -60.0), Offset::new(0.0, 600.0));
+        assert_eq!(rest_at(Offset::new(0.0, -60.0), refreshing), None);
+        // Content shorter than the viewport rests at its start.
+        let short = (Offset::new(0.0, 0.0), Offset::new(0.0, -100.0));
+        assert_eq!(
+            rest_at(Offset::new(0.0, -50.0), short),
+            Some(Offset::new(0.0, 0.0))
+        );
+    }
+
     /// A scroll view of `content` points in a 300 x 200 viewport.
     fn movable_with(content: (f32, f32), horizontal: bool, enabled: bool) -> bool {
         let s = ScrollState {
@@ -3088,5 +3205,42 @@ mod tests {
             350.0
         );
         assert_eq!(key_target(KeyMove::End, 0.0, 400.0, 0.0, 1000.0), 1000.0);
+    }
+
+    #[test]
+    fn refresh_spinner_dismissal_and_large_clock_precision() {
+        let mut s = ScrollState {
+            y: -32.0,
+            ..Default::default()
+        };
+        assert_eq!(spinner_state(&s, true), Some((0.5, 1.0)));
+        assert_eq!(spinner_state(&s, false), None);
+
+        s.y = -56.0;
+        s.live.refreshing = true;
+        assert_eq!(spinner_state(&s, false), Some((1.0, 1.0)));
+
+        // Ending refresh enters dismissing: keeps full spinning progress and
+        // fades out linearly with the remaining offset, including under a top
+        // content inset where the spinner stays visible until y reaches 0.
+        s.behavior.content_inset.top = Points(48.0);
+        s.live.refreshing = false;
+        s.live.dismissing = true;
+        assert_eq!(spinner_state(&s, true), Some((1.0, 1.0)));
+        assert_eq!(spinner_state(&s, false), Some((1.0, 1.0)));
+        s.y = -28.0;
+        assert_eq!(spinner_state(&s, true), Some((1.0, 0.5)));
+        s.y = -2.8;
+        assert_eq!(spinner_state(&s, true), Some((1.0, 0.05)));
+        s.y = 0.0;
+        assert_eq!(spinner_state(&s, true), None);
+
+        // Large elapsed times keep sub-spoke precision when reduced in f64.
+        let step = 2.0 * PI / SPOKES as f32;
+        for i in 0..SPOKES {
+            let angle = spin_angle(10_000_000_000.0 + i as f64 * 125.0);
+            let lead = (angle / step) as usize % SPOKES;
+            assert_eq!(lead, i);
+        }
     }
 }

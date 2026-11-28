@@ -41,6 +41,7 @@ mod focus;
 mod fps;
 mod global_shortcut;
 mod gpu;
+mod gpu_view;
 mod image;
 mod input;
 mod keyboard;

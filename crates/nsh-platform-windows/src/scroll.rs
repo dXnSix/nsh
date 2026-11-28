@@ -453,7 +453,15 @@ pub(crate) fn draw_indicator(cx: &mut DrawCx<'_>, view: &NshView, state: &ViewSt
     if let Some((center, progress)) =
         s.spinner(size.width, state.events.contains(EventKind::Refresh))
     {
-        draw_spinner(cx, center.x.0, center.y.0, progress, s.live.spin, dark);
+        draw_spinner(
+            cx,
+            center.x.0,
+            center.y.0,
+            progress,
+            s.spinner_opacity(),
+            s.live.spin,
+            dark,
+        );
     }
     if !s.indicator || s.live.alpha <= 0.0 {
         return;
@@ -525,6 +533,7 @@ fn draw_spinner(
     x: f32,
     y: f32,
     progress: Percentage,
+    opacity: f32,
     spin: Radians,
     dark: bool,
 ) {
@@ -544,7 +553,7 @@ fn draw_spinner(
             2.5,
             5.5,
             1.25,
-            Color::rgba(gray, gray, gray, (fade * 255.0) as u8),
+            Color::rgba(gray, gray, gray, (fade * opacity * 255.0) as u8),
         );
     }
     cx.set_transform(world);

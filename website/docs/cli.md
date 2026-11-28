@@ -79,7 +79,7 @@ Apps whose Rust crates depend on NSH through Git use the checkout Cargo resolves
 ## nsh run
 
 ```sh
-nsh run [ENTRY] [--app <DIR>] [--target macos|linux|windows|ios|android|gpui|tui|web|tizen-web|tizen|catalyst] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop] [--background]
+nsh run [ENTRY] [--app <DIR>] [--target macos|linux|windows|ios|android|gpui|tui|web|tizen-web|tizen|catalyst] [--device <DEVICE>] [--port <PORT>] [--release] [--limits [<LIMITS>]] [--trace] [--fps] [--name <NAME>] [--points-per-cell <WIDTHxHEIGHT>] [--window-size <WIDTHxHEIGHT>] [--display <N>] [--idiom tv|desktop] [--background] [--sign <IDENTITY>]
 ```
 
 ```sh
@@ -108,6 +108,7 @@ On the native window and mobile targets, a Rust app (`nsh.json` `"root"`, [Build
 | `--display <N>` | The main display | The display the window opens on, centered: `1` is the primary display (the one with the menu bar), `2` the next, and so on; a number with no display opens it on the main one (`--target macos`, TSX entries). |
 | `--idiom <IDIOM>` | `nsh.json` `dev.idiom`, otherwise the host's own | The kind of device the app runs as: `tv` runs it as on a TV (`platform.tv`, `tv={{…}}` props, mobile behavior), so 10-foot layouts and focus are built on this machine; `desktop` runs the web page in the desktop idiom whatever the browser's pointer and width ([TVs](./platform-specific.md#tv-layouts-on-the-desktop)). `--target gpui` (the window keeps its size: `--window-size 1920x1080` shows a TV's whole screen) and `--target web`; the other hosts run in their device's own idiom and refuse it. |
 | `--background` | | The app never becomes the active app, as `nsh test` runs its apps: its window shows, the keyboard stays with the app you type in, and input sent to its windows (an agent driving it, a UI test) still reaches it. On macOS it has no Dock icon or menu bar while it runs. For a run you do not watch, such as an agent checking a change while you work (`--target macos`, `linux`, `windows` and `gpui`, TSX entries). |
+| `--sign <IDENTITY>` | Signed ad hoc | The code signing identity the macOS host is signed with, as `nsh package --sign` takes it, such as `"Apple Development: …"`. The host's signature then stays the same from one build to the next, so the app keeps access to its keychain items when its Rust code is rebuilt ([macOS](./macos.md#signing-the-development-host)) (`--target macos`). |
 
 With `--target android`, the device `--device` or `ANDROID_SERIAL` names is used, else the first one `adb devices` lists (`nsh` names it when several are connected); the dev server's port is forwarded to it with `adb reverse`. See [Getting started](./getting-started.md#run-it) and [Dev server and debugging](./dev-server-and-debugging.md).
 
