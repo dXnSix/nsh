@@ -1188,9 +1188,8 @@ fn center_with_sidebars(a: AreaCx) -> AnyElement {
                 .min_h(px(0.0))
                 .child(region(a, DockPlacement::Center)),
         );
-    let has_sidebars = untracked(|| {
-        a.props.center_left.get().is_some() || a.props.center_right.get().is_some()
-    });
+    let has_sidebars =
+        untracked(|| a.props.center_left.get().is_some() || a.props.center_right.get().is_some());
     if !has_sidebars {
         return center_column.into_element();
     }
@@ -1213,8 +1212,7 @@ fn center_with_sidebars(a: AreaCx) -> AnyElement {
                         .size(move || a.props.center_left_size.get())
                         .min_size(move || a.props.center_left_min_size.get().unwrap_or(px(120.0)))
                         .visible(move || {
-                            a.props.center_left.get().is_some()
-                                && a.props.center_left_visible.get()
+                            a.props.center_left.get().is_some() && a.props.center_left_visible.get()
                         })
                         .on_resize(move |size: &Points| {
                             a.emit(DockAreaEvent::CenterLeftResize(*size))

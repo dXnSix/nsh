@@ -1527,7 +1527,9 @@ fn CenterSidebarsHarness() -> impl IntoElement {
             .default_layout(layout)
             .compact(false)
             .tab_bar_class("flex-row h-6")
-            .render_tab(|tab: &DockTab| view().h(px(24.0)).child(text(format!("Tab {}", tab.panel))))
+            .render_tab(|tab: &DockTab| {
+                view().h(px(24.0)).child(text(format!("Tab {}", tab.panel)))
+            })
             .render_panel(|panel: &DockPanel| {
                 view()
                     .test_id(&format!("panel-{}", panel.id))
@@ -1538,7 +1540,12 @@ fn CenterSidebarsHarness() -> impl IntoElement {
             .center_left_size(px(180.0))
             .center_left_min_size(px(120.0))
             .center_left_visible(true)
-            .center_right(view().test_id("sidebar-right").flex_1().child(text("Right")))
+            .center_right(
+                view()
+                    .test_id("sidebar-right")
+                    .flex_1()
+                    .child(text("Right")),
+            )
             .center_right_size(px(200.0))
             .center_right_min_size(px(120.0))
             .center_right_visible(true)

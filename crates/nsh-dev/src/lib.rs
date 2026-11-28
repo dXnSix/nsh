@@ -25,9 +25,7 @@ mod site;
 #[cfg(feature = "client")]
 pub use crate::{
     attach::Attachment,
-    client::{
-        DevClient, DevEvent, DevTransport, HostInfo, LogObserver, set_log_observer, tap_log,
-    },
+    client::{DevClient, DevEvent, DevTransport, HostInfo, LogObserver, set_log_observer, tap_log},
 };
 #[cfg(feature = "server")]
 pub use crate::{
